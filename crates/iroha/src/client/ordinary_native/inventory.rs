@@ -30,6 +30,7 @@ const MAX_TOTAL: u64 = 16 * 1024 * 1024 * 1024;
 
 /// One exact public original relative to the installed package directory; never a key file.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::KagemushaOrdinaryNativeOriginalDescriptorV1")]
 pub struct KagemushaOrdinaryNativeOriginalDescriptorV1 {
     /// Bounded slash-separated relative path with no dot segments or symbolic links.
     pub path: String,
@@ -41,6 +42,7 @@ pub struct KagemushaOrdinaryNativeOriginalDescriptorV1 {
 
 /// Four exact validator transport targets corresponding to the same ordered signed node pins.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::KagemushaOrdinaryNativeNodeTargetV1")]
 pub struct KagemushaOrdinaryNativeNodeTargetV1 {
     /// Independently authorized current BLS/build/config identity.
     pub node: KagemushaOrdinaryNativeClockNodeV1,
@@ -51,6 +53,7 @@ pub struct KagemushaOrdinaryNativeNodeTargetV1 {
 /// Public original inventory, signed only by the already installed runtime authority.
 /// Decoding this value neither admits a Native installation nor supplies current FI status.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::KagemushaOrdinaryNativeInventoryV1")]
 pub struct KagemushaOrdinaryNativeInventoryV1 {
     /// Exactly one; there is no old-format fallback.
     pub version: u16,
@@ -172,9 +175,9 @@ struct HeldFile {
     process: u32,
 }
 impl HeldFile {
-    fn open_exact(path: PathBuf, sha256: [u8; 32], length: u64, maximum: usize) -> Result<Self> {
+    fn open_exact(path: PathBuf, sha256: [u8; 32], length: u64, maximum: u64) -> Result<Self> {
         ensure!(
-            sha256 != [0; 32] && length > 0 && length <= u64::try_from(maximum)?,
+            sha256 != [0; 32] && length > 0 && length <= maximum,
             "Native original bound rejected"
         );
         require_path(&path)?;
@@ -302,6 +305,7 @@ pub struct KagemushaAdmittedOrdinaryNativeInventoryV1 {
     files: BTreeMap<String, HeldFile>,
     release: Arc<KagemushaAuthenticatedReleaseV1>,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+    lineage_issuer: KagemushaOrdinaryLineageIssuerPolicyV1,
     checkpoint: SumeragiFinalityCheckpoint,
 }
 impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
@@ -334,7 +338,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             package_path.to_owned(),
             package_sha256,
             length,
-            MAX_BODY + 140,
+            u64::try_from(MAX_BODY + 140)?,
         )?;
         let bytes = package.bytes(MAX_BODY + 140)?;
         let payload = verify_packet(&bytes, &authority.public_key)?;
@@ -350,7 +354,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
                 && body.sequence >= authority.minimum_sequence,
             "Native inventory installed selection changed"
         );
-        let (files, release, issuer, checkpoint) = admit_files(root, &body)?;
+        let (files, release, issuer, checkpoint, lineage_issuer) = admit_files(root, &body)?;
         let this = Self {
             authority,
             package,
@@ -361,6 +365,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             files,
             release,
             issuer,
+            lineage_issuer,
             checkpoint,
         };
         this.recheck()?;
@@ -389,10 +394,29 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
                 file.stream_check()?;
             }
         }
+        self.lineage_issuer
+            .validate_for_issuer(&self.issuer)
+            .map_err(|_| eyre!("Native admitted CAS purpose changed"))?;
         self.issuer
             .validate()
             .map_err(|_| eyre!("Native issuer original rejected"))?;
         Ok(())
+    }
+    /// Borrow public CAS purpose data only from the independently signed inventory and its held
+    /// exact descriptor. This does not admit a receipt, current DATA observation or monetary loan.
+    /// # Errors
+    /// Refuses changed installation, descriptor, issuer/key/runtime or disabled purpose.
+    pub fn lineage_policy_original(&self) -> Result<Vec<u8>> {
+        self.recheck()?;
+        self.files["originals/ordinary-lineage-cas-policy.norito"].bytes(32 * 1024)
+    }
+    /// Same independently installed exact CAS purpose; raw decoding cannot create this inventory.
+    /// The separate global receipt and current financial owner remain mandatory.
+    /// # Errors
+    /// Refuses changed installed policy custody.
+    pub fn lineage_issuer_policy(&self) -> Result<&KagemushaOrdinaryLineageIssuerPolicyV1> {
+        self.recheck()?;
+        Ok(&self.lineage_issuer)
     }
     /// Build the actual independently installed clock selection from authenticated public originals.
     /// This does not answer a fresh clock read; Native transport must do so before startup.
@@ -410,6 +434,20 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             )
             .map_err(|_| eyre!("Native installed clock originals rejected"))?,
         ))
+    }
+    /// Export the same complete public clock selection from this actual independently signed
+    /// installed inventory. A Core release assembler may admit this exact file under its own
+    /// existing signed runtime manifest; a decoded export itself grants no installed clock root.
+    /// # Errors
+    /// Refuses changed inventory/descriptors or canonical selection framing failure.
+    pub fn clock_selection_original(&self) -> Result<Vec<u8>> {
+        self.recheck()?;
+        let raw = self
+            .clock_originals()?
+            .canonical_selection_original()
+            .map_err(|_| eyre!("Native installed clock selection rejected"))?;
+        self.recheck()?;
+        Ok(raw)
     }
     /// Join exact certified S/W and real Native AccountClient to the installed ordinary policy,
     /// actual clock owner and caller-independent Core point; no selected DTO grants this custody.
@@ -476,11 +514,50 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             lane_id: lane.finalize().into(),
         };
         let selected=Arc::new(KagemushaOrdinaryPreparationSelectedOriginalsV1::from_governed_originals_with_native_clock(
-            owner,governed,self.issuer.clone(),&self.body.core_public_key,clock,temporary_digest,
+            owner,governed,self.issuer.clone(),&self.body.core_public_key,clock,temporary_digest,self.body.world_schema_hash,
         ).map_err(|_|eyre!("Native ordinary account selection rejected"))?);
         custody.recheck()?;
         self.recheck()?;
         Ok((selected, custody))
+    }
+    pub(super) fn require_current_control_request(
+        &self,
+        request: &iroha_data_model::kagemusha::KagemushaOrdinaryCurrentControlRequestV1,
+    ) -> Result<()> {
+        self.recheck()?;
+        request
+            .validate_shape()
+            .map_err(|_| eyre!("Native current FI request shape rejected"))?;
+        let mut lane = sha2::Sha256::new();
+        lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
+        lane.update(norito::encode_canonical(&request.owner.account_id)?);
+        lane.update(norito::encode_canonical(&self.issuer.runtime)?);
+        ensure!(
+            request.owner.runtime == self.issuer.runtime
+                && request.issuer_policy_digest == self.body.fi_issuer_policy_digest
+                && request.owner.lane_id == <[u8; 32]>::from(lane.finalize()),
+            "Native current FI request changed installed issuer/runtime/wallet lane"
+        );
+        self.recheck()
+    }
+    pub(super) fn require_lineage_request(
+        &self,
+        request: &iroha_data_model::kagemusha::KagemushaOrdinaryLineageRequestV1,
+    ) -> Result<()> {
+        self.recheck()?;
+        request.canonical_bytes().map_err(|_| eyre!("Native lineage request shape rejected"))?;
+        let owner = &request.operation.lineage().owner;
+        let mut lane = sha2::Sha256::new();
+        lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
+        lane.update(norito::encode_canonical(&owner.account_id)?);
+        lane.update(norito::encode_canonical(&self.issuer.runtime)?);
+        ensure!(
+            owner.runtime == self.issuer.runtime
+                && request.issuer_policy_digest == self.lineage_issuer.issuer_policy_digest
+                && owner.lane_id == <[u8; 32]>::from(lane.finalize()),
+            "Native lineage request changed installed issuer/runtime/wallet lane"
+        );
+        self.recheck()
     }
     pub(super) fn membership_nodes(
         &self,
@@ -613,7 +690,10 @@ impl KagemushaArtifactByteResolverV1 for KagemushaOrdinaryNativeArtifactResolver
     }
 }
 
-fn canonical<T: norito::Decode + norito::Encode>(raw: &[u8]) -> Result<T> {
+fn canonical<T>(raw: &[u8]) -> Result<T>
+where
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
     ensure!(
         !raw.is_empty() && raw.len() <= MAX_ORIGINAL,
         "Native original frame rejected"
@@ -650,6 +730,7 @@ fn admit_files(
     Arc<KagemushaAuthenticatedReleaseV1>,
     KagemushaRetailEnrollmentIssuerPolicyV1,
     SumeragiFinalityCheckpoint,
+    KagemushaOrdinaryLineageIssuerPolicyV1,
 )> {
     ensure!(
         body.version == 1
@@ -695,6 +776,7 @@ fn admit_files(
                 | "originals/validation-receipt.norito"
                 | "originals/release-attestation.norito"
                 | "originals/issuer-policy.norito"
+                | "originals/ordinary-lineage-cas-policy.norito"
                 | "originals/ordinary-trust.norito"
                 | "originals/app-authority.bin"
                 | "originals/finality-checkpoint.norito"
@@ -727,9 +809,9 @@ fn admit_files(
             .ok_or_else(|| eyre!("Native inventory overflow"))?;
         ensure!(total <= MAX_TOTAL, "Native inventory total rejected");
         let maximum = if descriptor.path.starts_with("artifacts/") {
-            MAX_TOTAL as usize
+            MAX_TOTAL
         } else {
-            MAX_ORIGINAL
+            u64::try_from(MAX_ORIGINAL)?
         };
         files.insert(
             descriptor.path.clone(),
@@ -784,6 +866,10 @@ fn admit_files(
                 == body.fi_issuer_policy_digest,
         "Native release/runtime/issuer scope changed"
     );
+    let lineage_issuer = decode_lineage_policy(
+        &raw("originals/ordinary-lineage-cas-policy.norito")?,
+        &issuer,
+    )?;
     let governed = KagemushaOrdinaryGovernedPolicyOriginalsV1::authenticate(
         release.clone(),
         body.profile_id,
@@ -834,6 +920,7 @@ fn admit_files(
                     | "originals/validation-receipt.norito"
                     | "originals/release-attestation.norito"
                     | "originals/issuer-policy.norito"
+                    | "originals/ordinary-lineage-cas-policy.norito"
                     | "originals/ordinary-trust.norito"
                     | "originals/app-authority.bin"
             ) || *name == body.checkpoint.path
@@ -846,7 +933,21 @@ fn admit_files(
             "Native inventory unrecognized original role"
         );
     }
-    Ok((files, release, issuer, checkpoint))
+    Ok((files, release, issuer, checkpoint, lineage_issuer))
+}
+fn decode_lineage_policy(
+    raw: &[u8],
+    issuer: &KagemushaRetailEnrollmentIssuerPolicyV1,
+) -> Result<KagemushaOrdinaryLineageIssuerPolicyV1> {
+    ensure!(
+        !raw.is_empty() && raw.len() <= 32 * 1024,
+        "Native CAS purpose original bound rejected"
+    );
+    let policy: KagemushaOrdinaryLineageIssuerPolicyV1 = canonical(raw)?;
+    policy
+        .validate_for_issuer(issuer)
+        .map_err(|_| eyre!("Native CAS purpose differs from held issuer"))?;
+    Ok(policy)
 }
 fn require_https(url: &Url) -> Result<()> {
     ensure!(
@@ -862,6 +963,34 @@ fn require_https(url: &Url) -> Result<()> {
     Ok(())
 }
 
+/// Emit the exact full public clock selection from the same genuine held public release
+/// inputs as inventory assembly. The Core manifest must independently authenticate this file
+/// before it can verify carried clock samples. The emitted shape grants no selected root.
+/// # Errors
+/// Refuses missing/changed original custody or checkpoint/network/node/policy inconsistencies.
+pub fn assemble_kagemusha_ordinary_native_clock_selection_v1(
+    root: &Path,
+    body: &KagemushaOrdinaryNativeInventoryV1,
+) -> Result<Vec<u8>> {
+    require_path(root)?;
+    let (files, _, issuer, checkpoint, _) = admit_files(root, body)?;
+    let selected = KagemushaOrdinaryNativeClockOriginalsV1::from_selected_originals(
+        checkpoint.clone(),
+        issuer.runtime.network_id,
+        checkpoint.chain_id().into(),
+        std::array::from_fn(|index| body.nodes[index].node.clone()),
+        body.clock_policy,
+    )
+    .map_err(|_| eyre!("Native release clock selection rejected"))?;
+    let raw = selected
+        .canonical_selection_original()
+        .map_err(|_| eyre!("Native release clock selection rejected"))?;
+    for file in files.values() {
+        file.stream_check()?;
+    }
+    Ok(raw)
+}
+
 /// Validate real held public originals at release assembly and emit the exact unsigned canonical
 /// inventory packet. The existing app-runtime signing process signs DOMAIN || this packet;
 /// this function reads no signing key, FI secret, wallet key or platform private material.
@@ -872,7 +1001,7 @@ pub fn assemble_kagemusha_ordinary_native_inventory_v1(
     body: &KagemushaOrdinaryNativeInventoryV1,
 ) -> Result<Vec<u8>> {
     require_path(root)?;
-    let (files, _, _, _) = admit_files(root, body)?;
+    let (files, _, _, _, _) = admit_files(root, body)?;
     let payload = norito::encode_canonical(body)?;
     ensure!(
         !payload.is_empty() && payload.len() <= MAX_BODY,
@@ -888,4 +1017,238 @@ pub fn assemble_kagemusha_ordinary_native_inventory_v1(
         file.stream_check()?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    use crate::participant_enrollment_request::NativeCustodyFixture;
+
+    #[test]
+    fn held_original_keeps_u64_budget_without_address_sized_narrowing() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // Public-file custody only: no inventory, release or runtime authority is created.
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let path = root.join("public-original.bin");
+        let original = b"data-only public original";
+        std::fs::write(&path, original).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let digest = <[u8; 32]>::from(sha2::Sha256::digest(original));
+
+        assert_eq!(MAX_TOTAL, 16_u64 * 1024 * 1024 * 1024);
+        assert!(u32::try_from(MAX_TOTAL).is_err());
+        let held = HeldFile::open_exact(
+            path,
+            digest,
+            u64::try_from(original.len()).unwrap(),
+            MAX_TOTAL,
+        )
+        .unwrap();
+        assert_eq!(held.bytes(original.len()).unwrap(), original);
+        held.stream_check().unwrap();
+    }
+
+    #[test]
+    fn held_original_u64_budget_rejects_over_bound_and_named_replacement() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // A real tiny file exercises bounds and descriptor identity without fake authority.
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let path = root.join("public-original.bin");
+        let replacement = root.join("replacement.bin");
+        let original = b"data-only public original";
+        let length = u64::try_from(original.len()).unwrap();
+        let digest = <[u8; 32]>::from(sha2::Sha256::digest(original));
+        std::fs::write(&path, original).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let rejection = HeldFile::open_exact(path.clone(), digest, length, length - 1)
+            .err()
+            .expect("oversize rejected before descriptor open or hashing");
+        assert_eq!(rejection.to_string(), "Native original bound rejected");
+        let held = HeldFile::open_exact(path.clone(), digest, length, MAX_TOTAL).unwrap();
+        assert!(held.bytes(original.len() - 1).is_err());
+        std::fs::write(&replacement, original).unwrap();
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert!(held.stream_check().is_err());
+        assert!(held.bytes(original.len()).is_err());
+    }
+
+    fn assert_exact_frame<T>(value: &T, nominal_name: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSchema,
+    {
+        let raw = norito::encode_canonical(value).expect("data-only canonical public frame");
+        assert!(!raw.is_empty() && raw.len() <= MAX_ORIGINAL);
+        let header = norito::core::Header::read(std::io::Cursor::new(&raw)).unwrap();
+        assert_eq!(T::nominal_name(), nominal_name);
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(nominal_name)
+        );
+        let decoded: T = canonical(&raw).expect("bounded canonical typed frame");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), raw);
+        assert!(canonical::<T>(&[]).is_err());
+        for end in [
+            0,
+            norito::core::Header::SIZE - 1,
+            norito::core::Header::SIZE,
+            raw.len() - 1,
+        ] {
+            assert!(canonical::<T>(&raw[..end]).is_err(), "truncated at {end}");
+        }
+        let mut suffix = raw.clone();
+        suffix.push(0);
+        assert!(canonical::<T>(&suffix).is_err());
+        let mut foreign_schema = raw;
+        foreign_schema[6] ^= 1;
+        assert!(canonical::<T>(&foreign_schema).is_err());
+    }
+
+    fn descriptor(path: &str, byte: u8) -> KagemushaOrdinaryNativeOriginalDescriptorV1 {
+        KagemushaOrdinaryNativeOriginalDescriptorV1 {
+            path: path.into(),
+            sha256: [byte; 32],
+            byte_len: u64::from(byte),
+        }
+    }
+
+    fn node(index: usize) -> KagemushaOrdinaryNativeNodeTargetV1 {
+        let key = iroha_crypto::KeyPair::from_seed(
+            vec![u8::try_from(index + 1).unwrap(); 32],
+            iroha_crypto::Algorithm::BlsNormal,
+        );
+        KagemushaOrdinaryNativeNodeTargetV1 {
+            node: KagemushaOrdinaryNativeClockNodeV1 {
+                peer_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                build_fingerprint: Hash::new([u8::try_from(index + 11).unwrap()]),
+                config_fingerprint: Hash::new([u8::try_from(index + 21).unwrap()]),
+            },
+            endpoint: format!("https://node{index}.example.invalid/"),
+        }
+    }
+
+    #[test]
+    fn descriptor_framed_codec_rejects_retired_schema_truncation_and_oversize() {
+        assert_exact_frame(
+            &descriptor("originals/checkpoint.norito", 7),
+            "iroha::client::KagemushaOrdinaryNativeOriginalDescriptorV1",
+        );
+        assert!(
+            canonical::<KagemushaOrdinaryNativeOriginalDescriptorV1>(&vec![0; MAX_ORIGINAL + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn node_target_framed_codec_retains_exact_public_identity_and_endpoint() {
+        assert_exact_frame(
+            &node(0),
+            "iroha::client::KagemushaOrdinaryNativeNodeTargetV1",
+        );
+    }
+
+    #[test]
+    fn inventory_framed_codec_retains_complete_public_pins_without_native_admission() {
+        // These public data-only fields never call installation/release/native admission.
+        let point = hex::decode(concat!(
+            "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        ))
+        .unwrap();
+        let value = KagemushaOrdinaryNativeInventoryV1 {
+            version: 1,
+            runtime_manifest_sha256: [1; 32],
+            sdk_release_sha256: [2; 32],
+            sequence: 3,
+            release_id: [4; 32],
+            profile_id: [5; 32],
+            core_public_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(&point).unwrap(),
+            world_schema_hash: Hash::new(b"data-only codec schema"),
+            checkpoint: descriptor("originals/checkpoint.norito", 7),
+            nodes: std::array::from_fn(node),
+            clock_policy: KagemushaOrdinaryNativeClockPolicyV1 {
+                maximum_reply_age_ms: 10_000,
+                maximum_node_skew_ms: 30_000,
+                maximum_projection_age_ms: 86_400_000,
+                maximum_persistence_age_ms: 5_000,
+            },
+            fi_current_control_endpoint: "https://fi.example.invalid/".into(),
+            fi_issuer_policy_digest: [8; 32],
+            integrity_policy: Some(descriptor("originals/integrity.norito", 9)),
+            originals: vec![descriptor("originals/trust.norito", 10)],
+        };
+        assert_exact_frame(&value, "iroha::client::KagemushaOrdinaryNativeInventoryV1");
+        // A complete canonical data shape cannot issue an installed clock selection.
+        assert!(assemble_kagemusha_ordinary_native_clock_selection_v1(
+            Path::new("offered-relative-root"), &value,
+        ).is_err());
+        let empty = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert!(assemble_kagemusha_ordinary_native_clock_selection_v1(&empty, &value).is_err());
+
+    }
+
+    #[test]
+    fn current_wallet_framed_codec_retains_original_public_values_without_native_admission() {
+        // Reuse the maintained actual certificate fixture only as public sidecar data.
+        // Repeating a public attestation here does not claim four-node admission/custody.
+        let fixture = NativeCustodyFixture::new();
+        let public = fixture.wallet_original([7; 32]);
+        let value = KagemushaOrdinaryNativeCurrentWalletOriginalV1 {
+            proof: norito::encode_canonical(&public.attestation.body.finality_proof).unwrap(),
+            world_snapshot: public.world_snapshot,
+            signatory_value: public.signatory_value,
+            wallet_value: public.wallet_value,
+            statements: std::array::from_fn(|_| public.attestation.clone()),
+        };
+        assert_exact_frame(
+            &value,
+            "iroha::client::KagemushaOrdinaryNativeCurrentWalletOriginalV1",
+        );
+    }
+    #[test]
+    fn installed_lineage_purpose_refuses_disabled_foreign_issuer_and_trailing_original() {
+        use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
+        let f = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        let mut policy = KagemushaOrdinaryLineageIssuerPolicyV1 {
+            version: 1,
+            issuer_policy_digest: kagemusha_ordinary_retail_issuer_policy_digest_v1(
+                &f.issuer_policy,
+            )
+            .unwrap(),
+            issuer_public_key: f.issuer_policy.issuer_public_key.clone(),
+            runtime: f.issuer_policy.runtime.clone(),
+            purpose_domain_digest: KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            enabled: true,
+        };
+        let raw = norito::encode_canonical(&policy).unwrap();
+        assert_eq!(
+            decode_lineage_policy(&raw, &f.issuer_policy).unwrap(),
+            policy
+        );
+        let mut trailing = raw;
+        trailing.push(0);
+        assert!(decode_lineage_policy(&trailing, &f.issuer_policy).is_err());
+        policy.enabled = false;
+        assert!(
+            decode_lineage_policy(
+                &norito::encode_canonical(&policy).unwrap(),
+                &f.issuer_policy
+            )
+            .is_err()
+        );
+        policy.enabled = true;
+        policy.issuer_policy_digest[0] ^= 1;
+        assert!(
+            decode_lineage_policy(
+                &norito::encode_canonical(&policy).unwrap(),
+                &f.issuer_policy
+            )
+            .is_err()
+        );
+    }
 }

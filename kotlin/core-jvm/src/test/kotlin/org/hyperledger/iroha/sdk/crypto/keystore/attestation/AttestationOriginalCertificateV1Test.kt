@@ -57,12 +57,40 @@ class AttestationOriginalCertificateV1Test {
         }
     }
 
+    @Test fun completeOriginalCertificateRejectsEachRetiredDerShapeNegative() {
+        val f = fixture(original = description(challenge))
+        f.verifier.verify(f.attestation, challenge) // Real signed positive precedes mutation.
+        val chain = f.attestation.certificateChain()
+        val leaf = chain[0]
+        // All eight former archive-parser negatives now exercise the sole actual verifier.
+        val malformed = listOf(leaf + 0, leaf.copyOfRange(0, 4), byteArrayOf(0x31, 0),
+            byteArrayOf(0x30, 0x80.toByte(), 0, 0), byteArrayOf(0x30, 0x81.toByte(), 0),
+            byteArrayOf(0x30, 0x82.toByte(), 0, 1, 0), byteArrayOf(0x30, 0x81.toByte(), 1, 0),
+            ByteArray(16 * 1024 + 1))
+        for (bad in malformed) assertThrows(AttestationVerificationException::class.java) {
+            f.verifier.verify(KeyAttestation("original-alias", listOf(bad, chain[1], chain[2])), challenge)
+        }
+    }
+
+    @Test fun independentlySelectedRootRejectsAppendedOriginalDer() {
+        val f = fixture(original = description(challenge))
+        f.verifier.verify(f.attestation, challenge)
+        val root = f.attestation.certificateChain().last()
+        AttestationVerifier.builder(f.policy, time).addTrustedRoot(root).build()
+        for (bad in listOf(root + 0, root + root)) {
+            assertThrows(AttestationVerificationException::class.java) {
+                AttestationVerifier.builder(f.policy, time).addTrustedRoot(bad)
+            }
+        }
+    }
+
     private fun description(challenge: ByteArray, attestation: Int = 2, key: Int = 2) = DERSequence(arrayOf(
         ASN1Integer(100), ASN1Enumerated(attestation), ASN1Integer(100), ASN1Enumerated(key),
         DEROctetString(challenge), DEROctetString(ByteArray(0)), DERSequence(), DERSequence(),
     )).encoded
 
-    private class Fixture(val verifier: AttestationVerifier, val attestation: KeyAttestation)
+    private class Fixture(val verifier: AttestationVerifier, val attestation: KeyAttestation,
+        val policy: AndroidAttestationRevocationPolicyV1)
     private fun fixture(original: ByteArray?, leaf: ByteArray? = null, differentOriginalKey: Boolean = false): Fixture {
         val root = key(); val alias = key(); val originalKey = if (differentOriginalKey) key() else alias
         val rootDer = certificate(root, root, "CN=Root", "CN=Root", true, 1, null)
@@ -74,7 +102,7 @@ class AttestationOriginalCertificateV1Test {
         val policy = AndroidAttestationRevocationPolicyV1.fromCanonicalSnapshot(snapshot,
             MessageDigest.getInstance("SHA-256").digest(snapshot))
         return Fixture(AttestationVerifier.builder(policy, time).addTrustedRoot(rootDer).requireStrongBox(true).build(),
-            KeyAttestation("original-alias", listOf(leafDer, originalDer, rootDer)))
+            KeyAttestation("original-alias", listOf(leafDer, originalDer, rootDer)), policy)
     }
     private fun key(): KeyPair = KeyPairGenerator.getInstance("EC").apply {
         initialize(ECGenParameterSpec("secp256r1"))

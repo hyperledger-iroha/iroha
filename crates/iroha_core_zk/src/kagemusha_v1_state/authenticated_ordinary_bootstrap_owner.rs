@@ -818,9 +818,12 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
 
     /// Move the actual published wallet and its original verifier into exclusive cash custody.
     /// Fresh and recovery paths are explicit; missing recovery data never creates a new wallet.
+    /// The purpose original must come from the independently admitted installed Native inventory;
+    /// C/JNI frames cannot supply or select it. It is rejoined to the held actual issuer and WAL.
     /// No original Bootstrap approval is reused to authorize a cash operation.
     pub fn into_cash_owner(
         mut self,
+        installed_lineage_policy_original: &[u8],
         recover: bool,
         historical_leases: &[Arc<
             iroha_data_model::kagemusha::KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
@@ -838,6 +841,8 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
             &self.path.join("cash-approvals"),
             publication,
             self.verifier,
+            self.capacity,
+            installed_lineage_policy_original,
             recover,
             historical_leases,
             historical_receivers,

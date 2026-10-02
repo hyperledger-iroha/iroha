@@ -238,6 +238,7 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryCashTerminalV1 {
     output_originals_digest: DigestV1,
     inner_terminal_original: Vec<u8>,
     commit_wrapper_original: Vec<u8>,
+    wrapper_history_fold_originals: [[u8; super::KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1]; 2],
 }
 impl KagemushaAuthenticatedOrdinaryCashTerminalV1 {
     pub(crate) fn operation_id(&self) -> DigestV1 {
@@ -264,6 +265,13 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalV1 {
     pub(crate) fn commit_wrapper_original(&self) -> &[u8] {
         &self.commit_wrapper_original
     }
+    /// Actual fixed1280-byte Eq/Ep Wrapper folds retained from the same genuine producer.
+    pub(crate) fn wrapper_history_fold_originals(&self) -> [&[u8]; 2] {
+        [
+            &self.wrapper_history_fold_originals[0],
+            &self.wrapper_history_fold_originals[1],
+        ]
+    }
     /// Reverify restored data against the same retained Native attempt before an actual CAS.
     pub(crate) fn recheck_terminal_selection(
         &self,
@@ -275,6 +283,7 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalV1 {
             guard,
             &self.inner_terminal_original,
             &self.commit_wrapper_original,
+            self.wrapper_history_fold_originals(),
         )?;
         if self.operation_id != selection.challenge().operation_id
             || self.nonce != selection.challenge().nonce
@@ -298,12 +307,14 @@ pub(crate) fn verify_ordinary_cash_terminal_v1(
     guard: &KagemushaAuthenticatedOrdinaryTerminalGuardV1,
     inner_terminal_original: &[u8],
     commit_wrapper_original: &[u8],
+    wrapper_history_fold_originals: [&[u8]; 2],
 ) -> Result<KagemushaAuthenticatedOrdinaryCashTerminalV1> {
     verify_selection(
         selection,
         guard,
         inner_terminal_original,
         commit_wrapper_original,
+        wrapper_history_fold_originals,
     )?;
     let output_originals_digest = output_originals_digest(selection)?;
     selection.recheck_selected_originals_and_current_custody()?;
@@ -320,6 +331,14 @@ pub(crate) fn verify_ordinary_cash_terminal_v1(
         output_originals_digest,
         inner_terminal_original: inner_terminal_original.to_vec(),
         commit_wrapper_original: commit_wrapper_original.to_vec(),
+        wrapper_history_fold_originals: [
+            wrapper_history_fold_originals[0]
+                .try_into()
+                .map_err(integrity)?,
+            wrapper_history_fold_originals[1]
+                .try_into()
+                .map_err(integrity)?,
+        ],
     })
 }
 
@@ -328,6 +347,7 @@ fn verify_selection(
     guard: &KagemushaAuthenticatedOrdinaryTerminalGuardV1,
     inner: &[u8],
     wrapper: &[u8],
+    wrapper_history_fold_originals: [&[u8]; 2],
 ) -> Result<()> {
     selection.recheck_selected_originals_and_current_custody()?;
     let preparation = selection.preparation_selection()?;
@@ -350,14 +370,23 @@ fn verify_selection(
     {
         return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
     }
-    for (relation, original) in [(1, inner), (2, wrapper)] {
-        let wire = decode_exact(original, relation, &material)?;
-        let public = selected_public(selection, &material, &wire)?;
-        verify_wire(&material, &public, &wire)?;
-    }
-    // Whole histories are terminally decided independently for all four current proofs above.
-    // Wrapper's circuit also binds its exact nested Terminal, including both inner audit/protocol
-    // pairs. The actual selected candidate and both Guards are reverified here independently.
+    let inner = decode_exact(inner, 1, &material)?;
+    let wrapper = decode_exact(wrapper, 2, &material)?;
+    let inner_public = selected_public(selection, &material, &inner)?;
+    let wrapper_public = selected_public(selection, &material, &wrapper)?;
+    verify_stateless_public_v1(&material, &inner_public, &inner)?;
+    verify_stateless_public_v1(&material, &wrapper_public, &wrapper)?;
+    super::ordinary_cash_commit_wrapper::require_exact_ordinary_cash_wrapper_inner_v1(
+        &material,
+        &inner_public,
+        &wrapper_public,
+        &inner,
+        &wrapper,
+        wrapper_history_fold_originals,
+    )
+    .map_err(integrity)?;
+    // Same exact originals and both complete histories are now joined through the unchanged
+    // actual paired Wrapper audits, rather than independent same-semantic proof acceptance.
     guard.recheck_terminal_selection(selection)?;
     selection.recheck_selected_originals_and_current_custody()
 }
@@ -366,6 +395,22 @@ pub(super) fn selected_public(
     selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
     material: &OrdinaryCashTerminalMaterialV1<'_>,
     wire: &OrdinaryCashProofPairWireV1,
+) -> Result<OrdinaryCashTerminalPublicV1> {
+    selected_public_values_v1(
+        selection,
+        material,
+        [wire.eq_protocol_digest, wire.ep_protocol_digest],
+        [wire.eq_deferred_audit, wire.ep_deferred_audit],
+    )
+}
+/// Same exact Native public metadata constructor for discovery, generation and admission.
+/// Discovery supplies provisional audit data only; the real producer replaces both values with
+/// complete scalar audits before proof writing. This helper grants no decoded proof authority.
+pub(super) fn selected_public_values_v1(
+    selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
+    material: &OrdinaryCashTerminalMaterialV1<'_>,
+    protocols: [DigestV1; 2],
+    audits: [DigestV1; 2],
 ) -> Result<OrdinaryCashTerminalPublicV1> {
     let before = selection.selected_predecessor_state();
     let after = selection.selected_successor_state();
@@ -450,10 +495,10 @@ pub(super) fn selected_public(
         )
         .map_err(integrity)?,
         redemption_manifest_digest: body.artifact_manifest_digest,
-        eq_deferred_audit: wire.eq_deferred_audit,
-        ep_deferred_audit: wire.ep_deferred_audit,
-        eq_protocol_digest: wire.eq_protocol_digest,
-        ep_protocol_digest: wire.ep_protocol_digest,
+        eq_deferred_audit: audits[0],
+        ep_deferred_audit: audits[1],
+        eq_protocol_digest: protocols[0],
+        ep_protocol_digest: protocols[1],
     };
     value.validate().map_err(integrity)?;
     Ok(value)
@@ -476,12 +521,70 @@ fn output_originals_digest(
             hash.update(original);
         }
     } else if selection.terminal_body().operation == 4 {
-        hash.update(selection.terminal_body().artifact_manifest_digest);
+        let (output, beneficiary, manifest) = selection
+            .redeem_transport_originals()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        output
+            .validate_against_originals(
+                beneficiary,
+                selection.preparation_clock_context(),
+                selection.authenticated_release()?.as_ref(),
+            )
+            .map_err(integrity)?;
+        for original in [
+            norito::encode_canonical(output).map_err(integrity)?,
+            norito::encode_canonical(beneficiary).map_err(integrity)?,
+            manifest.to_vec(),
+        ] {
+            hash.update(
+                u64::try_from(original.len())
+                    .map_err(integrity)?
+                    .to_le_bytes(),
+            );
+            hash.update(&original);
+        }
     } else {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
     Ok(hash.finalize().into())
 }
+/// Stateless bounded mathematical decoder under the same actual authenticated protocol material.
+/// It produces data only; genuine current/history decisions remain mandatory below.
+pub(super) fn decode_stateless_original_v1(
+    original: &[u8],
+    relation: u8,
+    material: &OrdinaryCashTerminalMaterialV1<'_>,
+) -> Result<OrdinaryCashProofPairWireV1> {
+    decode_exact(original, relation, material)
+}
+/// Same real ordinary Terminal/Wrapper proof and complete carried-history decisions for Core.
+/// No caller-provided verifier callback or Native money result is introduced.
+pub(super) fn verify_stateless_public_v1(
+    material: &OrdinaryCashTerminalMaterialV1<'_>,
+    public: &OrdinaryCashTerminalPublicV1,
+    wire: &OrdinaryCashProofPairWireV1,
+) -> Result<()> {
+    public.validate().map_err(integrity)?;
+    let expected = match wire.relation {
+        1 => material.terminal_protocol_digests,
+        2 => material.wrapper_protocol_digests,
+        _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+    };
+    if wire.release_id != material.release_id
+        || wire.artifact_manifest_digest != material.artifact_manifest_digest
+        || [wire.eq_protocol_digest, wire.ep_protocol_digest] != expected
+        || public.release_id != material.release_id
+        || public.suite_id != material.suite_id
+        || public.vk_set_digest != material.vk_set_digest
+        || public.eq_deferred_audit != wire.eq_deferred_audit
+        || public.ep_deferred_audit != wire.ep_deferred_audit
+        || [public.eq_protocol_digest, public.ep_protocol_digest] != expected
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    verify_wire(material, public, wire)
+}
+
 fn decode_exact(
     original: &[u8],
     relation: u8,

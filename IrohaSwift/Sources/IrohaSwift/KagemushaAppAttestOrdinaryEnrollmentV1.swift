@@ -38,7 +38,7 @@ public struct KagemushaOrdinaryEnrollmentOriginalRequestV1: Sendable {
   public let idempotencyKey: String
   public let body: Data
   fileprivate init(stage: String, value: OrdinaryEnrollmentRequestRecord) {
-    path = "/v1/offline/enrollment/ordinary/" + stage
+    path = "/v1/kagemusha/enrollment/ordinary/" + stage
     requestID = value.requestID; idempotencyKey = value.idempotencyKey; body = Data(value.body)
   }
 }

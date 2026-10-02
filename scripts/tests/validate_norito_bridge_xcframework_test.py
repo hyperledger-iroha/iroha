@@ -51,6 +51,11 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             shutil.copyfile(REPOSITORY_ROOT / relative, destination)
         graph = b'version = 4\n\n[[package]]\nname = "validator-fixture"\nversion = "0.0.0"\n'
         (source_root / "Cargo.lock").write_bytes(graph)
+        graph_directory = Path(self.temporary.name).resolve() / "graph"
+        graph_directory.mkdir()
+        self.lockfile = graph_directory / "Cargo.lock"
+        self.lockfile.write_bytes(graph)
+        self.lockfile.chmod(0o400)
         graph_owner = source_root / "ci/privacy_sdk_cargo_lockfile.sh"
         graph_owner.parent.mkdir()
         graph_owner.write_text(
@@ -63,6 +68,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.artifact_root = Path(self.temporary.name).resolve() / "artifact"
         self.xcframework = self.artifact_root / "NoritoBridge.xcframework"
         self.xcframework.mkdir(parents=True)
+        (self.xcframework / ".privacy-production-enabled").touch()
         self.hashes: dict[str, str] = {}
         header = (
             ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
@@ -112,8 +118,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.payload = {
             "version": "1.0.0",
             "native_bridge_abi_version": 25,
-            "privacy_production_enabled": False,
-            "cargo_features": [],
+            "privacy_production_enabled": True,
+            "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -231,7 +237,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def validate(self, lockfile: Path | None = None) -> None:
         if lockfile is None:
-            lockfile = ROOT / "Cargo.lock"
+            lockfile = self.lockfile
         validator.validate(
             root=ROOT,
             lockfile_path=lockfile,
@@ -246,6 +252,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             external = Path(directory).resolve() / "Cargo.lock"
             external.write_bytes((ROOT / "Cargo.lock").read_bytes())
+            external.chmod(0o400)
             root_before = (ROOT / "Cargo.lock").read_bytes()
             source_seal = validator._load_swift_pin_owner(ROOT)
             digest = hashlib.sha256(external.read_bytes()).hexdigest()
@@ -277,7 +284,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                         expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
                         swift_loader=self.loader,
                     )
+            external.chmod(0o600)
             external.write_bytes(b"unreviewed validator fixture\n")
+            external.chmod(0o400)
             with self.assertRaisesRegex(validator.ValidationError, "canonical reviewed graph"):
                 validator.validate(
                     root=ROOT, lockfile_path=external, xcframework=self.xcframework,
@@ -290,7 +299,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "explicit external canonical graph snapshot"):
             validator._validate_root_identity(ROOT, payload, ROOT / "Cargo.lock")
 
-    def test_privacy_artifact_requires_readonly_external_bytes_but_development_does_not(self) -> None:
+    def test_every_native_artifact_requires_readonly_external_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             external = Path(directory).resolve() / "Cargo.lock"
             external.write_bytes((ROOT / "Cargo.lock").read_bytes())
@@ -298,7 +307,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             external.chmod(0o600)
             with self.assertRaisesRegex(validator.ValidationError, "must be read-only"):
                 validator._validate_root_identity(ROOT, payload, external)
-            validator._validate_root_identity(ROOT, self.payload, external)
+            with self.assertRaisesRegex(validator.ValidationError, "must be read-only"):
+                validator._validate_root_identity(ROOT, self.payload, external)
             external.chmod(0o400)
             validator._validate_root_identity(ROOT, payload, external)
             self.assertEqual(external.read_bytes(), (ROOT / "Cargo.lock").read_bytes())
@@ -310,6 +320,25 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 manifest_path=self.manifest, manifest_link=self.manifest_link,
                 expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
             )
+
+    def test_rejects_disabled_or_non_boolean_native_support(self) -> None:
+        for value in (False, 0, 1, "true", None):
+            with self.subTest(value=value):
+                self.payload["privacy_production_enabled"] = value
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "mandatory privacy support"):
+                    self.validate()
+
+    def test_rejects_omitted_native_feature_and_marker(self) -> None:
+        self.payload["cargo_features"] = []
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "Cargo feature inventory"):
+            self.validate()
+        self.payload["cargo_features"] = ["privacy-production-enabled"]
+        self.write_manifest()
+        (self.xcframework / ".privacy-production-enabled").unlink()
+        with self.assertRaisesRegex(validator.ValidationError, "top-level"):
+            self.validate()
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
@@ -399,7 +428,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.write_manifest()
         arguments = {
             "root": ROOT,
-            "lockfile_path": ROOT / "Cargo.lock",
+            "lockfile_path": self.lockfile,
             "xcframework": self.xcframework,
             "manifest_path": self.manifest,
             "manifest_link": self.manifest_link,
@@ -423,7 +452,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ):
             validator.validate(
                 root=ROOT,
-            lockfile_path=ROOT / "Cargo.lock",
+            lockfile_path=self.lockfile,
                 xcframework=self.xcframework,
                 manifest_path=self.manifest,
                 manifest_link=self.manifest_link,
@@ -713,6 +742,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             lockfile.write_bytes((ROOT / "Cargo.lock").read_bytes())
             lockfile.chmod(0o400)
             marker = self.xcframework / ".privacy-production-enabled"
+            marker.unlink()
             marker.mkdir()
             with self.assertRaisesRegex(validator.ValidationError, "regular file"):
                 self.validate(lockfile)

@@ -10,6 +10,7 @@ pub use ordinary_native::{
     KagemushaNativePreparedEnrollmentRequestV1, KagemushaOrdinaryNativeArtifactResolverV1,
     KagemushaOrdinaryNativeCurrentWalletOriginalV1, KagemushaOrdinaryNativeInventoryV1,
     KagemushaOrdinaryNativeNodeTargetV1, KagemushaOrdinaryNativeOriginalDescriptorV1,
+    assemble_kagemusha_ordinary_native_clock_selection_v1,
     assemble_kagemusha_ordinary_native_inventory_v1,
 };
 pub(crate) mod bounded_async_response;

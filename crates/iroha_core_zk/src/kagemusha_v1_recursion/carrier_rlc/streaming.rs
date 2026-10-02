@@ -10,12 +10,9 @@ use super::*;
 use halo2_base::ContextCell;
 use zeroize::Zeroize;
 
-const MAX_PACKS: usize = KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-    .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
-
 /// Nonsecret identity of the existing BUS equality target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Binding {
+pub(in crate::kagemusha_v1_recursion) enum Binding {
     /// The original virtual cell; absence fails when constraint copies are required.
     Virtual(Option<ContextCell>),
     /// Store one completed ternary quotient pack for its later BUS copy.
@@ -29,17 +26,17 @@ pub(super) enum Binding {
 /// No enum or AssignedValue payload shares this storage. The default explicitly
 /// overwrites every initialized field, independently of binding variant layout.
 #[derive(Clone, Copy)]
-pub(super) struct RowValues<F: KagemushaPoseidonFieldV1> {
+pub(in crate::kagemusha_v1_recursion) struct RowValues<F: KagemushaPoseidonFieldV1> {
     /// Logical arithmetic fields in the unchanged frozen-oracle index order.
-    pub(super) values: [F; CLAIM_RLC_COLUMNS],
+    pub(in crate::kagemusha_v1_recursion) values: [F; CARRIER_RLC_COLUMNS],
     /// Fixed schedule power for a preprocess row, zero in every other mode.
-    pub(super) ternary_power: F,
+    pub(in crate::kagemusha_v1_recursion) ternary_power: F,
 }
 
 impl<F: KagemushaPoseidonFieldV1> Default for RowValues<F> {
     fn default() -> Self {
         Self {
-            values: [F::ZERO; CLAIM_RLC_COLUMNS],
+            values: [F::ZERO; CARRIER_RLC_COLUMNS],
             ternary_power: F::ZERO,
         }
     }
@@ -48,16 +45,16 @@ impl<F: KagemushaPoseidonFieldV1> Default for RowValues<F> {
 impl<F: KagemushaPoseidonFieldV1> zeroize::DefaultIsZeroes for RowValues<F> {}
 
 /// One emitted logical record, owning scalar cleanup and only cell/copy metadata.
-pub(super) struct StreamRow<F: KagemushaPoseidonFieldV1> {
+pub(in crate::kagemusha_v1_recursion) struct StreamRow<F: KagemushaPoseidonFieldV1> {
     payload: RowValues<F>,
     /// The unchanged arithmetic/boundary opcode.
-    pub(super) mode: ClaimRlcRowModeV1,
+    pub(in crate::kagemusha_v1_recursion) mode: CarrierRlcRowModeV1,
     /// An EvaluateB row that completes a quotient pack.
-    pub(super) store_pack: bool,
+    pub(in crate::kagemusha_v1_recursion) store_pack: bool,
     /// An EvaluateA row that evaluates a previously stored quotient pack.
-    pub(super) load_pack: bool,
+    pub(in crate::kagemusha_v1_recursion) load_pack: bool,
     /// Only virtual-cell identity or pack coordinates; never an assigned scalar.
-    pub(super) binding: Option<Binding>,
+    pub(in crate::kagemusha_v1_recursion) binding: Option<Binding>,
 }
 
 impl<F: KagemushaPoseidonFieldV1> std::ops::Deref for StreamRow<F> {
@@ -74,7 +71,7 @@ impl<F: KagemushaPoseidonFieldV1> std::ops::DerefMut for StreamRow<F> {
 }
 
 impl<F: KagemushaPoseidonFieldV1> StreamRow<F> {
-    fn new(state: ClaimRlcStateV1, mode: ClaimRlcRowModeV1, binding: Option<Binding>) -> Self {
+    fn new(state: CarrierRlcStateV1, mode: CarrierRlcRowModeV1, binding: Option<Binding>) -> Self {
         #[cfg(test)]
         LIVE_ROWS.with(|live| {
             live.set(live.get() + 1);
@@ -91,38 +88,39 @@ impl<F: KagemushaPoseidonFieldV1> StreamRow<F> {
             load_pack: false,
             binding,
         };
-        row.values[CLAIM_RLC_CHALLENGE_A] = F::from_u128(state.challenge_a);
-        row.values[CLAIM_RLC_CHALLENGE_B] = F::from_u128(state.challenge_b);
-        row.values[CLAIM_RLC_ACCUMULATOR_A] = F::from_u128(state.accumulator_a);
-        row.values[CLAIM_RLC_ACCUMULATOR_B] = F::from_u128(state.accumulator_b);
-        row.values[CLAIM_RLC_QUOTIENT_PACK] = F::from_u128(state.quotient_pack);
-        row.values[CLAIM_RLC_COEFFICIENT] = F::from_u128(state.coefficient);
+        row.values[CARRIER_RLC_CHALLENGE_A] = F::from_u128(state.challenge_a);
+        row.values[CARRIER_RLC_CHALLENGE_B] = F::from_u128(state.challenge_b);
+        row.values[CARRIER_RLC_ACCUMULATOR_A] = F::from_u128(state.accumulator_a);
+        row.values[CARRIER_RLC_ACCUMULATOR_B] = F::from_u128(state.accumulator_b);
+        row.values[CARRIER_RLC_QUOTIENT_PACK] = F::from_u128(state.quotient_pack);
+        row.values[CARRIER_RLC_COEFFICIENT] = F::from_u128(state.coefficient);
         row
     }
 
     /// The same three fixed-column values as the retained vector encoder.
-    pub(super) fn fixed_encoding(&self) -> Result<[F; 3], PlonkError> {
-        if self.store_pack && !matches!(self.mode, ClaimRlcRowModeV1::EvaluateB)
-            || self.load_pack && !matches!(self.mode, ClaimRlcRowModeV1::EvaluateA)
-            || !matches!(self.mode, ClaimRlcRowModeV1::Preprocess) && self.ternary_power != F::ZERO
+    pub(in crate::kagemusha_v1_recursion) fn fixed_encoding(&self) -> Result<[F; 3], PlonkError> {
+        if self.store_pack && !matches!(self.mode, CarrierRlcRowModeV1::EvaluateB)
+            || self.load_pack && !matches!(self.mode, CarrierRlcRowModeV1::EvaluateA)
+            || !matches!(self.mode, CarrierRlcRowModeV1::Preprocess)
+                && self.ternary_power != F::ZERO
         {
             return Err(PlonkError::Synthesis);
         }
         Ok(match self.mode {
-            ClaimRlcRowModeV1::StartA => [F::ZERO, F::ONE, F::ZERO],
-            ClaimRlcRowModeV1::StartB => [F::ZERO, F::ONE, F::ONE],
-            ClaimRlcRowModeV1::Preprocess => {
+            CarrierRlcRowModeV1::StartA => [F::ZERO, F::ONE, F::ZERO],
+            CarrierRlcRowModeV1::StartB => [F::ZERO, F::ONE, F::ONE],
+            CarrierRlcRowModeV1::Preprocess => {
                 if self.ternary_power == F::ZERO {
                     return Err(PlonkError::Synthesis);
                 }
                 [F::ONE, F::ZERO, self.ternary_power]
             }
-            ClaimRlcRowModeV1::EvaluateA => [
+            CarrierRlcRowModeV1::EvaluateA => [
                 F::ONE,
                 F::ONE,
                 if self.load_pack { F::ONE } else { F::ZERO },
             ],
-            ClaimRlcRowModeV1::EvaluateB => [
+            CarrierRlcRowModeV1::EvaluateB => [
                 F::ONE,
                 F::ONE,
                 if self.store_pack {
@@ -131,26 +129,26 @@ impl<F: KagemushaPoseidonFieldV1> StreamRow<F> {
                     F::from(2)
                 },
             ],
-            ClaimRlcRowModeV1::EndA => [F::ZERO, F::ONE, F::from(2)],
-            ClaimRlcRowModeV1::EndB => [F::ZERO, F::ONE, F::from(3)],
+            CarrierRlcRowModeV1::EndA => [F::ZERO, F::ONE, F::from(2)],
+            CarrierRlcRowModeV1::EndB => [F::ZERO, F::ONE, F::from(3)],
         })
     }
 
     fn set_range_limbs(&mut self, first: u128, second: u128) -> Result<(), PlonkError> {
         let first_top_bits = match self.mode {
-            ClaimRlcRowModeV1::Preprocess => 8,
-            ClaimRlcRowModeV1::EvaluateA | ClaimRlcRowModeV1::EvaluateB => 6,
+            CarrierRlcRowModeV1::Preprocess => 8,
+            CarrierRlcRowModeV1::EvaluateA | CarrierRlcRowModeV1::EvaluateB => 6,
             _ => return Err(PlonkError::Synthesis),
         };
-        self.values[CLAIM_RLC_SCALED_FIRST_TOP] =
-            F::from_u128((first >> 120) << (CLAIM_RLC_RADIX_BITS - first_top_bits));
-        self.values[CLAIM_RLC_SCALED_SECOND_TOP] =
-            F::from_u128((second >> 120) << (CLAIM_RLC_RADIX_BITS - 7));
+        self.values[CARRIER_RLC_SCALED_FIRST_TOP] =
+            F::from_u128((first >> 120) << (CARRIER_RLC_RADIX_BITS - first_top_bits));
+        self.values[CARRIER_RLC_SCALED_SECOND_TOP] =
+            F::from_u128((second >> 120) << (CARRIER_RLC_RADIX_BITS - 7));
         for (half, mut value) in [first, second].into_iter().enumerate() {
             for limb in 0..9 {
-                self.values[CLAIM_RLC_RANGE_START + half * 9 + limb] =
-                    F::from_u128(value & (CLAIM_RLC_RADIX - 1));
-                value >>= CLAIM_RLC_RADIX_BITS;
+                self.values[CARRIER_RLC_RANGE_START + half * 9 + limb] =
+                    F::from_u128(value & (CARRIER_RLC_RADIX - 1));
+                value >>= CARRIER_RLC_RADIX_BITS;
             }
             debug_assert_eq!(value, 0);
         }
@@ -159,28 +157,30 @@ impl<F: KagemushaPoseidonFieldV1> StreamRow<F> {
 
     fn project_into(
         &self,
-        values: &mut [[F; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW],
+        values: &mut [[F; CARRIER_RLC_PHYSICAL_COLUMNS]; CARRIER_RLC_ROWS_PER_LOGICAL_ROW],
     ) {
-        for (logical, physical, half) in CLAIM_RLC_STATE_LAYOUT {
+        for (logical, physical, half) in CARRIER_RLC_STATE_LAYOUT {
             values[half][physical] = self.values[logical];
         }
         for (half, values) in values.iter_mut().enumerate() {
-            values[CLAIM_RLC_PHYSICAL_STATE_COLUMNS..CLAIM_RLC_PHYSICAL_COLUMNS - 1]
+            values[CARRIER_RLC_PHYSICAL_STATE_COLUMNS..CARRIER_RLC_PHYSICAL_COLUMNS - 1]
                 .copy_from_slice(
-                    &self.values
-                        [CLAIM_RLC_RANGE_START + 9 * half..CLAIM_RLC_RANGE_START + 9 * (half + 1)],
+                    &self.values[CARRIER_RLC_RANGE_START + 9 * half
+                        ..CARRIER_RLC_RANGE_START + 9 * (half + 1)],
                 );
-            values[CLAIM_RLC_PHYSICAL_COLUMNS - 1] = self.values[CLAIM_RLC_SCALED_FIRST_TOP + half];
+            values[CARRIER_RLC_PHYSICAL_COLUMNS - 1] =
+                self.values[CARRIER_RLC_SCALED_FIRST_TOP + half];
         }
     }
 
     /// Copy the physical projection solely for frozen-oracle test comparisons.
     /// Production instead projects directly into its owned physical cleanup guard.
     #[cfg(test)]
-    pub(super) fn physical_values(
+    pub(in crate::kagemusha_v1_recursion) fn physical_values(
         &self,
-    ) -> [[F; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW] {
-        let mut values = [[F::ZERO; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW];
+    ) -> [[F; CARRIER_RLC_PHYSICAL_COLUMNS]; CARRIER_RLC_ROWS_PER_LOGICAL_ROW] {
+        let mut values =
+            [[F::ZERO; CARRIER_RLC_PHYSICAL_COLUMNS]; CARRIER_RLC_ROWS_PER_LOGICAL_ROW];
         self.project_into(&mut values);
         values
     }
@@ -200,7 +200,7 @@ impl<F: KagemushaPoseidonFieldV1> Drop for StreamRow<F> {
     }
 }
 
-struct GuardedState(ClaimRlcStateV1);
+struct GuardedState(CarrierRlcStateV1);
 
 impl Drop for GuardedState {
     fn drop(&mut self) {
@@ -227,16 +227,16 @@ impl Drop for GuardedState {
     }
 }
 
-struct GuardedPacks {
-    values: [u128; MAX_PACKS],
+struct GuardedPacks<const PACKS: usize> {
+    values: [u128; PACKS],
     len: usize,
     ternary_power: u128,
 }
 
-impl GuardedPacks {
+impl<const PACKS: usize> GuardedPacks<PACKS> {
     fn new() -> Self {
         Self {
-            values: [0; MAX_PACKS],
+            values: [0; PACKS],
             len: 0,
             ternary_power: 1,
         }
@@ -250,7 +250,7 @@ impl GuardedPacks {
     }
 }
 
-impl Drop for GuardedPacks {
+impl<const PACKS: usize> Drop for GuardedPacks<PACKS> {
     fn drop(&mut self) {
         self.values.zeroize();
         self.ternary_power.zeroize();
@@ -264,14 +264,14 @@ impl Drop for GuardedPacks {
 
 #[derive(Clone, Copy)]
 struct PhysicalValues<F: KagemushaPoseidonFieldV1> {
-    values: [[F; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW],
+    values: [[F; CARRIER_RLC_PHYSICAL_COLUMNS]; CARRIER_RLC_ROWS_PER_LOGICAL_ROW],
     fixed: [F; 3],
 }
 
 impl<F: KagemushaPoseidonFieldV1> Default for PhysicalValues<F> {
     fn default() -> Self {
         Self {
-            values: [[F::ZERO; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW],
+            values: [[F::ZERO; CARRIER_RLC_PHYSICAL_COLUMNS]; CARRIER_RLC_ROWS_PER_LOGICAL_ROW],
             fixed: [F::ZERO; 3],
         }
     }
@@ -334,43 +334,43 @@ where
 
     fn evaluations(
         &mut self,
-        state: &mut ClaimRlcStateV1,
+        state: &mut CarrierRlcStateV1,
         pack_load: Option<(usize, usize)>,
         pack_store: Option<(usize, usize)>,
     ) -> Result<(), PlonkError> {
         let (quotient_a, remainder_a) =
-            claim_rlc_native_step_v1(state.accumulator_a, state.challenge_a, state.coefficient)
+            carrier_rlc_native_step_v1(state.accumulator_a, state.challenge_a, state.coefficient)
                 .map_err(|_| PlonkError::Synthesis)?;
         let binding = pack_load.map(|(carrier, pack)| Binding::PackLoad { carrier, pack });
-        let mut evaluate_a = StreamRow::new(*state, ClaimRlcRowModeV1::EvaluateA, binding);
-        evaluate_a.values[CLAIM_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_a);
-        evaluate_a.values[CLAIM_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_a);
-        evaluate_a.values[CLAIM_RLC_REMAINDER_INVERSE] =
-            claim_rlc_non_modulus_inverse_v1::<F>(remainder_a)
+        let mut evaluate_a = StreamRow::new(*state, CarrierRlcRowModeV1::EvaluateA, binding);
+        evaluate_a.values[CARRIER_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_a);
+        evaluate_a.values[CARRIER_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_a);
+        evaluate_a.values[CARRIER_RLC_REMAINDER_INVERSE] =
+            carrier_rlc_non_modulus_inverse_v1::<F>(remainder_a)
                 .map_err(|_| PlonkError::Synthesis)?;
         if pack_load.is_some() {
             evaluate_a.load_pack = true;
-            evaluate_a.values[CLAIM_RLC_BUS] = F::from_u128(state.coefficient);
+            evaluate_a.values[CARRIER_RLC_BUS] = F::from_u128(state.coefficient);
         }
         evaluate_a.set_range_limbs(quotient_a, remainder_a)?;
         self.row(evaluate_a)?;
         state.accumulator_a = remainder_a;
 
         let (quotient_b, remainder_b) =
-            claim_rlc_native_step_v1(state.accumulator_b, state.challenge_b, state.coefficient)
+            carrier_rlc_native_step_v1(state.accumulator_b, state.challenge_b, state.coefficient)
                 .map_err(|_| PlonkError::Synthesis)?;
-        let mut evaluate_b = StreamRow::new(*state, ClaimRlcRowModeV1::EvaluateB, None);
-        evaluate_b.values[CLAIM_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_b);
-        evaluate_b.values[CLAIM_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_b);
-        evaluate_b.values[CLAIM_RLC_REMAINDER_INVERSE] =
-            claim_rlc_non_modulus_inverse_v1::<F>(remainder_b)
+        let mut evaluate_b = StreamRow::new(*state, CarrierRlcRowModeV1::EvaluateB, None);
+        evaluate_b.values[CARRIER_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_b);
+        evaluate_b.values[CARRIER_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_b);
+        evaluate_b.values[CARRIER_RLC_REMAINDER_INVERSE] =
+            carrier_rlc_non_modulus_inverse_v1::<F>(remainder_b)
                 .map_err(|_| PlonkError::Synthesis)?;
         evaluate_b.set_range_limbs(quotient_b, remainder_b)?;
         // The frozen emitter patches its just-pushed EvaluateB row with these fields. The
         // same pack boundary is known here before dispatch, so no old row must be retained.
         if let Some((carrier, pack)) = pack_store {
             evaluate_b.store_pack = true;
-            evaluate_b.values[CLAIM_RLC_BUS] = F::from_u128(state.quotient_pack);
+            evaluate_b.values[CARRIER_RLC_BUS] = F::from_u128(state.quotient_pack);
             evaluate_b.binding = Some(Binding::PackStore { carrier, pack });
         }
         self.row(evaluate_b)?;
@@ -381,15 +381,20 @@ where
 
 /// Emit the existing complete schedule, releasing each guarded row before its successor.
 ///
-/// The production caller always supplies the unchanged capacity 4090. Smaller capacities are
-/// used only by existing fixed-schedule tests; the buffer retains at most 52 quotient packs.
+/// Each caller supplies its declared fixed capacity. The pack owner is an exact compile-time
+/// bound: 52 for the original 4090-cell Claim and 103 for an 8162-cell Credential lane.
 /// A sink failure or unwind drops all live row/state/pack guards and stops the successful prefix.
-pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
-    machine: &KagemushaClaimCarrierRlcMachineV1<F>,
+pub(in crate::kagemusha_v1_recursion) fn emit_rows_with_capacity<
+    F: KagemushaPoseidonFieldV1,
+    const CAPACITY: usize,
+    const CARRIERS: usize,
+    const PACKS: usize,
+>(
+    machine: &KagemushaCarrierRlcMachineV1<F, CAPACITY, CARRIERS, PACKS>,
     fixed_capacity: usize,
     mut sink: impl FnMut(usize, &StreamRow<F>) -> Result<(), PlonkError>,
 ) -> Result<usize, PlonkError> {
-    if fixed_capacity == 0 || fixed_capacity > KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 {
+    if fixed_capacity == 0 || fixed_capacity > CAPACITY {
         return Err(PlonkError::Synthesis);
     }
     let challenge_a = if machine.use_unknown {
@@ -406,15 +411,15 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
     };
     if challenge_a == 0
         || challenge_b == 0
-        || challenge_a > (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1)
-        || challenge_b > (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1)
+        || challenge_a > (1_u128 << CARRIER_RLC_CHALLENGE_BITS_V1)
+        || challenge_b > (1_u128 << CARRIER_RLC_CHALLENGE_BITS_V1)
     {
         return Err(PlonkError::Synthesis);
     }
     let physical_rows = machine
         .required_rows_with_capacity(fixed_capacity)
         .map_err(|_| PlonkError::Synthesis)?;
-    let expected = physical_rows / CLAIM_RLC_ROWS_PER_LOGICAL_ROW;
+    let expected = physical_rows / CARRIER_RLC_ROWS_PER_LOGICAL_ROW;
     let mut emit = Emitter {
         sink: &mut sink,
         next: 0,
@@ -422,7 +427,7 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
         marker: std::marker::PhantomData,
     };
     for (carrier_index, carrier) in machine.carriers.iter().enumerate() {
-        let mut state = GuardedState(ClaimRlcStateV1 {
+        let mut state = GuardedState(CarrierRlcStateV1 {
             challenge_a,
             challenge_b,
             accumulator_a: 0,
@@ -430,20 +435,20 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
             quotient_pack: 0,
             coefficient: 0,
         });
-        let mut packs = GuardedPacks::new();
+        let mut packs = GuardedPacks::<PACKS>::new();
         let mut start_a = StreamRow::new(
             state.0,
-            ClaimRlcRowModeV1::StartA,
+            CarrierRlcRowModeV1::StartA,
             Some(Binding::Virtual(machine.challenge_a.cell)),
         );
-        start_a.values[CLAIM_RLC_BUS] = F::from_u128(challenge_a);
+        start_a.values[CARRIER_RLC_BUS] = F::from_u128(challenge_a);
         emit.row(start_a)?;
         let mut start_b = StreamRow::new(
             state.0,
-            ClaimRlcRowModeV1::StartB,
+            CarrierRlcRowModeV1::StartB,
             Some(Binding::Virtual(machine.challenge_b.cell)),
         );
-        start_b.values[CLAIM_RLC_BUS] = F::from_u128(challenge_b);
+        start_b.values[CARRIER_RLC_BUS] = F::from_u128(challenge_b);
         emit.row(start_b)?;
         for (value_index, assigned) in carrier.values.iter().copied().enumerate() {
             let value = if machine.use_unknown {
@@ -452,23 +457,23 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
                 assigned_u128_cell_v1(assigned, "claim RLC carrier value")
                     .map_err(|_| PlonkError::Synthesis)?
             };
-            let quotient = value / CLAIM_CARRIER_RLC_MODULUS_V1;
-            let remainder = value % CLAIM_CARRIER_RLC_MODULUS_V1;
-            if quotient >= CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1 {
+            let quotient = value / CARRIER_RLC_MODULUS_V1;
+            let remainder = value % CARRIER_RLC_MODULUS_V1;
+            if quotient >= CARRIER_RLC_QUOTIENT_RADIX_V1 {
                 return Err(PlonkError::Synthesis);
             }
             let mut preprocess = StreamRow::new(
                 state.0,
-                ClaimRlcRowModeV1::Preprocess,
+                CarrierRlcRowModeV1::Preprocess,
                 Some(Binding::Virtual(assigned.cell)),
             );
-            preprocess.values[CLAIM_RLC_BUS] = F::from_u128(value);
-            preprocess.values[CLAIM_RLC_VALUE] = F::from_u128(value);
-            preprocess.values[CLAIM_RLC_QUOTIENT_BIT_0] = F::from_u128(quotient & 1);
-            preprocess.values[CLAIM_RLC_QUOTIENT_BIT_1] = F::from_u128(quotient >> 1);
-            preprocess.values[CLAIM_RLC_RAW_REMAINDER] = F::from_u128(remainder);
-            preprocess.values[CLAIM_RLC_REMAINDER_INVERSE] =
-                claim_rlc_non_modulus_inverse_v1::<F>(remainder)
+            preprocess.values[CARRIER_RLC_BUS] = F::from_u128(value);
+            preprocess.values[CARRIER_RLC_VALUE] = F::from_u128(value);
+            preprocess.values[CARRIER_RLC_QUOTIENT_BIT_0] = F::from_u128(quotient & 1);
+            preprocess.values[CARRIER_RLC_QUOTIENT_BIT_1] = F::from_u128(quotient >> 1);
+            preprocess.values[CARRIER_RLC_RAW_REMAINDER] = F::from_u128(remainder);
+            preprocess.values[CARRIER_RLC_REMAINDER_INVERSE] =
+                carrier_rlc_non_modulus_inverse_v1::<F>(remainder)
                     .map_err(|_| PlonkError::Synthesis)?;
             preprocess.ternary_power = F::from_u128(packs.ternary_power);
             preprocess.set_range_limbs(value, remainder)?;
@@ -483,7 +488,7 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
                 )
                 .ok_or(PlonkError::Synthesis)?;
             state.0.coefficient = remainder;
-            let pack_end = (value_index + 1) % CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1 == 0
+            let pack_end = (value_index + 1) % CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1 == 0
                 || value_index + 1 == carrier.values.len();
             let pack_store = pack_end.then_some((carrier_index, packs.len));
             emit.evaluations(&mut state.0, None, pack_store)?;
@@ -494,7 +499,7 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
             } else {
                 packs.ternary_power = packs
                     .ternary_power
-                    .checked_mul(CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1)
+                    .checked_mul(CARRIER_RLC_QUOTIENT_RADIX_V1)
                     .ok_or(PlonkError::Synthesis)?;
             }
         }
@@ -502,7 +507,7 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
             state.0.coefficient = packs.values[pack_index];
             emit.evaluations(&mut state.0, Some((carrier_index, pack_index)), None)?;
         }
-        if packs.len != fixed_capacity.div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
+        if packs.len != fixed_capacity.div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
             return Err(PlonkError::Synthesis);
         }
         let expected_a = if machine.use_unknown {
@@ -517,23 +522,22 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
             assigned_u128_cell_v1(carrier.expected_b, "claim RLC expected B")
                 .map_err(|_| PlonkError::Synthesis)?
         };
-        if expected_a >= CLAIM_CARRIER_RLC_MODULUS_V1 || expected_b >= CLAIM_CARRIER_RLC_MODULUS_V1
-        {
+        if expected_a >= CARRIER_RLC_MODULUS_V1 || expected_b >= CARRIER_RLC_MODULUS_V1 {
             return Err(PlonkError::Synthesis);
         }
         let mut end_a = StreamRow::new(
             state.0,
-            ClaimRlcRowModeV1::EndA,
+            CarrierRlcRowModeV1::EndA,
             Some(Binding::Virtual(carrier.expected_a.cell)),
         );
-        end_a.values[CLAIM_RLC_BUS] = F::from_u128(expected_a);
+        end_a.values[CARRIER_RLC_BUS] = F::from_u128(expected_a);
         emit.row(end_a)?;
         let mut end_b = StreamRow::new(
             state.0,
-            ClaimRlcRowModeV1::EndB,
+            CarrierRlcRowModeV1::EndB,
             Some(Binding::Virtual(carrier.expected_b.cell)),
         );
-        end_b.values[CLAIM_RLC_BUS] = F::from_u128(expected_b);
+        end_b.values[CARRIER_RLC_BUS] = F::from_u128(expected_b);
         emit.row(end_b)?;
     }
     if emit.next != expected {
@@ -544,9 +548,14 @@ pub(super) fn emit_rows_with_capacity<F: KagemushaPoseidonFieldV1>(
 
 /// Assign a complete streamed schedule after the caller loads the unchanged fixed range table.
 /// This preserves both half-row coordinates and the final sorted pack copy schedule.
-pub(super) fn synthesize_with_capacity<F: KagemushaPoseidonFieldV1>(
-    machine: &KagemushaClaimCarrierRlcMachineV1<F>,
-    config: &KagemushaClaimCarrierRlcConfigV1,
+pub(in crate::kagemusha_v1_recursion) fn synthesize_with_capacity<
+    F: KagemushaPoseidonFieldV1,
+    const CAPACITY: usize,
+    const CARRIERS: usize,
+    const PACKS: usize,
+>(
+    machine: &KagemushaCarrierRlcMachineV1<F, CAPACITY, CARRIERS, PACKS>,
+    config: &KagemushaCarrierRlcConfigV1,
     layouter: &mut impl Layouter<F>,
     copy_manager: &halo2_base::virtual_region::copy_constraints::SharedCopyConstraintManager<F>,
     witness_gen_only: bool,
@@ -564,7 +573,7 @@ pub(super) fn synthesize_with_capacity<F: KagemushaPoseidonFieldV1>(
             let mut pack_loads = std::collections::BTreeMap::<(usize, usize), Cell>::new();
             emit_rows_with_capacity(machine, fixed_capacity, |logical_row, row| {
                 let physical_start = logical_row
-                    .checked_mul(CLAIM_RLC_ROWS_PER_LOGICAL_ROW)
+                    .checked_mul(CARRIER_RLC_ROWS_PER_LOGICAL_ROW)
                     .ok_or(PlonkError::Synthesis)?;
                 let physical = GuardedPhysical::new(row)?;
                 let mut bus = None;
@@ -657,14 +666,14 @@ fn record_clear(kind: usize, zero: bool) {
 
 /// Reset only thread-local nonsecret cleanup counters for the focused regression tests.
 #[cfg(test)]
-pub(super) fn reset_cleanup_counts() {
+pub(in crate::kagemusha_v1_recursion) fn reset_cleanup_counts() {
     CLEARS.with(|counts| counts.set([0; 6]));
     LIVE_ROWS.with(|live| assert_eq!(live.get(), 0));
 }
 
 /// Read drop/zero-observation counters without reading freed memory or retaining secrets.
 #[cfg(test)]
-pub(super) fn cleanup_counts() -> [usize; 6] {
+pub(in crate::kagemusha_v1_recursion) fn cleanup_counts() -> [usize; 6] {
     CLEARS.with(std::cell::Cell::get)
 }
 
@@ -673,11 +682,16 @@ pub(super) fn cleanup_counts() -> [usize; 6] {
 /// The closure can succeed, return an error, or unwind. It receives no witness
 /// references; cleanup counters can inspect the guard only after its drop.
 #[cfg(test)]
-pub(super) fn with_physical_guard_for_test<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn with_physical_guard_for_test<
+    F: KagemushaPoseidonFieldV1,
+>(
     run: impl FnOnce() -> Result<(), PlonkError>,
 ) -> Result<(), PlonkError> {
     let mut physical = GuardedPhysical(PhysicalValues::<F>::default());
-    physical.0.values.fill([F::ONE; CLAIM_RLC_PHYSICAL_COLUMNS]);
+    physical
+        .0
+        .values
+        .fill([F::ONE; CARRIER_RLC_PHYSICAL_COLUMNS]);
     physical.0.fixed.fill(F::ONE);
     let result = run();
     drop(physical);

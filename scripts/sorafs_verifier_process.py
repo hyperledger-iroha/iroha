@@ -70,7 +70,11 @@ def _kill_and_reap_verifier(process: subprocess.Popen[bytes]) -> bool:
         while process.poll() is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return False
+                # The child can finish while this thread is descheduled after poll().
+                # Observe/reap it once more before declaring incomplete cleanup.
+                if process.poll() is None:
+                    return False
+                break
             try:
                 process.wait(timeout=min(remaining, 0.05))
             except subprocess.TimeoutExpired:
@@ -81,7 +85,8 @@ def _kill_and_reap_verifier(process: subprocess.Popen[bytes]) -> bool:
         while _verifier_process_group_exists(process):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return False
+                # The group can disappear after the preceding existence check.
+                return signal_ok and not _verifier_process_group_exists(process)
             signal_ok = kill_group() and signal_ok
             time.sleep(min(0.01, remaining))
         return signal_ok

@@ -190,6 +190,7 @@ mod tests {
         };
         let binding = KagemushaOrdinaryGuardDataBindingV1 {
             digests: core::array::from_fn(|_| assigned_digest(ctx, 0x51)),
+            account_binding: assigned_digest(ctx, 0x52),
             canonical_subject,
             approval_purpose: ctx.load_witness(F::from(
                 if matches!(mutation, Some(Mutation::Purpose)) {

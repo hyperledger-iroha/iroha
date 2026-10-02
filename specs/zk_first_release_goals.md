@@ -46,7 +46,15 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current merged base is `222e30c4` on `optimizations`. The workspace and
+The current merged base is `c09adfff` on `optimizations`. That merge changed 504
+source paths and committed conflict markers in 63 files. Reviewed merge repairs
+and the diagnosed fixture corrections are now applied. The repaired merge passes
+normal privacy builds, all three authentic pins and 1,061 selected controls.
+The model test build exposes two opaque-credential assertion compilation errors;
+their test-only correction is applied and awaits native execution. The subsequent
+stock-Cargo JavaScript workflow repair and X509 retained-query optimization require
+a fresh integrated build. No pre-merge result qualifies this source.
+The workspace and
 network results recorded against `051df111`, including the Kagami JSON fixture
 correction, are historical evidence for that source. That normal build passed
 workspace all-targets checking,
@@ -68,21 +76,23 @@ four-domain Metal coefficient parity also pass. Its maximum X509 proof and a
 fresh verifier pass cryptographic verification and byte/RSS limits, but fail the
 unchanged proving-time and literal virtual-address-space limits described below.
 
-The corrected normal Core/Kagami/SDK build and canonical 54-role producer pass.
-Two genuine finalized-execution fixture captures and their consumers agree byte
-for byte. The authentic sender fixture, five canonical artifacts, help output,
-54-role managed verifier and bounded retail-journal recovery correction are now
-integrated for a fresh native/SDK run. The last native identity selection passed
-three of four controls and failed cold Recover/Recover before that repair.
-The private SHA/RFC bridge passes normal production and optimized test compilation
-and all three genuinely regenerated profile/IO/projection pins. The expanded
-1,058-control privacy run finishes with 1,039 passes, 19 failures and no skips:
-five X509 fixture/shape assertions and fourteen IVM fixture/copyback failures.
-Successive SDK producer builds expose IVM fixture macro imports and unsupported
-JSON-array serialization; their partial artifacts do not qualify those builds.
-The fixture corrections and a new regression-test accessor repair require fresh
-native runs. The actual release-evidence Python suite passes all 130 tests without
-fixture or import substitutions. No component result closes any of the six goals.
+Before that merge, the corrected normal Core/Kagami/SDK build, genuine canonical
+fixture producers and consumers pass. The private SHA/RFC bridge passes normal
+production and optimized test compilation, all three authentic profile/IO/projection
+pins and all 1,061 selected privacy controls with no failures or skips. All 674
+ordinary bridge controls and two native top-up generations pass. Ten Kotlin fixture
+modes run twice with identical outputs. Their next consumer run refuses source
+drift before starting Gradle.
+
+The Core run executes 1,114 of its 1,180 planned controls: 1,084 pass and 30 fail.
+The last group overlaps the merge; 66 planned executions remain unrun. The failures
+identify missing SNS leases, a signed-parent time expectation, missing genesis
+consensus-key permission and a redundant bootstrap commit. Two separate native
+IVM capture diagnostics expose heap-allocation and retired compiler-syntax fixture
+errors. Reviewed fixture corrections require fresh execution. The release-evidence
+Python suite passes all 130 tests without fixture or import substitutions on its
+recorded source. Earlier failures remain retained. No component result closes any
+of the six goals.
 
 ### ZK01 — secret arithmetic
 
@@ -153,8 +163,10 @@ execution sequencing, integrated resource accounting and finalized State binding
 remain open. All 15 private lifecycle/history/access controls pass in the
 normal optimized native build. This component binds original private
 dispatcher, Owner and Initialization ports and retains canonical inactive packets;
-the added native descriptor/copyback producers and private partial-dispatch
-relations await integrated native validation. Governed runtime availability now
+the added private descriptor/copyback and partial-dispatch relations pass their
+26 selected controls before the merge. The two genuine native capture producers
+still require fixture repairs and successful producer/consumer execution.
+Governed runtime availability now
 has a distinct local deferral path, and publication checks the authenticated
 registry and immutable cache without transferring local key ownership into
 consensus state. Full instruction/region semantics, masking integration and the
@@ -238,8 +250,9 @@ columns and 20 quartic endpoint equations use original masked columns and
 existing authenticated openings. The bridge adds no public endpoint values or
 opening points. Independent source/algebra and ownership reviews pass within
 their stated component scope. Normal native builds and authentic regenerated pins
-pass; the ordinary selection exposes five X509 test failures after the relation
-change. Their corrections and the new maximum proof require native validation.
+pass; all five exposed X509 fixture/shape failures are corrected and pass in the
+1,061-control pre-merge privacy run. The merged candidate and new maximum proof
+require fresh native validation.
 
 The new source retains 285 RFC base / 280 auxiliary / 102 fixed columns, with
 1,654 local degree-four constraints. Six composition chunks keep 137 independent
@@ -249,6 +262,14 @@ and 108 accumulator public scalars, so full terminal privacy is unfinished.
 Missing byte-source joins, complete transcript hiding and measured time/address
 limits remain activation blockers. Local algebra or proof acceptance does not
 qualify the complete credential relation.
+
+The retained-query optimization keeps clearing level-four Merkle cuts from the
+original base and auxiliary commitments. Query replay preserves the original
+masked polynomials, full transforms and field checks, while hashing selected
+subtrees and checking both their original roots and the complete committed root.
+Both retained allocations are charged to every affected phase and quotient cache
+under the unchanged arithmetic envelope. Source review is complete; native parity,
+complete proof verification and actual time/memory measurements remain pending.
 
 ### ZK06 — cryptographic qualification
 
@@ -274,16 +295,15 @@ host/JNI consumers pass 291 tests. C# records 6,015 passes. Installed Python pas
 4,370 tests plus 281 subtests and five genuine maximum-tree wallet controls.
 Normal Kotodama generation and all 57 official sample mappings pass.
 
-The last tested merged host library passes a normal locked Rust check, test build
+The last tested pre-merge host library passes a normal locked Rust check, test build
 and dylib build. The actual loaded image reports ABI 25, exactly 359 exports and
-117 Kotlin JNI symbols; all 38 retired Java-Android aliases are absent. Its 63
-selected bridge controls and eight top-up controls pass. Two genuine top-up
-fixture-producer executions are byte-identical to each other and the canonical
-fixture. The full 674 ordinary bridge controls finish with 635 passes and 39 failures
-on unchanged source. The failures include inventory digests, an outdated method
-matrix, bootstrap/finality fixtures missing root scope, and rejected application
-identity. Corrections require a new native run; full current Kotlin, Swift and
-device qualification remains open.
+117 Kotlin JNI symbols; all 38 retired Java-Android aliases are absent. All 674
+ordinary bridge controls pass on unchanged source after the fixture repairs.
+Two genuine top-up fixture-producer executions are byte-identical to each other
+and the canonical fixture. Ten authentic Kotlin fixture modes also run twice
+with identical output. The subsequent Kotlin consumer run refuses the changed
+source before starting Gradle. Current merged native, Kotlin, Swift and device
+qualification remains open.
 
 Historical evidence covers all five Apple slices and ABI-25 package/resource checks.
 The merged Swift fixture correction is present; the full Swift host suite and
@@ -331,18 +351,15 @@ finalized FASTPQ authority, wallet workflows and full release qualification
 remain open. Compiler artifact recovery never converts a failed command into a
 pass.
 
-The recorded RFC private-output production and optimized test builds, all three
-authentic pin controls, all 1,017 selected ordinary controls, required-Metal
-coefficient parity and full RFC key-output replay pass. The normal corrected
-Core/Kagami/SDK build and genuine 54-role fixture producer also pass. Their
-successors include private SHA/RFC joins, IVM relation/publication controls,
-authentic canonical fixtures and retail recovery corrections. The expanded
-privacy selection records 1,039 passes and 19 failures out of 1,058, with every
-selected test accounted for. SDK producer compilation exposes
-IVM fixture import and JSON-array serialization errors. Failed runs remain
-retained; native repairs,
-expanded Core controls, workspace checks and four-validator scenarios remain
-required. The unadapted release-evidence Python suite passes 130 tests.
+The pre-merge private SHA/RFC production and optimized test builds, three authentic
+pins and all 1,061 selected ordinary controls pass. Genuine Core/Kagami/SDK fixture
+production and all 674 ordinary native bridge controls also pass. The Core run
+records 1,084 passes and 30 failures among 1,114 executed controls; its last group
+overlaps the merge and 66 planned controls are unrun. Source guards refuse later
+privacy, MV and Kotlin stages. The applied committed-marker and fixture repairs need
+one fresh integrated source, genuine producers, expanded Core controls, workspace
+checks and four-validator scenarios. Historical failures remain failures. The
+unadapted release-evidence Python suite passes 130 tests on its recorded source.
 
 ## Remaining execution sequence
 

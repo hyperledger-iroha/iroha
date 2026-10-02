@@ -12,10 +12,12 @@ import java.security.Signature
 import java.security.interfaces.ECPublicKey
 
 /** Internal framing checks do not produce a native prepared capability or monetary authority. */
-internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, val bodyBytes: Int, val fields: Int) {
+internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, val bodyBytes: Int, val fields: Int, val signedPurpose: Int = 1) {
     OPERATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     ORDINARY_BOOTSTRAP_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     IDENTITY_ENROLLMENT_POSSESSION("iroha:kagemusha:v1:app-enrollment-possession\u0000", 371, 11),
+    // Native cash selection must correlate exact W/S before selecting this private purpose.
+    ORDINARY_PREPARATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8, 2),
 }
 
 internal fun requireAppPlatformSigningMessageV1(original: ByteArray, purpose: KagemushaAndroidAppSignaturePurposeV1) {
@@ -25,7 +27,7 @@ internal fun requireAppPlatformSigningMessageV1(original: ByteArray, purpose: Ka
     val body = domain.size + 8
     val reader = ByteBuffer.wrap(original).order(ByteOrder.LITTLE_ENDIAN)
     require(reader.getLong(domain.size) == purpose.bodyBytes.toLong() && reader.getShort(body).toInt() == 1 &&
-        original[body + 2] == 1.toByte()) { "Native app signing version or fixed body differs" }
+        original[body + 2] == purpose.signedPurpose.toByte()) { "Native app signing version or fixed body differs" }
     repeat(purpose.fields) { field ->
         val start = body + 3 + field * 32
         require(original.copyOfRange(start, start + 32).any { it != 0.toByte() }) { "Native app signing selector is absent" }

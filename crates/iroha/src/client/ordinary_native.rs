@@ -6,6 +6,7 @@ use crate::participant_enrollment_request::{
     ParticipantEnrollmentOperationV1, ParticipantEnrollmentRequestV1,
     VerifiedEnrollmentWalletSignatoryV1, VerifiedParticipantEnrollmentRequestV1,
 };
+use eyre::ensure;
 use iroha_core_zk::kagemusha_v1_state::{
     KagemushaOrdinaryAppPossessionAttemptV1, KagemushaOrdinaryNativeClockOwnerV1,
     KagemushaOrdinaryRetailEnrollmentAttemptV1, KagemushaPendingAppIdentityV1,
@@ -20,12 +21,14 @@ pub use inventory::{
     KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeInstalledRuntimeAuthorityV1,
     KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeInventoryV1,
     KagemushaOrdinaryNativeNodeTargetV1, KagemushaOrdinaryNativeOriginalDescriptorV1,
+    assemble_kagemusha_ordinary_native_clock_selection_v1,
     assemble_kagemusha_ordinary_native_inventory_v1,
 };
 
 /// Complete untrusted current account cut returned by a Native original-data transport.
 /// The full World snapshot and all four original signatures remain mandatory; this grants no root.
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::KagemushaOrdinaryNativeCurrentWalletOriginalV1")]
 pub struct KagemushaOrdinaryNativeCurrentWalletOriginalV1 {
     /// Exact same already retained canonical certified finality proof.
     pub proof: Vec<u8>,
@@ -39,7 +42,7 @@ pub struct KagemushaOrdinaryNativeCurrentWalletOriginalV1 {
     pub statements: [iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation; 4],
 }
 
-/// Fresh actual Native account-startup read retained before any response; no decoder or clone.
+/// Fresh actual Native current account read retained before any response; no decoder or clone.
 pub struct KagemushaNativeCurrentWalletReadV1 {
     account: AccountClient,
     inventory: Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>,
@@ -75,6 +78,29 @@ impl KagemushaNativeCurrentWalletReadV1 {
             height,
         })
     }
+    // A request read uses the same move-only preparation and actual account/clock context.
+    // The startup read domain intentionally cannot stand in for this signing subject.
+    fn reserve_for_enrollment_request(
+        account: AccountClient,
+        inventory: Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>,
+        prepared: &KagemushaNativePreparedEnrollmentRequestV1,
+    ) -> Result<Self> {
+        inventory.require_account_transport(&account)?;
+        let challenge = prepared.reserve_wallet_read_challenge(&account)?;
+        let clock = prepared.clock.clone();
+        let height = require_installed_request_clock(&inventory, &clock, None)?;
+        prepared.recheck(&account)?;
+        inventory.recheck()?;
+        Ok(Self {
+            account,
+            inventory,
+            clock,
+            challenge,
+            signatory: prepared.signatory.clone(),
+            height,
+        })
+    }
+
     /// Native-generated public transport nonce only; possession does not grant an account owner.
     #[must_use]
     pub fn nonce(&self) -> [u8; 32] {
@@ -154,6 +180,36 @@ impl KagemushaNativeCurrentWalletReadV1 {
         current.recheck()?;
         Ok(current)
     }
+}
+
+// Join only the genuine admitted inventory and the same held Native clock. The optional height
+// is copied from the read reservation, never supplied by a public DTO or offered response.
+fn require_installed_request_clock(
+    inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+    clock: &Mutex<KagemushaOrdinaryNativeClockOwnerV1>,
+    reserved_height: Option<u64>,
+) -> Result<u64> {
+    let expected = inventory.clock_originals()?;
+    let mut actual = clock
+        .lock()
+        .map_err(|_| eyre!("Native request clock owner unavailable"))?;
+    ensure!(
+        actual
+            .installed_selection_digest()
+            .map_err(|_| eyre!("Native request clock custody rejected"))?
+            == expected.selection_digest(),
+        "Native request clock differs from installed original selection"
+    );
+    let height = actual
+        .current_certified_height()
+        .map_err(|_| eyre!("Native request current prefix unavailable"))?;
+    ensure!(
+        reserved_height.is_none_or(|original| height == original),
+        "Native request current prefix changed after reservation"
+    );
+    drop(actual);
+    inventory.recheck()?;
+    Ok(height)
 }
 
 /// Actual immutable Native account signer joined to current certified S/W membership.
@@ -309,6 +365,108 @@ impl KagemushaNativeAccountCustodyV1 {
         Ok(raw)
     }
 
+    /// Sign only a closed, durably fenced Main/CAS invocation with the same actual Native account.
+    /// No offered request, key callback or managed frame can create the required signing borrow.
+    /// The Main CAS journal retains the resulting exact Ed64 before transport exposure.
+    /// # Errors
+    /// Refuses stale custody, another installed purpose, wrong W/key/network or changed invocation.
+    pub fn sign_retained_lineage_request(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,
+    ) -> Result<[u8; 64]> {
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        original.recheck().map_err(|_| eyre!("Native lineage invocation custody rejected"))?;
+        let request = original.request().map_err(|_| eyre!("Native lineage original request rejected"))?.clone();
+        inventory.require_lineage_request(&request)?;
+        ensure!(
+            original.installed_policy_original().map_err(|_| eyre!("Native lineage purpose custody rejected"))?
+                == inventory.lineage_policy_original()?.as_slice()
+                && request.operation.lineage().owner.account_id == *self.current.wallet()
+                && &request.operation.lineage().owner.runtime.network_id == self.account.network_id(),
+            "Native lineage invocation changed exact installed purpose/W/network"
+        );
+        let message = original.account_signing_message().map_err(|_| eyre!("Native lineage message custody rejected"))?;
+        ensure!(message == request.account_signing_message().map_err(|_| eyre!("Native lineage message rejected"))?,
+            "Native lineage invocation message changed");
+        self.recheck()?;
+        original.recheck().map_err(|_| eyre!("Native lineage invocation expired before signing"))?;
+        let signature: [u8; 64] = iroha_crypto::Signature::try_new(
+            self.account.context.key_pair.private_key(), &message,
+        )?.payload().try_into().map_err(|_| eyre!("Native lineage Ed64 shape rejected"))?;
+        request.verify_account_signature(&iroha_crypto::Signature::from_bytes(&signature))
+            .map_err(|_| eyre!("Native lineage signature differs from exact account controller"))?;
+        original.recheck().map_err(|_| eyre!("Native lineage custody changed after signing"))?;
+        inventory.require_lineage_request(&request)?;
+        self.recheck()?;
+        Ok(signature)
+    }
+
+    /// Sign only the same financial owner's Native-reserved current FI request after its
+    /// durable invocation fence. Ed64 is retained by that owner before any transport projection.
+    /// This consent supplies neither FI status nor a money/platform approval.
+    /// # Errors
+    /// Refuses foreign installed issuer/runtime, original W/S/key/session, stale current custody,
+    /// unknown prior invocation or failed same-original signature durability.
+    pub fn sign_retained_current_fi_control(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        control: &mut iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryCurrentFinancialControlOwnerV1,
+        financial: &iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<Vec<Vec<u8>>> {
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        let request = control
+            .pending_account_request(financial)
+            .map_err(|_| eyre!("Native current FI request custody rejected"))?
+            .clone();
+        inventory.require_current_control_request(&request)?;
+        ensure!(
+            request.owner.account_id == *self.current.wallet()
+                && &request.owner.runtime.network_id == self.account.network_id(),
+            "Native current FI request changed retained W/network"
+        );
+        let message = request
+            .account_signing_message()
+            .map_err(|_| eyre!("Native current FI account subject rejected"))?;
+        let retained = control
+            .fence_account_request(financial)
+            .map_err(|_| eyre!("Native current FI account invocation unavailable or unknown"))?;
+        self.recheck()?;
+        inventory.recheck()?;
+        let signature = match retained {
+            Some(original) => original,
+            None => iroha_crypto::Signature::try_new(
+                self.account.context.key_pair.private_key(),
+                &message,
+            )?
+            .payload()
+            .try_into()
+            .map_err(|_| eyre!("Native current FI Ed64 shape rejected"))?,
+        };
+        control
+            .retain_account_request_original(financial, signature)
+            .map_err(|_| eyre!("Native current FI account original durability rejected"))?;
+        self.recheck()?;
+        inventory.require_current_control_request(&request)?;
+        let fields = control
+            .retained_current_read_fields(financial)
+            .map_err(|_| eyre!("Native current FI transport original rejected"))?;
+        ensure!(
+            fields.as_slice()
+                == [
+                    request
+                        .canonical_bytes()
+                        .map_err(|_| eyre!("Native current FI request original rejected"))?,
+                    signature.to_vec()
+                ]
+                .as_slice(),
+            "Native current FI transport original drifted"
+        );
+        self.recheck()?;
+        Ok(fields)
+    }
     /// Prepare the exact enrollment HTTP signing subject with the actual Native clock and
     /// fresh Native request entropy. Managed metadata supplies no time, network, S or W.
     /// The returned originals remain move-only and bound to this same actual account context.
@@ -352,6 +510,41 @@ impl KagemushaNativeAccountCustodyV1 {
         prepared.recheck(&self.account)?;
         self.recheck()?;
         Ok(prepared)
+    }
+
+    /// Fetch all four installed-node originals for this exact Native-prepared FI request, then
+    /// authenticate the current S/W cut and sign through the existing Native account signer.
+    /// The prepared holder is consumed on every outcome. Transport failures require a new Native
+    /// preparation/read; this call never retries or renews the original nonce or elapsed budget.
+    /// The caller must retain the original FI request/idempotency context and supply actual FI
+    /// admission separately. This method neither dispatches to the FI nor grants monetary state.
+    /// # Errors
+    /// Refuses foreign account/runtime/clock, a changed certified prefix, substituted node or
+    /// request originals, expired custody/read, transport failure or failed actual Native signing.
+    pub fn fetch_and_sign_current_enrollment_request(
+        &self,
+        prepared: KagemushaNativePreparedEnrollmentRequestV1,
+        inventory: Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>,
+    ) -> Result<(
+        iroha_crypto::Signature,
+        VerifiedParticipantEnrollmentRequestV1,
+    )> {
+        self.recheck()?;
+        let read = KagemushaNativeCurrentWalletReadV1::reserve_for_enrollment_request(
+            self.account.clone(),
+            inventory.clone(),
+            &prepared,
+        )?;
+        let height = read.height;
+        let clock = prepared.clock.clone();
+        let current = read.fetch_and_authenticate()?;
+        prepared.recheck(&self.account)?;
+        require_installed_request_clock(&inventory, &clock, Some(height))?;
+        let (signature, verified) = self.sign_current_enrollment_request(prepared, current)?;
+        require_installed_request_clock(&inventory, &clock, Some(height))?;
+        verified.recheck()?;
+        self.recheck()?;
+        Ok((signature, verified))
     }
 
     /// Sign the exact Native-prepared request with this real Native key, then consume only its
@@ -444,6 +637,21 @@ impl KagemushaNativePreparedEnrollmentRequestV1 {
             nonce: &self.nonce,
         }
     }
+    // The actual request challenge owns its own finite Native reading while the preparation's
+    // original reading and clock window remain unchanged. No public request projection rebuilds it.
+    fn reserve_wallet_read_challenge(
+        &self,
+        account: &AccountClient,
+    ) -> Result<crate::participant_enrollment_request::EnrollmentWalletReadChallengeV1> {
+        self.recheck(account)?;
+        let challenge =
+            crate::participant_enrollment_request::EnrollmentWalletReadChallengeV1::for_request(
+                &self.request(),
+            )?;
+        self.recheck(account)?;
+        Ok(challenge)
+    }
+
     fn recheck(&self, account: &AccountClient) -> Result<()> {
         ensure!(
             Arc::ptr_eq(&self.account, &account.context)
@@ -475,7 +683,7 @@ impl KagemushaNativePreparedEnrollmentRequestV1 {
 /// Closed progress result: this Native call fsynced genuine certified successors but could
 /// not reach the current tip within its finite work/time budget. Retry through a new Native
 /// request; the result carries no checkpoint, signed clock, session or monetary authority.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct KagemushaNativeClockCatchupRequiredV1 {
     /// Number of actually verified/fsynced immediate successors during this call.
     pub verified_successors: u64,
@@ -721,7 +929,7 @@ mod tests {
             idempotency_key: "fixture-stable-attempt".into(),
             operation: ParticipantEnrollmentOperationV1::Prepare,
             target: Url::parse(
-                "https://fi.example.invalid/leumi.is2/v1/offline/enrollment/ordinary/prepare",
+                "https://fi.example.invalid/leumi.is2/v1/kagemusha/enrollment/ordinary/prepare",
             )
             .unwrap(),
             body: b"exact-native-prepared-json".to_vec(),
@@ -816,6 +1024,200 @@ mod tests {
         // cannot replace the Arc identity retained before preparation.
         assert!(prepared.recheck(&context(&fixture)).is_err());
     }
+    #[test]
+    fn request_bound_native_read_uses_original_four_statements_and_existing_signer() {
+        let fixture = NativeCustodyFixture::new();
+        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        let prepared = custody
+            .prepare_enrollment_request(request_context(), clock)
+            .unwrap();
+        let message = prepared.request().signing_message().unwrap();
+        let body = prepared.request().body.to_vec();
+        let challenge = prepared
+            .reserve_wallet_read_challenge(&custody.account)
+            .unwrap();
+        // This existing synthetic fixture performs actual Ed/BLS/World/finality verification.
+        // It is not an installed-inventory or physical-device transport qualification.
+        let current = fixture.current_for_challenge(challenge);
+        let (signature, verified) = custody
+            .sign_current_enrollment_request(prepared, current)
+            .unwrap();
+        signature
+            .verify(fixture.key().public_key(), &message)
+            .unwrap();
+        assert_eq!(verified.namespace(), "leumi.is2");
+        assert_eq!(verified.actor_id(), "fixture-retail-actor");
+        assert_eq!(verified.request_id(), "fixture-request");
+        assert_eq!(verified.idempotency_key(), "fixture-stable-attempt");
+        assert_eq!(verified.wallet(), fixture.wallet());
+        assert_eq!(verified.signatory(), fixture.signatory());
+        verified.verify_original_body(&body).unwrap();
+        assert!(
+            verified
+                .verify_original_body(b"changed native request body")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn request_bound_native_read_rejects_each_changed_fi_request_original() {
+        let fixture = NativeCustodyFixture::new();
+        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        for field in 0..10 {
+            let mut prepared = custody
+                .prepare_enrollment_request(request_context(), clock.clone())
+                .unwrap();
+            let challenge = prepared
+                .reserve_wallet_read_challenge(&custody.account)
+                .unwrap();
+            let current = fixture.current_for_challenge(challenge);
+            // Simulate a substitution after read reservation, without rebuilding the prepared owner.
+            match field {
+                0 => prepared.context.authentication_namespace = "hapoalim.is2".into(),
+                1 => prepared.context.actor_id = "another-retail-actor".into(),
+                2 => prepared.context.session_sha256 = [8; 32],
+                3 => prepared.context.request_id = "another-request".into(),
+                4 => prepared.context.idempotency_key = "another-attempt".into(),
+                5 => prepared.context.body = b"changed-original-json".to_vec(),
+                6 => prepared.context.target = Url::parse(
+                    "https://another-fi.example.invalid/leumi.is2/v1/kagemusha/enrollment/ordinary/prepare",
+                )
+                .unwrap(),
+                7 => {
+                    prepared.context.operation = ParticipantEnrollmentOperationV1::Certificate;
+                    prepared.context.target = Url::parse(
+                        "https://fi.example.invalid/leumi.is2/v1/kagemusha/enrollment/ordinary/certificate",
+                    )
+                    .unwrap();
+                }
+                8 => prepared.nonce = "another-native-request-nonce-0001".into(),
+                _ => prepared.timestamp_ms += 1,
+            }
+            // Every changed subject remains well formed and all original time/key custody is
+            // live. Refusal must come from the challenged subject, not an expired fixture.
+            prepared.request().signing_message().unwrap();
+            prepared.recheck(&custody.account).unwrap();
+            current.recheck().unwrap();
+            custody.recheck().unwrap();
+            assert!(
+                custody
+                    .sign_current_enrollment_request(prepared, current)
+                    .is_err(),
+                "changed request field {field} must not return a signature/verified request",
+            );
+        }
+    }
+
+    #[test]
+    fn native_request_retry_preserves_business_identity_and_refuses_old_read() {
+        let fixture = NativeCustodyFixture::new();
+        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        let original = custody
+            .prepare_enrollment_request(request_context(), clock.clone())
+            .unwrap();
+        let old_nonce = original.request().nonce.to_owned();
+        let old_challenge = original
+            .reserve_wallet_read_challenge(&custody.account)
+            .unwrap();
+        let old_challenge_bytes = old_challenge.bytes();
+        let old_current = fixture.current_for_challenge(old_challenge);
+        // An abandoned preparation/read cannot authenticate a fresh retry, even with the same
+        // exact business request ID, body and idempotency key. No deadline/nonce is renewed.
+        drop(original);
+        let substituted_retry = custody
+            .prepare_enrollment_request(request_context(), clock.clone())
+            .unwrap();
+        assert_ne!(substituted_retry.request().nonce, old_nonce);
+        substituted_retry.request().signing_message().unwrap();
+        substituted_retry.recheck(&custody.account).unwrap();
+        old_current.recheck().unwrap();
+        custody.recheck().unwrap();
+        assert!(
+            custody
+                .sign_current_enrollment_request(substituted_retry, old_current)
+                .is_err()
+        );
+        let retry = custody
+            .prepare_enrollment_request(request_context(), clock)
+            .unwrap();
+        assert_eq!(retry.request().request_id, "fixture-request");
+        assert_eq!(retry.request().idempotency_key, "fixture-stable-attempt");
+        assert_eq!(retry.request().body, b"exact-native-prepared-json");
+        assert_ne!(retry.request().nonce, old_nonce);
+        let message = retry.request().signing_message().unwrap();
+        let challenge = retry
+            .reserve_wallet_read_challenge(&custody.account)
+            .unwrap();
+        assert_ne!(challenge.bytes(), old_challenge_bytes);
+        let current = fixture.current_for_challenge(challenge);
+        let (signature, verified) = custody
+            .sign_current_enrollment_request(retry, current)
+            .unwrap();
+        signature
+            .verify(fixture.key().public_key(), &message)
+            .unwrap();
+        verified
+            .verify_original_body(b"exact-native-prepared-json")
+            .unwrap();
+        assert_eq!(verified.idempotency_key(), "fixture-stable-attempt");
+    }
+
+    #[test]
+    fn native_request_read_refuses_same_key_foreign_holder_and_startup_domain() {
+        let fixture = NativeCustodyFixture::new();
+        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        let prepared = custody
+            .prepare_enrollment_request(request_context(), clock)
+            .unwrap();
+        // A same-key/same-W reconstructed AccountClient has another actual Arc identity.
+        prepared.recheck(&custody.account).unwrap();
+        assert!(
+            prepared
+                .reserve_wallet_read_challenge(&context(&fixture))
+                .is_err()
+        );
+        let startup =
+            crate::participant_enrollment_request::EnrollmentWalletReadChallengeV1::for_native_wallet_selection(
+                fixture.network(),
+                fixture.signatory(),
+                fixture.wallet(),
+            )
+            .unwrap();
+        let startup_current = fixture.current_for_challenge(startup);
+        startup_current.recheck().unwrap();
+        prepared.recheck(&custody.account).unwrap();
+        custody.recheck().unwrap();
+        assert!(
+            custody
+                .sign_current_enrollment_request(prepared, startup_current)
+                .is_err()
+        );
+    }
+
     #[test]
     fn native_prepared_request_expires_even_if_its_signed_clock_projection_remains_live() {
         let fixture = NativeCustodyFixture::new();

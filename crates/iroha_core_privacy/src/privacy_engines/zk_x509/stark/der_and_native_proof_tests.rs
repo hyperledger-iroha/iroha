@@ -1647,3 +1647,128 @@ fn main_key_join_opening_codec_is_canonical_exact_and_roundtrips() {
     trailing.push(0);
     assert!(decode_zk_x509_main_proof_envelope_v1(&trailing).is_err());
 }
+
+#[test]
+fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
+    let claims = main_log19_terminal_claims_fixture_v1();
+    let values = core::array::from_fn(|index| {
+        E::canonical(core::array::from_fn(|limb| (4 * index + limb + 1) as u64)).unwrap()
+    });
+    let aggregate = b"X5S1ordered-opening-fixture";
+    let encoded = encode_zk_x509_main_proof_envelope_v1(claims, &values, aggregate).unwrap();
+    assert_eq!(
+        MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 - MAIN_PROOF_KEY_OPENINGS_OFFSET_V1,
+        31 * 32
+    );
+    for (index, value) in values.iter().enumerate() {
+        for (limb, coefficient) in value.coefficients().iter().enumerate() {
+            let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index + 8 * limb;
+            assert_eq!(&encoded[offset..offset + 8], &coefficient.0.to_be_bytes());
+        }
+    }
+    assert_eq!(
+        decode_zk_x509_main_proof_envelope_v1(&encoded)
+            .unwrap()
+            .key_openings,
+        values
+    );
+    for index in 0..30 {
+        let mut swapped = encoded.clone();
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        swapped[offset..offset + 64].rotate_left(32);
+        let mut expected = values;
+        expected.swap(index, index + 1);
+        let decoded = decode_zk_x509_main_proof_envelope_v1(&swapped).unwrap();
+        assert_eq!(decoded.key_openings, expected);
+        assert_ne!(decoded.key_openings, values);
+        assert_eq!(
+            encode_zk_x509_main_proof_envelope_v1(
+                decoded.claims,
+                &decoded.key_openings,
+                decoded.aggregate_proof
+            )
+            .unwrap(),
+            swapped
+        );
+    }
+    for index in 0..31 {
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        let mut missing = encoded.clone();
+        missing.drain(offset..offset + 32);
+        assert!(decode_zk_x509_main_proof_envelope_v1(&missing).is_err());
+        let mut duplicate = encoded.clone();
+        duplicate.splice(offset..offset, encoded[offset..offset + 32].iter().copied());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&duplicate).is_err());
+    }
+}
+
+#[test]
+fn main_public_partition_binds_each_governed_lane_and_exact_current_counts() {
+    assert_eq!(ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, 76);
+    assert_eq!(ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, 3_340);
+    assert_eq!(MAIN_KEY_OPENING_COUNT_V1, 31);
+    assert_eq!(
+        MAIN_KEY_OPENING_COUNT_V1,
+        main_aggregate::main_key_joins::OPENINGS_V1
+    );
+    assert_eq!(MAIN_PROOF_RFC_OFFSET_V1, 8);
+    assert_eq!(MAIN_PROOF_SHA_OFFSET_V1, 84);
+    assert_eq!(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1, 3_424);
+    assert_eq!(MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1, 4_416);
+    assert_eq!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1, 4_420);
+    let claims = ZkX509MainTerminalClaimsV1 {
+        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
+        sha: ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1(),
+    };
+    let aggregate = b"X5S1public partition";
+    let mut encoded =
+        encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], aggregate).unwrap();
+    let products = [F(2), F(3), F(5), F(7)];
+    for (lane, product) in products.into_iter().enumerate() {
+        overwrite_main_terminal_record_value_v1(
+            &mut encoded,
+            MAIN_PROOF_RFC_OFFSET_V1,
+            lane,
+            product,
+        );
+    }
+    let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).unwrap();
+    assert_eq!(
+        decoded.claims.rfc5280.governed_trust_anchor_products_v1(),
+        products
+    );
+    assert_eq!(decoded.claims.sha, claims.sha);
+    assert_eq!(decoded.key_openings, [E::ZERO; 31]);
+    assert_eq!(decoded.aggregate_proof, aggregate);
+    assert_eq!(
+        encode_zk_x509_main_proof_envelope_v1(
+            decoded.claims,
+            &decoded.key_openings,
+            decoded.aggregate_proof
+        )
+        .unwrap(),
+        encoded
+    );
+    for (frame, counts) in [
+        (MAIN_PROOF_RFC_OFFSET_V1, [0_u16, 3, 5, 80, u16::MAX]),
+        (MAIN_PROOF_SHA_OFFSET_V1, [0_u16, 207, 209, 304, u16::MAX]),
+    ] {
+        for count in counts {
+            let mut wrong = encoded.clone();
+            wrong[frame + 10..frame + 12].copy_from_slice(&count.to_be_bytes());
+            assert!(
+                decode_zk_x509_main_proof_envelope_v1(&wrong).is_err(),
+                "frame {frame}, count {count}"
+            );
+        }
+    }
+    for lane in 0..4 {
+        let mut reordered = encoded.clone();
+        let record = MAIN_PROOF_RFC_OFFSET_V1
+            + TERMINAL_TEST_HEADER_BYTES_V1
+            + lane * TERMINAL_TEST_RECORD_BYTES_V1;
+        let wrong_lane = u16::try_from((lane + 1) % 4).expect("four governed lanes fit u16");
+        reordered[record + 4..record + 6].copy_from_slice(&wrong_lane.to_be_bytes());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&reordered).is_err());
+    }
+}

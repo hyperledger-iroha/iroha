@@ -14,6 +14,8 @@ use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::privacy_outer_hash::{PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) mod retained_commitment;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "aggregate_stark/streaming_commitment.rs"]
 mod streaming_commitment;
 use super::transparent_stark::{
@@ -1938,15 +1940,25 @@ impl StreamingMerkleAccumulatorV1 {
         if self.pending[..height].iter().any(Option::is_some) {
             return Err(AggregateStarkErrorV1::InternalInvariant);
         }
+        if self.frontier.iter().any(Option::is_none) {
+            return Err(AggregateStarkErrorV1::InternalInvariant);
+        }
         let root = self.pending[height]
             .take()
             .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-        let frontier = self
-            .frontier
+        let frontier = core::mem::take(&mut self.frontier)
             .into_iter()
             .map(|node| node.ok_or(AggregateStarkErrorV1::InternalInvariant))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(StreamingMerkleCommitmentV1 { root, frontier })
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for StreamingMerkleAccumulatorV1 {
+    fn drop(&mut self) {
+        for node in self.pending.iter_mut().chain(&mut self.frontier).flatten() {
+            node.zeroize_v1();
+        }
     }
 }
 /// Commit an exact leaf iterator with logarithmic tree memory.
@@ -2172,6 +2184,42 @@ impl StreamingRowCommitmentV1 {
         for row in self.opened_rows.values_mut() {
             zeroize_field_column_v1(row);
         }
+    }
+    /// Retain a clearing level-four cut during the original root-only pass.
+    pub(crate) fn finish_retaining_cut_v1(
+        mut self,
+    ) -> Result<
+        (
+            StreamingRowCommitmentResultV1,
+            retained_commitment::RetainedMerkleCutV1,
+        ),
+        AggregateStarkErrorV1,
+    > {
+        if self.failed
+            || self.digest_streams.capacity() != self.rows
+            || self.received_columns != self.width
+            || !self.opening_indices.is_empty()
+            || !self.opened_rows.is_empty()
+        {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        let mut cut = retained_commitment::RetainedMerkleCutV1::new_v1(self.rows)?;
+        let mut accumulator =
+            StreamingMerkleAccumulatorV1::new(self.context, self.node_role, self.rows, &[])?;
+        streaming_commitment::finish_rows_retaining_v1(
+            &mut accumulator,
+            &mut self.digest_streams,
+            &mut cut,
+        )?;
+        let commitment = accumulator.finish()?;
+        cut.bind_root_v1(commitment.root)?;
+        Ok((
+            StreamingRowCommitmentResultV1 {
+                commitment,
+                opened_rows: BTreeMap::new(),
+            },
+            cut,
+        ))
     }
     /// Finalize the exact-width vector rows into a streaming Merkle commitment.
     pub(crate) fn finish(

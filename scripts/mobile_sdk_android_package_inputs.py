@@ -232,7 +232,7 @@ def main():
     parser.add_argument("--artifact-dir")
     parser.add_argument("--maven-repo", type=Path)
     parser.add_argument("--version")
-    parser.add_argument("--native-mode", choices=("default", "production"))
+    parser.add_argument("--native-mode", choices=("production",))
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--archive", type=Path)
     args = parser.parse_args()

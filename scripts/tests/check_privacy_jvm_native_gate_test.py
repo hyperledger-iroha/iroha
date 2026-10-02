@@ -234,9 +234,12 @@ def test_javascript_lane_builds_and_executes_real_napi_abi25() -> None:
     assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert (
-        'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path '
-        '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+        'env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.93.1 cargo)" '
+        'fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"'
     ) in job
+    assert "-Z unstable-options" not in job
+    assert "--lockfile-path" not in job
+    assert "RUSTC_BOOTSTRAP=1" not in job
     assert "run: ci/check_privacy_js_sdk.sh" in job
 
     gate = read("ci/check_privacy_js_sdk.sh")
@@ -250,6 +253,21 @@ def test_javascript_lane_builds_and_executes_real_napi_abi25() -> None:
     assert 'test/privacyNative.integration.test.js' in gate
     assert 'export IROHA_JS_NATIVE_DIR=' in gate
     assert 'export CARGO_NET_OFFLINE=true' in gate
+    assert 'export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"' in gate
+    assert 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' not in gate
+    assert gate.count('unset RUSTC_BOOTSTRAP') == 1
+    assert 'export RUSTC_BOOTSTRAP=' not in gate
+    assert gate.index('unset RUSTC_BOOTSTRAP') < gate.index('"${NODE_BIN}" scripts/build-native.mjs')
+    assert '"${PRIVACY_RELEASE_CARGO_LOCK}" != "${WORKSPACE_CARGO_LOCKFILE}"' in gate
+    assert 'privacy JavaScript external Cargo.lock does not match the canonical reviewed graph' in gate
+    assert 'privacy JavaScript tracked root Cargo.lock authority changed' in gate
+    guard = read("ci/check_privacy_sdk_guard.sh")
+    assert 'export IROHA_JS_CARGO_LOCKFILE_PATH="${ROOT_DIR}/Cargo.lock"' in guard
+    helper = read("ci/privacy_sdk_cargo_lockfile.sh")
+    assert "printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\\n' \"${canonical_repository_root}/Cargo.lock\"" in helper
+    python_gate = read("ci/check_privacy_python_sdk.sh")
+    assert 'export IROHA_JS_CARGO_LOCKFILE_PATH="${ROOT_DIR}/Cargo.lock"' in python_gate
+    assert 'export IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${PRIVACY_SDK_CARGO_LOCKFILE}"' in guard
 
     integration = read(
         "javascript/iroha_js/test/privacyNative.integration.test.js"

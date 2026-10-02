@@ -16,6 +16,23 @@ use rand_core_06::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeSet, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 
+#[path = "ordinary_native_clock/signed_originals.rs"]
+mod signed_originals;
+pub(crate) use signed_originals::KagemushaRetainedOrdinaryNativeClockOriginalsV1;
+pub use signed_originals::{
+    KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1,
+    KagemushaOrdinaryNativeSignedClockOriginalV1,
+    KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+    verify_ordinary_native_signed_clock_original_v1,
+};
+
+#[path = "ordinary_native_clock/selection_original.rs"]
+mod selection_original;
+pub use selection_original::{
+    KAGEMUSHA_ORDINARY_NATIVE_CLOCK_SELECTION_ORIGINAL_MAX_BYTES_V1,
+    KagemushaOrdinaryNativeClockSelectionOriginalV1,
+};
+
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 const MAX_ROWS: usize = 100_000;
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
@@ -243,7 +260,7 @@ enum Record {
 struct Initialize {
     selection_digest: [u8; 32],
 }
-#[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::ordinary_native_clock::ObservationV1")]
 struct Observation {
     nonce: [u8; 32],
@@ -285,6 +302,7 @@ pub struct KagemushaOrdinaryNativeClockOwnerV1 {
     signed_observations_original_digest: [u8; 32],
     high_water_ms: u64,
     observation_median_ms: Option<u64>,
+    latest_observation: Option<Arc<Observation>>,
     reference: Option<Reference>,
     #[cfg(test)]
     persistence_delay: Duration,
@@ -339,6 +357,7 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
                     this.observation_digest = [0; 32];
                     this.signed_observations_original_digest = [0; 32];
                     this.observation_median_ms = None;
+                    this.latest_observation = None;
                 }
                 Record::Observation(original) if this.rows > 0 => {
                     let (median, context) =
@@ -362,6 +381,7 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
                     this.observation_median_ms = Some(median);
                     this.signed_observations_original_digest =
                         signed_observation_digest(original.nonce, context, &original.originals)?;
+                    this.latest_observation = Some(Arc::new(*original));
                 }
                 Record::Projected(original) if this.rows > 0 => {
                     let median = this.observation_median_ms.ok_or(Rejected)?;
@@ -420,6 +440,7 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
             signed_observations_original_digest: [0; 32],
             high_water_ms: 0,
             observation_median_ms: None,
+            latest_observation: None,
             reference: None,
             #[cfg(test)]
             persistence_delay: Duration::ZERO,
@@ -445,6 +466,7 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
         self.observation_digest = [0; 32];
         self.signed_observations_original_digest = [0; 32];
         self.observation_median_ms = None;
+        self.latest_observation = None;
         self.reference = None;
         self.recheck()
     }
@@ -547,6 +569,10 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
         self.observation_digest = Sha256::digest(original).into();
         self.observation_median_ms = Some(median_ms);
         self.signed_observations_original_digest = signed_observations_original_digest;
+        let Record::Observation(observation) = record else {
+            return Err(Custody);
+        };
+        self.latest_observation = Some(Arc::new(*observation));
         self.reference = None;
         self.require_reply_budget(read.started)?;
         self.reference = Some(Reference {
@@ -698,6 +724,17 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
         Ok(self.selected.digest)
     }
 
+    /// Historical cryptographic prefix custody only; this private projection cannot restore
+    /// an elapsed-clock reference or grant current FI/money authority after cold recovery.
+    pub(crate) fn retained_finality_verifier_for_original_custody(
+        &self,
+    ) -> Result<SumeragiFinalityVerifier> {
+        self.recheck()?;
+        let verifier = self.verifier.clone();
+        self.recheck()?;
+        Ok(verifier)
+    }
+
     fn recheck(&self) -> Result<()> {
         self.journal.check_owned().map_err(|_| Custody)?;
         if let Some(prefix) = self.prefix {
@@ -739,60 +776,77 @@ impl KagemushaOrdinaryNativeClockOwnerV1 {
             .ok_or(Custody)
     }
     fn verify_observation(&self, nonce: [u8; 32], originals: &[Vec<u8>; 4]) -> Result<(u64, Hash)> {
-        let mut times = [0; 4];
-        let mut context = None;
-        for (index, original) in originals.iter().enumerate() {
-            if original.is_empty() || original.len() > MAX_FRAME / 4 {
-                return Err(Rejected);
-            }
-            let reply: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
-                original,
-                norito::canonical_decode_limits(MAX_FRAME / 4),
-            )
-            .map_err(|_| Rejected)?;
-            if norito::encode_canonical(&reply).map_err(|_| Rejected)? != *original {
-                return Err(Rejected);
-            }
-            reply.verify().map_err(|_| Rejected)?;
-            let body = &reply.body;
-            let selected = &self.selected.nodes[index];
-            if body.challenge != nonce
-                || body.network_id != self.selected.network
-                || body.node_id != selected.peer_id
-                || body.build_fingerprint != selected.build_fingerprint
-                || body.config_fingerprint != selected.config_fingerprint
-                || body.status.config_fingerprint != selected.config_fingerprint
-                || body.status.instance != self.verifier.instance().0
-                || body.status.signer.as_ref() != Some(selected.peer_id.public_key())
-                || body.status.unanchored
-                || body.status.abstaining
-                || body.status.halted.is_some()
-                || body.finality_proof.height() != self.current_height
-                || NetworkId::from_genesis_hash(body.genesis_block_hash) != self.selected.network
-            {
-                return Err(Rejected);
-            }
-            let block = self
-                .verifier
-                .verify_retained_decision(&body.finality_proof)
-                .map_err(|_| Rejected)?;
-            if context.is_some_and(|prior| prior != block.context_id()) {
-                return Err(Rejected);
-            }
-            context = Some(block.context_id());
-            times[index] = body.observed_at_unix_ms;
-        }
-        times.sort_unstable();
-        if times[0] == 0 || times[3] - times[0] > self.selected.policy.maximum_node_skew_ms {
+        verify_signed_observations(
+            &self.selected,
+            &self.verifier,
+            nonce,
+            originals,
+            Some(self.current_height),
+        )
+    }
+}
+fn verify_signed_observations(
+    selected: &KagemushaOrdinaryNativeClockOriginalsV1,
+    verifier: &SumeragiFinalityVerifier,
+    nonce: [u8; 32],
+    originals: &[Vec<u8>; 4],
+    required_height: Option<u64>,
+) -> Result<(u64, Hash)> {
+    if nonce == [0; 32] {
+        return Err(Rejected);
+    }
+    let mut times = [0; 4];
+    let mut context = None;
+    for (index, original) in originals.iter().enumerate() {
+        if original.is_empty() || original.len() > MAX_FRAME / 4 {
             return Err(Rejected);
         }
-        Ok((
-            times[1]
-                .checked_add((times[2] - times[1]) / 2)
-                .ok_or(Rejected)?,
-            context.ok_or(Rejected)?,
-        ))
+        let reply: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
+            original,
+            norito::canonical_decode_limits(MAX_FRAME / 4),
+        )
+        .map_err(|_| Rejected)?;
+        if norito::encode_canonical(&reply).map_err(|_| Rejected)? != *original {
+            return Err(Rejected);
+        }
+        reply.verify().map_err(|_| Rejected)?;
+        let body = &reply.body;
+        let node = &selected.nodes[index];
+        if body.challenge != nonce
+            || body.network_id != selected.network
+            || body.node_id != node.peer_id
+            || body.build_fingerprint != node.build_fingerprint
+            || body.config_fingerprint != node.config_fingerprint
+            || body.status.config_fingerprint != node.config_fingerprint
+            || body.status.instance != verifier.instance().0
+            || body.status.signer.as_ref() != Some(node.peer_id.public_key())
+            || body.status.unanchored
+            || body.status.abstaining
+            || body.status.halted.is_some()
+            || required_height.is_some_and(|height| body.finality_proof.height() != height)
+            || NetworkId::from_genesis_hash(body.genesis_block_hash) != selected.network
+        {
+            return Err(Rejected);
+        }
+        let block = verifier
+            .verify_retained_decision(&body.finality_proof)
+            .map_err(|_| Rejected)?;
+        if context.is_some_and(|prior| prior != block.context_id()) {
+            return Err(Rejected);
+        }
+        context = Some(block.context_id());
+        times[index] = body.observed_at_unix_ms;
     }
+    times.sort_unstable();
+    if times[0] == 0 || times[3] - times[0] > selected.policy.maximum_node_skew_ms {
+        return Err(Rejected);
+    }
+    Ok((
+        times[1]
+            .checked_add((times[2] - times[1]) / 2)
+            .ok_or(Rejected)?,
+        context.ok_or(Rejected)?,
+    ))
 }
 fn encode(record: &Record) -> Result<Vec<u8>> {
     let original = norito::encode_canonical(record).map_err(|_| Rejected)?;

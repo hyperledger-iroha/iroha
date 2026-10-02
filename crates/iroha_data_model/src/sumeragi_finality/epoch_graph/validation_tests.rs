@@ -309,3 +309,40 @@ fn scoped_schedule_walk_invokes_full_crypto_validation_once_per_exact_context() 
         "shared boundary geometry cannot silently re-run original credential crypto"
     );
 }
+
+#[test]
+fn scoped_decode_keeps_inherited_resource_refusal_and_reuses_epoch_work_after_retry() {
+    use crate::sumeragi_finality::commitment::CommitmentError;
+    let value = commitment(&fixture(4));
+    let bytes = value.preimage().unwrap();
+    let original = bytes.clone();
+    let canonical = norito::canonical_decode_limits(bytes.len());
+    let limits = norito::DecodeLimits::new(
+        96,
+        super::super::commitment::MAX_RESULT_PREIMAGE_BYTES,
+        canonical.max_total_elements(),
+        0,
+        32,
+    );
+    let mut validation = EpochValidationScope::new();
+    let refused = norito::with_decode_limits_scope(limits, || {
+        ExecutionResultCommitment::decode_with_validation(&bytes, &mut validation)
+    });
+    assert!(matches!(
+        refused,
+        Err(CommitmentError::Resource(
+            norito::core::DecodeResourceError::TotalAllocationExceeded { .. }
+        ))
+    ));
+    assert_eq!(validation.validations, 0);
+    assert!(validation.entries.is_empty());
+    assert_eq!(bytes, original);
+    for _ in 0..3 {
+        assert_eq!(
+            ExecutionResultCommitment::decode_with_validation(&bytes, &mut validation).unwrap(),
+            value
+        );
+    }
+    assert_eq!(validation.validations, 1);
+    assert_eq!(validation.entries.len(), 1);
+}

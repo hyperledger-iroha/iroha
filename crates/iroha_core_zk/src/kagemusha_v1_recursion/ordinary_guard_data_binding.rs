@@ -42,6 +42,8 @@ use crate::{
 pub(crate) struct KagemushaOrdinaryGuardDataBindingV1<F: KagemushaPoseidonFieldV1> {
     /// Normalized statement, credential, authorization transcript, complete S, provider root.
     pub(crate) digests: [[PastaSha256ByteV1<F>; 32]; 5],
+    /// Actual account binding copied from the same issuer-authenticated original C.
+    pub(crate) account_binding: [PastaSha256ByteV1<F>; 32],
     /// Exact full S signing bytes; State additionally joins its real proof statement/candidate.
     pub(crate) canonical_subject: [AssignedValue<F>; S::TOTAL_BYTES],
     /// Same signed purpose cell inside the whole platform-approved wrapper transcript.
@@ -198,6 +200,7 @@ pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
             subject_digest,
             provider,
         ],
+        account_binding: cells.fixed_digests[3],
         canonical_subject: signed_s,
         approval_purpose,
         approval_operation_id: original.operation_id,

@@ -54,7 +54,7 @@ npm run build:native
 
 The native build writes strict V4 provenance with the execution policy
 `trusted-local-cargo-v1`. Cargo compiles the authenticated live repository root.
-The builder seals the tracked and untracked source inventory, selected Cargo
+The builder seals the tracked and untracked source inventory, original root Cargo
 lockfile and exact compiled bytes, and checks that source state again after
 compilation and during publication. Keep the checkout, index and HEAD unchanged
 through compilation, publication and native-backed tests. A dirty checkout is
@@ -66,13 +66,14 @@ Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
 
 `scripts/build-native.mjs` requires explicit canonical paths for Cargo, rustc
-and rustdoc from the same Rust 1.93.1 toolchain, the selected `Cargo.lock` and
-the Cargo target directory. It enforces one offline, locked Cargo build with
-`CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, `CARGO_NET_OFFLINE=true` and
-`RUSTC_BOOTSTRAP=1`, and rejects `CARGO_PROFILE_*` overrides. The configured
-target must be the repository's `target` directory or wholly outside the source
+and rustdoc from the same stock Rust 1.93.1 toolchain, the repository-root
+`Cargo.lock` and the Cargo target directory. It invokes stable Cargo with the
+original root manifest and `--locked --offline`, and enforces
+`CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, `CARGO_NET_OFFLINE=true`.
+It rejects `RUSTC_BOOTSTRAP`, `CARGO_PROFILE_*` overrides and alternate lockfiles.
+The configured target must be the repository's `target` directory or wholly outside the source
 tree. Preserve `IROHA_JS_CARGO_LOCKFILE_PATH` through publication and loading so
-each provenance check observes the same selected dependency graph.
+each provenance check observes the same original root dependency graph.
 
 The configured target is a cache parent. Builds use an `iroha-js-source` child
 keyed by the complete authenticated source fingerprint, canonical checkout,
@@ -3190,6 +3191,7 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 
 Every artifact helper requires an explicit `{ dataspaceId, codeHash }` identity;
 use a canonical decimal string for the full unsigned 64-bit dataspace range.
+The same code hash in two dataspaces identifies two separately authorized artifacts.
 Manifest registration also requires its `code_hash` to match that identity.
 The local builder checks lifecycle kinds and permissions, unique declarations,
 local callback targets, access-hint completeness and exact schema bindings before

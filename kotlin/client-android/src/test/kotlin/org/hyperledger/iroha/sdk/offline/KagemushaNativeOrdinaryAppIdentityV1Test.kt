@@ -9,7 +9,6 @@ import java.security.MessageDigest
 import java.util.UUID
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppKeyHardwarePolicyV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidHardwareAppKeyEvidenceV1
-import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAndroidKeyAttestationArchiveV1
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -119,11 +118,11 @@ class KagemushaNativeOrdinaryAppIdentityV1Test {
     }
 
     @Test fun retainedRawChunkBoundaryNeverRequestsAbsentTail() {
-        val boundary = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(
-            listOf(der(16_384, 1), der(16_384, 2), der(16_384, 3), der(16_362, 4))).transportBytes()
+        val boundary = KagemushaPlatformAttestationOriginalV1.android(
+            listOf(der(16_384, 1), der(16_384, 2), der(16_384, 3), der(16_280, 4))).canonicalBytes()
         assertEquals(65_536, boundary.size)
-        val small = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(
-            listOf(der(32, 1), der(32, 2))).transportBytes()
+        val small = KagemushaPlatformAttestationOriginalV1.android(
+            listOf(der(32, 1), der(32, 2))).canonicalBytes()
         for (original in listOf(small, boundary)) {
             val endpoint = Endpoint().apply { state = 4; raw = original }
             val admission = checkNotNull(prepare(endpoint).recoverOriginalAttestation())
@@ -184,13 +183,43 @@ class KagemushaNativeOrdinaryAppIdentityV1Test {
         assertEquals(1, endpoint.admissions); assertEquals(0, endpoint.generationFences)
     }
 
+    @Test fun retainedLegacyKmcaCannotBeExposedAsTheCanonicalOriginal() {
+        val endpoint = Endpoint().apply {
+            state = 4
+            raw = byteArrayOf(0x4b, 0x4d, 0x43, 0x41, 1, 2,
+                0, 0, 0, 4, 0x30, 2, 1, 1, 0, 0, 0, 4, 0x30, 2, 1, 2)
+            // Explicit retired KMCA rejection DATA; no old producer/parser remains.
+        }
+        assertFailsWith<IllegalArgumentException> { prepare(endpoint).recoverOriginalAttestation() }
+        assertEquals(0, endpoint.generationFences)
+    }
+
+    @Test fun retainedAppleRoleCannotSubstituteForAndroidOriginal() {
+        val endpoint = Endpoint().apply {
+            state = 4
+            raw = KagemushaPlatformAttestationOriginalV1.apple(byteArrayOf(0xa0.toByte())).canonicalBytes()
+        }
+        assertFailsWith<IllegalStateException> { prepare(endpoint).recoverOriginalAttestation() }
+        assertEquals(0, endpoint.generationFences)
+    }
+
+    @Test fun retainedCanonicalChecksumTailOrTruncationCannotBeExposed() {
+        val canonical = Endpoint().archive
+        val changed = canonical.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() }
+        for (original in listOf(changed, canonical + byteArrayOf(0), canonical.copyOf(canonical.size - 1))) {
+            val endpoint = Endpoint().apply { state = 4; raw = original }
+            assertFailsWith<IllegalArgumentException> { prepare(endpoint).recoverOriginalAttestation() }
+            assertEquals(0, endpoint.generationFences)
+        }
+    }
+
     private class Endpoint(large: Boolean = false) : KagemushaCoreCoordinatorEndpointV1 {
         val id = bytes(1)
         val fields = preparation(id).map(ByteArray::copyOf).toMutableList()
         val reserved = carrier(fields)
         val alias = fields[5].toString(Charsets.UTF_8)
         val chain = if (large) List(5) { der(16_384, it + 1) } else listOf(der(32, 1), der(32, 2))
-        val archive = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(chain).transportBytes()
+        val archive = KagemushaPlatformAttestationOriginalV1.android(chain).canonicalBytes()
         val signedRaw = ByteArray(314) { 0x39 }
         val pending = bytes(0x40)
         var state = 0; var raw = byteArrayOf(); var closes = 0; var generationFences = 0

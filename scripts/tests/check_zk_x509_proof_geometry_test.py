@@ -25,8 +25,8 @@ def _sources() -> tuple[str, str, str, str, str]:
 def test_current_source_complete_relation_exact_wire_bound() -> None:
     result = SCREEN["screen"](*_sources())
     assert result["proof_cap_bytes"] == 9_437_184
-    assert result["combined_current_max_bytes"] == 9_420_938
-    assert result["headroom_bytes"] == 16_246
+    assert result["combined_current_max_bytes"] == 9_413_406
+    assert result["headroom_bytes"] == 23_778
     assert result["current_trace_columns"] == 5_811
     assert result["current_trace_opening_bytes"] == 6_322_368
     assert result["complete_deep_opening_bytes"] == 424_896
@@ -40,6 +40,7 @@ def test_current_source_complete_relation_exact_wire_bound() -> None:
     assert result["implemented_paired_fri_saving_bytes"] == 867_456
     assert result["current_main_inner_max_bytes"] == 7_908_768
     assert result["current_ca_inner_max_bytes"] == 1_498_816
+    assert result["main_claim_envelope_bytes"] == 12 + 76 + 3_340 + 31 * 32 == 4_420
 
 
 def test_closed_frontier_bound_matches_exhaustive_small_trees() -> None:
@@ -71,8 +72,8 @@ def test_candidate_cannot_assume_unimplemented_pair_commitments() -> None:
 def test_source_drift_cannot_silently_reuse_old_component_bound() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     changed = profile.replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_420_938;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_420_939;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_406;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_407;",
         1,
     )
     assert changed != profile
@@ -129,10 +130,31 @@ def test_complete_calendar_bindings_keep_each_column_and_the_same_ceiling() -> N
     added_aux = 280 - 264
     per_column = 136 * 8 + 2 * 32
     assert result["current_trace_columns"] == 5_623 + added_base + added_aux
-    assert result["combined_current_max_bytes"] == 9_204_362 + (added_base + added_aux) * per_column
-    assert result["headroom_bytes"] == 14 * per_column + 118
+    # The reviewed private RFC/SHA union retains every trace column and DEEP
+    # opening while retiring 7,532 bytes of public claim framing/products.
+    retired_public_claim_bytes = 7_532
+    assert result["combined_current_max_bytes"] == (
+        9_204_362 + (added_base + added_aux) * per_column - retired_public_claim_bytes
+    )
+    assert result["headroom_bytes"] == 14 * per_column + 118 + retired_public_claim_bytes
 
 
 def test_numeric_constants_accept_public_owner_visibility() -> None:
     assert SCREEN["_constant"]("pub const OWNER_BYTES: u32 = 123;", "OWNER_BYTES") == 123
     assert SCREEN["_constant"]("pub(crate) const OWNER_BYTES: u32 = 123;", "OWNER_BYTES") == 123
+
+
+def test_main_claim_envelope_must_match_independent_native_codec_accounting() -> None:
+    profile, stark, credential, accumulator, native_test = _sources()
+    changed = profile.replace(
+        "ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 4_420;",
+        "ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 4_421;",
+        1,
+    ).replace(
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_406;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_407;",
+        1,
+    )
+    assert changed != profile
+    with pytest.raises(SCREEN["GeometryError"], match="independent native codec accounting"):
+        SCREEN["screen"](changed, stark, credential, accumulator, native_test)

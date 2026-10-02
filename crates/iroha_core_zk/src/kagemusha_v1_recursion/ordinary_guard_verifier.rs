@@ -287,6 +287,29 @@ fn verify_selected_original(
     })
 }
 
+/// Mathematical original verification only; no historical/current Native loan is produced.
+pub(super) fn verify_stateless_original_v1(
+    original: &[u8],
+    material: &OrdinaryGuardMaterialV1<'_>,
+    expected: [DigestV1; 5],
+) -> Result<()> {
+    if expected.contains(&[0; 32]) {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    let wire = decode_exact(original, material)?;
+    if [
+        wire.normalized_guard_digest,
+        wire.credential_digest,
+        wire.authorization_transcript_digest,
+        wire.subject_signing_digest,
+        wire.provider_policy_root,
+    ] != expected
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    verify_wire(&wire, material)
+}
+
 fn decode_exact(
     bytes: &[u8],
     material: &OrdinaryGuardMaterialV1<'_>,

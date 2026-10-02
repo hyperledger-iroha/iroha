@@ -50,7 +50,10 @@ use super::{
         accumulator_limb_count, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
     },
     guard_bundle::{
-        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
+        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
         KagemushaGuardBundleEqCircuitV1,
     },
     mint_authority::{
@@ -2753,6 +2756,60 @@ mod checked_loader_tests {
     }
 
     #[test]
+    fn platform_credential_native_reader_requires_complete_exact_hybrid_topology() {
+        // This proves layout admission only, not an accepted proof or credential owner.
+        let exact = [56, 8162, 8162];
+        for parity in ["Eq", "Ep"] {
+            require_platform_credential_hybrid_layout(16, 16, &exact, &exact, parity)
+                .expect("the current closed hybrid layout");
+            for wrong in [
+                vec![],
+                vec![42],
+                vec![56],
+                vec![56, 8162],
+                vec![56, 8162, 8162, 8162],
+            ] {
+                assert!(
+                    require_platform_credential_hybrid_layout(16, 16, &wrong, &exact, parity)
+                        .is_err()
+                );
+                assert!(
+                    require_platform_credential_hybrid_layout(16, 16, &exact, &wrong, parity)
+                        .is_err()
+                );
+            }
+            for column in 0..3 {
+                for delta in [-1_isize, 1] {
+                    let mut wrong = exact;
+                    wrong[column] = wrong[column].checked_add_signed(delta).unwrap();
+                    assert!(
+                        require_platform_credential_hybrid_layout(16, 16, &wrong, &exact, parity)
+                            .is_err()
+                    );
+                    assert!(
+                        require_platform_credential_hybrid_layout(16, 16, &exact, &wrong, parity)
+                            .is_err()
+                    );
+                }
+            }
+            for (k, domain_k) in [(15, 15), (17, 17), (16, 15), (16, 17)] {
+                assert!(
+                    require_platform_credential_hybrid_layout(k, domain_k, &exact, &exact, parity)
+                        .is_err()
+                );
+            }
+        }
+        validate_hybrid_commitment_limb_indices(56, &[[42, 43], [44, 45]], "Eq")
+            .expect("both actual Eq carrier commitments follow the semantic prefix");
+        validate_hybrid_commitment_limb_indices(56, &[[46, 47], [48, 49]], "Ep")
+            .expect("both actual Ep carrier commitments retain the common tail");
+        assert!(validate_hybrid_commitment_limb_indices(56, &[[97, 98], [99, 100]], "Eq").is_err());
+        assert!(
+            validate_hybrid_commitment_limb_indices(56, &[[101, 102], [103, 104]], "Ep").is_err()
+        );
+    }
+
+    #[test]
     fn hybrid_native_parser_counts_and_orders_proof_supplied_commitments() {
         assert_eq!(
             hybrid_proof_supplied_commitment_bytes::<EqAffine>(1, "Eq").expect("one Eq commitment"),
@@ -4069,6 +4126,114 @@ pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol_with_transcript
         ],
         "Ep mint-hash claim hybrid",
     )
+}
+
+/// Verify the complete Eq PlatformCredential with both authentic compact carriers.
+/// The exact three-column k16 profile is mandatory; no retired one-column proof is accepted.
+pub(super) fn verify_eq_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fp>],
+) -> Result<KagemushaNativeVerifiedProofV1<EqAffine>, String> {
+    require_platform_credential_hybrid_layout(
+        params.k(),
+        protocol.domain.k,
+        &protocol.num_instance,
+        &instances.iter().map(Vec::len).collect::<Vec<_>>(),
+        "Eq",
+    )?;
+    let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 1,
+            ],
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 2,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 3,
+            ],
+        ],
+        "Eq PlatformCredential hybrid",
+    )
+}
+
+/// Verify the complete Ep PlatformCredential with both authentic compact carriers.
+/// Return the actual final transcript squeeze as well as the genuine IPA accumulator.
+pub(super) fn verify_ep_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fq>],
+) -> Result<KagemushaNativeVerifiedProofV1<EpAffine>, String> {
+    require_platform_credential_hybrid_layout(
+        params.k(),
+        protocol.domain.k,
+        &protocol.num_instance,
+        &instances.iter().map(Vec::len).collect::<Vec<_>>(),
+        "Ep",
+    )?;
+    let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 4,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 5,
+            ],
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 6,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 7,
+            ],
+        ],
+        "Ep PlatformCredential hybrid",
+    )
+}
+
+fn require_platform_credential_hybrid_layout(
+    k: u32,
+    domain_k: usize,
+    protocol_columns: &[usize],
+    instance_columns: &[usize],
+    parity: &str,
+) -> Result<(), String> {
+    let expected = [
+        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if k != KAGEMUSHA_HALO2_K_V1
+        || usize::try_from(k).ok() != Some(domain_k)
+        || protocol_columns != expected
+        || instance_columns != expected
+    {
+        return Err(format!(
+            "Kagemusha {parity} PlatformCredential requires exactly k16 [56,8162,8162]"
+        ));
+    }
+    Ok(())
 }
 
 fn verify_hybrid_succinct_protocol<C, const N: usize>(

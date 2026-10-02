@@ -54,6 +54,7 @@ COMMON_ROOT_INPUTS = (
     "scripts/check_mobile_sdk_artifacts.sh",
     "scripts/mobile_sdk_android_artifacts.py",
     "scripts/norito_bridge_source_seal.py",
+    "scripts/ivm_artifacts.tsv",
     "scripts/run_mobile_hermetic_command.py",
 )
 APPLE_ROOT_INPUTS = (
@@ -99,6 +100,9 @@ ANDROID_ROOT_INPUTS = (
     "kotlin/client-android/build.gradle.kts",
     "kotlin/client-android/src/main",
     "kotlin/kagemusha-wallet-android/build.gradle.kts",
+    "kotlin/kagemusha-wallet-android/src/main",
+    "kotlin/client-android/consumer-rules.pro",
+    "kotlin/kagemusha-wallet-android/consumer-rules.pro",
     "java/norito_java/settings.gradle.kts",
     "java/norito_java/build.gradle.kts",
     "java/norito_java/gradle.properties",
@@ -159,9 +163,10 @@ SWIFT_NATIVE_BRIDGE_HASH_BLOCK = re.compile(
 
 # Only public source/build input filenames may be opened by the derived seal. A
 # prohibited required input stops the seal; it is never silently dropped.
+# .ko is Kotodama source; compiled IVM .to bytecode is a separate input role.
 _PUBLIC_SOURCE_SUFFIXES = frozenset({
     ".rs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".inc",
-    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java",
+    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java", ".ko",
     ".py", ".sh", ".bat", ".kts", ".gradle", ".properties", ".xml",
     ".toml", ".lock", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".md",
     ".rst", ".adoc", ".csv", ".tsv", ".nrt", ".bin", ".ptx", ".podspec",
@@ -169,6 +174,199 @@ _PUBLIC_SOURCE_SUFFIXES = frozenset({
     ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".snap", ".expect",
     ".hex", ".pub", ".hash", ".sha256", ".checksum",
 })
+# Exact public loader/consumer-rule inputs used by the maintained Android builds.
+# This admits their filenames only after the material/provider/path refusal above;
+# it does not admit another dotted SPI name or an arbitrary .pro file.
+_REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
+    "java/iroha_android/core/src/main/resources/META-INF/proguard/iroha3.pro",
+    "kotlin/core-jvm/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro",
+    "kotlin/client-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.KagemushaAndroidOrdinaryHardwareServiceFactoryV1",
+    "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidHardwareProviderFactoryV1",
+})
+# Exact public trybuild diagnostics in the maintained package closures.
+# These are 62 expected originals plus three tracked event-set diagnostic copies
+# retained under iroha_data_model_derive/wip; their full bytes remain sealed.
+# This admits no other .stderr name or material/provider/path/custody exception.
+_REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
+    "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_duplicate.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_invalid.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_missing.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/has_origin_multiple_attributes.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_duplicate.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_invalid.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_missing.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/transparent_api_private_field.stderr",
+    "crates/iroha_data_model_derive/tests/ui_fail/transparent_api_private_item.stderr",
+    "crates/iroha_data_model_derive/wip/event_set_identity_duplicate.stderr",
+    "crates/iroha_data_model_derive/wip/event_set_identity_invalid.stderr",
+    "crates/iroha_data_model_derive/wip/event_set_identity_missing.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/generics.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_commas.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_conflicts.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_default_invalid_expr.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_env_without_var.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_no_comma_between_attrs.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_struct.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/removed_key_attribute.stderr",
+    "crates/iroha_derive/tests/config_base_ui_fail/unsupported_shapes.stderr",
+    "crates/iroha_derive/tests/ui_fail/from_variant_conflicting_implementation.stderr",
+    "crates/iroha_derive/tests/ui_fail/from_variant_incorrect_attr_placement.stderr",
+    "crates/iroha_derive/tests/ui_fail/from_variant_removed_skip_container.stderr",
+    "crates/iroha_derive/tests/ui_fail/from_variant_same_type.stderr",
+    "crates/iroha_derive/tests/ui_fail/from_variant_skip_try_from_non_newtype.stderr",
+    "crates/iroha_derive/tests/ui_fail/struct_from_variant.stderr",
+    "crates/iroha_derive/tests/ui_fail/telemetry_future_non_async.stderr",
+    "crates/iroha_executor_data_model_derive/tests/ui/fail/parameter_missing_default.stderr",
+    "crates/iroha_executor_data_model_derive/tests/ui/fail/parameter_missing_traits.stderr",
+    "crates/iroha_executor_data_model_derive/tests/ui/fail/permission_missing_deserialize.stderr",
+    "crates/iroha_executor_data_model_derive/tests/ui/fail/permission_missing_serde.stderr",
+    "crates/iroha_primitives/tests/ui_fail/must_use_not_used.stderr",
+    "crates/iroha_primitives_derive/tests/ui/fail/numeric_empty.stderr",
+    "crates/iroha_primitives_derive/tests/ui/fail/numeric_invalid.stderr",
+    "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_bad.stderr",
+    "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_missing_colon.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/duplicate_binary_validation_hook.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/enum_duplicate_index.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/malformed_binary_validation_hook.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/transparent_enum_multi_variant.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/transparent_struct_multiple_fields.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/args_no_wsv.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/bare_spec.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/doubled_plus.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/metric_name_with_space.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/no_args.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/non_snake_case_name.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/not_execute.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/not_return_result.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/return_nothing.stderr",
+    "crates/iroha_telemetry_derive/tests/ui_fail/trailing_plus.stderr",
+    "crates/norito_derive/tests/ui/fail/attrs_conflict_named.stderr",
+    "crates/norito_derive/tests/ui/fail/attrs_conflict_tuple.stderr",
+    "crates/norito_derive/tests/ui/fail/attrs_tuple_rename.stderr",
+    "crates/norito_derive/tests/ui/fail/enum_duplicate_index.stderr",
+    "crates/norito_derive/tests/ui/fail/fastjson_enum.stderr",
+    "crates/norito_derive/tests/ui/fail/frame_identity_schema_name.stderr",
+    "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
+    "crates/norito_derive/tests/ui/fail/json_enum_missing_tag.stderr",
+    "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
+    "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
+    "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",
+    "crates/norito_derive/tests/ui/fail/schema_identity_missing.stderr",
+    "crates/norito_derive/tests/ui/fail/schema_identity_nested.stderr",
+})
+# Exact checked-in IVM goldens owned by scripts/ivm_artifacts.tsv: 43 paired
+# Kotodama outputs and two canonical predecoder fixtures. Source intake seals
+# the full bytes; it grants no compilation, deployment or runtime qualification.
+# No other .to file (including a SoraFS deployment manifest) is admitted.
+_REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
+    "crates/iroha/tests/fixtures/contract_code_readback/code_readback.to",
+    "crates/ivm/docs/examples/01_hajimari.to",
+    "crates/ivm/docs/examples/02_kotoage_public_fn.to",
+    "crates/ivm/docs/examples/03_kaizen_permission.to",
+    "crates/ivm/docs/examples/04_foreach_map.to",
+    "crates/ivm/docs/examples/05_range_for.to",
+    "crates/ivm/docs/examples/06_map_ops.to",
+    "crates/ivm/docs/examples/07_set_detail_authority.to",
+    "crates/ivm/docs/examples/08_call_transfer_asset.to",
+    "crates/ivm/docs/examples/09_struct_and_state.to",
+    "crates/ivm/docs/examples/10_meta_header.to",
+    "crates/ivm/docs/examples/11_detail_and_transfer.to",
+    "crates/ivm/docs/examples/12_nft_flow.to",
+    "crates/ivm/docs/examples/13_register_and_mint.to",
+    "crates/ivm/docs/examples/14_map_sum_take2.to",
+    "crates/ivm/docs/examples/15_modulo.to",
+    "crates/ivm/docs/examples/16_register_domain.to",
+    "crates/ivm/docs/examples/18_ternary.to",
+    "crates/ivm/docs/examples/19_contract_flow_test.to",
+    "crates/ivm/tests/data/add.to",
+    "crates/ivm/tests/data/amm.to",
+    "crates/ivm/tests/data/complex.to",
+    "crates/ivm/tests/data/control.to",
+    "crates/ivm/tests/data/mfc.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+    "crates/kotodama_lang/src/samples/asset_ops.to",
+    "crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.to",
+    "crates/kotodama_lang/src/samples/dex_contract.to",
+    "crates/kotodama_lang/src/samples/dex_simple.to",
+    "crates/kotodama_lang/src/samples/domain_ops.to",
+    "crates/kotodama_lang/src/samples/irohaswap.to",
+    "crates/kotodama_lang/src/samples/kotodama_swap.to",
+    "crates/kotodama_lang/src/samples/lending_simple.to",
+    "crates/kotodama_lang/src/samples/mint_rose_trigger.to",
+    "crates/kotodama_lang/src/samples/native_escrow.to",
+    "crates/kotodama_lang/src/samples/perp_funding.to",
+    "crates/kotodama_lang/src/samples/query_assets_and_save_cursor.to",
+    "crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.to",
+    "crates/kotodama_lang/src/samples/stablecoin_simple.to",
+    "crates/kotodama_lang/src/samples/subscription_billing_trigger.to",
+    "crates/kotodama_lang/src/samples/subscription_usage_recorder.to",
+    "crates/kotodama_lang/src/samples/threshold_escrow.to",
+    "crates/kotodama_lang/src/samples/tuple_return_demo.to",
+    "crates/kotodama_lang/src/samples/zk_vote_ballot.to",
+})
+# These named public Rust modules and predecoder fixture inputs happen to live
+# in directories named artifacts/run. Only those two directory words are
+# excepted for these exact files; every other operational/material gate remains.
+_REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS = frozenset({
+    "crates/iroha_core/src/sumeragi/certified_chain/artifacts/tests.rs",
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture.rs",
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture_tests.rs",
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key.rs",
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key_tests.rs",
+    "crates/iroha_p2p/src/peer/run/admission_class_tests.rs",
+    "crates/iroha_p2p/src/peer/run/granted.rs",
+    "crates/iroha_p2p/src/peer/run/payload_codec_tests.rs",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+})
+# Fixed public parser seeds, offsets, codec/checksum goldens, normative grammar,
+# Objective-C source and the embedded Metal library, traced to their source
+# owners. There is no general binary, extensionless or uncommon-suffix role.
+_REVIEWED_PUBLIC_FIXTURE_INPUTS = frozenset({
+    "crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest",
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/test_vectors/SHA256SUMS",
+    "crates/ivm/fuzz/corpus/artifact_admission_v1/canonical_seed",
+    "crates/ivm/fuzz/corpus/artifact_admission_v1/raw_malformed_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/arithmetic_full_width_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/arithmetic_rounding_tie_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/raw_malformed_envelope_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/raw_malformed_frame_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/staged_oog_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/valid_decimal_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/valid_int_seed",
+    "crates/ivm/fuzz/corpus/numeric_v1/valid_quantity_seed",
+    "crates/ivm/fuzz/corpus/tlv_validate/acdef51ee223031b697842004824832b9eed6272",
+    "crates/ivm/metal/v1/ivm_kernels.metallib",
+    "crates/kotodama_lang/grammar/v1.lex",
+    "crates/norito/accelerators/jsonstage1_metal/src/metal.m",
+    "crates/norito/tests/data/escaped_quote.tape",
+    "crates/norito/tests/data/small_a1.tape",
+    "crates/norito/tests/data/small_empty.tape",
+    "crates/norito/tests/data/string_x.tape",
+    "crates/norito/tests/data/two_backslashes.tape",
+    "crates/norito/tests/fixtures/sample_payload_frame.norito",
+    "crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message",
+})
+# Two exact MockEnv inputs and two static compiler/contract assets have names
+# caught by the material rule. Their public, non-operational roles are bound to
+# reviewed complete bytes through the existing no-follow reader. These are
+# source-fixture pins, never credential, signing or runtime authority inputs.
+_REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS = frozenset({
+    "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt",
+    "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv",
+})
+_REVIEWED_PUBLIC_MOCK_ENV_INPUTS = frozenset({
+    "crates/iroha_config/tests/fixtures/full.env",
+    "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
+})
+_REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS = {
+    "crates/iroha_config/tests/fixtures/full.env": ("3f0cd58caab9edb0f4f3c02c9788962854d996d6de949af36508cce01b9a24dd", 2249),
+    "crates/iroha_config/tests/fixtures/minimal_file_and_env.env": ("196c68787e11f84107aaa983a5cb02a97b5d2ef6f860269c85920a1baf5817f5", 26),
+    "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("06f3e6f960e02cb8a452e85d634d6b5b7518ac511d9ab98c69d2ba3e42d8eb4f", 53080),
+    "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv": ("0d62f715c83be396e55b2abb499e7e59a497f1ebeff60e1768ac50bff617714a", 3261),
+}
+
 _MATERIAL_SUFFIXES = frozenset({
     ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdb", ".asc",
     ".der", ".crt", ".cer", ".mobileprovision", ".env",
@@ -188,7 +386,7 @@ _MATERIAL_FILENAME = re.compile(
 )
 _CODE_SUFFIXES = frozenset({
     ".rs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".inc",
-    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java",
+    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java", ".ko",
     ".py", ".sh", ".bat", ".kts", ".js", ".ts",
 })
 _PUBLIC_BASENAMES = frozenset({
@@ -198,7 +396,44 @@ _PUBLIC_BASENAMES = frozenset({
 })
 
 
-def _public_source_relative(relative: str, *, file_name: bool = True) -> pathlib.PurePosixPath:
+# Reviewed exact vendor roles: original Cargo manifests named by their normalized
+# owners, spelling ignore words consumed by Concread's Makefile, and deterministic
+# public BLS generator vectors included by the curve tests. This does not admit
+# any other .orig/.dat filename or override material/provider/alias refusal.
+_REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
+    "vendor/concread/.codespell_ignore",
+    "vendor/concread/Cargo.toml.orig",
+    "vendor/halo2-axiom/Cargo.toml.orig",
+    "vendor/halo2curves-axiom/Cargo.toml.orig",
+    "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
+    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_compressed_valid_test_vectors.dat",
+    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_uncompressed_valid_test_vectors.dat",
+    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_compressed_valid_test_vectors.dat",
+    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_uncompressed_valid_test_vectors.dat",
+})
+
+# Exact public parser seeds reviewed from the Norito cargo-fuzz owners. The
+# pinned declaration travels with a frozen working-source cut; it never changes
+# the snapshot Git index or admits arbitrary untracked/ignored hexadecimal files.
+_NORITO_PUBLIC_CORPUS_MANIFEST = "crates/norito/fuzz/public_corpus_manifest.json"
+_NORITO_PUBLIC_CORPUS_MANIFEST_SHA256 = "6614365dae962dd554f4c47760f89a565d3b820396a6891d89a9f69af2ef7166"
+_NORITO_PUBLIC_CORPUS_SEED_COUNT = 741
+_NORITO_PUBLIC_CORPUS_TARGETS = frozenset({
+    "json_from_json_equiv", "json_parse_string", "json_parse_string_ref", "json_skip_value",
+})
+
+
+def _norito_public_corpus_path(relative: str) -> bool:
+    path = pathlib.PurePosixPath(relative)
+    return (len(path.parts) == 6 and path.parts[:4] == ("crates", "norito", "fuzz", "corpus")
+            and path.parts[4] in _NORITO_PUBLIC_CORPUS_TARGETS
+            and re.fullmatch(r"[0-9a-f]{40}", path.name) is not None)
+
+
+def _public_source_relative(
+    relative: str, *, file_name: bool = True,
+    reviewed_corpus_inputs: frozenset[str] = frozenset(),
+) -> pathlib.PurePosixPath:
     """Admit a canonical public filename before filesystem or content intake."""
     path = pathlib.PurePosixPath(relative)
     if (not relative or path.is_absolute() or path.as_posix() != relative
@@ -206,14 +441,28 @@ def _public_source_relative(relative: str, *, file_name: bool = True) -> pathlib
             or any(ord(character) < 32 or ord(character) == 127 for character in relative)):
         raise RuntimeError(f"source-seal input path is not canonical: {relative!r}")
     lower = relative.lower()
-    if (any(part.lower() in _PROHIBITED_SOURCE_PARTS for part in path.parts)
+    reviewed_fixture = relative in _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS
+    if (any(part.lower() in _PROHIBITED_SOURCE_PARTS
+            and not (relative in _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS
+                     and part.lower() in {"artifacts", "run"}) for part in path.parts)
             or "vultr" in lower or "sydneycreds" in lower
-            or path.suffix.lower() in _MATERIAL_SUFFIXES
+            or (path.suffix.lower() in _MATERIAL_SUFFIXES
+                and not (relative in _REVIEWED_PUBLIC_MOCK_ENV_INPUTS
+                         and path.suffix == ".env"))
             or path.name.lower().startswith(".env")
             or (path.suffix.lower() not in _CODE_SUFFIXES
-                and _MATERIAL_FILENAME.search(path.name))):
+                and _MATERIAL_FILENAME.search(path.name)
+                and relative not in _REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS)):
         raise RuntimeError(f"source-seal input is prohibited material or operational input: {relative}")
     if file_name and not (relative in ROOT_INPUTS
+            or relative in _REVIEWED_PUBLIC_VENDOR_INPUTS
+            or relative in _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS
+            or relative in _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS
+            or relative in _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS
+            or relative in _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS
+            or relative in _REVIEWED_PUBLIC_FIXTURE_INPUTS
+            or reviewed_fixture
+            or relative in reviewed_corpus_inputs
             or path.suffix.lower() in _PUBLIC_SOURCE_SUFFIXES
             or path.name in _PUBLIC_BASENAMES
             or path.name.startswith(("LICENSE-", "LICENSE.", "COPYING", "COPYRIGHT",
@@ -226,7 +475,17 @@ def _source_path_metadata(
     root: pathlib.Path, relative: str, *, allow_directory: bool = False,
 ) -> tuple[pathlib.Path, dict[pathlib.Path, tuple[object, ...]]]:
     """Reject every ancestor alias before admitting a source content descriptor."""
-    relative_path = _public_source_relative(relative, file_name=not allow_directory)
+    # Fixed public roles never bypass provider/canonical-name or descriptor custody.
+    # Every other material/operational path is refused before content intake.
+    relative_path = _public_source_relative(relative, file_name=False)
+    corpus_entry = None
+    corpus_identities = {}
+    if not allow_directory and _norito_public_corpus_path(relative):
+        corpus_inputs, corpus_identities = _reviewed_norito_public_corpus(root)
+        _public_source_relative(relative, reviewed_corpus_inputs=frozenset(corpus_inputs))
+        corpus_entry = corpus_inputs[relative]
+    else:
+        _public_source_relative(relative, file_name=not allow_directory)
     if not root.is_absolute() or root != pathlib.Path(os.path.abspath(root)):
         raise RuntimeError("source-seal root must be absolute and canonical")
     source = root.joinpath(*relative_path.parts)
@@ -242,6 +501,14 @@ def _source_path_metadata(
             raise RuntimeError(f"source-seal input is not a regular file: {relative}")
         identities[component] = (_source_directory_identity(value)
             if stat.S_ISDIR(value.st_mode) else _source_identity(value))
+    if corpus_entry is not None:
+        for component, identity in corpus_identities.items():
+            if component in identities and identities[component] != identity:
+                raise RuntimeError(f"source-seal corpus declaration ancestor changed: {relative}")
+            identities[component] = identity
+        declaration = root / _NORITO_PUBLIC_CORPUS_MANIFEST
+        identities[declaration] += ("reviewed-public-corpus", _NORITO_PUBLIC_CORPUS_MANIFEST_SHA256,
+                                  corpus_entry["sha256"], corpus_entry["bytes"])
     return source, identities
 
 
@@ -285,9 +552,71 @@ def _read_public_source_bytes(root: pathlib.Path, relative: str) -> bytes:
             if (_source_identity(after) != initial[source] or current != initial
                     or len(contents) != after.st_size):
                 raise RuntimeError(f"source-seal input changed while authenticating: {relative}")
+            reviewed_fixture = _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS.get(relative)
+            if reviewed_fixture is not None:
+                digest, size = reviewed_fixture
+                if (len(contents) != size
+                        or hashlib.sha256(contents).hexdigest() != digest):
+                    raise RuntimeError(f"source-seal public fixture differs from its reviewed original: {relative}")
+            if _norito_public_corpus_path(relative):
+                declaration = initial[root / _NORITO_PUBLIC_CORPUS_MANIFEST]
+                if (len(contents) != declaration[-1]
+                        or hashlib.sha256(contents).hexdigest() != declaration[-2]
+                        or hashlib.sha1(contents).hexdigest() != source.name):
+                    raise RuntimeError(f"source-seal corpus original differs from its reviewed role: {relative}")
             return contents
     finally:
         os.close(descriptor)
+
+
+def _reviewed_norito_public_corpus(
+    root: pathlib.Path,
+) -> tuple[dict[str, dict[str, object]], dict[pathlib.Path, tuple[object, ...]]]:
+    """Authenticate the exact public seed declaration through the same no-follow reader."""
+    try:
+        _, initial = _source_path_metadata(root, _NORITO_PUBLIC_CORPUS_MANIFEST)
+        contents = _read_public_source_bytes(root, _NORITO_PUBLIC_CORPUS_MANIFEST)
+        _, current = _source_path_metadata(root, _NORITO_PUBLIC_CORPUS_MANIFEST)
+    except FileNotFoundError as error:
+        raise RuntimeError("source-seal required public corpus declaration is missing") from error
+    if (current != initial
+            or hashlib.sha256(contents).hexdigest() != _NORITO_PUBLIC_CORPUS_MANIFEST_SHA256):
+        raise RuntimeError("source-seal public corpus declaration differs from its reviewed original")
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise RuntimeError("source-seal public corpus declaration has duplicate object keys")
+            value[key] = item
+        return value
+
+    try:
+        value = json.loads(contents, object_pairs_hook=unique_object)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("source-seal public corpus declaration is not canonical JSON") from error
+    if (not isinstance(value, dict) or set(value) != {"schema", "entries"}
+            or value["schema"] != "iroha.norito.public-fuzz-corpus.v1"
+            or not isinstance(value["entries"], list)
+            or len(value["entries"]) != _NORITO_PUBLIC_CORPUS_SEED_COUNT):
+        raise RuntimeError("source-seal public corpus declaration has an unreviewed shape")
+    entries = {}
+    for item in value["entries"]:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256", "bytes"}:
+            raise RuntimeError("source-seal public corpus declaration has an unreviewed entry")
+        relative = item["path"]
+        if not isinstance(relative, str):
+            raise RuntimeError("source-seal public corpus declaration path is not text")
+        _public_source_relative(relative, file_name=False)
+        if (not _norito_public_corpus_path(relative) or relative in entries
+                or not isinstance(item["sha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+                or type(item["bytes"]) is not int or item["bytes"] < 0):
+            raise RuntimeError("source-seal public corpus declaration has an unreviewed entry")
+        entries[relative] = item
+    if list(entries) != sorted(entries):
+        raise RuntimeError("source-seal public corpus declaration is not ordered")
+    return entries, initial
 
 
 class AuthenticatedTool:
@@ -773,6 +1102,11 @@ def listed_files(
         if stat.S_ISREG(int(identities[source][2])):
             _public_source_relative(relative)
             listed.add(relative)
+
+    # Classification is an authenticated source input even for an explicit seed
+    # selection. This does not recursively enumerate or admit ignored local corpora.
+    if any(_norito_public_corpus_path(relative) for relative in listed):
+        listed.add(_NORITO_PUBLIC_CORPUS_MANIFEST)
 
     present = []
     for relative in listed:

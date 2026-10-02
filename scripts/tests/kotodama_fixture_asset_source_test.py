@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        '64228020f76318efa67da5cbc704d0d821b04d12bba5eab20fef57c56347bda4',
+        '02df794136b01ae44e8fc9069635286274044917be775de814208c5fc1fd5db2',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -239,7 +239,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/compiler/tests/staged_mint_access_hints.rs',
-        'dbd47ce160cd3204deccb472e38e7a25368ff7bd543af0954a24bfe6038740e1',
+        'adc4c9f48070d1bd2987ffcee36dcb287f7180c75b96cf08a7e509b6daba0546',
         (
             AssetSpec('001.ko', '84c5f786e83b467f1f9799bfcd79e1c2f42e983d0207ae16bf586c8591b2c571', 3546, False),
         ),
@@ -256,7 +256,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/resolved.rs',
-        '334123cda6864c2fb69f98351bedc02d0db0286c73b406facc1e54472a4296f3',
+        'fabe7f50e11d4c90307585bd97fa94dfad113eb6a818a33fa2947768b686b480',
         (
             AssetSpec('001.ko', 'a15f6256b419624f839af6961586120b08958cb3886b9f7a51671471b7a85e88', 176, False),
             AssetSpec('002.ko', 'fbdce614e48b118614c6817b2ec40eaa3719125c19ec72fe332acd0d5c0e8577', 249, False),
@@ -332,6 +332,12 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'assert_eq!(host.invoke_entrypoint(&mut vm, false), Err(refusal));',
         b'assert_eq!(host.last_test_error(), None);',
         b'assert_eq!(budget.reserved_bytes(), occupied);',
+        b'fn multifile_suite_discovers_and_executes_included_tests_with_local_modules()',
+        b'temp.write("src/unrelated.ko", "this file is deliberately invalid");',
+        b'fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file()',
+        b'run_tests_structured_source_with_modules_v1(',
+        b'assert_eq!(report.cases.len(), 1);',
+        b'"module Math { export fn value() -> int { return 7; } }"',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
@@ -342,9 +348,20 @@ SOURCE_REQUIRED_FRAGMENTS = {
     'crates/kotodama_lang/src/resolved.rs': (
         b'use kotodama_surface::builtins::Builtin;',
         b'kotodama_surface::source_policy::is_reserved_source_declaration(',
+        b'included: Vec<ResolvedProgram>',
+        b'original: Option<Box<ResolvedProgram>>',
+        b'std::iter::once(self.original.as_deref().unwrap_or(self)).chain(self.included.iter())',
+        b'pub(crate) fn with_included_sources(',
+        b'self.original = Some(Box::new(self.clone()));',
+        b'.map(|(source, index)| originals[source].items[*index].clone())',
+        b'file.attach_sources(typed);',
+        b'state.source = Some(source);',
     ),
     'crates/kotodama_lang/src/secret.rs': (
         b'use kotodama_surface::builtins::{Builtin, BuiltinAccess};',
+    ),
+    'crates/kotodama_lang/src/compiler/tests/staged_mint_access_hints.rs': (
+        b'string_literal_temps.contains(&(func_idx, *value)),',
     ),
     # K1b: ivm no longer re-exports the Kotodama compiler; tests import kotodama_lang directly.
     'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs': (

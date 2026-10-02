@@ -42,6 +42,14 @@ mod ordinary_state_prepared_binding;
 #[path = "ordinary_state_subject_binding.rs"]
 mod ordinary_state_subject_binding;
 
+#[cfg(all(
+    unix,
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+#[path = "ordinary_cash_terminal_math.rs"]
+pub(super) mod ordinary_cash_terminal_math;
+
 #[cfg(test)]
 use super::terminal_authorization::constrain_candidate_envelope_digest_v1;
 #[cfg(any(

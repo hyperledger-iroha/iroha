@@ -128,6 +128,8 @@ def screen(
     ca_section_cap = _asserted_value(
         accumulator, "ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1"
     )
+    if main_claim != _asserted_value(stark, "ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1"):
+        raise GeometryError("MAIN claim envelope disagrees with independent native codec accounting")
     if (
         outer != 92
         or ca_inner != ca_pre_deep + (deep - (wide_main - main_pre_deep))
@@ -214,6 +216,7 @@ def screen(
         "current_main_inner_max_bytes": wide_main,
         "current_ca_inner_max_bytes": ca_inner,
         "main_section_cap_bytes": main_section_cap,
+        "main_claim_envelope_bytes": main_claim,
         "current_trace_columns": columns,
         "current_trace_opening_bytes": trace_bytes,
         "complete_deep_opening_bytes": deep,

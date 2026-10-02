@@ -44,6 +44,29 @@ pub(super) fn constrain_ordinary_state_prepared_v1<F: KagemushaPoseidonFieldV1>(
     prepared_carriers: &[AssignedValue<F>],
     opening: Option<KagemushaOrdinaryRecursivePreparedOpeningV1<'_>>,
 ) -> Result<(), String> {
+    constrain_ordinary_state_prepared_opening_v1(
+        builder,
+        jobs,
+        assigned,
+        witness,
+        original,
+        transition_sha,
+        prepared_carriers,
+        opening,
+    )
+    .map(|_| ())
+}
+
+pub(super) fn constrain_ordinary_state_prepared_opening_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    assigned: &KagemushaAssignedStateRelationV1<F>,
+    witness: &KagemushaStateRelationWitnessV1,
+    original: &KagemushaOrdinaryGuardDataBindingV1<F>,
+    transition_sha: &[PastaSha256ByteV1<F>; 32],
+    prepared_carriers: &[AssignedValue<F>],
+    opening: Option<KagemushaOrdinaryRecursivePreparedOpeningV1<'_>>,
+) -> Result<[AssignedValue<F>; 2], String> {
     if prepared_carriers.len() != 6 {
         return Err("ordinary prepared State carrier width differs".into());
     }
@@ -198,6 +221,9 @@ pub(super) fn constrain_ordinary_state_prepared_v1<F: KagemushaPoseidonFieldV1>(
             stream_expected[index],
         )?);
     }
+    let lengths: [AssignedValue<F>; 2] = lengths
+        .try_into()
+        .map_err(|_| "ordinary sealed-stream count")?;
     let transition_digest = digest_limbs_assigned(ctx, transition_sha);
     constrain_ordinary_prepared_intent_if_v1(
         ctx,
@@ -218,16 +244,14 @@ pub(super) fn constrain_ordinary_state_prepared_v1<F: KagemushaPoseidonFieldV1>(
             reservation_digest: reservation,
             preparation_authorization_digest: original.digests[2],
             preparation_approval_purpose: original.approval_purpose,
-            stream_lengths: lengths
-                .try_into()
-                .map_err(|_| "ordinary sealed-stream count")?,
+            stream_lengths: lengths,
             stream_digests: stream_expected,
             candidate_preparation_id: prepared_carriers[..2]
                 .try_into()
                 .map_err(|_| "ordinary preparation ID width")?,
         },
     )?;
-    Ok(())
+    Ok(lengths)
 }
 
 fn constrain_sealed_stream_v1<F: KagemushaPoseidonFieldV1>(

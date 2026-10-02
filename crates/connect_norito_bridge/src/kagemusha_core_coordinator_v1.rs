@@ -36,6 +36,8 @@ pub use native_core_work::{
 #[cfg(unix)]
 pub use ordinary_app_identity::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
+    KagemushaOrdinaryNativeCurrentControlRequestV1, KagemushaOrdinaryNativeCurrentControlResponseV1,
+    invoke_kagemusha_native_ordinary_current_control_v1,
     KagemushaOrdinaryEnrollmentDispositionV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,

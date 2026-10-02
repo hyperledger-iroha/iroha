@@ -643,7 +643,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
         if self.owner.preparation.challenge.platform_class
             == KagemushaHardwarePlatformClassV1::AndroidKeyMint
         {
-            validate_android_archive(raw)?;
+            validate_android_platform_original(raw)?;
         }
         Ok(())
     }
@@ -680,29 +680,14 @@ fn replay_bounded(journal: &mut PrivateJournal) -> Result<Vec<Record>> {
     }
     Err(Custody)
 }
-fn validate_android_archive(raw: &[u8]) -> Result<()> {
-    if raw.len() < 6 || &raw[..5] != b"KMCA\x01" || !(2..=8).contains(&raw[5]) {
-        return Err(Rejected);
-    }
-    let mut offset = 6usize;
-    for _ in 0..raw[5] {
-        let end = offset.checked_add(4).ok_or(Rejected)?;
-        let size = u32::from_be_bytes(
-            raw.get(offset..end)
-                .ok_or(Rejected)?
-                .try_into()
-                .map_err(|_| Rejected)?,
-        ) as usize;
-        offset = end;
-        if size == 0 || size > 16 * 1024 {
-            return Err(Rejected);
-        }
-        offset = offset
-            .checked_add(size)
-            .filter(|n| *n <= raw.len())
-            .ok_or(Rejected)?;
-    }
-    if offset != raw.len() {
+fn validate_android_platform_original(raw: &[u8]) -> Result<()> {
+    // This is only the sole Model container's exact role/resource shape. It grants no
+    // certificate, challenge, application, revocation, issuer or financial verdict.
+    let original = KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(raw)
+        .map_err(|_| Rejected)?;
+    if original.android_certificate_chain_der().is_none()
+        || original.canonical_bytes().map_err(|_| Rejected)? != raw
+    {
         return Err(Rejected);
     }
     Ok(())
@@ -1052,21 +1037,126 @@ mod tests {
     }
     #[test]
     fn ordinary_c_raw_archive_and_retention_reject_changed_original_boundaries() {
-        let mut archive = b"KMCA\x01\x02".to_vec();
-        for bytes in [
-            b"synthetic DER one".as_slice(),
-            b"synthetic DER two".as_slice(),
-        ] {
-            archive.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-            archive.extend_from_slice(bytes);
-        }
-        // Only outer envelope structure is checked here; raw DER semantics remain issuer-owned.
-        validate_android_archive(&archive).unwrap();
+        let value = android_original(vec![
+            b"synthetic DER one".to_vec(),
+            b"synthetic DER two".to_vec(),
+        ]);
+        let archive = value.canonical_bytes().unwrap();
+        // Only the complete outer container is checked; DER semantics remain issuer-owned.
+        validate_android_platform_original(&archive).unwrap();
         let mut extra = archive.clone();
         extra.push(0);
-        assert!(validate_android_archive(&extra).is_err());
-        assert!(validate_android_archive(&archive[..archive.len() - 1]).is_err());
-        archive[5] = 9;
-        assert!(validate_android_archive(&archive).is_err());
+        assert!(validate_android_platform_original(&extra).is_err());
+        assert!(validate_android_platform_original(&archive[..archive.len() - 1]).is_err());
+        let invalid = android_original(vec![vec![1]; 9]);
+        assert!(validate_android_platform_original(&norito::encode_canonical(&invalid).unwrap()).is_err());
+    }
+
+    fn android_original(chain: Vec<Vec<u8>>) -> KagemushaPlatformAttestationOriginalV1 {
+        KagemushaPlatformAttestationOriginalV1 {
+            version: 1,
+            evidence: KagemushaPlatformAttestationEvidenceV1::AndroidKeyMint {
+                certificate_chain_der: chain,
+            },
+        }
+    }
+
+    #[test]
+    fn ordinary_c_android_container_rejects_legacy_role_version_and_corruption() {
+        let value = android_original(vec![vec![1; 32], vec![2; 32]]);
+        let original = value.canonical_bytes().unwrap();
+        let mut changed = original.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        let apple = KagemushaPlatformAttestationOriginalV1 {
+            version: 1,
+            evidence: KagemushaPlatformAttestationEvidenceV1::AppleAppAttest {
+                attestation_object_cbor: vec![0xa0],
+            },
+        };
+        let mut wrong_version = value.clone();
+        wrong_version.version = 2;
+        let mut legacy = b"KMCA\x01\x02".to_vec();
+        for cert in [vec![1; 32], vec![2; 32]] {
+            legacy.extend_from_slice(&(cert.len() as u32).to_be_bytes());
+            legacy.extend_from_slice(&cert);
+        }
+        for raw in [
+            legacy,
+            vec![1; 64],
+            apple.canonical_bytes().unwrap(),
+            norito::encode_canonical(&wrong_version).unwrap(),
+            changed,
+            [original.as_slice(), &[0]].concat(),
+            original[..original.len() - 1].to_vec(),
+        ] {
+            assert!(validate_android_platform_original(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_c_android_container_checks_components_and_complete_archive_bounds() {
+        for count in 2..=8 {
+            let raw = android_original(vec![vec![1]; count]).canonical_bytes().unwrap();
+            validate_android_platform_original(&raw).unwrap();
+        }
+        let seven_full = android_original(vec![vec![1; 16 * 1024]; 7]);
+        validate_android_platform_original(&seven_full.canonical_bytes().unwrap()).unwrap();
+        for chain in [
+            vec![],
+            vec![vec![1]],
+            vec![vec![1]; 9],
+            vec![vec![], vec![1]],
+            vec![vec![1; 16 * 1024 + 1], vec![1]],
+            vec![vec![1; 16 * 1024]; 8],
+        ] {
+            let raw = norito::encode_canonical(&android_original(chain)).unwrap();
+            assert!(validate_android_platform_original(&raw).is_err());
+        }
+        assert!(validate_android_platform_original(&[]).is_err());
+        assert!(validate_android_platform_original(&vec![0; MAX_RAW + 1]).is_err());
+    }
+
+    #[test]
+    fn ordinary_c_android_retains_and_recovers_only_the_same_complete_original() {
+        // Synthetic fixture/DER data tests private journal custody, never physical attestation.
+        let f = Fixture::new(false);
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let mut attempt =
+            KagemushaOrdinaryAppEnrollmentAttemptV1::create(&root, owner(&f), 300).unwrap();
+        let ticket = attempt.ticket();
+        attempt.fence_generation().unwrap();
+        let alias = kagemusha_ordinary_android_app_key_alias_v1(&f.selection.preparation.challenge)
+            .unwrap();
+        attempt.retain_key_reference(&alias).unwrap();
+        attempt.fence_attestation().unwrap();
+        let point = f.selection.issuance.credential.subject.app_public_key;
+        let raw = android_original(vec![vec![1; 32], vec![2; 32]])
+            .canonical_bytes()
+            .unwrap();
+        let metadata = attempt.retain_raw(point, &raw).unwrap();
+        assert_eq!(metadata[0], Sha256::digest(&raw).to_vec());
+        let wal = root
+            .join(hex::encode(f.selection.preparation.challenge.enrollment_id))
+            .join(FORMAT.filename);
+        let before = std::fs::read(&wal).unwrap();
+        let substituted = android_original(vec![vec![2; 32], vec![1; 32]])
+            .canonical_bytes()
+            .unwrap();
+        assert!(attempt.retain_raw(point, &substituted).is_err());
+        assert_eq!(std::fs::read(&wal).unwrap(), before);
+        assert_eq!(attempt.raw_chunk_fields(0).unwrap()[1], raw);
+        assert!(attempt.raw_chunk_fields(1).is_err());
+        let current = attempt.now().unwrap();
+        drop(attempt);
+        let recovered = KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(
+            &root, owner(&f), current,
+        )
+        .unwrap();
+        assert_eq!(recovered.ticket(), ticket);
+        assert_eq!(recovered.recovery_fields().unwrap()[0], vec![4]);
+        assert_eq!(recovered.raw_chunk_fields(0).unwrap()[1], raw);
+        assert!(recovered.pending_identity().is_err());
+        assert_eq!(std::fs::read(&wal).unwrap(), before);
     }
 }

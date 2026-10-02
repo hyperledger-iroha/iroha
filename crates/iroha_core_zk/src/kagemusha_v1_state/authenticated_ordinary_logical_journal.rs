@@ -101,6 +101,9 @@ impl InitialPublicationPermit {
     }
 }
 
+#[path = "ordinary_logical_historical_custody.rs"]
+mod historical_custody;
+
 #[path = "captured_ordinary_bootstrap_approval.rs"]
 mod captured_bootstrap;
 pub use captured_bootstrap::KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1;
@@ -1237,6 +1240,11 @@ mod tests {
             kagemusha_ordinary_app_enrollment_evidence_digest_v1,
             kagemusha_ordinary_app_enrollment_possession_message_v1,
         };
+        // Compute the protocol-fixed paired empty-tree hashes before the real fixture
+        // clock/reservation begins. Their OnceLock contains no enrollment inputs or
+        // authority; waiting on its cold initialization must not consume this fixture's
+        // unchanged original possession interval.
+        drop(ExactConsumedCreditIndex::empty());
         let mut fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
@@ -1366,7 +1374,7 @@ mod tests {
         (fixture, financial)
     }
 
-    fn publication_intent_fixture_journal(
+    pub(super) fn publication_intent_fixture_journal(
         path: &Path,
         apple: bool,
         capture: bool,

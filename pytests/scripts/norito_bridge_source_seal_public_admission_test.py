@@ -122,3 +122,74 @@ def test_fingerprint_retains_original_name_byte_and_lock_domains(tmp_path: Path)
     expected.update(hashlib.sha256(lock.read_bytes()).digest())
     with mock.patch.object(seal, "listed_files", return_value=["bridge-src/lib.rs"]):
         assert seal.fingerprint(root, ["bridge-src"], lock) == expected.hexdigest()
+
+
+@pytest.mark.parametrize("relative", sorted(seal._REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS))
+def test_exact_android_loader_resource_original_is_preserved(tmp_path: Path, relative: str) -> None:
+    root = tmp_path.resolve()
+    source = root / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    original = b"public synthetic consumer/loader original; no runtime authority\n"
+    source.write_bytes(original)
+    assert seal._read_public_source_bytes(root, relative) == original
+
+
+@pytest.mark.parametrize("relative", [
+    "kotlin/client-android/src/main/resources/META-INF/services/unreviewed.Factory",
+    "kotlin/client-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.UnreviewedFactoryV1",
+    "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.wallet.UnreviewedFactoryV1",
+    "kotlin/client-android/src/main/resources/META-INF/proguard/unreviewed.pro",
+    "kotlin/client-android/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro",
+    "java/iroha_android/core/src/main/resources/META-INF/proguard/other.pro",
+    "kotlin/client-android/other-consumer-rules.pro",
+    "kotlin/client-android/src/main/resources/META-INF/services/credentials.json",
+    "kotlin/client-android/src/main/resources/META-INF/services/private/signing.json",
+    "kotlin/client-android/src/main/resources/META-INF/services/public-sentinel.pem",
+])
+def test_android_resource_exception_never_opens_unreviewed_or_material_input(tmp_path: Path, relative: str) -> None:
+    root = tmp_path.resolve()
+    source = root / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"PUBLIC SYNTHETIC SENTINEL; NOT A CREDENTIAL\n")
+    with mock.patch.object(seal.os, "open", side_effect=AssertionError("no source open permitted")) as opened:
+        with pytest.raises(RuntimeError, match="prohibited|admitted public filename"):
+            seal._read_public_source_bytes(root, relative)
+    opened.assert_not_called()
+
+
+def test_android_wallet_shipping_sources_and_consumer_rules_are_seal_inputs(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    (root / "Cargo.lock").write_bytes(b"public synthetic lock original\n")
+    expected = {
+        "kotlin/kagemusha-wallet-android/src/main",
+        "kotlin/client-android/consumer-rules.pro",
+        "kotlin/kagemusha-wallet-android/consumer-rules.pro",
+    }
+    for relative in expected:
+        source = root / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        if relative.endswith("src/main"):
+            source.mkdir()
+        else:
+            source.write_bytes(b"public synthetic consumer rule\n")
+    with mock.patch.object(seal, "local_dependency_roots", return_value=set()) as dependencies:
+        inputs = seal.seal_inputs(root, "android", root / "Cargo.lock")
+    assert expected <= set(inputs)
+    assert "kotlin/kagemusha-wallet-android/src/test" not in inputs
+    dependencies.assert_called_once_with(root, seal.ANDROID_TARGETS, root / "Cargo.lock")
+
+
+@pytest.mark.parametrize("relative", sorted(seal._REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS))
+def test_reviewed_android_resource_ancestor_alias_is_still_refused(tmp_path: Path, relative: str) -> None:
+    root = tmp_path.resolve()
+    path = Path(relative)
+    real = root / "public-synthetic-resource"
+    real.mkdir()
+    (real / path.name).write_bytes(b"public synthetic loader original\n")
+    parent = root / path.parent
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    parent.symlink_to(real, target_is_directory=True)
+    with mock.patch.object(seal.os, "open", side_effect=AssertionError("no source open permitted")) as opened:
+        with pytest.raises(RuntimeError, match="symlinked"):
+            seal._read_public_source_bytes(root, relative)
+    opened.assert_not_called()

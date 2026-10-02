@@ -11,6 +11,10 @@
 //! authorization. The terminal body precedes purpose1 approval and excludes that approval
 //! and the final output binding. The later logical record binds both authorizations.
 
+#[path = "kagemusha_ordinary_cash_v1/ordinary_redeem.rs"]
+mod ordinary_redeem;
+pub use ordinary_redeem::*;
+
 use super::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1,
     KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_REQUEST_MAX_TTL_MS_V1,
@@ -1212,6 +1216,87 @@ impl KagemushaOrdinaryPaymentOutputV1 {
         Ok(layout.finish())
     }
 }
+/// Derive the sole acyclic ordinary Send AAD from exact request and preparation data.
+/// This is a data projection; it authenticates no receiver, clock or financial owner.
+/// Candidate, ciphertext, platform approval and recursive proof bytes are deliberately absent.
+/// # Errors
+/// Rejects malformed request/clock, reserved selectors, unchanged State or a preparation interval
+/// outside the exact signed receiver request. The amount comes only from that complete request.
+pub fn kagemusha_ordinary_send_credit_aad_v1(
+    request: &KagemushaOrdinaryPaymentRequestV1,
+    sender_before_commitment: [u8; 32],
+    sender_after_commitment: [u8; 32],
+    transition_nullifier: [u8; 32],
+    ciphertext_commitment: [u8; 32],
+    clock: &KagemushaOrdinaryCashClockContextV1,
+) -> Result<super::KagemushaEncryptedCreditAadV1, String> {
+    let request_digest = request.canonical_original_digest()?;
+    nonzero(&[
+        sender_before_commitment,
+        sender_after_commitment,
+        transition_nullifier,
+        ciphertext_commitment,
+    ])?;
+    if sender_before_commitment == sender_after_commitment {
+        return Err("ordinary send credit State heads are unchanged".into());
+    }
+    clock.validate_within_original_window(request.body.issued_at_ms, request.body.expires_at_ms)?;
+    let clock_digest = clock.binding_digest()?;
+    let credit_id = kagemusha_ordinary_credit_id_v1(transition_nullifier, request_digest);
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:ordinary-send-credit-context\0");
+    hash.update(request.body.version.to_le_bytes());
+    hash.update(request_digest);
+    hash.update(request.body.amount.to_le_bytes());
+    hash.update(sender_before_commitment);
+    hash.update(sender_after_commitment);
+    hash.update(transition_nullifier);
+    hash.update(ciphertext_commitment);
+    hash.update(clock_digest);
+    hash.update(clock.upper_at_ms.to_le_bytes());
+    let aad = super::KagemushaEncryptedCreditAadV1 {
+        version: request.body.version,
+        purpose: super::KagemushaEncryptedCreditPurposeV1::Peer,
+        context_digest: hash.finalize().into(),
+        issuance_or_transition_commitment: ciphertext_commitment,
+        credit_id,
+        amount: request.body.amount,
+    };
+    aad.validate_shape().map_err(|error| error.to_string())?;
+    Ok(aad)
+}
+
+impl KagemushaOrdinaryPaymentOutputV1 {
+    /// Reconstruct the same pre-encryption AAD for actual Native receiver decryption.
+    /// The encrypted-byte digest remains an independently opened output field, never an AAD input.
+    /// # Errors
+    /// Rejects a substituted complete request, amount, clock, credit identity or output shape.
+    pub fn encrypted_credit_aad_against(
+        &self,
+        request: &KagemushaOrdinaryPaymentRequestV1,
+        clock: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<super::KagemushaEncryptedCreditAadV1, String> {
+        self.validate_against_clock(clock)?;
+        if self.request_digest != request.canonical_original_digest()?
+            || self.amount != request.body.amount
+        {
+            return Err("ordinary send credit request original differs".into());
+        }
+        let aad = kagemusha_ordinary_send_credit_aad_v1(
+            request,
+            self.sender_before_commitment,
+            self.sender_after_commitment,
+            self.transition_nullifier,
+            self.ciphertext_commitment,
+            clock,
+        )?;
+        if aad.credit_id != self.credit_id {
+            return Err("ordinary send credit identity differs".into());
+        }
+        Ok(aad)
+    }
+}
+
 impl KagemushaOrdinaryPreparedTransitionV1 {
     /// Exact mathematical payload width, excluding domain and any request signing length.
     pub const PAYLOAD_BYTES: usize = 211;
@@ -2787,6 +2872,12 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         &self,
     ) -> Result<KagemushaOrdinaryCashOriginalLayoutV1, String> {
         self.validate_shape()?;
+        self.original_preimage_layout_for_specimen()
+    }
+    // Codec-only templates cannot authorize or authenticate original platform evidence.
+    fn original_preimage_layout_for_specimen(
+        &self,
+    ) -> Result<KagemushaOrdinaryCashOriginalLayoutV1, String> {
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field(
             "version",
@@ -2964,6 +3055,93 @@ mod tests {
             key,
         )
     }
+    #[test]
+    fn ordinary_send_aad_is_acyclic_and_joins_exact_request_and_clock() {
+        // Genuine cryptography over synthetic model vectors; no issuer/Native authority fixture.
+        let request = request().0;
+        let output = output();
+        let aad = output
+            .encrypted_credit_aad_against(&request, &clock())
+            .unwrap();
+        let mut altered = output;
+        altered.encrypted_credit_digest[0] ^= 1;
+        assert_eq!(
+            aad,
+            altered
+                .encrypted_credit_aad_against(&request, &clock())
+                .unwrap()
+        );
+        assert_ne!(
+            output.binding_digest().unwrap(),
+            altered.binding_digest().unwrap()
+        );
+        for selector in 0..5 {
+            let mut changed = output;
+            match selector {
+                0 => changed.sender_before_commitment[0] ^= 1,
+                1 => changed.sender_after_commitment[0] ^= 1,
+                2 => {
+                    changed.transition_nullifier[0] ^= 1;
+                    changed.credit_id = kagemusha_ordinary_credit_id_v1(
+                        changed.transition_nullifier,
+                        changed.request_digest,
+                    );
+                }
+                3 => changed.ciphertext_commitment[0] ^= 1,
+                _ => {
+                    let mut later = clock();
+                    later.upper_at_ms += 1;
+                    changed.clock_context_digest = later.binding_digest().unwrap();
+                    changed.prepared_at_ms = later.upper_at_ms;
+                    assert_ne!(
+                        aad,
+                        changed
+                            .encrypted_credit_aad_against(&request, &later)
+                            .unwrap()
+                    );
+                    continue;
+                }
+            }
+            assert_ne!(
+                aad,
+                changed
+                    .encrypted_credit_aad_against(&request, &clock())
+                    .unwrap()
+            );
+        }
+        let mut substituted = request;
+        substituted.body.request_id[0] ^= 1;
+        assert!(
+            output
+                .encrypted_credit_aad_against(&substituted, &clock())
+                .is_err()
+        );
+        let mut expired = clock();
+        expired.upper_at_ms = substituted.body.expires_at_ms;
+        assert!(
+            kagemusha_ordinary_send_credit_aad_v1(
+                &substituted,
+                d(12),
+                d(13),
+                d(14),
+                d(15),
+                &expired
+            )
+            .is_err()
+        );
+        assert!(
+            kagemusha_ordinary_send_credit_aad_v1(
+                &substituted,
+                d(12),
+                d(12),
+                d(14),
+                d(15),
+                &clock()
+            )
+            .is_err()
+        );
+    }
+
     fn output() -> KagemushaOrdinaryPaymentOutputV1 {
         let request_digest = request().0.canonical_original_digest().unwrap();
         let nullifier = d(14);
@@ -3609,3 +3787,9 @@ mod terminal_formula_tests {
         );
     }
 }
+
+#[path = "ordinary_payment_request_stream.rs"]
+mod request_stream;
+pub use request_stream::{
+    KagemushaOrdinaryPaymentRequestStreamGrammarV1, KagemushaOrdinaryPaymentRequestStreamVariantV1,
+};

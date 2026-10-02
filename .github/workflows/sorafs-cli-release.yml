@@ -443,7 +443,7 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} does not match version-map release ${release_version}" >&2
             exit 1
           fi
-      - name: Verify CLI source integrity
+      - name: Validate SoraFS CLI source integrity and runtime-provider broker deployment
         run: bash ci/check_sorafs_cli_release.sh
       - name: Prepare release evidence directory
         run: mkdir -p artifacts/sorafs-release

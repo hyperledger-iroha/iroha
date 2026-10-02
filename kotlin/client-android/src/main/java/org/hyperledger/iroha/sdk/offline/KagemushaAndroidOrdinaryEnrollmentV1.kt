@@ -69,10 +69,12 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private var bootstrap: KagemushaNativePreparedOrdinaryBootstrapApprovalV1? = null
     private var capturedBootstrap: KagemushaOrdinaryBootstrapApprovalOriginalsV1? = null
     private var publishedInitialState: KagemushaOrdinaryInitialStatePublicationOriginalsV1? = null
+    private var bootstrapRetiredForCash = false
 
     /** Complete the same Native ceremony, reusing complete originals and refusing uncertain platform/wallet work. */
     suspend fun beginOrResume(): KagemushaOrdinaryEnrollmentOriginalsV1 = mutex.withLock {
         requireOriginalOwner()
+        requireBootstrapStage()
         completed?.let { original ->
             checkNotNull(retail).originalRetailCertificate().also {
                 check(java.security.MessageDigest.isEqual(it, original.originalRetailCertificate()))
@@ -128,6 +130,7 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
         val enrollment = beginOrResume()
         return mutex.withLock {
             requireOriginalOwner()
+            requireBootstrapStage()
             val signer = checkNotNull(approveBootstrapOriginal) { "Actual hardware Bootstrap signer is unavailable" }
             val heldRetail = checkNotNull(retail)
             check(java.security.MessageDigest.isEqual(heldRetail.originalRetailCertificate(), enrollment.originalRetailCertificate()))
@@ -158,6 +161,7 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
         beginOrResumeBootstrapApproval()
         return mutex.withLock {
             requireOriginalOwner()
+            requireBootstrapStage()
             val held = checkNotNull(bootstrap)
             val published = if (publishedInitialState == null) held.publishOriginalInitialState()
                 else held.recoverOriginalInitialStatePublication()
@@ -165,6 +169,26 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
             publishedInitialState = published
             published
         }
+    }
+
+    /** Finish the genuine initial publication once, then stop using the Bootstrap holder.
+     * This local consumption fence creates no cash owner or FI authority. The wallet module
+     * must still dispatch under the same coordinator to actual Native startup and cash intake.
+     * Keep this workflow through retries: after retirement old entry points refuse locally.
+     */
+    suspend fun prepareCurrentFinancialControlHandoff() {
+        val needsPublication = mutex.withLock { requireOriginalOwner(); !bootstrapRetiredForCash }
+        if (needsPublication) beginOrResumeInitialStatePublication()
+        mutex.withLock {
+            requireOriginalOwner()
+            checkNotNull(publishedInitialState) { "The authentic initial publication is unavailable" }
+            bootstrapRetiredForCash = true
+            requireOriginalOwner()
+        }
+    }
+
+    private fun requireBootstrapStage() {
+        check(!bootstrapRetiredForCash) { "The original Bootstrap holder has been retired for consuming cash handoff" }
     }
 
     private fun guardedTransport() = KagemushaOrdinaryIdentityOriginalTransportV1 { original ->

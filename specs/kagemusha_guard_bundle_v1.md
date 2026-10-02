@@ -45,6 +45,60 @@ StrongBox, Secure Enclave, App Attest, or an equivalent signing API does not
 qualify unless an OEM or secure-element service implements and passes the full
 contract.
 
+## Complete credential carrier authentication
+
+The internal PlatformCredential proof uses exactly three instance columns
+`[56, 8162, 8162]` at `k = 16`. Rows `0..42` of its semantic column retain the
+credential digest, app-policy binding, Eq/Ep audits, and each parity's exact
+544-byte transported SHA history. Rows `42..56` contain the four original IPA
+carrier commitments (two compressed `u128` limbs each), Eq/Ep challenges, and
+the four carrier evaluations. Both fields carry the same fourteen values.
+There is no scalar-only accepting credential shape.
+
+Each complete carrier retains its original ordered sources: compressed source
+point limbs, both canonical aggregate coefficient limbs, then every original
+audit-bound value. Its capacity is `4 * 2016 + 98 = 8162`; the shorter active
+prefix is zero-padded through constrained constant cells. The coefficient
+challenge still hashes the complete original equation source namespace, tags,
+selectors and bound-value count. The new fourteen values are separately
+proof-bound rather than recursively inserted into that original audit hash.
+The reciprocal dense MSM retains every native aggregate equation. A carrier
+alone confers no authentication.
+
+Both full carrier columns are opened by actual proof-supplied IPA commitments.
+The hybrid proof reader recomputes the semantic-column commitment, checks the
+corresponding two compressed carrier points against rows `42/44` for Eq and
+`46/48` for Ep, reads the complete ordinary transcript and openings, and emits
+its genuine accumulator. Native acceptance requires the retained terminal IPA
+decision. Recursive Guard and Mint consumers perform the same full hybrid
+reading before the original credential-history folds and merges. They compare
+the complete fourteen-value tails across parities; history remains exactly
+rows `8..42`. Guard binds all four complete semantic columns in its reciprocal
+audit. Mint retains its original Claim14 bound prefix and appends Credential14
+once, so its complete native audit and reciprocal carrier bind all 28 values.
+
+Carrier equality across the two fields uses the injective common-prime encoding
+`x = r + q * (2^127 - 1)` for every `u128`, with `r < 2^127 - 1` and
+`q in {0,1,2}`. Eighty ordered quotients form one base-three pack; all 103 packs,
+range bounds and padding are constrained by the streaming machine. Challenges
+are nonzero 125-bit values derived after all four original commitments, with
+credential domain `kgpcrlc1`, version 1, actual `k` and capacity. Both full
+carriers are evaluated at both challenges. Each carrier has an independent
+14-advice-column lane and 49,392 physical rows, sharing only an actually
+configured identical 15-bit range table. The complete configured Base advice,
+lookup, row, key and resident-memory measurements remain authoritative; the
+hard 1,024-advice ceiling is unchanged.
+
+The probabilistic equality argument is conditional on the authenticated IPA
+commitments and transcript/random-oracle assumptions. Layout or native MSM
+parity alone is not proof acceptance. Qualification must execute a genuine
+paired credential proof, the complete Guard and Mint consumers, original
+source/coefficient/padding and all fourteen tail substitutions, history and
+policy substitutions, malformed topology, and the unchanged terminal decision
+refusals. Credential, Guard and descendant protocols, keys and golden outputs
+must be regenerated through their actual producer before qualification; no
+signed or proof bytes are edited to match this representation.
+
 ## Private state and public commitment
 
 Each `(network, device lane, asset, asset incarnation)` has exactly one private

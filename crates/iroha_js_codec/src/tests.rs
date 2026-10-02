@@ -1475,3 +1475,106 @@ fn artifact_instruction_codecs_preserve_exact_dataspace_and_reject_alternate_env
     assert_eq!(frames_by_variant.len(), 6);
     assert!(frames_by_variant.values().all(|frames| frames.len() == 3));
 }
+
+#[test]
+fn artifact_registry_instructions_bind_full_width_dataspace_without_hash_only_alias() {
+    use iroha_data_model::{
+        isi::smart_contract_code::{RegisterSmartContractBytes, RemoveSmartContractBytes},
+        smart_contract::ContractArtifactId,
+    };
+    use iroha_model_base::topology::DataSpaceId;
+    let manifest: ContractManifest =
+        json::from_value(register_code_payload()["manifest"].clone()).unwrap();
+    let code_hash = manifest.code_hash.unwrap();
+    let artifact_id = ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash);
+    let instructions: Vec<InstructionBox> = vec![
+        RegisterSmartContractCode {
+            artifact_id,
+            manifest,
+        }
+        .into(),
+        RegisterSmartContractBytes {
+            artifact_id,
+            code: vec![1],
+        }
+        .into(),
+        UploadSmartContractCodeChunk {
+            artifact_id,
+            total_size: 1,
+            chunk_index: 0,
+            chunk_count: 1,
+            chunk: vec![1],
+        }
+        .into(),
+        FinalizeSmartContractCodeUpload {
+            artifact_id,
+            total_size: 1,
+            chunk_count: 1,
+        }
+        .into(),
+        CancelSmartContractCodeUpload { artifact_id }.into(),
+        RemoveSmartContractBytes {
+            artifact_id,
+            reason: None,
+        }
+        .into(),
+    ];
+    for instruction in instructions {
+        let value = instruction_to_json_value(&instruction).unwrap();
+        assert_typed_instruction_roundtrip(&instruction, &value);
+        let (name, payload) = value.as_object().unwrap().iter().next().unwrap();
+        assert_eq!(
+            payload["artifact_id"]["dataspace_id"],
+            Value::String(u64::MAX.to_string())
+        );
+        let original = instruction.encode();
+        let mut foreign = payload.clone();
+        foreign
+            .as_object_mut()
+            .unwrap()
+            .get_mut("artifact_id")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("dataspace_id".into(), Value::String("0".into()));
+        let foreign = value_to_instruction(object([(name.as_str(), foreign)])).unwrap();
+        assert_ne!(
+            foreign.encode(),
+            original,
+            "scope must be part of canonical signed bytes"
+        );
+        let mut hash_only = payload.clone();
+        let fields = hash_only.as_object_mut().unwrap();
+        fields.remove("artifact_id");
+        fields.insert("code_hash".into(), json::to_value(&code_hash).unwrap());
+        assert_strict_rejection(&object([(name.as_str(), hash_only)]));
+        let mut extra_payload = payload.clone();
+        extra_payload
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), Value::Null);
+        assert_strict_rejection(&object([(name.as_str(), extra_payload)]));
+        let mut extra = value.clone();
+        extra
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), Value::Null);
+        assert_strict_rejection(&extra);
+        for malformed in [
+            Value::from(u64::MAX),
+            Value::String("01".into()),
+            Value::String("18446744073709551616".into()),
+        ] {
+            let mut invalid = payload.clone();
+            invalid
+                .as_object_mut()
+                .unwrap()
+                .get_mut("artifact_id")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("dataspace_id".into(), malformed);
+            assert_strict_rejection(&object([(name.as_str(), invalid)]));
+        }
+    }
+}

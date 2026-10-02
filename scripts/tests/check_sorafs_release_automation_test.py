@@ -2919,3 +2919,246 @@ def test_release_parent_cleanup_controls_have_an_executable_registration(test):
     assert batch.group(1).splitlines().count("  " + test + " \\") == 1
     workflow = (REPO_ROOT / ".github/workflows/sorafs-cli-release.yml").read_text()
     assert automation._pull_request_path_entries(workflow).count(test.split("::", 1)[0]) == 1
+
+
+@pytest.mark.parametrize("mutation", (
+    "remove", "comment", "duplicate", "conditional", "ignore_failure",
+    "after_return", "outer_conditional", "outer_function", "early_exit", "disable_errexit",
+    "remove_lock_recheck", "swallow_lock_recheck",
+    "remove_diagnostic_lock_recheck", "conditional_diagnostic_lock_recheck",
+))
+def test_broker_deployment_contract_has_one_unconditional_fail_closed_owner(tmp_path, mutation):
+    """A plausible marker must not hide an omitted or swallowed real child."""
+    _copy_workflows(tmp_path)
+    gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = gate.read_text()
+    phase = (
+        'echo "[sorafs-release] runtime-provider broker deployment contracts"\n'
+        "python3 scripts/tests/check_runtime_provider_broker_install_test.py\n\n"
+    )
+    command = "python3 scripts/tests/check_runtime_provider_broker_install_test.py\n"
+    assert source.count(phase) == 1
+    replacements = {
+        "remove": "",
+        "comment": phase.replace(command, "# " + command),
+        "duplicate": phase * 2,
+        "conditional": "if false; then\n" + phase + "fi\n",
+        "ignore_failure": phase.replace(command, command.rstrip() + " || true\n"),
+        "outer_function": "unused_broker_contract() {\n" + phase + "}\n",
+        "early_exit": "exit 0\n" + phase,
+        "disable_errexit": "set +e\n" + phase,
+    }
+    if mutation == "outer_conditional":
+        # Unlike wrapping the single command, this encloses the lock function
+        # and leaves the complete marker/boundary intact inside the false arm.
+        boundary = "cargo_lock_sha256() {\n"
+        assert source.count(boundary) == 1
+        source = source.replace(boundary, "if false; then\n" + boundary, 1) + "\nfi\n"
+    elif mutation in ("remove_lock_recheck", "swallow_lock_recheck"):
+        check = phase + "verify_cargo_lock_unchanged\n\n"
+        assert source.count(check) == 1
+        replacement = phase if mutation == "remove_lock_recheck" else phase + "verify_cargo_lock_unchanged || true\n\n"
+        source = source.replace(check, replacement, 1)
+    elif mutation in ("remove_diagnostic_lock_recheck", "conditional_diagnostic_lock_recheck"):
+        check = '\nverify_cargo_lock_unchanged\necho "[sorafs-release] release verification complete"\n'
+        assert source.count(check) == 1
+        call = "" if mutation == "remove_diagnostic_lock_recheck" else "if false; then\nverify_cargo_lock_unchanged\nfi\n"
+        source = source.replace(check, '\n' + call + 'echo "[sorafs-release] release verification complete"\n', 1)
+    elif mutation == "after_return":
+        source = source.replace(phase, "", 1)
+        boundary = 'echo "[sorafs-release] fmt check (workspace)"\n'
+        assert source.count(boundary) == 1
+        source = source.replace(boundary, phase + boundary, 1)
+    else:
+        source = source.replace(phase, replacements[mutation], 1)
+    gate.write_text(source)
+    with pytest.raises(ValueError, match="mandatory broker deployment contracts"):
+        automation.validate_release_automation(tmp_path)
+
+
+def _run_broker_release_gate_fixture(
+    tmp_path: Path, mode: tuple[str, ...], fail_child: bool, mutate_lock: bool = False,
+    mutate_diagnostics_lock: bool = False,
+):
+    """Run the real broker unittest child; model only unrelated expensive tools."""
+    import shutil
+    import subprocess
+    import sys
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for relative in (
+        automation.SORAFS_CLI_RELEASE_GATE_SCRIPT,
+        "scripts/tests/check_runtime_provider_broker_install_test.py",
+        "scripts/check_runtime_provider_broker_install.py",
+        "crates/irohad/bins/src/bin/sorafs_external_software_signer.rs",
+    ):
+        destination = workspace / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPO_ROOT / relative).read_bytes())
+    shutil.copytree(
+        REPO_ROOT / "configs/sorafs/runtime_provider_broker",
+        workspace / "configs/sorafs/runtime_provider_broker",
+    )
+    if fail_child or mutate_lock:
+        child = workspace / "scripts/tests/check_runtime_provider_broker_install_test.py"
+        original = child.read_text()
+        boundary = 'if __name__ == "__main__":\n'
+        assert original.count(boundary) == 1
+        refusal = (
+            "class DeliberateBrokerContractFailure(unittest.TestCase):\n"
+            "    def test_child_failure_is_not_swallowed(self):\n"
+            "        self.fail('genuine broker child assertion failure')\n\n\n"
+        )
+        if mutate_lock:
+            refusal = (
+                "class DeliberateBrokerLockMutation(unittest.TestCase):\n"
+                "    def test_original_child_returns_success_after_lock_changes(self):\n"
+                "        (REPO_ROOT / 'Cargo.lock').write_text('changed by fixture child\\n')\n\n\n"
+            )
+        child.write_text(original.replace(boundary, refusal + boundary, 1))
+    (workspace / "Cargo.lock").write_text('# Local lock-reader fixture\nversion = 4\n')
+    # These children are controlled callgraph fixtures, not release validation.
+    # The broker's original 37 test bodies and the bounded lock reader are real.
+    for relative in (
+        "scripts/release_sorafs_cli.sh", "scripts/package_iroha_cli_release.sh",
+        "scripts/build_canonical_binaries.sh", "scripts/build_release_bundle.sh",
+        "scripts/build_release_image.sh",
+        "configs/sorafs/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1",
+        "python/iroha_python/scripts/release_smoke.sh",
+        "scripts/tests/release_manifest_signing_test.sh",
+        "ci/check_sorafs_reference_ffi_header.sh", "ci/check_sorafs_native_authority_runtime.sh",
+    ):
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/bash\nset -euo pipefail\nexit 0\n")
+        path.chmod(0o755)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    trace = tmp_path / "commands.jsonl"
+    python = tools / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        f"trace = {str(trace)!r}\n"
+        "with open(trace, 'a') as output:\n"
+        "    output.write(json.dumps(['python3', *sys.argv[1:]]) + '\\n')\n"
+        "if sys.argv[1:] == ['scripts/tests/check_runtime_provider_broker_install_test.py'] "
+        "or sys.argv[1:] == ['-I', '-S', '-', 'Cargo.lock']:\n"
+        f"    os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+    )
+    python.chmod(0o755)
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(trace)!r}, 'a') as output:\n"
+        "    output.write(json.dumps(['cargo', *sys.argv[1:]]) + '\\n')\n"
+        "if '--list' in sys.argv:\n"
+        "    print('sorafs_provider_ingest_runtime::tests::quarantine_restart::"
+        "post_admission_quarantine_survives_restart_with_shared_chunks: test')\n"
+        + (
+            "if sys.argv[1:] == ['test', '--locked', '-p', 'sorafs_chunker', '--all-targets']:\n"
+            "    from pathlib import Path\n"
+            "    Path('Cargo.lock').write_text('changed by diagnostic fixture child\\n')\n"
+            if mutate_diagnostics_lock else ""
+        )
+    )
+    cargo.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = str(tools) + os.pathsep + environment["PATH"]
+    result = subprocess.run(
+        ["bash", str(workspace / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT), *mode],
+        cwd=workspace, env=environment, capture_output=True, text=True, timeout=30,
+    )
+    commands = [json.loads(line) for line in trace.read_text().splitlines()]
+    return result, commands
+
+
+@pytest.mark.parametrize("mode", ((), ("--diagnostics",)), ids=("default", "diagnostics"))
+def test_broker_deployment_contract_executes_original_unittests_in_both_modes(tmp_path, mode):
+    """Both modes really execute all broker cases exactly once before returning."""
+    result, commands = _run_broker_release_gate_fixture(tmp_path, mode, False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Ran 37 tests" in result.stderr
+    assert result.stderr.rstrip().endswith("OK")
+    child = ["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"]
+    assert commands.count(child) == 1
+    assert commands[:5] == [
+        ["python3", "-I", "-S", "scripts/check_build_efficiency_provenance.py"],
+        ["python3", "-I", "-S", "scripts/check_release_feature_graph.py"],
+        ["python3", "-I", "-S", "-", "Cargo.lock"],
+        child,
+        ["python3", "-I", "-S", "-", "Cargo.lock"],
+    ]
+    if mode:
+        assert any(command[0] == "cargo" for command in commands)
+        assert "release verification complete" in result.stdout
+    else:
+        assert len(commands) == 5
+        assert "diagnostics were not run" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ((), ("--diagnostics",)), ids=("default", "diagnostics"))
+def test_broker_deployment_contract_child_assertion_failure_propagates_in_both_modes(tmp_path, mode):
+    """A genuine failing unittest aborts before the lock/diagnostic children."""
+    result, commands = _run_broker_release_gate_fixture(tmp_path, mode, True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Ran 38 tests" in result.stderr
+    assert "genuine broker child assertion failure" in result.stderr
+    assert "FAILED (failures=1)" in result.stderr
+    assert commands == [
+        ["python3", "-I", "-S", "scripts/check_build_efficiency_provenance.py"],
+        ["python3", "-I", "-S", "scripts/check_release_feature_graph.py"],
+        ["python3", "-I", "-S", "-", "Cargo.lock"],
+        ["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"],
+    ]
+    assert "diagnostics were not run" not in result.stdout
+    assert "release verification complete" not in result.stdout
+
+
+@pytest.mark.parametrize("mode", ((), ("--diagnostics",)), ids=("default", "diagnostics"))
+def test_broker_deployment_contract_lock_change_refuses_both_modes(tmp_path, mode):
+    """A successful child cannot authorize a changed original lockfile."""
+    result, commands = _run_broker_release_gate_fixture(tmp_path, mode, False, mutate_lock=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Ran 38 tests" in result.stderr
+    assert "OK" in result.stderr
+    assert "workspace Cargo.lock changed during the release gate" in result.stderr
+    assert commands == [
+        ["python3", "-I", "-S", "scripts/check_build_efficiency_provenance.py"],
+        ["python3", "-I", "-S", "scripts/check_release_feature_graph.py"],
+        ["python3", "-I", "-S", "-", "Cargo.lock"],
+        ["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"],
+        ["python3", "-I", "-S", "-", "Cargo.lock"],
+    ]
+    assert "diagnostics were not run" not in result.stdout
+    assert "release verification complete" not in result.stdout
+
+
+def test_broker_deployment_contract_diagnostics_final_lock_change_refuses(tmp_path):
+    """The same original lock-check owner also guards diagnostic completion."""
+    result, commands = _run_broker_release_gate_fixture(
+        tmp_path, ("--diagnostics",), False, mutate_diagnostics_lock=True,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Ran 37 tests" in result.stderr
+    assert "OK" in result.stderr
+    assert "workspace Cargo.lock changed during the release gate" in result.stderr
+    assert commands.count(["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"]) == 1
+    assert commands.count(["python3", "-I", "-S", "-", "Cargo.lock"]) == 3
+    assert ["cargo", "test", "--locked", "-p", "sorafs_chunker", "--all-targets"] in commands
+    assert "release verification complete" not in result.stdout
+
+
+def test_broker_deployment_contract_one_lock_helper_has_both_unconditional_boundaries():
+    """One fail-closed comparison owner must serve both original intervals."""
+    source = (REPO_ROOT / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT).read_text()
+    calls = tuple(re.finditer(r"(?m)^verify_cargo_lock_unchanged$", source))
+    assert len(calls) == 2
+    assert source.count("verify_cargo_lock_unchanged() {\n") == 1
+    broker = source.index("python3 scripts/tests/check_runtime_provider_broker_install_test.py\n")
+    optional_return = source.index('if [[ "${diagnostics}" != true ]]; then\n')
+    last_child = source.index("cargo test --locked -p sorafs_chunker --all-targets\n")
+    completion = source.index('echo "[sorafs-release] release verification complete"\n')
+    assert broker < calls[0].start() < optional_return < last_child < calls[1].start() < completion

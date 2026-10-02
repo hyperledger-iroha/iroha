@@ -1,31 +1,55 @@
 //! Native ordinary cash custody carried from the genuine published zero-State owner.
 //!
 //! The app key approves an exact Native selection; it does not own the financial witness.
+//! One exclusive WAL orders preparation, terminal capture and subsequent financial State commits.
 //! This journal retains separate cash attempts and complete platform originals. It never
 //! converts a captured Bootstrap approval or a decoded journal into a monetary proof.
 
 use super::*;
+use crate::kagemusha_v1_recursion::{
+    KagemushaOrdinaryCashCarrierBudgetV1, KagemushaOrdinaryLineageStateProofBundleV1,
+    KagemushaOrdinaryLineageStateOriginalV1, ordinary_cash_carrier_budget_v1,
+};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1,
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KagemushaAppOperationApprovalChallengeV1,
     KagemushaAppOperationApprovalPurposeV1, KagemushaAppOperationApprovalV1,
     KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
-    KagemushaVerifiedAppOperationApprovalV1,
+    KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryLineageAnchorV1,
+    KagemushaOrdinaryPaymentOutputV1,
+    KagemushaOutboxReservationV1, KagemushaVerifiedAppOperationApprovalV1,
     kagemusha_ordinary_financial_authorization_proof_binding_digest_v1,
 };
 use rand_core_06::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "ordinary_send_credit_factory.rs"]
+mod send_credit;
 #[path = "ordinary_cash_terminal_owner.rs"]
 mod terminal;
+use send_credit::SendCreditOriginals;
+#[path = "ordinary_redeem_factory.rs"]
+mod redeem_credit;
+use redeem_credit::RedeemOriginals;
+#[path = "ordinary_receiver_request_factory.rs"]
+mod receiver_request;
+#[path = "ordinary_cash_lineage_transport.rs"]
+mod lineage_transport;
+#[path = "ordinary_cash_preparation_originals.rs"]
+mod preparation_originals;
+use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
+pub(crate) use receiver_request::{
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+};
 pub(crate) use terminal::KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1;
 
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
-    filename: "ordinary-cash-approval.norito.wal",
-    magic: b"IKGOCA1\0",
-    hash_domain: b"iroha:kagemusha:v1:ordinary-cash-approval-frame\0",
-    maximum_payload_bytes: 64 * 1024,
+    filename: "ordinary-cash.norito.wal",
+    magic: b"IKGOCS1\0",
+    hash_domain: b"iroha:kagemusha:v1:ordinary-cash-state-frame\0",
+    maximum_payload_bytes: 128 * 1024 * 1024,
 };
 const MAX_ROWS: u64 = 100_000;
 
@@ -35,11 +59,27 @@ enum Record {
     Initialize {
         originals: [DigestV1; 8],
         counter_floor: Option<u32>,
+        capacity: KagemushaDurableCapacityV1,
+        lineage_originals: [DigestV1; 4],
+    },
+    LineageAnchorAcknowledged {
+        request_original_sha256: DigestV1,
     },
     Intent {
         operation: DigestV1,
         nonce: DigestV1,
         predecessor: DigestV1,
+        financial_control: CapturedFinancialControlIdentity,
+        preparation_clock: KagemushaOrdinaryCashClockContextV1,
+        reservation: KagemushaOutboxReservationV1,
+    },
+    SendCredit {
+        successor: KagemushaStateV1,
+        originals: SendCreditOriginals,
+    },
+    RedeemCredit {
+        successor: KagemushaStateV1,
+        originals: RedeemOriginals,
     },
     Preparation {
         statement: TransitionProofStatementV1,
@@ -70,15 +110,86 @@ enum Record {
     Cancel {
         operation: DigestV1,
     },
+    Terminal(terminal::TerminalRecord),
+    ReceiverReserve {
+        originals: ReceiverRequestOriginals,
+        financial_control: CapturedFinancialControlIdentity,
+    },
+    ReceiverPlatformFence {
+        request_id: DigestV1,
+    },
+    ReceiverCapture(CapturedReceiverRequestOriginals),
+    ReceiverCancel {
+        request_id: DigestV1,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::CapturedOrdinaryFinancialControlIdentityV1"
+)]
+struct CapturedFinancialControlIdentity {
+    original_sha256: DigestV1,
+    lower_ms: u64,
+    upper_ms: u64,
+}
+
+struct RecoveryCatalog {
+    leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    receivers: Vec<Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
 }
 
 struct Pending {
     operation: DigestV1,
     nonce: DigestV1,
+    financial_control: CapturedFinancialControlIdentity,
+    preparation_clock: KagemushaOrdinaryCashClockContextV1,
+    reservation: KagemushaOutboxReservationV1,
+    send_credit: Option<RetainedSendCredit>,
+    redeem_credit: Option<(KagemushaStateV1, RedeemOriginals)>,
     selected: Option<Selected>,
     fenced: bool,
     retained: Option<(u64, u64, KagemushaVerifiedAppOperationApprovalV1)>,
     capture: Option<(u64, u64, KagemushaVerifiedAppOperationApprovalV1)>,
+}
+struct PendingReceiverRequest {
+    originals: ReceiverRequestOriginals,
+    financial_control: CapturedFinancialControlIdentity,
+    lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    fenced: bool,
+}
+impl PendingReceiverRequest {
+    fn require_identity(&self, request_id: DigestV1) -> Result<(), KagemushaStateErrorV1> {
+        if self.originals.request_id() != request_id {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(())
+    }
+    fn require_unfenced(&self, request_id: DigestV1) -> Result<(), KagemushaStateErrorV1> {
+        self.require_identity(request_id)?;
+        if self.fenced {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(())
+    }
+    fn require_fenced(&self, request_id: DigestV1) -> Result<(), KagemushaStateErrorV1> {
+        self.require_identity(request_id)?;
+        if !self.fenced {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(())
+    }
+}
+struct RetainedReceiverRequest {
+    captured: CapturedReceiverRequestOriginals,
+    financial_control: CapturedFinancialControlIdentity,
+    lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+}
+struct RetainedSendCredit {
+    successor: KagemushaStateV1,
+    originals: SendCreditOriginals,
+    receiver: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+    receiver_lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
 }
 struct Selected {
     statement: TransitionProofStatementV1,
@@ -95,15 +206,28 @@ struct Selected {
 /// Publication of a financial successor additionally requires actual paired cash proofs.
 pub struct KagemushaNativeOrdinaryCashOwnerV1 {
     publication: KagemushaAuthenticatedOrdinaryCurrentPublicationV1,
+    control: KagemushaOrdinaryCurrentFinancialControlOwnerV1,
+    lineage_cas: KagemushaOrdinaryLineageCasOwnerV1,
+    initial_lineage_anchor: KagemushaOrdinaryLineageAnchorV1,
+    initial_lineage_anchor_bundle_original: Vec<u8>,
+    lineage_originals: [DigestV1; 4],
+    public_state_original: Vec<u8>,
+    anchor_request_sha256: Option<DigestV1>,
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
     journal: PrivateJournal,
     prefix: KagemushaRecoveryJournalPrefixV1,
     state: KagemushaStateV1,
+    capacity: KagemushaDurableCapacityV1,
+    carrier_budget: KagemushaOrdinaryCashCarrierBudgetV1,
     counter_floor: Option<u32>,
     pending: Option<Pending>,
     used_operations: BTreeSet<DigestV1>,
+    pending_receiver_request: Option<PendingReceiverRequest>,
+    retained_receiver_requests: BTreeMap<DigestV1, RetainedReceiverRequest>,
     financial_journal_revision: u64,
     terminal: Option<terminal::TerminalJournal>,
+    recovery_catalog: Option<RecoveryCatalog>,
+    recovery_failed: bool,
 }
 
 /// Borrow of one durably captured purpose2 approval under the still-held cash owner.
@@ -118,11 +242,14 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         path: &Path,
         publication: KagemushaAuthenticatedOrdinaryCurrentPublicationV1,
         verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
+        capacity: KagemushaDurableCapacityV1,
+        installed_lineage_policy_original: &[u8],
         recover: bool,
         historical_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
         historical_receivers: &[Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>],
     ) -> Result<Self, KagemushaStateErrorV1> {
         publication.recheck()?;
+        capacity.validate()?;
         if historical_leases.len() > 1024 || historical_receivers.len() > 1024 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
@@ -131,12 +258,39 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let state = publication.initial_state()?.clone();
+        let (initial_lineage_anchor, initial_lineage_anchor_bundle_original) = publication
+            .lineage_anchor_public_originals(Arc::clone(&verifier), capacity)?;
+        let initial_bundle = KagemushaOrdinaryLineageStateProofBundleV1::decode_original(
+            &initial_lineage_anchor_bundle_original,
+        ).map_err(material)?;
+        let public_state_original = initial_bundle.state_original().to_vec();
+        if initial_lineage_anchor.initial_head.state_commitment != state.state_commitment
+            || initial_lineage_anchor.initial_head.logical_sequence != state.logical_sequence
+            || initial_lineage_anchor.initial_head.state_original_sha256
+                != <DigestV1>::from(Sha256::digest(&public_state_original))
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let lineage_originals = [
+            Sha256::digest(installed_lineage_policy_original).into(),
+            Sha256::digest(norito::encode_canonical(&initial_lineage_anchor).map_err(material)?).into(),
+            Sha256::digest(&initial_lineage_anchor_bundle_original).into(),
+            Sha256::digest(&public_state_original).into(),
+        ];
+        let carrier_budget = ordinary_cash_carrier_budget_v1(verifier.as_ref()).map_err(material)?;
+        if carrier_budget.release_id() != state.release_id
+            || u64::from(carrier_budget.required_outbox_slot_bytes()) > FORMAT.maximum_payload_bytes
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         let counter_floor = publication
             .cash_approvals()
             .retained_app_attest_counter_floor();
         let initial = Record::Initialize {
             originals: publication.original_commitments()?,
             counter_floor,
+            capacity,
+            lineage_originals,
         };
         let mut journal = if recover {
             PrivateJournal::open_existing(path, FORMAT)
@@ -147,56 +301,127 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         if !recover {
             journal.append(&encode(&initial)?).map_err(storage)?;
         }
+        if recover {
+            let (first_sequence, first) = journal
+                .replay_next()
+                .map_err(storage)?
+                .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+            let first = zeroize::Zeroizing::new(first);
+            if first_sequence != 0 || decode(&first)? != initial {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            // Authenticate the complete physical prefix before semantic proof replay. A cold
+            // journal cannot lend recovery_prefix while its physical cursor is incomplete.
+            while let Some((sequence, original)) = journal.replay_next().map_err(storage)? {
+                let _original = zeroize::Zeroizing::new(original);
+                if sequence >= MAX_ROWS {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+            }
+        }
+        let control = if recover {
+            KagemushaOrdinaryCurrentFinancialControlOwnerV1::open_existing(
+                path,
+                publication.cash_financial(),
+            )
+        } else {
+            KagemushaOrdinaryCurrentFinancialControlOwnerV1::create(
+                path,
+                publication.cash_financial(),
+            )
+        }
+        .map_err(material)?;
+        let lineage_cas = if recover {
+            KagemushaOrdinaryLineageCasOwnerV1::open_existing(
+                path, publication.cash_financial(), installed_lineage_policy_original,
+            )
+        } else {
+            KagemushaOrdinaryLineageCasOwnerV1::create(
+                path, publication.cash_financial(), installed_lineage_policy_original,
+            )
+        }.map_err(material)?;
         let prefix = journal.recovery_prefix().map_err(storage)?;
-        let mut this = Self {
+        let this = Self {
             publication,
+            control,
+            lineage_cas,
+            initial_lineage_anchor,
+            initial_lineage_anchor_bundle_original,
+            lineage_originals,
+            public_state_original,
+            anchor_request_sha256: None,
             verifier,
             journal,
             prefix,
             state,
+            capacity,
+            carrier_budget,
             counter_floor,
             pending: None,
             used_operations: BTreeSet::new(),
+            pending_receiver_request: None,
+            retained_receiver_requests: BTreeMap::new(),
             financial_journal_revision: 0,
-            terminal: None,
+            terminal: Some(terminal::TerminalJournal::new()),
+            recovery_catalog: recover.then(|| RecoveryCatalog {
+                leases: historical_leases.to_vec(),
+                receivers: historical_receivers.to_vec(),
+            }),
+            recovery_failed: false,
         };
-        if recover {
-            let (first_sequence, first) = this
-                .journal
-                .replay_next()
-                .map_err(storage)?
-                .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-            if first_sequence != 0 || decode(&first)? != initial {
-                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-            }
-            while let Some((sequence, original)) = this.journal.replay_next().map_err(storage)? {
-                if sequence >= MAX_ROWS {
-                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                }
-                this.replay(decode(&original)?, historical_leases)?;
-            }
-        }
-        this.recheck()?;
-        this.terminal = Some(terminal::TerminalJournal::open(
-            &path.join("terminal"),
-            &this,
-            recover,
-            historical_leases,
-            historical_receivers,
-        )?);
-        this.recheck()?;
+        // Semantic replay is deliberately deferred until a newly admitted current FI read
+        // has acknowledged the actual private historical captures. No State/effect is exposed
+        // by this holder while its recovery catalog remains pending.
+        this.recheck_current_storage()?;
         Ok(this)
+    }
+
+    /// Reserve the genuine globally serialized zero anchor using this owner's exact retained
+    /// public originals and actual installed recursive verifier. Returning request bytes does
+    /// not acknowledge a global anchor or permit financial effects.
+    /// # Errors
+    /// Refuses an existing anchor, unavailable actual current FI/proof or failed request durability.
+    pub fn prepare_lineage_anchor(&mut self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        if self.anchor_request_sha256.is_some()
+            || self.lineage_cas.acknowledged_anchor_request(
+                self.publication.cash_financial(), &self.initial_lineage_anchor,
+            ).map_err(material)?.is_some()
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let financial = self.publication.cash_financial();
+        let approval = self.publication.cash_approvals().historical_bootstrap_approval()?;
+        let proof = crate::kagemusha_v1_recursion::verify_ordinary_lineage_anchor_v1(
+            self.verifier.as_ref(),
+            &self.initial_lineage_anchor,
+            &self.initial_lineage_anchor_bundle_original,
+            financial.enrollment().app_credential(),
+            approval
+                .original_approval_integrity_lease()
+                .map(|lease| lease.as_ref()),
+        ).map_err(material)?;
+        let current = self.control.loan(financial).map_err(material)?;
+        let original = self.lineage_cas.reserve_anchor(financial, &current, &proof)
+            .map_err(material)?;
+        self.require_current_financial_control()?;
+        Ok(original)
     }
 
     /// Observe the current authenticated private State while its original custody remains held.
     /// A projection cannot reconstruct this owner or authorize a payment.
     pub fn current_state(&self) -> Result<&KagemushaStateV1, KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         Ok(&self.state)
     }
 
-    fn recheck(&self) -> Result<(), KagemushaStateErrorV1> {
+    fn recheck_current_storage(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.capacity.validate()?;
+        if self.carrier_budget.release_id() != self.state.release_id {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         self.publication.recheck()?;
+        self.recheck_lineage_retained_custody()?;
         self.journal.check_owned().map_err(storage)?;
         if self.journal.recovery_prefix().map_err(storage)? != self.prefix
             || self.state != *self.publication.initial_state()?
@@ -208,6 +433,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         self.state.validate()?;
+        self.recheck_receiver_request_storage()?;
         if let Some(terminal) = &self.terminal {
             terminal.recheck()?;
         }
@@ -222,21 +448,676 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             })
     }
 
+    fn recheck_lineage_retained_custody(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.publication.recheck_historical_cash_custody()?;
+        let (lineage, policy_sha256) = self.lineage_cas
+            .retained_lineage_originals(self.publication.cash_financial())
+            .map_err(material)?;
+        let anchor = &self.initial_lineage_anchor;
+        let bundle = &self.initial_lineage_anchor_bundle_original;
+        let initial_state = self.publication.historical_initial_state()?;
+        let initial_bundle = KagemushaOrdinaryLineageStateProofBundleV1::decode_original(bundle)
+            .map_err(material)?;
+        // Constructor/reopen already admitted the actual immutable publication. Routine
+        // custody checks hash its retained originals; they do not repeat recursive proving.
+        if lineage != &anchor.lineage
+            || policy_sha256 != self.lineage_originals[0]
+            || <DigestV1>::from(Sha256::digest(norito::encode_canonical(anchor).map_err(material)?))
+                != self.lineage_originals[1]
+            || <DigestV1>::from(Sha256::digest(bundle)) != self.lineage_originals[2]
+            || anchor.proof_bundle_original_sha256 != self.lineage_originals[2]
+            || <DigestV1>::from(Sha256::digest(initial_bundle.state_original()))
+                != self.lineage_originals[3]
+            || anchor.initial_head.state_original_sha256 != self.lineage_originals[3]
+            || anchor.initial_head.state_commitment != initial_state.state_commitment
+            || anchor.initial_head.logical_sequence != initial_state.logical_sequence
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        KagemushaOrdinaryLineageStateOriginalV1::decode_original(&self.public_state_original)
+            .map_err(material)?;
+        self.recheck_initial_lineage_anchor_historical()
+    }
+
+    fn recheck(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_current_storage()?;
+        if self.recovery_catalog.is_some() || self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(())
+    }
+
+    fn require_current_financial_control(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck()?;
+        self.control
+            .loan(self.publication.cash_financial())
+            .map_err(material)?
+            .recheck()
+            .map_err(material)
+    }
+
+    fn recheck_proving_history(&self) -> Result<(), KagemushaStateErrorV1> {
+        if self.recovery_catalog.is_some() || self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        self.publication.recheck_historical_cash_custody()?;
+        self.recheck_lineage_retained_custody()?;
+        self.journal.check_owned().map_err(storage)?;
+        if self.journal.recovery_prefix().map_err(storage)? != self.prefix
+            || self.state != *self.publication.historical_initial_state()?
+            || !Arc::ptr_eq(
+                &admitted_release(&self.verifier)?,
+                self.publication.cash_approvals().retained_release(),
+            )
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.state.validate()?;
+        self.recheck_receiver_request_storage()?;
+        if let Some(terminal) = &self.terminal {
+            terminal.recheck()?;
+        }
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let identity = pending.financial_control;
+        self.control
+            .borrow_captured_proof_decision(
+                self.publication.cash_financial(),
+                identity.original_sha256,
+                identity.lower_ms,
+                identity.upper_ms,
+            )
+            .map_err(material)?
+            .recheck_historical_originals()
+            .map_err(material)
+    }
+
+    /// Reserve the sole actual current FI read under this cash holder and installed clock.
+    /// Only canonical public request/signing fields are returned; they create no live grant.
+    /// # Errors
+    /// Refuses changed original storage, unavailable genuine clock or failed Native durability.
+    pub fn prepare_current_financial_control_read(
+        &mut self,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.recheck_current_storage()?;
+        if self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        self.control
+            .prepare_current_read(self.publication.cash_financial())
+            .map_err(material)
+    }
+
+    /// Sign through the real installed Native account/session caller after its invocation fence.
+    /// The callback borrows the actual same control/financial holders; managed code cannot
+    /// supply a financial owner, signing subject, account key, status or replacement clock.
+    /// # Errors
+    /// Refuses subject drift, foreign account/session, unknown invocation or unretained Ed64.
+    pub fn sign_current_financial_control_request(
+        &mut self,
+        sign: impl FnOnce(
+            &mut KagemushaOrdinaryCurrentFinancialControlOwnerV1,
+            &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1>,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.recheck_current_storage()?;
+        if self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let financial = self.publication.cash_financial();
+        let request = self
+            .control
+            .pending_account_request(financial)
+            .map_err(material)?
+            .canonical_bytes()
+            .map_err(material)?;
+        let fields = sign(&mut self.control, financial)?;
+        if fields
+            != self
+                .control
+                .retained_current_read_fields(financial)
+                .map_err(material)?
+            || fields.first() != Some(&request)
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.recheck_current_storage()?;
+        Ok(fields)
+    }
+
+    /// Authenticate exact issuer-signed control and complete independently certified World.
+    /// This is the descriptor-bound original intake; no managed decoding supplies authority.
+    /// # Errors
+    /// Refuses substituted/stale originals, wrong actual owner/cut, or failed original durability.
+    pub fn accept_current_financial_control_read(
+        &mut self,
+        signed_original: &[u8],
+        authority_original: &[u8],
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_current_storage()?;
+        if self.recovery_failed
+            || signed_original.len() > 64 * 1024
+            || authority_original.len() > 128 * 1024 * 1024
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.control
+            .accept_current_read(
+                self.publication.cash_financial(),
+                signed_original,
+                authority_original,
+            )
+            .map_err(material)?;
+        self.control
+            .resume_all_retained_proof_decisions(self.publication.cash_financial())
+            .map_err(material)?;
+        if let Some(catalog) = self.recovery_catalog.take() {
+            // Partial semantic replay never exposes State or retries from an advanced cursor.
+            // Failure freezes this holder; reopening must independently verify all originals.
+            if let Err(error) = self.replay_financial_history(&catalog) {
+                self.recovery_failed = true;
+                return Err(error);
+            }
+        }
+        self.require_current_financial_control()
+    }
+
+    /// Lend actual custody for PI refresh even when the old PI has expired. This checks
+    /// static originals and the Native clock, never current FI or monetary authority.
+    /// # Errors
+    /// Refuses changed original publication, owned storage, state scope or refresh custody.
+    pub fn with_integrity_refresh_custody<T>(
+        &mut self,
+        consume: impl FnOnce(
+            &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        ) -> Result<T, KagemushaStateErrorV1>,
+    ) -> Result<T, KagemushaStateErrorV1> {
+        self.recheck_integrity_refresh_storage()?;
+        let result = consume(self.publication.cash_financial())?;
+        self.recheck_integrity_refresh_storage()?;
+        Ok(result)
+    }
+
+    fn recheck_integrity_refresh_storage(&self) -> Result<(), KagemushaStateErrorV1> {
+        if self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        self.publication.recheck_historical_cash_custody()?;
+        self.recheck_lineage_retained_custody()?;
+        self.journal.check_owned().map_err(storage)?;
+        if self.journal.recovery_prefix().map_err(storage)? != self.prefix
+            || self.state != *self.publication.historical_initial_state()?
+            || !Arc::ptr_eq(
+                &admitted_release(&self.verifier)?,
+                self.publication.cash_approvals().retained_release(),
+            )
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.state.validate()?;
+        self.publication
+            .cash_financial()
+            .recheck_integrity_refresh_custody()
+            .map(|_| ())
+            .map_err(material)
+    }
+
+    /// Durably retain an independently verified current PI original through the actual
+    /// publication and its same logical/financial holders. Existing captured attempts keep
+    /// their immutable original lease; this refresh creates no FI control or cash grant.
+    /// # Errors
+    /// Refuses wrong credential/release, stale PI, changed original storage, failed durability
+    /// or a recovery catalog that cannot retain the exact original for semantic replay.
+    pub fn accept_integrity_lease(
+        &mut self,
+        lease: Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if self.recovery_failed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        self.journal.check_owned().map_err(storage)?;
+        if self.journal.recovery_prefix().map_err(storage)? != self.prefix {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let needs_catalog_entry = self.recovery_catalog.as_ref().is_some_and(|catalog| {
+            !catalog
+                .leases
+                .iter()
+                .any(|held| held.original() == lease.original())
+        });
+        if needs_catalog_entry
+            && self
+                .recovery_catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.leases.len() >= 1024)
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.publication
+            .accept_integrity_lease(Arc::clone(&lease))?;
+        if needs_catalog_entry {
+            self.recovery_catalog
+                .as_mut()
+                .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+                .leases
+                .push(lease);
+        }
+        self.recheck_current_storage()
+    }
+
+    fn replay_financial_history(
+        &mut self,
+        catalog: &RecoveryCatalog,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let mut cursor = self.journal.replay_cursor().map_err(storage)?;
+        let (sequence, first) = self
+            .journal
+            .read_cursor_next(&mut cursor)
+            .map_err(storage)?
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let expected = Record::Initialize {
+            originals: self.publication.historical_original_commitments()?,
+            counter_floor: self.counter_floor,
+            capacity: self.capacity,
+            lineage_originals: self.lineage_originals,
+        };
+        let first = zeroize::Zeroizing::new(first);
+        if sequence != 0 || decode(&first)? != expected {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        loop {
+            let preceding = cursor.consumed_prefix();
+            let Some((sequence, original)) = self
+                .journal
+                .read_cursor_next(&mut cursor)
+                .map_err(storage)?
+            else {
+                break;
+            };
+            if sequence >= MAX_ROWS {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            let original = zeroize::Zeroizing::new(original);
+            self.replay(
+                decode(&original)?,
+                &catalog.leases,
+                &catalog.receivers,
+                preceding,
+            )?;
+        }
+        self.journal.check_owned().map_err(storage)?;
+        if self.journal.recovery_prefix().map_err(storage)? != self.prefix {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
+    }
+
     fn persist(&mut self, record: &Record) -> Result<(), KagemushaStateErrorV1> {
         self.recheck()?;
         if self.prefix.sequence >= MAX_ROWS {
             return Err(KagemushaStateErrorV1::JournalRevisionOverflow);
         }
-        self.journal.append(&encode(record)?).map_err(storage)?;
-        self.prefix = self.journal.recovery_prefix().map_err(storage)?;
-        self.recheck()
+        // Commit in-memory chronology before a caller's post-fsync freshness recheck.
+        // Any uncertain append/cursor freezes this holder; it cannot dispatch another attempt.
+        let original = encode(record)?;
+        if self.journal.append(&original).is_err() {
+            self.recovery_failed = true;
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        match self.journal.recovery_prefix() {
+            Ok(prefix) => {
+                self.prefix = prefix;
+                Ok(())
+            }
+            Err(_) => {
+                self.recovery_failed = true;
+                Err(KagemushaStateErrorV1::SnapshotIntegrity)
+            }
+        }
+    }
+
+    /// Reserve one Native-owned X25519 key and exact receiver request in the single cash WAL.
+    /// Amount is user intent. This operation creates no credit, ReceiveFold or funding grant.
+    /// # Errors
+    /// Refuses conflicting app-key attempts, unavailable current FI/clock, insufficient capacity,
+    /// changed custody or a failed durable append. An exact pending amount retry reuses its ID/key.
+    pub fn reserve_receiver_request(
+        &mut self,
+        amount: u128,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        if let Some(pending) = &self.pending_receiver_request {
+            if pending.originals.amount() != amount {
+                return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+            }
+            pending
+                .originals
+                .recheck_live_source(self, pending.lease.as_deref())?;
+            return Ok(pending.originals.request_id());
+        }
+        if self.pending.is_some() || self.terminal.as_ref().is_none_or(|t| t.has_pending()) {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let captured = self
+            .control
+            .capture_proof_decision(self.publication.cash_financial())
+            .map_err(material)?;
+        let financial_control = CapturedFinancialControlIdentity {
+            original_sha256: captured.original_sha256().map_err(material)?,
+            lower_ms: captured.captured_lower_ms(),
+            upper_ms: captured.captured_upper_ms(),
+        };
+        let originals = ReceiverRequestOriginals::create(self, amount)?;
+        let id = originals.request_id();
+        if id == [0; 32] || self.used_operations.contains(&id) {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.require_receiver_request_capacity(&originals)?;
+        self.require_receiver_request_control(financial_control, &originals)?;
+        let lease = self
+            .publication
+            .cash_financial()
+            .retained_integrity_lease()
+            .cloned();
+        self.append_receiver_frame(&Record::ReceiverReserve {
+            originals: originals.clone(),
+            financial_control,
+        })?;
+        self.used_operations.insert(id);
+        self.pending_receiver_request = Some(PendingReceiverRequest {
+            originals,
+            financial_control,
+            lease,
+            fenced: false,
+        });
+        // Memory follows actual durable chronology before a post-fsync clock failure can return.
+        self.require_current_financial_control()?;
+        Ok(id)
+    }
+
+    /// Read only the exact model signing message from the durable, unfenced Native reservation.
+    /// No caller key/message/clock or private encryption key is accepted or returned.
+    /// # Errors
+    /// Refuses another request, a retained invocation fence, expired request or changed custody.
+    pub fn receiver_request_signing_message(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let pending = self
+            .pending_receiver_request
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        pending.require_unfenced(request_id)?;
+        self.require_receiver_request_control(pending.financial_control, &pending.originals)?;
+        pending
+            .originals
+            .signing_message(self, pending.lease.as_deref())
+    }
+
+    /// Project the complete same original C for the hardware app-key signer selection.
+    /// It is data only; managed code cannot select another alias or construct request custody.
+    /// # Errors
+    /// Uses the same current, exact unfenced reservation checks as the signing-message borrow.
+    pub fn receiver_request_credential_original(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.receiver_request_signing_message(request_id)?;
+        Ok(self
+            .pending_receiver_request
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .originals
+            .credential_original()
+            .to_vec())
+    }
+
+    /// Fsync the irreversible single OS invocation fence before handing off to the app signer.
+    /// Recovery retains uncertainty; neither a retry nor cancellation can dispatch a second signature.
+    /// # Errors
+    /// Refuses a different/fenced/expired request, changed original custody or failed durability.
+    pub fn fence_receiver_request_platform(
+        &mut self,
+        request_id: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.receiver_request_signing_message(request_id)?;
+        self.append_receiver_frame(&Record::ReceiverPlatformFence { request_id })?;
+        self.pending_receiver_request
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+            .fenced = true;
+        self.require_current_financial_control()
+    }
+
+    /// Authenticate and fsync the full OS-signed request, then advance the global Apple floor.
+    /// Capture exposes public Request bytes only. The one-use X25519 key remains private Native WAL data.
+    /// # Errors
+    /// Refuses missing fence, changed exact body, wrong platform/key/counter, expiration or conflict.
+    /// After durable capture an exact byte retry returns the original without appending/signing again.
+    pub fn capture_receiver_request_original(
+        &mut self,
+        request_id: DigestV1,
+        original: &[u8],
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        if let Some(retained) = self.retained_receiver_requests.get(&request_id) {
+            if retained.captured.original() != original {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            return self.captured_receiver_request_original(request_id);
+        }
+        let pending = self
+            .pending_receiver_request
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        pending.require_fenced(request_id)?;
+        self.require_receiver_request_control(pending.financial_control, &pending.originals)?;
+        let captured =
+            pending
+                .originals
+                .clone()
+                .capture_original(self, pending.lease.as_deref(), original)?;
+        self.append_receiver_frame(&Record::ReceiverCapture(captured.clone()))?;
+        self.counter_floor = captured.accepted_counter().or(self.counter_floor);
+        let pending = self
+            .pending_receiver_request
+            .take()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        self.retained_receiver_requests.insert(
+            request_id,
+            RetainedReceiverRequest {
+                captured,
+                financial_control: pending.financial_control,
+                lease: pending.lease,
+            },
+        );
+        // Even a slow post-fsync freshness failure preserves Capture and the accepted counter.
+        self.captured_receiver_request_original(request_id)
+    }
+
+    /// Expose only a previously fsynced exact public request while current FI custody is held.
+    /// Historical signature/counter originals are checked at their retained admission bounds;
+    /// this neither renews the request nor lends decryption, ReceiveFold or monetary authority.
+    /// # Errors
+    /// Refuses absent capture, changed full enrollment/control originals or current FI failure.
+    pub fn captured_receiver_request_original(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let retained = self
+            .retained_receiver_requests
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        self.require_receiver_request_control(
+            retained.financial_control,
+            retained.captured.reservation(),
+        )?;
+        retained
+            .captured
+            .recheck_historical_sources(self, retained.lease.as_deref())?;
+        self.require_current_financial_control()?;
+        Ok(retained.captured.original().to_vec())
+    }
+
+    /// Lend the actual fsynced receiver request and current custody to Native proof admission.
+    /// The key remains private and retained; this creates no Receive or global head effect.
+    pub(crate) fn receiver_request_custody(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1> {
+        receiver_request::loan_main_request(self, request_id)
+    }
+
+    /// Cancel only an unfenced request. Its identity remains in the global never-reuse set.
+    /// No captured/uncertain key can be consumed or recycled through this operation.
+    /// # Errors
+    /// Refuses a different request, any OS fence, current FI failure or failed durable append.
+    pub fn cancel_receiver_request(
+        &mut self,
+        request_id: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let pending = self
+            .pending_receiver_request
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        pending.require_unfenced(request_id)?;
+        self.append_receiver_frame(&Record::ReceiverCancel { request_id })?;
+        self.pending_receiver_request = None;
+        self.require_current_financial_control()
+    }
+
+    // Only Receiver methods may call this. Commit memory immediately after this actual fsync,
+    // then check live freshness. Partial append/cursor uncertainty freezes the holder for reopen.
+    fn append_receiver_frame(&mut self, record: &Record) -> Result<(), KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        if self.prefix.sequence >= MAX_ROWS {
+            return Err(KagemushaStateErrorV1::JournalRevisionOverflow);
+        }
+        let bytes = encode(record)?;
+        if self.journal.append(&bytes).is_err() {
+            self.recovery_failed = true;
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        match self.journal.recovery_prefix() {
+            Ok(prefix) => {
+                self.prefix = prefix;
+                Ok(())
+            }
+            Err(_) => {
+                self.recovery_failed = true;
+                Err(KagemushaStateErrorV1::SnapshotIntegrity)
+            }
+        }
+    }
+
+    fn require_receiver_request_control(
+        &self,
+        identity: CapturedFinancialControlIdentity,
+        originals: &ReceiverRequestOriginals,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.control
+            .recheck_retained_capture_identity(
+                self.publication.cash_financial(),
+                identity.original_sha256,
+                identity.lower_ms,
+                identity.upper_ms,
+            )
+            .map_err(material)?;
+        let clock = originals.clock();
+        if clock.lower_at_ms < identity.lower_ms || clock.upper_at_ms < identity.upper_ms {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        Ok(())
+    }
+
+    fn require_receiver_request_capacity(
+        &self,
+        next: &ReceiverRequestOriginals,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let mut used = next.capacity_charge_bytes()?;
+        for retained in self.retained_receiver_requests.values() {
+            used = used
+                .checked_add(retained.captured.reservation().capacity_charge_bytes()?)
+                .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
+        }
+        if used > self.capacity.inbox_bytes
+            || self.retained_receiver_requests.len() >= MAX_ROWS as usize
+        {
+            return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
+        }
+        Ok(())
+    }
+
+    fn recheck_receiver_request_storage(&self) -> Result<(), KagemushaStateErrorV1> {
+        let mut bytes = 0u64;
+        if let Some(pending) = &self.pending_receiver_request {
+            if !self
+                .used_operations
+                .contains(&pending.originals.request_id())
+                || self.pending.is_some()
+                || self.terminal.as_ref().is_none_or(|t| t.has_pending())
+                || pending.originals.original_counter_floor() != self.counter_floor
+            {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            bytes = pending.originals.capacity_charge_bytes()?;
+        }
+        for (id, retained) in &self.retained_receiver_requests {
+            if *id != retained.captured.reservation().request_id()
+                || !self.used_operations.contains(id)
+            {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            bytes = bytes
+                .checked_add(retained.captured.reservation().capacity_charge_bytes()?)
+                .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
+        }
+        if bytes > self.capacity.inbox_bytes
+            || self.retained_receiver_requests.len() > MAX_ROWS as usize
+        {
+            return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
+        }
+        Ok(())
+    }
+
+    fn resolve_receiver_request_lease(
+        &self,
+        originals: &ReceiverRequestOriginals,
+        leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+    ) -> Result<Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>, KagemushaStateErrorV1>
+    {
+        match originals.lease_original() {
+            None => Ok(None),
+            Some(raw) => Ok(Some(Arc::clone(
+                leases
+                    .iter()
+                    .find(|held| held.original() == raw)
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?,
+            ))),
+        }
     }
 
     /// Reserve actual Native entropy and exact held predecessor before deriving purpose2 S/W.
     /// This internal operation grants only an approval attempt, not funds or an outbox slot.
-    pub(crate) fn reserve_preparation(&mut self) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.recheck()?;
-        if self.pending.is_some() {
+    pub(crate) fn reserve_preparation(
+        &mut self,
+        operation_kind: KagemushaOperationKindV1,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        self.require_initial_lineage_anchor_current()?;
+        if self.pending.is_some()
+            || self.pending_receiver_request.is_some()
+            || !matches!(
+                operation_kind,
+                KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
+            )
+            || u64::from(self.carrier_budget.required_outbox_slot_bytes()) > self.capacity.outbox_bytes
+        {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         let mut entropy = [0; 64];
@@ -252,21 +1133,189 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         if operation == [0; 32] || nonce == [0; 32] || self.used_operations.contains(&operation) {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
+        let captured = self
+            .control
+            .capture_proof_decision(self.publication.cash_financial())
+            .map_err(material)?;
+        let financial_control = CapturedFinancialControlIdentity {
+            original_sha256: captured.original_sha256().map_err(material)?,
+            lower_ms: captured.captured_lower_ms(),
+            upper_ms: captured.captured_upper_ms(),
+        };
+        let preparation_clock = self
+            .publication
+            .cash_financial()
+            .current_cash_clock_context()
+            .map_err(material)?;
+        preparation_clock.validate_shape().map_err(material)?;
+        if preparation_clock.lower_at_ms < financial_control.lower_ms
+            || preparation_clock.upper_at_ms < financial_control.upper_ms
+        {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        let mut reservation_hash = Sha256::new();
+        reservation_hash.update(b"iroha:kagemusha:v1:ordinary-native-outbox-slot\0");
+        reservation_hash.update(operation);
+        reservation_hash.update(self.state.state_commitment);
+        reservation_hash.update(preparation_clock.binding_digest().map_err(material)?);
+        let reservation = KagemushaOutboxReservationV1 {
+            reservation_id: reservation_hash.finalize().into(),
+            operation_kind,
+            reserved_outbox_bytes: self.carrier_budget.required_outbox_slot_bytes(),
+            issued_at_ms: preparation_clock.lower_at_ms,
+            expires_at_ms: self.credential_floor()?.approval_valid_until_ms(),
+        };
+        reservation.validate().map_err(material)?;
+        preparation_clock
+            .validate_within_original_window(reservation.issued_at_ms, reservation.expires_at_ms)
+            .map_err(material)?;
+        self.require_current_financial_control()?;
         self.persist(&Record::Intent {
             operation,
             nonce,
             predecessor: self.state.state_commitment,
+            financial_control,
+            preparation_clock,
+            reservation,
         })?;
         self.used_operations.insert(operation);
         self.pending = Some(Pending {
             operation,
             nonce,
+            financial_control,
+            preparation_clock,
+            reservation,
+            send_credit: None,
+            redeem_credit: None,
             selected: None,
             fenced: false,
             retained: None,
             capture: None,
         });
+        self.require_current_financial_control()?;
         Ok(operation)
+    }
+
+    /// Produce and fsync exactly one credit before W2. Exact retries reuse all retained
+    /// entropy and ciphertext; independently authenticated receiver originals remain held.
+    pub(crate) fn retain_send_credit(
+        &mut self,
+        operation: DigestV1,
+        successor: KagemushaStateV1,
+        request_original: &[u8],
+        receiver: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+        receiver_lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        receiver_counter_floor: Option<u32>,
+    ) -> Result<KagemushaOrdinaryPaymentOutputV1, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if pending.operation != operation
+            || pending.reservation.operation_kind != KagemushaOperationKindV1::SendSplit
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        if let Some(retained) = &pending.send_credit {
+            if retained.successor != successor
+                || retained.originals.request_original() != request_original
+                || retained.originals.receiver_counter_floor() != receiver_counter_floor
+            {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            retained.originals.recheck_originals(
+                self,
+                operation,
+                &successor,
+                &receiver,
+                receiver_lease.as_deref(),
+            )?;
+            return Ok(*retained.originals.output());
+        }
+        let originals = SendCreditOriginals::create(
+            self,
+            operation,
+            &successor,
+            request_original,
+            &receiver,
+            receiver_lease.as_deref(),
+            receiver_counter_floor,
+        )?;
+        self.persist(&Record::SendCredit {
+            successor: successor.clone(),
+            originals: originals.clone(),
+        })?;
+        self.pending
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+            .send_credit = Some(RetainedSendCredit {
+            successor,
+            originals,
+            receiver,
+            receiver_lease,
+        });
+        self.require_current_financial_control()?;
+        let retained = self
+            .pending
+            .as_ref()
+            .and_then(|p| p.send_credit.as_ref())
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        retained.originals.recheck_originals(
+            self,
+            operation,
+            &retained.successor,
+            &retained.receiver,
+            retained.receiver_lease.as_deref(),
+        )?;
+        Ok(*retained.originals.output())
+    }
+
+    /// Select the enrolled beneficiary and actual release manifest before W2. Exact retries
+    /// use the original durable selection; offered beneficiary or manifest bytes are excluded.
+    pub(crate) fn retain_redeem_credit(
+        &mut self,
+        operation: DigestV1,
+        amount: u128,
+        successor: KagemushaStateV1,
+    ) -> Result<
+        iroha_data_model::kagemusha::KagemushaOrdinaryRedemptionOutputV1,
+        KagemushaStateErrorV1,
+    > {
+        self.require_current_financial_control()?;
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if pending.operation != operation
+            || pending.reservation.operation_kind != KagemushaOperationKindV1::RedeemSplit
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        if let Some((held_successor, originals)) = &pending.redeem_credit {
+            if *held_successor != successor || originals.output().amount != amount {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            originals.recheck_original_data(self, operation, &successor)?;
+            return Ok(*originals.output());
+        }
+        let originals = RedeemOriginals::create(self, operation, amount, &successor)?;
+        self.persist(&Record::RedeemCredit {
+            successor: successor.clone(),
+            originals: originals.clone(),
+        })?;
+        self.pending
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+            .redeem_credit = Some((successor, originals));
+        self.require_current_financial_control()?;
+        Ok(*self
+            .pending
+            .as_ref()
+            .and_then(|p| p.redeem_credit.as_ref())
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+            .1
+            .output())
     }
 
     /// Bind Native-derived transition data to the reserved cash attempt before any OS call.
@@ -280,7 +1329,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         successor: KagemushaStateV1,
         context: KagemushaGuardContextV1,
     ) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         let pending = self
             .pending
             .as_ref()
@@ -294,6 +1343,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             &statement,
             self.financial_journal_revision,
         )?;
+        require_reserved_selection(pending, &statement, &successor)?;
         let normalized =
             KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
                 .map_err(material)?;
@@ -499,7 +1549,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         &mut self,
         operation: DigestV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         let pending = self
             .pending
             .as_ref()
@@ -509,7 +1559,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         }
         self.persist(&Record::Cancel { operation })?;
         self.pending = None;
-        Ok(())
+        self.require_current_financial_control()
     }
 
     fn credential_floor(
@@ -525,7 +1575,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
 
     fn require_live_preparation(&self, operation: DigestV1) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         let pending = self
             .pending
             .as_ref()
@@ -599,27 +1649,138 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         &mut self,
         record: Record,
         historical_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+        historical_receivers: &[Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>],
+        preceding: Option<KagemushaRecoveryJournalPrefixV1>,
     ) -> Result<(), KagemushaStateErrorV1> {
         match record {
+            Record::LineageAnchorAcknowledged { request_original_sha256 } => {
+                self.replay_lineage_anchor_acknowledgment(request_original_sha256)?;
+            }
             Record::Intent {
                 operation,
                 nonce,
                 predecessor,
-            } if self.pending.is_none()
+                financial_control,
+                preparation_clock,
+                reservation,
+            } if self.anchor_request_sha256.is_some()
+                && self.pending.is_none()
+                && self.pending_receiver_request.is_none()
                 && operation != [0; 32]
                 && nonce != [0; 32]
                 && predecessor == self.state.state_commitment
                 && !self.used_operations.contains(&operation) =>
             {
+                preparation_clock.validate_shape().map_err(material)?;
+                reservation.validate().map_err(material)?;
+                preparation_clock
+                    .validate_within_original_window(
+                        reservation.issued_at_ms,
+                        reservation.expires_at_ms,
+                    )
+                    .map_err(material)?;
+                if reservation.reserved_outbox_bytes != self.carrier_budget.required_outbox_slot_bytes()
+                    || u64::from(reservation.reserved_outbox_bytes) > self.capacity.outbox_bytes
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                self.control
+                    .recheck_retained_capture_identity(
+                        self.publication.cash_financial(),
+                        financial_control.original_sha256,
+                        financial_control.lower_ms,
+                        financial_control.upper_ms,
+                    )
+                    .map_err(material)?;
+                if preparation_clock.lower_at_ms < financial_control.lower_ms
+                    || preparation_clock.upper_at_ms < financial_control.upper_ms
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotRollback);
+                }
                 self.used_operations.insert(operation);
                 self.pending = Some(Pending {
                     operation,
                     nonce,
+                    financial_control,
+                    preparation_clock,
+                    reservation,
+                    send_credit: None,
+                    redeem_credit: None,
                     selected: None,
                     fenced: false,
                     retained: None,
                     capture: None,
                 });
+            }
+            Record::SendCredit {
+                successor,
+                originals,
+            } => {
+                let pending = self
+                    .pending
+                    .as_ref()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                if pending.send_credit.is_some()
+                    || pending.selected.is_some()
+                    || pending.fenced
+                    || pending.reservation.operation_kind != KagemushaOperationKindV1::SendSplit
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                let mut receiver = None;
+                for held in historical_receivers {
+                    if originals.matches_receiver(held)? {
+                        receiver = Some(Arc::clone(held));
+                        break;
+                    }
+                }
+                let receiver = receiver.ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                let receiver_lease = match originals.receiver_lease_original() {
+                    None => None,
+                    Some(raw) => Some(Arc::clone(
+                        historical_leases
+                            .iter()
+                            .find(|held| held.original() == raw)
+                            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?,
+                    )),
+                };
+                originals.recheck_at_replay_position(
+                    self,
+                    pending.operation,
+                    &successor,
+                    &receiver,
+                    receiver_lease.as_deref(),
+                )?;
+                self.pending
+                    .as_mut()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+                    .send_credit = Some(RetainedSendCredit {
+                    successor,
+                    originals,
+                    receiver,
+                    receiver_lease,
+                });
+            }
+            Record::RedeemCredit {
+                successor,
+                originals,
+            } => {
+                let pending = self
+                    .pending
+                    .as_ref()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                if pending.redeem_credit.is_some()
+                    || pending.send_credit.is_some()
+                    || pending.selected.is_some()
+                    || pending.fenced
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                originals.recheck_original_data(self, pending.operation, &successor)?;
+                self.pending
+                    .as_mut()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+                    .redeem_credit = Some((successor, originals));
             }
             Record::Preparation {
                 statement,
@@ -653,6 +1814,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     &statement,
                     self.financial_journal_revision,
                 )?;
+                require_reserved_selection(pending, &statement, &successor)?;
                 if KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
                     .map_err(material)?
                     != normalized
@@ -800,6 +1962,104 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             {
                 self.pending = None;
             }
+            Record::Terminal(record) => {
+                if self.pending_receiver_request.is_some() {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                if let Some(selected_prefix) = record.preselection_prefix() {
+                    if Some(selected_prefix) != preceding {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                }
+                let operation = record.new_operation();
+                let counter = record.accepted_counter();
+                let mut terminal = self
+                    .terminal
+                    .take()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                let result = terminal.replay(self, record, historical_leases, historical_receivers);
+                self.terminal = Some(terminal);
+                result?;
+                if let Some(operation) = operation {
+                    if !self.used_operations.insert(operation) {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                }
+                self.counter_floor = counter.or(self.counter_floor);
+            }
+            Record::ReceiverReserve {
+                originals,
+                financial_control,
+            } => {
+                if self.pending.is_some()
+                    || self.pending_receiver_request.is_some()
+                    || self.terminal.as_ref().is_none_or(|t| t.has_pending())
+                    || self.used_operations.contains(&originals.request_id())
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                self.require_receiver_request_capacity(&originals)?;
+                let lease = self.resolve_receiver_request_lease(&originals, historical_leases)?;
+                originals.recheck_at_replay_position(self, lease.as_deref())?;
+                self.require_receiver_request_control(financial_control, &originals)?;
+                self.used_operations.insert(originals.request_id());
+                self.pending_receiver_request = Some(PendingReceiverRequest {
+                    originals,
+                    financial_control,
+                    lease,
+                    fenced: false,
+                });
+            }
+            Record::ReceiverPlatformFence { request_id } => {
+                let pending = self
+                    .pending_receiver_request
+                    .as_mut()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                pending.require_unfenced(request_id)?;
+                pending.fenced = true;
+            }
+            Record::ReceiverCapture(captured) => {
+                let pending = self
+                    .pending_receiver_request
+                    .as_ref()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                let request_id = pending.originals.request_id();
+                if !pending.fenced
+                    || captured.reservation() != &pending.originals
+                    || self.retained_receiver_requests.contains_key(&request_id)
+                {
+                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                }
+                pending
+                    .originals
+                    .recheck_at_replay_position(self, pending.lease.as_deref())?;
+                self.require_receiver_request_control(
+                    pending.financial_control,
+                    &pending.originals,
+                )?;
+                captured.recheck_historical_sources(self, pending.lease.as_deref())?;
+                self.counter_floor = captured.accepted_counter().or(self.counter_floor);
+                let pending = self
+                    .pending_receiver_request
+                    .take()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                self.retained_receiver_requests.insert(
+                    request_id,
+                    RetainedReceiverRequest {
+                        captured,
+                        financial_control: pending.financial_control,
+                        lease: pending.lease,
+                    },
+                );
+            }
+            Record::ReceiverCancel { request_id } => {
+                let pending = self
+                    .pending_receiver_request
+                    .as_ref()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                pending.require_unfenced(request_id)?;
+                self.pending_receiver_request = None;
+            }
             _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
         }
         Ok(())
@@ -824,7 +2084,23 @@ impl KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_> {
     ) -> Result<(), KagemushaStateErrorV1> {
         self.recheck_selected_originals_and_current_custody()?;
         let financial = self.owner.publication.cash_financial();
-        let secret = financial.financial_secret().map_err(material)?;
+        let identity = self
+            .owner
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .financial_control;
+        let captured = self
+            .owner
+            .control
+            .borrow_captured_proof_decision(
+                financial,
+                identity.original_sha256,
+                identity.lower_ms,
+                identity.upper_ms,
+            )
+            .map_err(material)?;
+        let secret = captured.financial_secret().map_err(material)?;
         if crate::kagemusha_v1_recursion::device_authority_commitment_v1(*secret)
             != self
                 .enrollment()
@@ -841,7 +2117,7 @@ impl KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_> {
     pub(crate) fn recheck_selected_originals_and_current_custody(
         &self,
     ) -> Result<(), KagemushaStateErrorV1> {
-        self.owner.recheck()?;
+        self.owner.recheck_proving_history()?;
         if self.owner.prefix != self.prefix {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
@@ -869,17 +2145,15 @@ impl KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_> {
         )?;
         approval.recheck_at_trusted_time(*lower).map_err(material)?;
         approval.recheck_at_trusted_time(*upper).map_err(material)?;
-        self.owner
-            .publication
-            .cash_financial()
-            .trusted_time_interval()
-            .map_err(material)?
-            .check_both(|now| {
-                if now < *lower {
-                    return Err(KagemushaStateErrorV1::SnapshotRollback);
-                }
-                Ok(())
-            })
+        Ok(())
+    }
+    pub(crate) fn preparation_clock_context(&self) -> &KagemushaOrdinaryCashClockContextV1 {
+        &self
+            .owner
+            .pending
+            .as_ref()
+            .expect("retained cash intent")
+            .preparation_clock
     }
     fn selected(&self) -> &Selected {
         self.owner
@@ -1028,8 +2302,43 @@ fn authorization(
     )
     .map_err(material)
 }
-fn encode(record: &Record) -> Result<Vec<u8>, KagemushaStateErrorV1> {
-    let original = norito::encode_canonical(record).map_err(material)?;
+fn require_reserved_selection(
+    pending: &Pending,
+    statement: &TransitionProofStatementV1,
+    successor: &KagemushaStateV1,
+) -> Result<(), KagemushaStateErrorV1> {
+    let operation = match statement.kind {
+        KagemushaTransitionKindV1::SendSplit => KagemushaOperationKindV1::SendSplit,
+        KagemushaTransitionKindV1::RedeemSplit => KagemushaOperationKindV1::RedeemSplit,
+        _ => return Err(KagemushaStateErrorV1::InvalidCandidateStage),
+    };
+    if operation != pending.reservation.operation_kind {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    if operation == KagemushaOperationKindV1::SendSplit {
+        let retained = pending
+            .send_credit
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if retained.successor != *successor || retained.originals.operation() != pending.operation {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        retained.originals.require_statement(statement, successor)?;
+    } else {
+        let (held_successor, originals) = pending
+            .redeem_credit
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if *held_successor != *successor || originals.operation() != pending.operation {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        originals.require_statement(statement, successor)?;
+    }
+    Ok(())
+}
+
+fn encode(record: &Record) -> Result<zeroize::Zeroizing<Vec<u8>>, KagemushaStateErrorV1> {
+    let original = zeroize::Zeroizing::new(norito::encode_canonical(record).map_err(material)?);
     if original.is_empty() || original.len() as u64 > FORMAT.maximum_payload_bytes {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
@@ -1044,7 +2353,7 @@ fn decode(original: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
         norito::canonical_decode_limits(original.len()),
     )
     .map_err(material)?;
-    if encode(&record)? != original {
+    if encode(&record)?.as_slice() != original {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
     Ok(record)

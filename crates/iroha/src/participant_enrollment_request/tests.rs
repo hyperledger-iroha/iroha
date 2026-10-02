@@ -17,6 +17,9 @@ use norito::codec::Encode as _;
 #[path = "../participant_enrollment_dispatch_tests.rs"]
 mod issuer_dispatch_retention_tests;
 
+#[path = "../participant_enrollment_fi_read_tests.rs"]
+mod fi_current_receiving_tests;
+
 struct Fixture {
     signer: KeyPair,
     signatory: AccountId,
@@ -176,7 +179,7 @@ fn request<'a>(
     }
 }
 fn valid_target() -> Url {
-    Url::parse("https://fi.example.invalid/leumi.is2/v1/offline/enrollment/ordinary/prepare")
+    Url::parse("https://fi.example.invalid/leumi.is2/v1/kagemusha/enrollment/ordinary/prepare")
         .unwrap()
 }
 #[test]
@@ -189,7 +192,7 @@ fn exact_ed_request_binds_fi_session_origin_body_route_and_idempotency() {
     let signature = Signature::new(f.signer.private_key(), &message);
     signature.verify(f.signer.public_key(), &message).unwrap();
     let other_target = Url::parse(
-        "https://other.example.invalid/leumi.is2/v1/offline/enrollment/ordinary/prepare",
+        "https://other.example.invalid/leumi.is2/v1/kagemusha/enrollment/ordinary/prepare",
     )
     .unwrap();
     let mut variants = vec![];
@@ -271,8 +274,12 @@ fn substituted_node_pin_challenge_and_signatory_membership_never_form_current_ow
             .clone(),
     );
     assert!(require_single_member_wallet(&foreign, &f.wallet).is_err());
-    let mut challenge = EnrollmentWalletReadChallengeV1::for_request(&req).unwrap();
-    challenge.deadline = Instant::now();
+    let challenge = EnrollmentWalletReadChallengeV1::for_request(&req).unwrap();
+    // Exhaust this same process-bound suspend-inclusive Native reading; it has no
+    // caller-supplied clock constructor or mutable local deadline.
+    std::thread::sleep(READ_BUDGET);
+    assert!(challenge.started.elapsed().unwrap() >= READ_BUDGET);
+    assert!(challenge.remaining_native_budget().is_err());
     let statements = f.statements(challenge.bytes(), &nodes);
     assert!(f.admit(challenge, &nodes, &statements).is_err());
 }
@@ -406,6 +413,14 @@ impl NativeCustodyFixture {
         request: &ParticipantEnrollmentRequestV1<'_>,
     ) -> VerifiedEnrollmentWalletSignatoryV1 {
         let challenge = EnrollmentWalletReadChallengeV1::for_request(request).unwrap();
+        self.current_for_challenge(challenge)
+    }
+    // Reuse the same actual fixture statements/World/finality admission with a retained
+    // production challenge; this creates no installed inventory or Native runtime authority.
+    pub(crate) fn current_for_challenge(
+        &self,
+        challenge: EnrollmentWalletReadChallengeV1,
+    ) -> VerifiedEnrollmentWalletSignatoryV1 {
         let nodes = Fixture::nodes();
         let statements = self.0.statements(challenge.bytes(), &nodes);
         self.0.admit(challenge, &nodes, &statements).unwrap()
@@ -474,5 +489,25 @@ impl NativeCustodyFixture {
             )
             .unwrap();
         owner
+    }
+}
+
+#[test]
+fn enrollment_operation_routes_use_the_complete_canonical_product_prefix() {
+    for (operation, path) in [
+        (
+            ParticipantEnrollmentOperationV1::Prepare,
+            "/v1/kagemusha/enrollment/ordinary/prepare",
+        ),
+        (
+            ParticipantEnrollmentOperationV1::RawAttestation,
+            "/v1/kagemusha/enrollment/ordinary/raw-attestation",
+        ),
+        (
+            ParticipantEnrollmentOperationV1::Certificate,
+            "/v1/kagemusha/enrollment/ordinary/certificate",
+        ),
+    ] {
+        assert_eq!(operation.path_suffix(), path);
     }
 }

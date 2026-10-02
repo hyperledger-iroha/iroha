@@ -14,7 +14,7 @@ SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_te
 
 REGION_START = '#[derive(Clone, Copy)]\nenum FheInputAdmissionPayloadShape'
 REGION_END = '#[cfg(feature = "zk-stark")]\n#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
-REGION_HASH = "472eb42b8bb787f4facdd5854e2d57db5175a9f710aa0ea17a7afbcd82fc3d4d"
+REGION_HASH = "e055766708b398b2296ebc032ef89731800127ca0dacd9b55c90af55f4b3b6ed"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -102,6 +102,8 @@ VERIFIER_MUTATION_TOKENS = (
 )
 
 RUNNER_TOKENS = (
+    "initial_permissioned_soracloud_state!(kura, state)",
+    "initial_soracloud_transaction!(state, block_header, state_block, state_transaction)",
     "for &case in cases",
     "configure_fhe_input_admission_rejection_verifier",
     "deploy_diagnostic_job_test_service",
@@ -275,6 +277,19 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
         mutated = _replace_once(self.source, old, old.replace(".is_none()", ".is_some()"))
         with self.assertRaises(GuardError):
             validate_source(mutated)
+
+
+    def test_native_initial_fixture_cannot_be_downgraded_to_structural_component(self) -> None:
+        region = _region(self.source)
+        for old, new in (
+            ("initial_permissioned_soracloud_state!(kura, state)", "permissioned_soracloud_state!(kura, state)"),
+            ("initial_soracloud_transaction!(state, block_header, state_block, state_transaction)", "soracloud_transaction!(state, block_header, state_block, state_transaction)"),
+        ):
+            self.assertEqual(region.count(old), 1)
+            mutated = self.source.replace(region, region.replace(old, new, 1), 1)
+            self.assertNotEqual(mutated, self.source)
+            with self.subTest(target=old), self.assertRaises(GuardError):
+                validate_source(mutated)
 
 
 if __name__ == "__main__":

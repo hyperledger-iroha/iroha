@@ -344,7 +344,7 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
     assert_eq!(
         namespace_only.len(),
         29,
-        "all provider-admission, custody descendant, and gateway paths"
+        "all provider-admission, custody and gateway descendant paths"
     );
     assert!(
         namespace_only.contains(
@@ -358,10 +358,23 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
             .iter()
             .any(|path| path.as_ref().starts_with("sorafs/provider_admission/"))
     );
-    assert!(
+    let gateway_prefix = format!(
+        "{}/",
+        crate::query::stream_token_gateway::storage::STATE_ROOT
+    );
+    assert_eq!(
         namespace_only
             .iter()
-            .any(|path| path.as_ref().starts_with("sorafs_stream_token_gateway_v1/"))
+            .filter(|path| path.as_ref().starts_with(&gateway_prefix))
+            .count(),
+        15
+    );
+    assert_eq!(
+        namespace_only
+            .iter()
+            .filter(|path| !path.as_ref().starts_with(&gateway_prefix))
+            .count(),
+        14
     );
     for path in &namespace_only {
         assert!(path.as_ref().contains('/'));

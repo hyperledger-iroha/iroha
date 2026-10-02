@@ -14,6 +14,12 @@ mod native_outgoing_witness;
 mod production_incoming;
 #[path = "production_ordinary_auxiliaries.rs"]
 mod production_ordinary_auxiliaries;
+#[path = "production_ordinary_cash_terminal.rs"]
+mod production_ordinary_cash_terminal;
+pub(crate) use production_ordinary_cash_terminal::GeneratedOrdinaryCashCommitOriginalsV1;
+#[path = "production_ordinary_preparation_reservation.rs"]
+mod production_ordinary_preparation_reservation;
+pub(crate) use production_ordinary_preparation_reservation::GeneratedOrdinaryCashReservationOriginalsV1;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
 #[path = "production_ordinary_padding.rs"]

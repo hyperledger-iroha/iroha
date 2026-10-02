@@ -93,7 +93,7 @@ def validate(
         raise ValidationError("full repository provenance was not requested")
     if os.environ.get("PIN_OWNER_TEST_REJECT_PROVENANCE") == "1":
         raise ValidationError("simulated stale repository provenance")
-    if lockfile_path != root / "Cargo.lock":
+    if lockfile_path != root.parent / "graph/Cargo.lock" or lockfile_path.stat().st_mode & 0o222:
         raise ValidationError("pin owner failed to propagate explicit selected lock")
     lock_path = manifest_path.parent.parent / ".NoritoBridge.publish.lockfile"
     if os.environ.get("PIN_OWNER_TEST_ASSERT_LOCK_HELD") == "1":
@@ -135,7 +135,18 @@ def validate(
 ''',
             encoding="utf-8",
         )
-        shutil.copy2(REPO / "Cargo.lock", self.root / "Cargo.lock")
+        # Pure graph data for this pin-owner fixture, never a production Cargo selection.
+        graph = b'version = 4\n\n[[package]]\nname = "swift-pin-owner-fixture"\nversion = "0.0.0"\n'
+        (self.root / "Cargo.lock").write_bytes(graph)
+        (self.root / "ci").mkdir()
+        (self.root / "ci/privacy_sdk_cargo_lockfile.sh").write_text(
+            'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"'
+            + hashlib.sha256(graph).hexdigest() + '"\n', encoding="utf-8")
+        graph_directory = self.temporary_root / "graph"
+        graph_directory.mkdir()
+        self.lockfile = graph_directory / "Cargo.lock"
+        shutil.copyfile(self.root / "Cargo.lock", self.lockfile)
+        self.lockfile.chmod(0o400)
         authoritative_headers = {
             "include/NoritoBridge.h": REPO
             / "crates/connect_norito_bridge/include/NoritoBridge.h",
@@ -170,6 +181,7 @@ def validate(
         self.output_root.mkdir()
         xcframework = self.artifact / "NoritoBridge.xcframework"
         xcframework.mkdir(parents=True)
+        (xcframework / ".privacy-production-enabled").touch()
         header = (
             REPO / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
         ).read_bytes()
@@ -213,8 +225,8 @@ def validate(
         payload = {
             "version": "1.0.0",
             "native_bridge_abi_version": 25,
-            "privacy_production_enabled": False,
-            "cargo_features": [],
+            "privacy_production_enabled": True,
+            "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -300,7 +312,7 @@ def validate(
                 str(OWNER),
                 "--root",
                 str(self.root),
-                "--lockfile-path", str(self.root / "Cargo.lock"),
+                "--lockfile-path", str(self.lockfile),
                 "--artifact-dir",
                 str(artifact or self.artifact),
                 *arguments,

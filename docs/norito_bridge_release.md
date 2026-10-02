@@ -57,7 +57,7 @@ that workflow for local release verification.
      "$NORITO_BRIDGE_BUILD_DIR" \
      "$(dirname "$NORITO_BRIDGE_ARCHIVE_OUTPUT")"
    ./scripts/build_norito_xcframework.sh \
-     --privacy-production-enabled \
+     --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock \
      --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
@@ -67,7 +67,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 25, the privacy-production feature state,
+   manifest binds exact native bridge ABI 25, the mandatory privacy build recipe,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,

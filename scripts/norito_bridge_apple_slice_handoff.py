@@ -229,16 +229,10 @@ def validate_common(common: dict[str, object]) -> None:
     ):
         require_sha256(common[key], key)
 
-    production = common["privacy_production_enabled"]
-    features = common["cargo_features"]
-    if production is True:
-        if features != ["privacy-production-enabled"]:
-            fail("production Apple slice has a non-canonical Cargo feature set")
-    elif production is False:
-        if features != []:
-            fail("default Apple slice carries production-only metadata")
-    else:
-        fail("Apple slice privacy production mode must be boolean")
+    if common["privacy_production_enabled"] is not True:
+        fail("Apple slice must include mandatory privacy support")
+    if common["cargo_features"] != ["privacy-production-enabled"]:
+        fail("Apple slice has a non-canonical Cargo feature set")
 
     environment = common["build_environment"]
     if not isinstance(environment, dict) or set(environment) != BUILD_ENVIRONMENT_KEYS:

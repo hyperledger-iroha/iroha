@@ -17,7 +17,6 @@ import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityPr
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityTokenOriginalV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaPlayIntegrityBackendV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaPlayIntegrityPreparedV1
-import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAndroidKeyAttestationArchiveV1
 import org.junit.jupiter.api.Test
 import kotlin.test.*
 
@@ -26,7 +25,7 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
     @Test fun certificateUsesOnlyTheSameNativeReservationIdentityAndConsumedEOriginals() {
         val e = Endpoint(); val held = Held(e)
         val request = held.e.certificateRequestOriginal(held.reservation, held.identity)
-        assertEquals("/v1/offline/enrollment/ordinary/certificate", request.path)
+        assertEquals("/v1/kagemusha/enrollment/ordinary/certificate", request.path)
         assertEquals(KagemushaOrdinaryIdentityHttpCodecV1.certificateRequestId(e.attempt), request.requestId)
         assertNotEquals(KagemushaOrdinaryIdentityHttpCodecV1.rawAttestationRequestId(e.attempt), request.requestId)
         val body = fields(request.body())
@@ -55,8 +54,8 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
     @Test fun originalRawHashAndPossessionSignatureCannotBeSubstitutedByAnotherRetainedFixture() {
         for (rawChanged in listOf(true, false)) {
             val e = Endpoint(); val held = Held(e)
-            if (rawChanged) e.raw = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(listOf(
-                byteArrayOf(0x30, 2, 1, 9), byteArrayOf(0x30, 2, 1, 2))).transportBytes()
+            if (rawChanged) e.raw = KagemushaPlatformAttestationOriginalV1.android(listOf(
+                byteArrayOf(0x30, 2, 1, 9), byteArrayOf(0x30, 2, 1, 2))).canonicalBytes()
             else e.changedReceipt = true
             assertFails { held.e.certificateRequestOriginal(held.reservation, held.identity) }
             assertEquals(0, e.credentialIntakes); assertTrue(e.closes > 0)
@@ -145,7 +144,7 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         val e = Endpoint(); val held = Held(e); val credential = byteArrayOf(0x71, 0x72)
         held.e.acceptOriginalCredential(credential)
         val request = held.e.retailStartRequestOriginal(held.reservation, held.identity)
-        assertEquals("/v1/offline/enrollment/ordinary/start", request.path)
+        assertEquals("/v1/kagemusha/enrollment/ordinary/start", request.path)
         assertEquals(mapOf("signed_preparation_base64" to base64(e.signedC),
             "app_certificate_base64" to base64(credential)), fields(request.body()))
         val retail = held.e.prepareOriginalRetailEnrollment(held.reservation, held.identity) { original ->
@@ -364,6 +363,30 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         assertEquals(4, httpCalls); assertEquals(1, walletCalls); assertEquals(1, osCalls)
     }
 
+    @Test fun publicationHandoffFenceRetiresBootstrapOnceAndAllOldEntryPointsRefuseLocally() = runBlocking {
+        val e=Endpoint().apply { publicationFixtureEnabled=true };var http=0;var wallet=0;var os=0
+        val workflow=e.workflow({ http++;e.reply(it) },{ wallet++;ByteArray(64) { 0x61 } },
+            bootstrapSigner={ prepared -> prepared.performPlatformSigning { _,_,_,_,_,_,guard -> os++;guard();der.copyOf() } })
+        workflow.prepareCurrentFinancialControlHandoff()
+        val nativeBefore=e.phases.toList()
+        workflow.prepareCurrentFinancialControlHandoff()
+        assertFails { workflow.beginOrResume() }
+        assertFails { workflow.beginOrResumeBootstrapApproval() }
+        assertFails { workflow.beginOrResumeInitialStatePublication() }
+        assertEquals(nativeBefore,e.phases);assertEquals(1,e.publicationCalls);assertEquals(0,e.publicationRecoveries)
+        assertEquals(4,http);assertEquals(1,wallet);assertEquals(1,os);assertEquals(0,e.closes)
+        // This is only local lifecycle retirement. No fixture cash owner or financial loan is created.
+    }
+    @Test fun lostPublicationCannotCreateAHandoffFenceOrRetryTheAuthenticOriginalInvocation() = runBlocking {
+        val e=Endpoint().apply { publicationFixtureEnabled=true;losePublicationReturn=true }
+        val workflow=e.workflow(e::reply,{ ByteArray(64) { 0x61 } },
+            bootstrapSigner={ prepared -> prepared.performPlatformSigning { _,_,_,_,_,_,guard -> guard();der.copyOf() } })
+        assertFails { workflow.prepareCurrentFinancialControlHandoff() }
+        e.losePublicationReturn=false
+        assertFails { workflow.prepareCurrentFinancialControlHandoff() }
+        assertEquals(1,e.publicationCalls);assertEquals(0,e.publicationRecoveries);assertEquals(1,e.closes)
+    }
+
     @Test fun pureSelectedGoogleProjectionRejectsExtraMembersUnsupportedNumbersAndBrokenIdentitySyntax() {
         assertEquals(7L, KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy()))
         for (mutation in listOf("extra", "project-extra", "project-zero", "project-overflow", "principal", "certificate", "version")) {
@@ -404,8 +427,8 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
                 fun coordinate(n: java.math.BigInteger) = n.toByteArray().takeLast(32).toByteArray().let { b -> ByteArray(32 - b.size) + b }
                 byteArrayOf(4) + coordinate(it.w.affineX) + coordinate(it.w.affineY)
             }
-        var raw = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(listOf(
-            byteArrayOf(0x30, 2, 1, 1), byteArrayOf(0x30, 2, 1, 2))).transportBytes()
+        var raw = KagemushaPlatformAttestationOriginalV1.android(listOf(
+            byteArrayOf(0x30, 2, 1, 1), byteArrayOf(0x30, 2, 1, 2))).canonicalBytes()
         val originalRaw = raw.copyOf(); val pending = bytes(0x40)
         val alias = KagemushaOrdinaryAppKeyAliasV1.originalAlias(c.canonicalSigningBytes()).toByteArray()
         val reserved = listOf(le64(6), "fixture-account".toByteArray(), c.clientNonce(), c.releaseId(), c.hardwareProfileId(),

@@ -108,7 +108,7 @@ fn selected_slot<F: KagemushaPoseidonFieldV1>(
 /// Fill the maintained model transcript's semantic ranges with actual assigned sources.
 /// All model bytes outside those exact ranges, including its domain/version framing, are fixed.
 /// No raw mathematical message or offset supplied by a caller is accepted.
-fn fill_transcript<F: KagemushaPoseidonFieldV1>(
+pub(super) fn fill_transcript<F: KagemushaPoseidonFieldV1>(
     template: KagemushaOrdinaryCashTranscriptV1,
     domain: &[u8],
     parts: Vec<(&'static str, Vec<PastaSha256ByteV1<F>>)>,
@@ -140,7 +140,7 @@ fn fill_transcript<F: KagemushaPoseidonFieldV1>(
     let payload = full[domain.len()..].to_vec();
     Ok((full, payload))
 }
-fn clock_payload<F: KagemushaPoseidonFieldV1>(
+pub(super) fn clock_payload<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     clock: &OrdinaryCashClockCellsV1<F>,
@@ -674,6 +674,7 @@ mod tests {
                 d(31),
             ]
             .map(|raw| assigned(ctx, range, raw)),
+            account_binding: assigned(ctx, range, d(32)),
             canonical_subject: core::array::from_fn(|_| ctx.load_witness(F::ZERO)),
             approval_purpose: ctx.load_witness(F::from(phase)),
             approval_operation_id: assigned(ctx, range, intent.native_operation_id),

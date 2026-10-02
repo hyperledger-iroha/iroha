@@ -26,6 +26,7 @@ import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AndroidKeyAttestationOriginalV1
+import org.hyperledger.iroha.sdk.offline.KagemushaPlatformAttestationOriginalV1
 
 /** Local generation preference. The independent issuer still enforces the original enrolled policy. */
 enum class KagemushaAndroidAppKeyHardwarePolicyV1 { TEE_OR_STRONGBOX, STRONGBOX_ONLY, TEE_ONLY }
@@ -33,10 +34,15 @@ enum class KagemushaAndroidAppKeyHardwarePolicyV1 { TEE_OR_STRONGBOX, STRONGBOX_
 /** Original platform evidence, without app-integrity, StateGuard or offline counter qualification. */
 class KagemushaAndroidHardwareAppKeyEvidenceV1 internal constructor(val securityLevel: Int,
     keyId: ByteArray, publicKey: ByteArray, chain: List<ByteArray>) {
-    private val id = keyId.copyOf(); private val point = publicKey.copyOf(); private val certificates = chain.map(ByteArray::copyOf)
+    private val id = keyId.copyOf(); private val point = publicKey.copyOf()
+    private val platformOriginal = KagemushaPlatformAttestationOriginalV1.android(chain)
     fun attestedKeyId(): ByteArray = id.copyOf()
     fun publicKeySec1(): ByteArray = point.copyOf()
-    fun certificateChainDer(): List<ByteArray> = certificates.map(ByteArray::copyOf)
+    fun certificateChainDer(): List<ByteArray> = checkNotNull(platformOriginal.androidCertificateChainDer())
+    /** Complete shared canonical original archive; data only, without a native or issuer grant. */
+    fun platformAttestationOriginal(): ByteArray = platformOriginal.canonicalBytes()
+    /** SHA-256 of the complete canonical archive, including original order and framing. */
+    fun platformAttestationOriginalSha256(): ByteArray = platformOriginal.canonicalDigest()
 }
 
 /** Shared ordinary app-key adapter. No custom applet or finite-use key is required to enroll.

@@ -24,8 +24,21 @@ pub use retail_enrollment_journal::KagemushaOrdinaryRetailEnrollmentAttemptV1;
 #[path = "ordinary_app_identity/preparation_reservation.rs"]
 mod preparation_reservation;
 pub use preparation_reservation::{
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
+
+    KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    KagemushaOrdinaryIntegrityRefreshOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
     KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+};
+pub(crate) use preparation_reservation::{
+    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
+    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 
 #[path = "ordinary_app_identity/issuer_preparation.rs"]

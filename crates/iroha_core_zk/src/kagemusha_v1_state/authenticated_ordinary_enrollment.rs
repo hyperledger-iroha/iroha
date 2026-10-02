@@ -27,6 +27,8 @@ pub use cash_owner::KagemushaNativeOrdinaryCashOwnerV1;
 pub(crate) use cash_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
 };
 
 #[path = "authenticated_ordinary_logical_journal.rs"]
@@ -382,6 +384,23 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
 
     /// Independently verify the real paired zero-State against the complete selected preview.
     /// The ordinary platform Guard and actual logical checkpoint remain mandatory afterward.
+    /// Copy the sole complete public original from this exact zero selection after both real
+    /// State proofs and their whole histories verify. This data grants no Anchor or money.
+    pub(crate) fn lineage_public_state_original(
+        &self,
+        proof: &KagemushaPairedProofV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.verify_state_proof(proof)?;
+        let inputs =
+            bootstrap_state_public_inputs(self.proof_release.artifacts, &self.preview, proof)?;
+        let original = crate::kagemusha_v1_recursion::KagemushaOrdinaryLineageStateOriginalV1::from_bootstrap_public_inputs(&inputs, proof)
+            .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
+            .canonical_bytes()
+            .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+        self.recheck_original_selection()?;
+        Ok(original)
+    }
+
     pub(crate) fn verify_state_proof(
         &self,
         proof: &KagemushaPairedProofV1,

@@ -274,6 +274,8 @@ RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS: tuple[str, ...] = (
     '- "crates/irohad/src/runtime_provider_broker.rs"',
     '- "crates/irohad/src/runtime_provider_broker/**"',
     '- "crates/irohad/src/sorafs_pop_runtime.rs"',
+    "name: Validate SoraFS CLI source integrity and runtime-provider broker deployment",
+    "run: bash ci/check_sorafs_cli_release.sh",
 )
 POP_BROKER_OPERATION_IDS: dict[str, int] = {
     "OPERATION_POP_RUNTIME_OPEN_V1": 60,
@@ -2204,6 +2206,23 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
         '  echo "[sorafs-release] source integrity checks complete; diagnostics were not run"\n'
         "  exit 0\nfi\n"
     )
+    broker_phase = (
+        'echo "[sorafs-release] runtime-provider broker deployment contracts"\n'
+        "python3 scripts/tests/check_runtime_provider_broker_install_test.py\n\n"
+    )
+    broker_command = "python3 scripts/tests/check_runtime_provider_broker_install_test.py\n"
+    if (
+        source.count(broker_phase) != 1
+        or source.count(broker_command) != 1
+        or source.count(diagnostics_return) != 1
+        or (source.count(diagnostics_return) == 1
+            and source.count(broker_phase) == 1
+            and source.index(broker_phase) > source.index(diagnostics_return))
+    ):
+        errors.append(
+            f"{relative}: mandatory broker deployment contracts must run exactly once "
+            "before the diagnostics-only return"
+        )
     diagnostics_arguments = (
         'diagnostics=false\ncase "$#" in\n'
         '  0) ;;\n  1)\n'
@@ -2213,6 +2232,58 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
         '  *)\n    echo "usage: $0 [--diagnostics]" >&2\n'
         "    exit 2\n    ;;\nesac\n"
     )
+    # The mandatory phase has one top-level owner. Remove only the known
+    # argument parser and lock-reader definition, then authenticate its complete
+    # active prefix so an outer conditional, function, early return or swallowed
+    # failure cannot leave a plausible command marker without executing it.
+    lock_check_definition = (
+        "verify_cargo_lock_unchanged() {\n"
+        '  if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]; then\n'
+        '    echo "workspace Cargo.lock changed during the release gate" >&2\n'
+        "    exit 1\n  fi\n}\n\n"
+    )
+    broker_prefix = source.split(broker_phase, 1)[0]
+    broker_prefix = broker_prefix.replace(diagnostics_arguments, "", 1)
+    broker_prefix = broker_prefix.replace(lock_check_definition, "", 1)
+    lock_definition = re.compile(r"(?ms)^cargo_lock_sha256\(\) \{\n.*?^PY\n\}\n")
+    broker_prefix, lock_definitions = lock_definition.subn("", broker_prefix)
+    active_prefix = tuple(
+        line for line in broker_prefix.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    expected_prefix = (
+        "set -euo pipefail",
+        'repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
+        'cd "${repo_root}"',
+        'echo "[sorafs-release] build-efficiency provenance check"',
+        SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+        'echo "[sorafs-release] reviewed shipping feature graph check"',
+        "python3 -I -S scripts/check_release_feature_graph.py",
+        'export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"',
+        'export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"',
+        'export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/.target}"',
+        'expected_cargo_lock_sha256="$(cargo_lock_sha256)"',
+    )
+    mandatory_lock_recheck = "verify_cargo_lock_unchanged\n\n"
+    broker_boundary = (
+        broker_phase
+        + mandatory_lock_recheck
+        + diagnostics_return
+    )
+    if (
+        lock_definitions != 1
+        or source.count(lock_check_definition) != 1
+        or len(re.findall(r"(?m)^verify_cargo_lock_unchanged$", source)) != 2
+        or active_prefix != expected_prefix
+        or source.count(broker_boundary) != 1
+        or source.count(
+            '\nverify_cargo_lock_unchanged\necho "[sorafs-release] release verification complete"\n'
+        ) != 1
+    ):
+        errors.append(
+            f"{relative}: mandatory broker deployment contracts must have the "
+            "unconditional fail-closed source-integrity prefix and lock recheck in both modes"
+        )
     if (
         source.count(diagnostics_arguments) != 1
         or source.index(diagnostics_arguments) > provenance_command.start()

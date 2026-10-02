@@ -137,6 +137,54 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     assert_eq!(plan.masks, 84_422_208);
+    let cut_payload = aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(
+        layout.common_lde_size(),
+    )
+    .unwrap();
+    assert_eq!(
+        core::mem::size_of::<aggregate::retained_commitment::RetainedMerkleCutV1>(),
+        80
+    );
+    assert_eq!(cut_payload, 12_582_912 + 80);
+    assert_eq!(plan.retained_cuts, 2 * cut_payload);
+    assert_eq!(plan.retained_cuts, 25_165_984);
+    let total_width = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.base_width + group.aux_width)
+        .sum::<usize>();
+    assert_eq!(
+        plan.selected_replay,
+        aggregate::retained_commitment::selected_payload_bound_v1(
+            layout.common_lde_size(),
+            total_width,
+            AGGREGATE_PARAMETERS_V1.query_count,
+        )
+        .unwrap()
+    );
+    assert!(plan.selected_replay < plan.joined_streams);
+    for stage in [
+        plan.masks + plan.retained_cuts + plan.joined_streams + plan.replay_batch,
+        plan.masks + plan.retained_cuts + plan.quotient_stage + plan.replay_batch,
+        plan.masks
+            + plan.retained_cuts
+            + plan.selected_replay
+            + plan.replay_batch
+            + plan.composition
+            + plan.fri_stage
+            + plan.openings,
+    ] {
+        assert!(stage <= plan.maximum_live_buffers);
+    }
+    let mut overflowing = plan;
+    overflowing.retained_cuts = usize::MAX;
+    for registration in &layout.registered_segments {
+        assert!(
+            overflowing
+                .quotient_cache_plan_v1(&layout, *registration)
+                .is_err()
+        );
+    }
     assert_eq!(
         plan.joined_streams,
         layout.common_lde_size()
@@ -619,9 +667,13 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         buffers.remaining_source_and_runtime_envelope,
         9_186_908_736 - core::mem::size_of::<E>()
     );
-    assert_eq!(cached_columns, 3_436);
-    assert_eq!(quotient_native_iffts, 7_404);
-    assert_eq!(quotient_native_butterflies, 27_951_608_320);
+    // Both level-four cut owners remain live in every registration. The exact
+    // 25,165,984-byte charge removes six cached columns from each of five
+    // arithmetic registrations and from RFC: 36 fewer retained columns.
+    // Each has four stripes, so this adds 36 * (4 - 1) = 108 native IFFTs.
+    assert_eq!(cached_columns, 3_400);
+    assert_eq!(quotient_native_iffts, 7_512);
+    assert_eq!(quotient_native_butterflies, 28_489_527_808);
     assert_eq!(quotient_forward_butterflies, 138_440_286_208);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_069_183_488);

@@ -93,6 +93,7 @@ fn set_source_delta_limit(
             },
         )
         .expect("exact atomic fixture fits its bounded sizing corpus");
+    assert_eq!(measured.deltas, transcript.deltas.len());
     let mut parameters = world.parameters.block();
     let baseline = parameters.get().block().fastpq_source();
     let mut intrinsic = baseline.intrinsic;
@@ -116,6 +117,19 @@ fn set_source_delta_limit(
         FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
     )
     .expect("explicit finite source profile fits the signed genesis and component corpus");
+    assert!(u32::try_from(measured.transcripts).unwrap() <= profile.intrinsic.max_transcripts);
+    assert!(
+        u64::try_from(measured.input_transcript_bytes).unwrap()
+            <= profile.intrinsic.max_input_transcript_bytes
+    );
+    assert!(
+        u64::try_from(measured.max_statement_bytes).unwrap()
+            <= profile.intrinsic.max_statement_bytes
+    );
+    assert!(
+        u64::try_from(measured.total_statement_bytes).unwrap()
+            <= profile.intrinsic.max_total_statement_bytes
+    );
     parameters
         .get_mut()
         .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));

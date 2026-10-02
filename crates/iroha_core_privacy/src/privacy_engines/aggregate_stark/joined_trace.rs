@@ -193,6 +193,93 @@ impl JoinedTraceCommitmentPlanV1 {
         commitment.finish()
     }
 
+    /// Collect an original clearing cut, or replay only original queried subtrees.
+    /// Coefficients, complete LDE evaluation and canonical-field checking remain
+    /// identical to the full replay. Only digest absorption/reduction is selected.
+    pub(crate) fn commit_retained_replayed_v1(
+        &self,
+        domains: AggregateStarkDomainsV1,
+        opening_indices: &[usize],
+        cut: Option<&retained_commitment::RetainedMerkleCutV1>,
+        mut coefficients: impl FnMut(usize, usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
+        mut evaluate: impl FnMut(
+            &[ZeroizingFieldColumnV1],
+            u8,
+            u8,
+        ) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1>,
+    ) -> Result<
+        (
+            StreamingRowCommitmentResultV1,
+            Option<retained_commitment::RetainedMerkleCutV1>,
+        ),
+        AggregateStarkErrorV1,
+    > {
+        domains.validate()?;
+        let rows = checked_domain_size_v1(self.commitment_lde_log2)?;
+        let (leaf, node) = self.roles_v1(domains);
+        let mut builder = match cut {
+            Some(cut) => RetainedReplayBuilderV1::Selected(
+                retained_commitment::SelectedRowCommitmentV1::new_v1(
+                    domains.digest_context,
+                    leaf,
+                    node,
+                    JOINED_TRACE_GROUP_MARKER_V1,
+                    rows,
+                    self.width,
+                    opening_indices,
+                    cut,
+                )?,
+            ),
+            None => {
+                if !opening_indices.is_empty() {
+                    return Err(AggregateStarkErrorV1::InvalidLayout);
+                }
+                RetainedReplayBuilderV1::Initial(StreamingRowCommitmentV1::new(
+                    domains.digest_context,
+                    leaf,
+                    node,
+                    JOINED_TRACE_GROUP_MARKER_V1,
+                    rows,
+                    self.width,
+                    &[],
+                )?)
+            }
+        };
+        for (group, (native, range)) in self.groups.iter().enumerate() {
+            for start in (0..range.len()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+                let end = (start + MASKED_TRACE_LDE_COLUMN_BATCH_V1).min(range.len());
+                let mut batch = Vec::new();
+                batch
+                    .try_reserve_exact(end - start)
+                    .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+                for column in start..end {
+                    batch.push(ZeroizingFieldColumnV1(coefficients(group, column)?));
+                }
+                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2)?;
+                if evaluations.len() != batch.len()
+                    || evaluations.iter().any(|column| column.len() != rows)
+                {
+                    return Err(AggregateStarkErrorV1::InvalidLayout);
+                }
+                match &mut builder {
+                    RetainedReplayBuilderV1::Initial(builder) => {
+                        builder.absorb_columns_v1(&evaluations)?
+                    }
+                    RetainedReplayBuilderV1::Selected(builder) => {
+                        builder.absorb_columns_v1(&evaluations)?
+                    }
+                }
+            }
+        }
+        match builder {
+            RetainedReplayBuilderV1::Initial(builder) => {
+                let (result, cut) = builder.finish_retaining_cut_v1()?;
+                Ok((result, Some(cut)))
+            }
+            RetainedReplayBuilderV1::Selected(builder) => Ok((builder.finish_v1()?, None)),
+        }
+    }
+
     /// Hash an opened common-domain row without copying its logical slices.
     /// No current/next row or relation is omitted by this primitive.
     #[cfg(test)]
@@ -248,6 +335,12 @@ impl JoinedTraceCommitmentPlanV1 {
             .map_err(map_digest_stream_error_v1)
             .map_err(map_transparent_error_v1)
     }
+}
+
+/// The selected builder owns private output rows until original-root agreement.
+enum RetainedReplayBuilderV1<'a> {
+    Initial(StreamingRowCommitmentV1),
+    Selected(retained_commitment::SelectedRowCommitmentV1<'a>),
 }
 
 #[cfg(test)]

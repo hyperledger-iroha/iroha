@@ -165,3 +165,74 @@ fn native_cash_preparation_subject_keeps_real_secure_index_and_full_state_sha() 
         changed.digest().unwrap()
     );
 }
+
+#[test]
+fn native_cash_intent_frame_binds_complete_captured_financial_control_identity() {
+    let control = CapturedFinancialControlIdentity {
+        original_sha256: [57; 32],
+        lower_ms: 100,
+        upper_ms: 200,
+    };
+    let control_frame = norito::encode_canonical(&control).unwrap();
+    let header = norito::core::Header::read(control_frame.as_slice()).unwrap();
+    assert_eq!(
+        header.schema,
+        norito::core::schema_hash_for_name(
+            "iroha_core::zk::kagemusha_v1_state::CapturedOrdinaryFinancialControlIdentityV1"
+        )
+    );
+    let restored: CapturedFinancialControlIdentity = norito::decode_canonical_with_limits(
+        &control_frame,
+        norito::canonical_decode_limits(control_frame.len()),
+    )
+    .unwrap();
+    assert_eq!(restored, control);
+    let intent = |financial_control| Record::Intent {
+        operation: [58; 32],
+        nonce: [59; 32],
+        predecessor: [60; 32],
+        financial_control,
+        preparation_clock: KagemushaOrdinaryCashClockContextV1 {
+            version: 1,
+            request_nonce: [61; 32],
+            signed_observations_original_digest: [62; 32],
+            lower_at_ms: 100,
+            upper_at_ms: 200,
+        },
+        reservation: KagemushaOutboxReservationV1 {
+            reservation_id: [63; 32],
+            operation_kind: KagemushaOperationKindV1::SendSplit,
+            // A codec field value only; no Native reservation is constructed or admitted.
+            reserved_outbox_bytes: 4096,
+            issued_at_ms: 100,
+            expires_at_ms: 300,
+        },
+    };
+    let original_record = intent(control);
+    let original = encode(&original_record).unwrap();
+    assert_eq!(decode(&original).unwrap(), original_record);
+    for field in 0..3 {
+        let mut changed = control;
+        match field {
+            0 => changed.original_sha256[0] ^= 1,
+            1 => changed.lower_ms += 1,
+            _ => changed.upper_ms -= 1,
+        }
+        let changed_record = intent(changed);
+        let changed_original = encode(&changed_record).unwrap();
+        assert_ne!(
+            changed_original, original,
+            "financial control field {field}"
+        );
+        assert_eq!(decode(&changed_original).unwrap(), changed_record);
+    }
+    for length in 0..original.len() {
+        assert!(decode(&original[..length]).is_err());
+    }
+    let mut suffix = original.clone();
+    suffix.push(0);
+    assert!(decode(&suffix).is_err());
+    let mut foreign_schema = original;
+    foreign_schema[6] ^= 1;
+    assert!(decode(&foreign_schema).is_err());
+}

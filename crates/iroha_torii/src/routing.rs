@@ -9332,7 +9332,11 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
 fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
     let native = rec.evidence.decode_native().map_err(|error| match error {
-        iroha_sumeragi::message::CodecError::Resource(_) => history_capacity_error(),
+        iroha_sumeragi::message::CodecError::Resource(_) => Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ),
+        ),
         other => conversion_error(format!("stored native evidence is not canonical: {other}")),
     })?;
     let class = match native {

@@ -59,7 +59,117 @@ pub(crate) struct PrivateJournal {
     pub(crate) failure: Cell<Option<TestPersistenceFailure>>,
 }
 
+/// Bounded positional data replay under one already authenticated complete owned prefix.
+/// Its fields and constructor are private; it grants byte custody, never financial authority.
+pub(crate) struct PrivateJournalReplayCursor {
+    prefix: super::KagemushaRecoveryJournalPrefixV1,
+    file_identity: (u64, u64),
+    offset: u64,
+    sequence: u64,
+    previous: DigestV1,
+    failed: bool,
+}
+
+impl PrivateJournalReplayCursor {
+    /// Actual frame boundary consumed by this cursor, absent before the first complete frame.
+    pub(crate) fn consumed_prefix(&self) -> Option<super::KagemushaRecoveryJournalPrefixV1> {
+        (self.sequence != 0 && !self.failed).then_some(super::KagemushaRecoveryJournalPrefixV1 {
+            sequence: self.sequence,
+            head: self.previous,
+            byte_len: self.offset,
+        })
+    }
+}
+
 impl PrivateJournal {
+    /// Start bounded semantic replay only after every physical frame has been authenticated.
+    /// Positional reads preserve the actual append cursor and retain one payload at a time.
+    pub(crate) fn replay_cursor(&self) -> Result<PrivateJournalReplayCursor, PrivateJournalError> {
+        let prefix = self.recovery_prefix()?;
+        Ok(PrivateJournalReplayCursor {
+            prefix,
+            file_identity: self.file_identity,
+            offset: 0,
+            sequence: 0,
+            previous: [0; 32],
+            failed: false,
+        })
+    }
+
+    /// Read one exact frame under the cursor's same inode and complete immutable prefix.
+    /// Valid appended suffixes retire this cursor; replacement/corruption still poisons storage.
+    /// No caller callback or semantic decoder can change this cursor's framing or own its bytes.
+    pub(crate) fn read_cursor_next(
+        &self,
+        cursor: &mut PrivateJournalReplayCursor,
+    ) -> Result<Option<(u64, Zeroizing<Vec<u8>>)>, PrivateJournalError> {
+        if cursor.failed || cursor.file_identity != self.file_identity {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        let result = (|| {
+            if self.recovery_prefix()? != cursor.prefix {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            if cursor.sequence == cursor.prefix.sequence {
+                if cursor.offset != cursor.prefix.byte_len || cursor.previous != cursor.prefix.head
+                {
+                    return Err(PrivateJournalError::Corrupt);
+                }
+                return Ok(None);
+            }
+            if cursor.sequence > cursor.prefix.sequence
+                || cursor.prefix.byte_len.saturating_sub(cursor.offset) < FRAME_HEADER_BYTES as u64
+            {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let mut header = [0; FRAME_HEADER_BYTES];
+            self.journal
+                .read_exact_at(&mut header, cursor.offset)
+                .map_err(storage_error)?;
+            let parsed =
+                validate_frame_header(&header, self.format, cursor.sequence, cursor.previous)?;
+            let payload_offset = cursor
+                .offset
+                .checked_add(FRAME_HEADER_BYTES as u64)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            if parsed.length > cursor.prefix.byte_len.saturating_sub(payload_offset) {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let length =
+                usize::try_from(parsed.length).map_err(|_| PrivateJournalError::Corrupt)?;
+            let mut payload = Zeroizing::new(Vec::new());
+            payload
+                .try_reserve_exact(length)
+                .map_err(|_| PrivateJournalError::StorageUnavailable)?;
+            payload.resize(length, 0);
+            self.journal
+                .read_exact_at(&mut payload, payload_offset)
+                .map_err(storage_error)?;
+            let actual = self.frame_hash(&header[..56], &payload);
+            if actual != parsed.hash || self.recovery_prefix()? != cursor.prefix {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let sequence = cursor.sequence;
+            cursor.offset = payload_offset
+                .checked_add(parsed.length)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            cursor.sequence = cursor
+                .sequence
+                .checked_add(1)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            cursor.previous = actual;
+            Ok(Some((sequence, payload)))
+        })();
+        if result.is_err() {
+            cursor.failed = true;
+            if self.recovery_prefix().ok() == Some(cursor.prefix) {
+                self.poisoned.set(true);
+                self.verified_recovery_prefix.set(None);
+            }
+        }
+        result
+    }
+
     pub(crate) fn create_new(
         path: &Path,
         format: PrivateJournalFormat,
@@ -950,6 +1060,88 @@ mod tests {
         );
         assert_eq!(journal.recovery_prefix().unwrap(), extended);
         assert!(journal.contains_recovery_prefix(selected).unwrap());
+    }
+
+    #[test]
+    fn positional_replay_requires_complete_physical_replay_and_preserves_append_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("positional");
+        let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        journal.append(b"initialize").unwrap();
+        let first = journal.recovery_prefix().unwrap();
+        journal.append(b"selected operation").unwrap();
+        let complete = journal.recovery_prefix().unwrap();
+        drop(journal);
+        let mut journal = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert!(journal.replay_cursor().is_err());
+        assert_eq!(journal.replay_next().unwrap().unwrap().1, b"initialize");
+        assert!(journal.replay_cursor().is_err());
+        assert_eq!(
+            journal.replay_next().unwrap().unwrap().1,
+            b"selected operation"
+        );
+        assert!(journal.replay_next().unwrap().is_none());
+        let mut cursor = journal.replay_cursor().unwrap();
+        assert!(cursor.consumed_prefix().is_none());
+        let (sequence, raw) = journal.read_cursor_next(&mut cursor).unwrap().unwrap();
+        assert_eq!(sequence, 0);
+        assert_eq!(raw.as_slice(), b"initialize");
+        assert_eq!(cursor.consumed_prefix(), Some(first));
+        assert!(journal.contains_recovery_prefix(first).unwrap());
+        let (sequence, raw) = journal.read_cursor_next(&mut cursor).unwrap().unwrap();
+        assert_eq!(sequence, 1);
+        assert_eq!(raw.as_slice(), b"selected operation");
+        assert_eq!(cursor.consumed_prefix(), Some(complete));
+        assert!(journal.read_cursor_next(&mut cursor).unwrap().is_none());
+        assert_eq!(journal.recovery_prefix().unwrap(), complete);
+        journal.append(b"valid suffix after replay").unwrap();
+        assert_eq!(
+            journal.recovery_prefix().unwrap().sequence,
+            complete.sequence + 1
+        );
+    }
+
+    #[test]
+    fn positional_replay_refuses_other_inode_and_retires_after_valid_append() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap();
+        let mut first = PrivateJournal::create_new(&path.join("first"), FORMAT).unwrap();
+        let mut other = PrivateJournal::create_new(&path.join("other"), FORMAT).unwrap();
+        first.append(b"same original").unwrap();
+        other.append(b"same original").unwrap();
+        assert_eq!(
+            first.recovery_prefix().unwrap(),
+            other.recovery_prefix().unwrap()
+        );
+        let mut cursor = first.replay_cursor().unwrap();
+        assert!(other.read_cursor_next(&mut cursor).is_err());
+        assert_eq!(
+            first
+                .read_cursor_next(&mut cursor)
+                .unwrap()
+                .unwrap()
+                .1
+                .as_slice(),
+            b"same original"
+        );
+        let mut retired = first.replay_cursor().unwrap();
+        first.append(b"genuine appended suffix").unwrap();
+        assert!(first.read_cursor_next(&mut retired).is_err());
+        assert!(first.read_cursor_next(&mut retired).is_err());
+        assert!(retired.consumed_prefix().is_none());
+        assert!(first.recovery_prefix().is_ok());
+        let mut fresh = first.replay_cursor().unwrap();
+        assert!(first.read_cursor_next(&mut fresh).unwrap().is_some());
+        assert_eq!(
+            first
+                .read_cursor_next(&mut fresh)
+                .unwrap()
+                .unwrap()
+                .1
+                .as_slice(),
+            b"genuine appended suffix"
+        );
+        assert!(first.read_cursor_next(&mut fresh).unwrap().is_none());
     }
 
     #[test]

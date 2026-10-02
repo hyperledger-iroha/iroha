@@ -90,6 +90,9 @@ pub struct KagemushaNativeOrdinaryRuntimeStartupV1 {
     preparation: Disposition,
     platform: Disposition,
     bootstrap: Disposition,
+    cash: Disposition,
+    cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    cash_receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
     profile: KagemushaRecursiveVerifierProfileV1,
     resolver: Arc<dyn KagemushaArtifactByteResolverV1>,
@@ -116,6 +119,9 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         preparation: Disposition,
         platform: Disposition,
         bootstrap: Disposition,
+        cash: Disposition,
+        cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        cash_receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
         profile: KagemushaRecursiveVerifierProfileV1,
         capacity: KagemushaDurableCapacityV1,
         integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
@@ -128,6 +134,11 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
             .load_recursive_verifier(profile.clone())
             .map_err(|_| Error::Rejected)?;
         capacity.validate().map_err(|_| Error::Rejected)?;
+        if cash_integrity_leases.len() > 1024 || cash_receivers.len() > 1024
+            || (cash == Disposition::Fresh
+                && (!cash_integrity_leases.is_empty() || !cash_receivers.is_empty())) {
+            return Err(Error::Rejected);
+        }
         let resolver: Arc<dyn KagemushaArtifactByteResolverV1> =
             Arc::new(ArtifactResolver(inventory.clone()));
         let selected = inventory.clock_originals().map_err(|_| Error::Rejected)?;
@@ -157,6 +168,9 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
             preparation,
             platform,
             bootstrap,
+            cash,
+            cash_integrity_leases,
+            cash_receivers,
             verifier,
             profile,
             resolver,
@@ -255,6 +269,14 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
                                 source.with_native_bootstrap_proving_material(
                                     self.profile.clone(),
                                     self.resolver.clone(),
+                                )
+                            })
+                            .and_then(|source| {
+                                source.with_native_cash_recovery_material(
+                                    Arc::clone(&self.inventory),
+                                    self.cash,
+                                    self.cash_integrity_leases.clone(),
+                                    self.cash_receivers.clone(),
                                 )
                             })
                             .map_err(|_| RegistryError::Rejected)?,
@@ -404,6 +426,53 @@ impl BoundNativeAccountSessionV1 {
                     .recheck()
                     .map_err(|_| Error::Rejected)?;
                 self.startup.require_current()
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+    pub(super) fn sign_lineage(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,
+    ) -> Result<[u8; 64], Error> {
+        let invocation = self.startup.registry.invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self.startup.registry.dispatch(invocation, |owner| {
+            self.startup.require_current()?;
+            let signature = owner.custody.as_ref().ok_or(Error::Rejected)?
+                .sign_retained_lineage_request(&self.startup.inventory, original)
+                .map_err(|_| Error::Rejected)?;
+            self.startup.require_current()?;
+            Ok(signature)
+        }).map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current { return Err(Error::Rejected); }
+        retained.value
+    }
+    pub(super) fn sign_current_control(
+        &self,
+        financial: &iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        control:&mut iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryCurrentFinancialControlOwnerV1,
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let fields = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .sign_retained_current_fi_control(&self.startup.inventory, control, financial)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(fields)
             })
             .map_err(|_| Error::Rejected)?;
         if !retained.session_is_current {

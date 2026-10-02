@@ -116,6 +116,14 @@ pub(super) mod production_prover;
 #[path = "ordinary_guard_generation.rs"]
 pub(crate) mod ordinary_guard_generation;
 
+#[cfg(all(
+    unix,
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+#[path = "ordinary_cash_terminal_generation.rs"]
+pub(super) mod ordinary_cash_terminal_generation;
+
 /// Return an owned Eq parameter set backed by one process-local canonical derivation.
 ///
 /// `ParamsIPA::new(k)` is deterministic but expensive at `k = 16`. Artifact stages require the
@@ -7360,39 +7368,40 @@ fn preflight_kagemusha_terminal_authorization_key_configuration_v1()
     Ok(())
 }
 
-/// Qualify the fixed PlatformCredential claim-consumer auxiliaries before the real-proof fixture
-/// builds either parity's Base graph or calls raw Halo2 key generation.
+/// Inventory the complete PlatformCredential graph before proving its typed SHA claim.
+///
+/// The private shape builder uses the same protocol parser, hash queue, history fold, deferred
+/// audit and reciprocal MSM as real construction. Its fixed-shape parser bytes are not proofs:
+/// no synthesis, key generation, proof verification or authority-bearing value is returned.
+/// Passing this configure-only check still requires exact synthesized key sizing and genuine
+/// proof verification. The actual producer checks its full Base parameters against this result.
+#[cfg(all(
+    any(test, feature = "kagemusha-real-proof-harness"),
+    feature = "zk-halo2-ipa"
+))]
+#[path = "platform_credential_geometry.rs"]
+mod platform_credential_geometry;
+
 #[cfg(all(
     any(test, feature = "kagemusha-real-proof-harness"),
     feature = "zk-halo2-ipa"
 ))]
 pub(super) fn preflight_kagemusha_platform_credential_key_configuration_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
+    relation: &super::KagemushaPlatformCredentialRelationWitnessV1,
     provider_policy_root: [u8; 32],
-) -> Result<(), KagemushaArtifactGenerationErrorV1> {
-    let params = super::KagemushaProviderRootCircuitParamsV1::new(
-        auxiliary_only_k16_base_params_v1(),
+) -> Result<(BaseCircuitParams, BaseCircuitParams), KagemushaArtifactGenerationErrorV1> {
+    platform_credential_geometry::preflight_complete_graph_v1(
+        eq_params,
+        ep_params,
+        eq_hash,
+        ep_hash,
+        relation,
         provider_policy_root,
     )
-    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    preflight_helper_key_configuration_v1::<
-        EqAffine,
-        super::KagemushaPlatformCredentialRelationCircuitV1<Fp>,
-    >(
-        KAGEMUSHA_HALO2_K_V1 as usize,
-        params.clone(),
-        KagemushaPastaParityV1::Eq,
-        "PlatformCredential claim-consumer auxiliary geometry",
-    )?;
-    preflight_helper_key_configuration_v1::<
-        EpAffine,
-        super::KagemushaPlatformCredentialRelationCircuitV1<Fq>,
-    >(
-        KAGEMUSHA_HALO2_K_V1 as usize,
-        params,
-        KagemushaPastaParityV1::Ep,
-        "PlatformCredential claim-consumer auxiliary geometry",
-    )?;
-    Ok(())
 }
 
 #[cfg(feature = "zk-halo2-ipa")]

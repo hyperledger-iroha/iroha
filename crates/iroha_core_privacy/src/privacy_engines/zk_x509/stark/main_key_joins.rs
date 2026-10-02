@@ -15,7 +15,8 @@ mod main_digest_joins;
 use main_digest_joins::{DIGEST_BLOCKS_V1, DIGEST_OPENINGS_V1, MainDigestJoinPlanV1};
 pub(super) const BLOCKS_V1: usize = KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1;
 pub(in super::super) const OPENINGS_V1: usize = KEY_OPENINGS_V1 + DIGEST_OPENINGS_V1;
-const _: () = assert!(OPENINGS_V1 == MAIN_KEY_OPENING_COUNT_V1);
+// The current first-release profile fixes eleven key and twenty digest DEEP values.
+const _: () = assert!(OPENINGS_V1 == 31);
 const DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:main-key-byte-joins:v1";
 const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+activity1:12-key-blocks647-equalities+5-sha-digest-blocks40-u32-equalities:root-power2,8,32:original-masks:31-extra-deep-openings:no-private-byte-divisions";
 

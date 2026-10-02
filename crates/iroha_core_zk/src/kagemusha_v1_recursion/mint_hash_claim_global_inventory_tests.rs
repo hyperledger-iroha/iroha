@@ -4,7 +4,10 @@ use ff::{Field as _, WithSmallOrderMulGroup};
 use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
 use halo2_proofs::{
     dev::{MockProver, VerifyFailure},
-    halo2curves::pasta::{Fp, Fq},
+    halo2curves::{
+        group::{Curve as _, prime::PrimeCurveAffine as _},
+        pasta::{Fp, Fq},
+    },
 };
 use snark_verifier::loader::halo2::EccInstructions as _;
 
@@ -227,7 +230,7 @@ where
 {
     let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(KAGEMUSHA_RECURSION_IPA_K_V1 as usize)
-        .use_lookup_bits(CLAIM_RLC_RADIX_BITS)
+        .use_lookup_bits(CARRIER_RLC_RADIX_BITS)
         .use_instance_columns(3);
     // Synthesis-only cases use explicit points; proof-reader cases supply the
     // actual commitments computed from these carriers and authenticated IPA parameters.
@@ -238,9 +241,17 @@ where
         ep_proof_ep_carrier: (EpAffine::generator() * Fq::from(2)).to_affine(),
     });
     let eq_challenge =
-        native_claim_carrier_challenge_v1::<Fp>(commitments, KagemushaPastaParityV1::Eq);
+        crate::kagemusha_v1_recursion::carrier_binding::native_carrier_challenge_v1::<Fp>(
+            commitments,
+            KagemushaPastaParityV1::Eq,
+            CLAIM_CARRIER_BINDING_LAYOUT_V1,
+        );
     let ep_challenge =
-        native_claim_carrier_challenge_v1::<Fq>(commitments, KagemushaPastaParityV1::Ep);
+        crate::kagemusha_v1_recursion::carrier_binding::native_carrier_challenge_v1::<Fq>(
+            commitments,
+            KagemushaPastaParityV1::Ep,
+            CLAIM_CARRIER_BINDING_LAYOUT_V1,
+        );
     let mut semantic_values = (0..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1)
         .map(|value| C::ScalarExt::from(value as u64 + 1))
         .collect::<Vec<_>>();
@@ -354,7 +365,7 @@ where
         let mut value = native_claim_carrier_rlc_v1(values, challenge)
             .expect("independent native RLC evaluation");
         if corrupt_rlc_evaluation && offset == public_instance::EQ_CARRIER_AT_EQ_CHALLENGE {
-            value = (value + 1) % CLAIM_CARRIER_RLC_MODULUS_V1;
+            value = (value + 1) % CARRIER_RLC_MODULUS_V1;
         }
         let assigned = builder.main(0).load_witness(C::ScalarExt::from_u128(value));
         builder.assigned_instances[0][offset] = assigned;

@@ -5,6 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
+from zk_source_tokens import rust_tokens
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 uses the existing test dependency
@@ -264,19 +268,42 @@ def test_stream_token_runtime_has_separate_trust_and_one_body_recovery_owners() 
     assert "continues_active_state" in lifecycle
     assert "HistoricalFinalityV1::Custody(signing_anchor)" in lifecycle
     core_finality = read("crates/iroha_core/src/query/signer_finality.rs")
-    assert "verify_signer_finality_v1(view, height, hash)" in finality
+    for marker in (
+        "struct VerifiedFinalityTargetsV1<'view, V: StateReadOnly>",
+        "targets.len() > 6",
+        "target.height == 0 || target.block_hash == [0; 32]",
+        "targets.sort_unstable_by_key(|target| target.height)",
+        "let through = if first == 1 { last.max(2) } else { last }",
+        "CertifiedChain::new(view)",
+        "for block in reader.walk(first, through)",
+        "block.height() > 1 && block.verification() != QcVerification::Verified",
+        "target.block_hash != *block.block_hash().as_ref()",
+        "if matched != targets.len()",
+        "batched_finality_requires_certified_genesis_successor",
+        "batched_finality_bounds_targets_before_walking",
+        "vec![valid, conflicting]",
+        "vec![conflicting, valid]",
+    ):
+        assert marker in finality
     certified_chain = read("crates/iroha_core/src/sumeragi/certified_chain.rs")
     assert "CertifiedChain::new(view)" in core_finality and ".certified(height)" in core_finality
     assert "block.block_hash().as_ref() != block_hash" in core_finality
-    assert "canonical_block_by_height(index)" in certified_chain
+    certified_tokens = "".join(rust_tokens(certified_chain))
+    for contract in (
+        "read_durable_pinned_block(view.kura(), index, *expected)",
+        ".native_frame_read(height, expected)",
+        "iroha_data_model::block::decode_framed_signed_block(&bytes)",
+        "block.hash() != expected || block.header().height().get() != height",
+    ):
+        assert "".join(rust_tokens(contract)) in certified_tokens
     assert "index.get() <= view.block_hashes().len()" in certified_chain
     for contract in (
         "iroha_sumeragi::crypto::Verifier::new(",
         "&authority.crypto", "&authority.committee", ".verify_qc(verifier, &commit_qc)",
         "commit_qc.height != height", "commit_qc.block_hash != committed.core_hash",
-        "verify_availability(&committed, config, &authority.crypto)?",
+        "verify_availability(&committed, config, &authority.crypto, availability, admit_scratch,)?",
     ):
-        assert contract in certified_chain
+        assert "".join(rust_tokens(contract)) in certified_tokens
     assert "v2_finality_artifact(" not in core_finality
     assert "view.block_hashes()" in finality
     assert "stream_token_binding_digest_v1(&binding)" in pins
@@ -341,3 +368,23 @@ def test_future_dated_seaglass_reports_are_not_readiness_evidence() -> None:
         "Passing that structural guard does not verify referenced artefacts",
     ):
         assert marker in normalized_status
+
+
+@pytest.mark.parametrize("old,new", (
+    (".native_frame_read(height, expected)", ".native_frame_read(height, other_hash)"),
+    ("iroha_data_model::block::decode_framed_signed_block(&bytes)", "decode_local_cached_body(&bytes)"),
+    ("block.hash() != expected || block.header().height().get() != height", "block.hash() != expected"),
+    (".verify_qc(verifier, &commit_qc)", ".skip_qc(verifier, &commit_qc)"),
+    ("verify_availability(\n            &committed,", "skip_availability(\n            &committed,"),
+))
+def test_stream_token_finality_requires_actual_durable_certificate_and_signed_availability(monkeypatch, old, new):
+    """A source guard must refuse dropped native frame, exact height, QC or availability checks."""
+    original_read = read
+    path = "crates/iroha_core/src/sumeragi/certified_chain.rs"
+    source = original_read(path)
+    assert old in source
+    changed = source.replace(old, new, 1)
+    monkeypatch.setattr(__import__(__name__, fromlist=["read"]), "read",
+                        lambda relative: changed if relative == path else original_read(relative))
+    with pytest.raises(AssertionError):
+        test_stream_token_runtime_has_separate_trust_and_one_body_recovery_owners()

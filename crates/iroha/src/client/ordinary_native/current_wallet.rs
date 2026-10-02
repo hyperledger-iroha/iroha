@@ -49,13 +49,13 @@ impl KagemushaNativeCurrentWalletReadV1 {
                     .request_without_canonical_account_auth(HttpMethod::POST, url)
                     .header(
                         HEADER_WITNESS,
-                        canonical_request_witness_header_value(&witness)?,
+                        &canonical_request_witness_header_value(&witness)?,
                     )
                     .header("Content-Type", "application/x-norito")
                     .header("Accept", "application/x-norito")
                     .header(
                         "X-Iroha-Finality-Challenge",
-                        hex::encode(request.request_nonce),
+                        &hex::encode(request.request_nonce),
                     )
                     .body(body.clone())
                     .timeout(budget)
@@ -182,5 +182,88 @@ mod tests {
         changed = fixture.wallet_original([7; 32]);
         changed.world_snapshot.entries[0].value_hash = Hash::new(b"changed row");
         assert!(require_same_cut(&original, &changed).is_err());
+    }
+}
+
+#[cfg(test)]
+mod header_custody_tests {
+    use super::*;
+    use crate::participant_enrollment_request::NativeCustodyFixture;
+    use std::sync::Arc;
+
+    #[test]
+    fn current_wallet_builder_retains_exact_borrowed_witness_challenge_and_body() {
+        let fixture = NativeCustodyFixture::new();
+        let request = fixture.wallet_original([7; 32]).request;
+        let body = request.canonical_wire().unwrap();
+        let url = Url::parse("https://installed-node.example")
+            .unwrap()
+            .join(ROUTE)
+            .unwrap();
+        let mut witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: fixture.wallet().clone(),
+            timestamp_ms: 42,
+            nonce: "current-wallet-header-custody".to_owned(),
+            canonical_request_hash: canonical_network_request_hash(
+                &request.network_id,
+                &HttpMethod::POST,
+                &url,
+                &body,
+            )
+            .unwrap(),
+            signatures: Vec::new(),
+        };
+        witness.signatures.push(
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: fixture.key().public_key().clone(),
+                signature: Signature::try_new(
+                    fixture.key().private_key(),
+                    &canonical_request_witness_message(&witness).unwrap(),
+                )
+                .unwrap(),
+            },
+        );
+        let mut witness_header = canonical_request_witness_header_value(&witness).unwrap();
+        let mut challenge_header = hex::encode(request.request_nonce);
+        let expected_witness = witness_header.clone();
+        let expected_challenge = challenge_header.clone();
+        let expected_body = body.clone();
+        let expected_url = url.clone();
+        let transport = DefaultHttpTransport::mock(Arc::new(move |captured| {
+            assert_eq!(captured.method, HttpMethod::POST);
+            assert_eq!(captured.url, expected_url);
+            assert_eq!(captured.body, expected_body);
+            assert_eq!(captured.max_response_bytes, MAX);
+            assert_eq!(
+                captured.headers,
+                vec![
+                    (
+                        HEADER_WITNESS.to_ascii_lowercase(),
+                        expected_witness.clone()
+                    ),
+                    ("content-type".to_owned(), "application/x-norito".to_owned()),
+                    ("accept".to_owned(), "application/x-norito".to_owned()),
+                    (
+                        "x-iroha-finality-challenge".to_owned(),
+                        expected_challenge.clone()
+                    ),
+                ]
+            );
+            Ok(crate::http::Response::new(Vec::new()))
+        }));
+        let built = DefaultRequestBuilder::new(HttpMethod::POST, url)
+            .with_transport(transport)
+            .header(HEADER_WITNESS, &witness_header)
+            .header("Content-Type", "application/x-norito")
+            .header("Accept", "application/x-norito")
+            .header("X-Iroha-Finality-Challenge", &challenge_header)
+            .body(body)
+            .max_response_bytes(MAX)
+            .build()
+            .unwrap();
+        witness_header.clear();
+        challenge_header.clear();
+        assert_eq!(built.send_blocking().unwrap().status(), StatusCode::OK);
     }
 }

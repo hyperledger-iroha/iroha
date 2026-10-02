@@ -21,7 +21,7 @@ const INVENTORY_SEMANTIC_COUNT: usize = INVENTORY_EP_SOURCE_COUNT + 1;
 #[derive(Clone, Debug)]
 pub(super) struct GlobalInventoryConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    carrier_rlc: KagemushaClaimCarrierRlcConfigV1,
+    carrier_rlc: KagemushaCarrierRlcConfigV1,
     native_poseidon: PastaNativePoseidonConfigV1,
 }
 
@@ -33,7 +33,7 @@ pub(super) struct GlobalInventoryConfigV1<F: halo2_base::utils::ScalarField> {
 #[derive(Clone)]
 pub(super) struct KagemushaClaimGlobalInventoryCircuitV1<F: KagemushaPoseidonFieldV1> {
     builder: BaseCircuitBuilder<F>,
-    carrier_rlc: KagemushaClaimCarrierRlcMachineV1<F>,
+    carrier_rlc: ClaimCarrierRlcMachineV1<F>,
     native_poseidon_jobs: PastaNativePoseidonJobsV1<F>,
 }
 
@@ -61,7 +61,7 @@ impl<F: KagemushaPoseidonFieldV1 + ff::WithSmallOrderMulGroup<3>> Circuit<F>
         let mut base = BaseConfig::configure(meta, params);
         base.set_usable_rows(usable_rows);
         GlobalInventoryConfigV1 {
-            carrier_rlc: KagemushaClaimCarrierRlcConfigV1::configure_with_base(meta, Some(&base)),
+            carrier_rlc: KagemushaCarrierRlcConfigV1::configure_with_base(meta, Some(&base)),
             native_poseidon: PastaNativePoseidonConfigV1::configure::<F>(
                 meta,
                 KAGEMUSHA_MINT_HASH_CLAIM_NATIVE_POSEIDON_LANES_V1,

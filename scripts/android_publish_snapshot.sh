@@ -67,8 +67,7 @@ TASKS=(
 )
 ARGS=(-p "$ROOT_DIR/kotlin" --no-daemon --no-configuration-cache
   --project-cache-dir "$ARTIFACT_DIR/publish-project-cache"
-  "-PirohaSdkVersion=$VERSION" "-PirohaSdkRepoDir=$REPO_DIR"
-  -PprivacyProductionEnabled=true)
+  "-PirohaSdkVersion=$VERSION" "-PirohaSdkRepoDir=$REPO_DIR")
 REMOTE_TASKS=(:core-jvm:publishReleasePublicationToRemoteSdkRepository
   :client-android:publishReleasePublicationToRemoteSdkRepository
   :kagemusha-wallet-android:publishReleasePublicationToRemoteSdkRepository)

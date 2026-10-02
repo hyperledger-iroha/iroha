@@ -17,7 +17,7 @@
   "compilerSourceRevisionAuthenticated": false,
   "buildAndOutputVerificationPassed": true,
   "generatedOwnerManifestSha256": "b834cc0d047c686ccc2f402ea87bb281cc32e9dd9735b855363e82fd5e3f4661",
-  "nativeAdmission": "PASS; fresh native CLI admitted this artifact and matched the compiler manifest in two independent renders.",
-  "currentNativeCandidateTests": "PASS for the current scoped-artifact candidate; 59/59 IVM contract-artifact tests, including exact compiler-byte reproduction, canonical admission, and stale-ABI rejection. Final-source release qualification remains open.",
-  "currentNativeSdkRouteTests": "PASS for the current scoped-artifact candidate; 5/5 Rust SDK tests cover signed bounded exact-network/dataspace artifact and manifest readback, hostile response rejection, and the maximum artifact envelope. Final-source SDK matrix remains open."
+  "nativeAdmission": "Historical parent 6abcea9fb3 evidence: PASS; fresh native CLI admitted this artifact and matched the compiler manifest in two independent renders.",
+  "currentNativeCandidateTests": "Pending on merged source. Historical parent 6abcea9fb3 evidence: PASS for the scoped-artifact candidate; 59/59 IVM contract-artifact tests, including exact compiler-byte reproduction, canonical admission, and stale-ABI rejection. Final-source release qualification remains open.",
+  "currentNativeSdkRouteTests": "Pending on merged source. Historical parent 6abcea9fb3 evidence: PASS for the scoped-artifact candidate; 5/5 Rust SDK tests cover signed bounded exact-network/dataspace artifact and manifest readback, hostile response rejection, and the maximum artifact envelope. Final-source SDK matrix remains open."
 }

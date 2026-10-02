@@ -9,7 +9,7 @@ ABI25_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
 # Preserve the tracked root source authority and the independently sealed
-# external snapshot of that same reviewed graph used by the native build.
+# external evidence snapshot of the same reviewed graph used by the stock root build.
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 WORKSPACE_CARGO_LOCKFILE="${ROOT_DIR}/Cargo.lock"
@@ -121,10 +121,11 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 export CARGO_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"
-export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"
+export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"
 export IROHA_JS_NATIVE_DIR="${NATIVE_BUILD_ROOT}/native"
 export NORITO_SKIP_BINDINGS_SYNC=1
-export RUSTC_BOOTSTRAP=1
+# This JS-owned child uses the stock toolchain even when another SDK uses a wrapper.
+unset RUSTC_BOOTSTRAP
 
 cd "${ROOT_DIR}/javascript/iroha_js"
 NODE_VERSION="$("${NODE_BIN}" --version)"

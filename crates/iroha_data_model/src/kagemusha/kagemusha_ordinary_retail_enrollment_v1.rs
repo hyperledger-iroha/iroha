@@ -473,12 +473,18 @@ impl KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
         {
             return Err("ordinary retail possession original challenge differs".into());
         }
-        let account_key = expected
-            .owner
-            .account_id
-            .controller()
-            .single_signatory()
-            .ok_or("ordinary retail account is not single Ed25519")?;
+        let controller = expected.owner.account_id.controller();
+        let account_key = match controller {
+            crate::account::AccountController::Single(key) => key,
+            crate::account::AccountController::Multisig(policy)
+                if policy.threshold() == 1
+                    && policy.members().len() == 1
+                    && policy.members()[0].weight() == 1 =>
+            {
+                policy.members()[0].public_key()
+            }
+            _ => return Err("ordinary retail account requires exactly one Ed25519 signer".into()),
+        };
         if account_key.algorithm() != Algorithm::Ed25519 {
             return Err("ordinary retail wallet key algorithm differs".into());
         }

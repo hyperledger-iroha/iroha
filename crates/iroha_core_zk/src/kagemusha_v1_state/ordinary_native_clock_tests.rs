@@ -508,3 +508,198 @@ fn nonzero_request_latency_cannot_admit_a_future_not_before_and_does_not_extend_
             .is_ok()
     );
 }
+
+#[test]
+fn retained_clock_originals_survive_fresh_observation_and_cold_recovery_without_time_grant() {
+    let fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let mut owner =
+        KagemushaOrdinaryNativeClockOwnerV1::create(&root, fixture.selected.clone()).unwrap();
+    let read = owner.reserve_current_read().unwrap();
+    let first_originals =
+        fixture.replies(read.nonce(), [1_000_000, 1_000_002, 1_000_004, 1_000_006]);
+    owner
+        .admit_current_read(read, first_originals.clone())
+        .unwrap();
+    let context = owner.current_cash_clock_context().unwrap();
+    let loan = owner.retained_cash_clock_originals(&context).unwrap();
+    let first_frame = loan.canonical_original().to_vec();
+    let decoded =
+        KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(&first_frame).unwrap();
+    assert_eq!(decoded.signed_observations(), &first_originals);
+    let read = owner.reserve_current_read().unwrap();
+    let nonce = read.nonce();
+    owner
+        .admit_current_read(
+            read,
+            fixture.replies(nonce, [1_010_000, 1_010_002, 1_010_004, 1_010_006]),
+        )
+        .unwrap();
+    loan.recheck(&owner).unwrap();
+    assert_eq!(
+        owner
+            .retained_cash_clock_originals(&context)
+            .unwrap()
+            .canonical_original(),
+        first_frame
+    );
+    drop(owner);
+    let mut recovered =
+        KagemushaOrdinaryNativeClockOwnerV1::open_existing(&root, fixture.selected.clone())
+            .unwrap();
+    assert!(
+        loan.recheck(&recovered).is_err(),
+        "process-bound loan does not cross owner identity"
+    );
+    assert!(recovered.current_native_time_interval().is_err());
+    assert_eq!(
+        recovered
+            .retained_cash_clock_originals(&context)
+            .unwrap()
+            .canonical_original(),
+        first_frame
+    );
+    assert!(
+        recovered.current_native_time_interval().is_err(),
+        "borrowing old originals cannot restore elapsed-clock freshness"
+    );
+}
+
+#[test]
+fn retained_clock_original_context_requires_exact_nonce_digest_and_finite_bounds() {
+    let fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let mut owner = KagemushaOrdinaryNativeClockOwnerV1::create(
+        &temporary.path().canonicalize().unwrap(),
+        fixture.selected.clone(),
+    )
+    .unwrap();
+    let read = owner.reserve_current_read().unwrap();
+    let nonce = read.nonce();
+    owner
+        .admit_current_read(
+            read,
+            fixture.replies(nonce, [1_000_000, 1_000_002, 1_000_004, 1_000_006]),
+        )
+        .unwrap();
+    let context = owner.current_cash_clock_context().unwrap();
+    for field in 0..4 {
+        let mut changed = context.clone();
+        match field {
+            0 => changed.request_nonce[0] ^= 1,
+            1 => changed.signed_observations_original_digest[0] ^= 1,
+            2 => changed.lower_at_ms = 1_000_002,
+            _ => changed.upper_at_ms = 1_120_003,
+        }
+        assert!(owner.retained_cash_clock_originals(&changed).is_err());
+    }
+}
+
+#[test]
+fn signed_clock_public_frame_authenticates_complete_originals_and_refuses_codec_substitution() {
+    let fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let mut owner = KagemushaOrdinaryNativeClockOwnerV1::create(
+        &temporary.path().canonicalize().unwrap(),
+        fixture.selected.clone(),
+    )
+    .unwrap();
+    let read = owner.reserve_current_read().unwrap();
+    let nonce = read.nonce();
+    owner
+        .admit_current_read(
+            read,
+            fixture.replies(nonce, [1_000_000, 1_000_002, 1_000_004, 1_000_006]),
+        )
+        .unwrap();
+    let context = owner.current_cash_clock_context().unwrap();
+    let loan = owner.retained_cash_clock_originals(&context).unwrap();
+    let raw = loan.canonical_original();
+    let original = KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(raw).unwrap();
+    canonical_clock_frame(
+        &original,
+        "iroha_core_zk::ordinary_native_clock::KagemushaOrdinaryNativeSignedClockOriginalV1",
+    );
+    let verified =
+        verify_ordinary_native_signed_clock_original_v1(&fixture.selected, &owner.verifier, raw)
+            .unwrap();
+    verified.recheck_cash_context(&context).unwrap();
+    assert_eq!(verified.original(), raw);
+    let mut trailing = raw.to_vec();
+    trailing.push(0);
+    assert!(KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(&trailing).is_err());
+    let mut changed = original.clone();
+    fixture.resign_changed(&mut changed.originals[0], 0, |body| {
+        body.build_fingerprint = Hash::new(b"foreign node executable")
+    });
+    assert!(
+        verify_ordinary_native_signed_clock_original_v1(
+            &fixture.selected,
+            &owner.verifier,
+            &changed.canonical_original().unwrap()
+        )
+        .is_err()
+    );
+    let mut changed = original;
+    changed.certified_context_id = Hash::new(b"foreign certified context");
+    assert!(
+        verify_ordinary_native_signed_clock_original_v1(
+            &fixture.selected,
+            &owner.verifier,
+            &changed.canonical_original().unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn historical_clock_original_lookup_retains_earlier_authenticated_finality_decision() {
+    let mut fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let mut owner =
+        KagemushaOrdinaryNativeClockOwnerV1::create(&root, fixture.selected.clone()).unwrap();
+    let read = owner.reserve_current_read().unwrap();
+    let nonce = read.nonce();
+    owner
+        .admit_current_read(
+            read,
+            fixture.replies(nonce, [1_000_000, 1_000_002, 1_000_004, 1_000_006]),
+        )
+        .unwrap();
+    let context = owner.current_cash_clock_context().unwrap();
+    let raw = owner
+        .retained_cash_clock_originals(&context)
+        .unwrap()
+        .canonical_original()
+        .to_vec();
+    fixture.native.certify_with_world_root(
+        fixture
+            .native
+            .block_with_submitted_work(fixture.native.next_header()),
+        Hash::new(b"second explicit synthetic World"),
+    );
+    let successor = norito::encode_canonical(fixture.native.latest()).unwrap();
+    owner.advance_certified_prefix(&successor).unwrap();
+    assert!(owner.current_native_time_interval().is_err());
+    assert_eq!(
+        owner
+            .retained_cash_clock_originals(&context)
+            .unwrap()
+            .canonical_original(),
+        raw
+    );
+    drop(owner);
+    let mut recovered =
+        KagemushaOrdinaryNativeClockOwnerV1::open_existing(&root, fixture.selected.clone())
+            .unwrap();
+    assert_eq!(
+        recovered
+            .retained_cash_clock_originals(&context)
+            .unwrap()
+            .canonical_original(),
+        raw
+    );
+    assert!(recovered.current_native_time_interval().is_err());
+}

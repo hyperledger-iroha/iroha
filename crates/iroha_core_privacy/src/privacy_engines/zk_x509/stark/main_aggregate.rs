@@ -828,6 +828,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Base,
             &opening_indices,
+            self.trace_groups
+                .first()
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
+                .base_root,
             self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;
@@ -835,6 +839,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Aux,
             &opening_indices,
+            self.trace_groups
+                .first()
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
+                .aux_root,
             self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;
@@ -3948,11 +3956,7 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     Ok(ZkX509MainCaBindingV1 {
         public,
         sha_terminals: envelope.claims.sha.credential_call_terminals_v1(),
-        root_spki_consumer_products: envelope
-            .claims
-            .rfc5280
-            .governed_trust_anchor_products_v1()
-            .consumer_products,
+        root_spki_consumer_products: envelope.claims.rfc5280.governed_trust_anchor_products_v1(),
     })
 }
 

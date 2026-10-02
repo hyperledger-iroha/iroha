@@ -55,6 +55,8 @@ pub(crate) use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
     KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
     verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
@@ -62,22 +64,42 @@ pub(crate) use authenticated_core_owner::{
 #[cfg(unix)]
 mod ordinary_native_clock;
 #[cfg(unix)]
+pub(crate) use ordinary_native_clock::KagemushaRetainedOrdinaryNativeClockOriginalsV1;
+#[cfg(unix)]
 pub use ordinary_native_clock::{
+    KAGEMUSHA_ORDINARY_NATIVE_CLOCK_SELECTION_ORIGINAL_MAX_BYTES_V1,
+    KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1,
     KagemushaOrdinaryNativeClockErrorV1, KagemushaOrdinaryNativeClockNodeV1,
     KagemushaOrdinaryNativeClockOriginalsV1, KagemushaOrdinaryNativeClockOwnerV1,
     KagemushaOrdinaryNativeClockPolicyV1, KagemushaOrdinaryNativeClockReadV1,
-    KagemushaOrdinaryNativeTimeIntervalV1,
+    KagemushaOrdinaryNativeClockSelectionOriginalV1, KagemushaOrdinaryNativeSignedClockOriginalV1,
+    KagemushaOrdinaryNativeTimeIntervalV1, KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+    verify_ordinary_native_signed_clock_original_v1,
 };
 #[cfg(unix)]
 mod ordinary_app_identity;
 #[cfg(unix)]
 pub use ordinary_app_identity::{
+    KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
+
+    KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryGovernedPolicyOriginalsV1,
-    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryIssuerPreparationAttemptV1,
-    KagemushaOrdinaryPreparationCarrierV1, KagemushaOrdinaryPreparationReservationV1,
-    KagemushaOrdinaryPreparationSelectedOriginalsV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
-    KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
+    KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    KagemushaOrdinaryGovernedPolicyOriginalsV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaOrdinaryIssuerPreparationAttemptV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+    KagemushaOrdinaryRetailEnrollmentAttemptV1, KagemushaPendingAppIdentityV1,
+    KagemushaPreparedOrdinaryAppEnrollmentV1,
+};
+#[cfg(unix)]
+pub(crate) use ordinary_app_identity::{
+    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
+    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 mod candidate_lifecycle;
 mod commitments;

@@ -139,9 +139,12 @@ fn retained_request_refuses_changed_body_bounds_and_expired_actual_proof() {
             .is_err()
         );
     }
-    let mut admitted = verified(ParticipantEnrollmentOperationV1::Prepare, b"original");
-    // Expire the same actual synthetic challenged proof without sleeping or minting a marker.
-    admitted.wallet.challenge.deadline = Instant::now();
+    let admitted = verified(ParticipantEnrollmentOperationV1::Prepare, b"original");
+    // Exhaust the retained process-bound suspend-inclusive Native clock budget
+    // without altering the original proof or adding a caller-supplied clock.
+    std::thread::sleep(READ_BUDGET);
+    assert!(admitted.wallet.challenge.started.elapsed().unwrap() >= READ_BUDGET);
+    assert!(admitted.wallet.challenge.remaining_native_budget().is_err());
     assert!(
         RetainedParticipantEnrollmentRequestV1::retain(admitted, b"original".to_vec()).is_err()
     );

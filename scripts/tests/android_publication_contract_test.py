@@ -118,7 +118,7 @@ for module in ['core-jvm','client-android','kagemusha-wallet-android']:
         self.assertEqual(len(calls), 1)
         for module in ["core-jvm", "client-android", "kagemusha-wallet-android"]:
             self.assertIn(f":{module}:publishReleasePublicationToMobileSdkRepository", calls[0]["args"])
-        self.assertIn("-PprivacyProductionEnabled=true", calls[0]["args"])
+        self.assertFalse(any(value.startswith("-PprivacyProductionEnabled") for value in calls[0]["args"]))
         self.assertEqual(
             [argument for argument in calls[0]["args"] if argument.startswith(":")],
             [f":{module}:publishReleasePublicationToMobileSdkRepository"

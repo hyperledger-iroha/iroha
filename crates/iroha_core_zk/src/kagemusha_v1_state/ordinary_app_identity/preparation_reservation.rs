@@ -17,6 +17,32 @@ use std::{
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
+#[path = "preparation_reservation/integrity_refresh.rs"]
+mod integrity_refresh;
+pub use integrity_refresh::KagemushaOrdinaryIntegrityRefreshOwnerV1;
+
+#[path = "preparation_reservation/current_control.rs"]
+mod current_control;
+pub(crate) use current_control::KagemushaCapturedOrdinaryFinancialControlDecisionV1;
+pub use current_control::{
+    KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaOrdinaryCurrentFinancialControlOwnerV1,
+};
+
+#[path = "preparation_reservation/lineage_cas.rs"]
+mod lineage_cas;
+pub use lineage_cas::{
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
+};
+pub use lineage_cas::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1;
+pub(crate) use lineage_cas::{
+    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
+};
+
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "ordinary-preparation.norito.wal",
     magic: b"KGMCINI1",
@@ -29,6 +55,7 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
 /// No C/JNI field, account cache or offered preparation can construct this selection.
 pub struct KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     owner: KagemushaRetailEnrollmentOwnerV1,
+    world_schema_hash: Option<iroha_crypto::Hash>,
     governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
     core_authorization_key_reference: [u8; 32],
@@ -101,6 +128,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         original_core_public_key.validate().map_err(|_| Rejected)?;
         let this = Self {
             owner,
+            world_schema_hash: None,
             governed,
             issuer,
             core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
@@ -127,6 +155,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         original_core_public_key: &KagemushaDevicePublicKeyV1,
         clock: Arc<Mutex<KagemushaOrdinaryNativeClockOwnerV1>>,
         installed_clock_selection_digest: [u8; 32],
+        installed_world_schema_hash: iroha_crypto::Hash,
     ) -> Result<Self> {
         original_core_public_key.validate().map_err(|_| Rejected)?;
         {
@@ -141,6 +170,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         }
         let this = Self {
             owner,
+            world_schema_hash: Some(installed_world_schema_hash),
             governed,
             issuer,
             core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
@@ -291,6 +321,22 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         Ok(challenge)
     }
 
+    pub(super) fn preparation_expiry_at(&self, issued: u64) -> Result<u64> {
+        self.trusted_time_ms()?;
+        let enabled = self
+            .governed
+            .release()
+            .enabled_profile(self.governed.profile_id())
+            .ok_or(Rejected)?;
+        issued
+            .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
+            .map(|end| {
+                end.min(self.issuer.expires_at_ms)
+                    .min(enabled.hardware_profile.expires_at_ms)
+            })
+            .ok_or(Rejected)
+    }
+
     // Bind the complete retained pre-key original to these independently selected originals.
     // This grants neither clock installation nor financial/issuer custody. A current interval
     // alone cannot lend authority from another valid account, release, profile or issuer.
@@ -339,22 +385,6 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             )
             .map_err(|_| Rejected)?;
         Ok(())
-    }
-
-    pub(super) fn preparation_expiry_at(&self, issued: u64) -> Result<u64> {
-        self.trusted_time_ms()?;
-        let enabled = self
-            .governed
-            .release()
-            .enabled_profile(self.governed.profile_id())
-            .ok_or(Rejected)?;
-        issued
-            .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
-            .map(|end| {
-                end.min(self.issuer.expires_at_ms)
-                    .min(enabled.hardware_profile.expires_at_ms)
-            })
-            .ok_or(Rejected)
     }
 
     fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
@@ -809,8 +839,16 @@ impl KagemushaOrdinaryPreparationReservationV1 {
     fn recheck_originals(&self) -> Result<()> {
         let interval = self.interval()?;
         let now = interval.lower_ms();
-        if now < self.original_issued_at_ms
-            || *self.secret == [0; 32]
+        if now < self.original_issued_at_ms {
+            return Err(Custody);
+        }
+        self.recheck_retained_original_custody()
+    }
+    // Exact immutable proving custody only; no current clock or live validity is borrowed here.
+    // Every live recheck above separately samples/validates the genuine current interval.
+    fn recheck_retained_original_custody(&self) -> Result<()> {
+        self.selected.governed.recheck()?;
+        if *self.secret == [0; 32]
             || self.carrier.financial_authority_commitment
                 != crate::kagemusha_v1_recursion::device_authority_commitment_v1(*self.secret)
         {
@@ -1109,6 +1147,85 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
             })
             .map_err(|_| Custody)
     }
+    /// Private immutable proving custody from the completed original Native reservation.
+    /// No current clock or FI grant is lent; all live effects must separately call `recheck`.
+    pub(crate) fn recheck_historical_proof_custody(&self) -> Result<()> {
+        self.reservation.recheck_retained_original_custody()?;
+        self.reservation.require_enrollment(&self.enrollment)?;
+        let completion = decode(self.reservation.completed.as_ref().ok_or(Custody)?)?;
+        let Record::EnrollmentComplete {
+            certificate_original,
+            possession_original,
+            authenticated_at_ms,
+            captured_at_ms,
+        } = &completion
+        else {
+            return Err(Custody);
+        };
+        if *certificate_original
+            != self
+                .enrollment
+                .certificate()
+                .canonical_bytes()
+                .map_err(|_| Rejected)?
+            || *possession_original != self.enrollment.possession().original()
+            || *authenticated_at_ms != self.enrollment.authenticated_at_ms()
+            || *captured_at_ms < *authenticated_at_ms
+            || *captured_at_ms >= self.reservation.original_expires_at_ms
+        {
+            return Err(Custody);
+        }
+        // Original admission is retained in the exact completed WAL, never supplied by a caller.
+        self.enrollment
+            .recheck_at_trusted_time(*authenticated_at_ms)
+            .map_err(|_| Custody)?;
+        self.enrollment
+            .possession()
+            .recheck_at_trusted_time(*authenticated_at_ms)
+            .map_err(|_| Custody)?;
+        if let Some(lease) = &self.integrity_lease {
+            self.enrollment
+                .recheck_with_integrity_lease(lease, lease.authenticated_at_ms())
+                .map_err(|_| Custody)?;
+        }
+        self.reservation.recheck_retained_original_custody()
+    }
+    /// Private commitment projection from the genuine held financial seed; no seed is exposed.
+    pub(crate) fn historical_financial_authority_commitment(&self) -> Result<[u8; 32]> {
+        self.recheck_historical_proof_custody()?;
+        let commitment =
+            crate::kagemusha_v1_recursion::device_authority_commitment_v1(*self.reservation.secret);
+        if commitment
+            != self
+                .enrollment
+                .app_credential()
+                .subject()
+                .financial_authority_commitment
+        {
+            return Err(Rejected);
+        }
+        self.recheck_historical_proof_custody()?;
+        Ok(commitment)
+    }
+    /// Compare authenticated release identities without creating or lending another release.
+    pub(crate) fn recheck_historical_release(
+        &self,
+        release: &Arc<KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<()> {
+        self.recheck_historical_proof_custody()?;
+        let actual = self.reservation.selected.governed.release();
+        if actual.release_id() != release.release_id()
+            || actual.manifest_digest() != release.manifest_digest()
+            || actual.vk_set_digest() != release.vk_set_digest()
+            || actual.hardware_policy_digest() != release.hardware_policy_digest()
+            || actual.provider_policy_root() != release.provider_policy_root()
+            || actual.network_id() != release.network_id()
+        {
+            return Err(Rejected);
+        }
+        Ok(())
+    }
+
     /// Current same-owner Native interval; immutable historical C/E/FI times are not renewed.
     pub(crate) fn trusted_time_interval(&self) -> Result<KagemushaOrdinaryNativeTimeIntervalV1> {
         self.recheck()?;
@@ -1158,6 +1275,82 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
         self.reservation.recheck_originals()?;
         self.recheck()?;
         Ok(context)
+    }
+
+    /// Private complete signed clock originals from the authentic same-owner WAL, selected by
+    /// a context retained in actual Native cash custody. Historical originals lend no live clock.
+    pub(crate) fn retained_cash_clock_originals(
+        &self,
+        context: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<super::super::KagemushaRetainedOrdinaryNativeClockOriginalsV1> {
+        self.recheck_historical_proof_custody()?;
+        let selected = &self.reservation.selected;
+        let loan = match &selected.clock {
+            SelectedClock::Native(clock) => {
+                let clock = clock.lock().map_err(|_| Custody)?;
+                if Some(clock.installed_selection_digest().map_err(|_| Custody)?)
+                    != selected.clock_selection_digest
+                {
+                    return Err(Rejected);
+                }
+                clock
+                    .retained_cash_clock_originals(context)
+                    .map_err(|_| Custody)?
+            }
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+            SelectedClock::Fixture(_) => return Err(Rejected),
+        };
+        self.recheck_historical_proof_custody()?;
+        self.recheck_retained_cash_clock_originals(&loan)?;
+        Ok(loan)
+    }
+    /// Authenticate an already private loan against the same actual clock and financial custody.
+    /// This check never refreshes FI, Integrity or the sender's elapsed clock interval.
+    pub(crate) fn recheck_retained_cash_clock_originals(
+        &self,
+        loan: &super::super::KagemushaRetainedOrdinaryNativeClockOriginalsV1,
+    ) -> Result<()> {
+        self.recheck_historical_proof_custody()?;
+        match &self.reservation.selected.clock {
+            SelectedClock::Native(clock) => {
+                let clock = clock.lock().map_err(|_| Custody)?;
+                if Some(clock.installed_selection_digest().map_err(|_| Custody)?)
+                    != self.reservation.selected.clock_selection_digest
+                {
+                    return Err(Rejected);
+                }
+                loan.recheck(&clock).map_err(|_| Custody)?;
+            }
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+            SelectedClock::Fixture(_) => return Err(Rejected),
+        }
+        self.recheck_historical_proof_custody()
+    }
+
+    /// Authenticate the same private retained clock original under actual installed custody.
+    /// This lends signatures/finality for historical proving, without a current elapsed grant.
+    pub(crate) fn verified_retained_cash_clock_originals(
+        &self,
+        context: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<super::super::KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1> {
+        let loan = self.retained_cash_clock_originals(context)?;
+        self.recheck_retained_cash_clock_originals(&loan)?;
+        let verified = match &self.reservation.selected.clock {
+            SelectedClock::Native(clock) => {
+                let clock = clock.lock().map_err(|_| Custody)?;
+                if Some(clock.installed_selection_digest().map_err(|_| Custody)?)
+                    != self.reservation.selected.clock_selection_digest
+                {
+                    return Err(Rejected);
+                }
+                loan.verified_original(&clock).map_err(|_| Custody)?
+            }
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+            SelectedClock::Fixture(_) => return Err(Rejected),
+        };
+        self.recheck_retained_cash_clock_originals(&loan)?;
+        self.recheck_historical_proof_custody()?;
+        Ok(verified)
     }
 
     /// Lower bound for immutable event timestamps; current validity must check both endpoints.
@@ -1250,7 +1443,10 @@ mod tests {
         )
         .unwrap()
     }
-    fn selected(f: &Fixture, now: u64) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
+    pub(super) fn selected(
+        f: &Fixture,
+        now: u64,
+    ) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
         Arc::new(
             KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
                 f.selection.owner.clone(),
@@ -1365,7 +1561,7 @@ mod tests {
         );
     }
 
-    fn bind(mut f: Fixture, carrier: &KagemushaOrdinaryPreparationCarrierV1) -> Fixture {
+    pub(super) fn bind(mut f: Fixture, carrier: &KagemushaOrdinaryPreparationCarrierV1) -> Fixture {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let platform = SigningKey::from_bytes((&[7; 32]).into()).unwrap();

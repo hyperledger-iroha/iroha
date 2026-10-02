@@ -28,7 +28,7 @@ tests; 48 dependency-budget tests; Cargo feature hygiene, workspace target
 inventory and every configured feature-resolved dependency boundary. Separate
 source/fixture suites retain their own logs and counts. The normal graphs
 exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
-The current privacy registry has 2,264 names and 52 ignored qualification cases;
+The earlier retained ordinary privacy registry has 2,264 names and 52 ignored qualification cases;
 twelve rewritten private-terminal controls map to original field-mutation and
 forgery coverage. Recorded normal
 native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
@@ -40,22 +40,32 @@ tests pass. Focused issuer-key, corrected enrollment-floor and expired-preparati
 custody controls pass in the retained default-feature harness. The Guard-generation
 fixes compile and both extended regressions pass. MintFold and protocol-label
 controls and every remaining selected proof case pass in the retained harness: 33
-selected controls in total, with source changes limiting current qualification. The non-test real-proof harness now enables its equations' P-256
-gadget and bounded SHA relation; focused frontend validation remains open. Unused
+selected controls in total, with source changes limiting current qualification. The scoped non-test real-proof-harness frontend check passes with all 22 focused
+source pins unchanged. Broader source and merged-candidate qualification remain
+incomplete. Unused
 terminal reference helpers now compile only for tests, preserving their assertions
-and production private-product/local-AIR path; strict privacy lint remains open. Repaired privacy acceptance passes all 136 selected controls,
-including malformed-input rejection and current/retired profile pins. Concurrent
-workspace manifest and lock changes limit source qualification; the full ordinary
-suite remains open. Eight focused parameter tests pass with the scoped inline-policy
+and production private-product/local-AIR path; strict privacy lint remains open. The retained privacy acceptance run passes 136 selected controls. It selects
+none of the three failures in the earlier retained ordinary suite, which finishes
+with 2,209 passed, three failed and 52 original ignored tests. The fresh harness
+registers 2,356 tests, including 56 ignored cases. Its composite-child control
+passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
+remain resource-held. The original build capture remains unqualified because of
+two foreign CoreZK census races; the independently checked composite result does
+not qualify the full suite or merged candidate. Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
 compile with matching package/features; the freshness check fails with concurrent
 source changes and library rebuilds. The latest workspace check reaches Core test
-compile errors owned by the separate repair chat. That chat completed the merge;
-current test and private-proof integration still needs compiler repair.
+compile errors owned by the separate repair chat. The current shared merge has
+no unresolved entries but remains open. The separate repair chat owns its closure
+and remaining protocol integration repairs.
 New SDK native-custody and assembly tools have explicit feature/target owners;
-FASTPQ belongs to existing STARK activation. Current dependency costs and native
-proving-context coverage remain under review. Workspace validation, metadata freshness qualification
+FASTPQ belongs to existing STARK activation; the measured Native dependency
+graph fell from 418 to 403 packages. The shipping Native configuration pins
+reviewed proof-owner profiles and paths while retaining all 21 existing
+configurations. Native policy validation passes 128 guard tests, all 22 dependency
+configurations and the source budgets. Exact ceilings account for the committed deployment and optional
+proving costs; current native frontend qualification remains open. Workspace validation, metadata freshness qualification
 and observational warm timings remain pending. The
 [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
 describes the remaining controls. All evidence retains its scoped source and

@@ -369,7 +369,11 @@ mod tests {
         };
         VerifiedFinalityTargetsV1::verify(&view, &[valid; 6])
             .expect("six independently matched targets are allowed");
+        let mut conflicting = valid;
+        conflicting.block_hash[0] ^= 1;
         for invalid in [
+            vec![valid, conflicting],
+            vec![conflicting, valid],
             Vec::new(),
             vec![valid; 7],
             vec![FinalityFloorV1 { height: 0, ..valid }],

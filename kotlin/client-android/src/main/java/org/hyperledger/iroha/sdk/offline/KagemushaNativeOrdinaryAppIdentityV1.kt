@@ -7,7 +7,6 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppKeyHardwarePolicyV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidHardwareAppKeyEvidenceV1
-import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAndroidKeyAttestationArchiveV1
 
 /** Read-only exact native-retained platform evidence, before issuer admission. */
 class KagemushaNativeCollectedAppIdentityOriginalV1 internal constructor(
@@ -174,7 +173,7 @@ private class NativeOrdinaryAppIdentityStateV1(
             recheck()
             val point = evidence.publicKeySec1()
             same(evidence.attestedKeyId(), sha(point))
-            val raw = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(evidence.certificateChainDer()).transportBytes()
+            val raw = evidence.platformAttestationOriginal()
             if (stage(recovered) < 2) invoke(3, original[5])
             if (stage(recovered) < 3) {
                 val fence = invoke(4)
@@ -202,7 +201,9 @@ private class NativeOrdinaryAppIdentityStateV1(
         same(recovery[1], original[5])
         val raw = readOriginalRaw(recovery[3], number(recovery[4]))
         // Shape validation grants no certificate/root/revocation/app policy verdict.
-        KagemushaAndroidKeyAttestationArchiveV1.parseOriginal(raw)
+        checkNotNull(KagemushaPlatformAttestationOriginalV1.decodeCanonicalExact(raw).androidCertificateChainDer()) {
+            "Original platform container is not Android"
+        }
         recheck()
         return KagemushaNativeCollectedAppIdentityOriginalV1(recovery[1].toString(Charsets.UTF_8), recovery[2], raw)
     }

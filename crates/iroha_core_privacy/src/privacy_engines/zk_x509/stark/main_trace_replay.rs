@@ -337,6 +337,7 @@ impl MainTraceMaskGroupV1 {
 /// reconstructs the same polynomial and final commitment replay checks its root.
 pub(in super::super) struct MainTracePolynomialSetV1 {
     groups: [MainTraceMaskGroupV1; FULL_PROFILE_TRACE_GROUPS_V1],
+    cut: Option<aggregate::retained_commitment::RetainedMerkleCutV1>,
 }
 
 impl MainTracePolynomialSetV1 {
@@ -351,6 +352,7 @@ impl MainTracePolynomialSetV1 {
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
+            cut: None,
         };
         set.validate_v1(layout, kind)?;
         Ok(set)
@@ -442,18 +444,26 @@ impl MainTracePolynomialSetV1 {
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
         indices: &[usize],
+        expected_root: PrivacyOuterDigestV1,
         assembly_payload: usize,
         sources: &MainTraceReplaySourcesV1<'_, '_>,
     ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
         let plan = self.joined_plan_v1(layout, kind)?;
         let native_policy =
             MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?;
-        Self::commit_joined_batches_v1(
+        let cut = self
+            .cut
+            .as_ref()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        cut.check_root_v1(layout.common_lde_size(), expected_root)
+            .map_err(map_aggregate_error_v1)?;
+        let (result, retained) = Self::commit_joined_batches_v1(
             layout,
             kind,
             indices,
             assembly_payload,
             plan,
+            Some(cut),
             |group, columns| {
                 self.replay_columns_coefficients_v1(
                     layout,
@@ -464,10 +474,14 @@ impl MainTracePolynomialSetV1 {
                     native_policy,
                 )
             },
-        )
+        )?;
+        if retained.is_some() {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(result)
     }
 
-    /// First commitment consumes each native source once and retains only masks.
+    /// First commitment consumes each native source once and retains its masks and Merkle cut.
     /// All successful RNG draws, polynomials and commitment framing are unchanged.
     /// Errors are fail-fast: no later source/RNG activity and no partial root escapes.
     pub(super) fn sample_and_commit_joined_v1<R: TryRngCore>(
@@ -503,6 +517,7 @@ impl MainTracePolynomialSetV1 {
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
+            cut: None,
         };
         let plan = aggregate::joined_trace::JoinedTraceCommitmentPlanV1::new_v1(
             layout.parameters_v1(),
@@ -517,12 +532,13 @@ impl MainTracePolynomialSetV1 {
         .map_err(map_aggregate_error_v1)?;
         let policy = MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?
             .for_native_replay_v1()?;
-        let commitment = Self::commit_joined_batches_v1(
+        let (commitment, cut) = Self::commit_joined_batches_v1(
             layout,
             kind,
             &[],
             assembly_payload,
             plan,
+            None,
             |group, columns| {
                 let mut pending = Vec::new().into_iter();
                 let mut next_column = columns.start;
@@ -572,6 +588,7 @@ impl MainTracePolynomialSetV1 {
                     )
             },
         )?;
+        set.cut = Some(cut.ok_or(ZkX509StarkErrorV1::InternalInvariant)?);
         set.validate_v1(layout, kind)?;
         Ok((set, commitment))
     }
@@ -583,11 +600,18 @@ impl MainTracePolynomialSetV1 {
         indices: &[usize],
         assembly_payload: usize,
         plan: aggregate::joined_trace::JoinedTraceCommitmentPlanV1,
+        cut: Option<&aggregate::retained_commitment::RetainedMerkleCutV1>,
         mut batch: impl FnMut(
             usize,
             core::ops::Range<usize>,
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
-    ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
+    ) -> Result<
+        (
+            aggregate::StreamingRowCommitmentResultV1,
+            Option<aggregate::retained_commitment::RetainedMerkleCutV1>,
+        ),
+        ZkX509StarkErrorV1,
+    > {
         // The same joined plan creates the leaf framing for retained and replayed
         // columns. At most eight coefficient/evaluation columns coexist.
         let mut source_error = None;
@@ -595,9 +619,10 @@ impl MainTracePolynomialSetV1 {
         let mut pending_next = None;
         let mut evaluator =
             main_transform::MainTraceCosetEvaluatorV1::new_v1(layout, assembly_payload)?;
-        let result = plan.commit_replayed_v1(
+        let result = plan.commit_retained_replayed_v1(
             AGGREGATE_DOMAINS_V1,
             indices,
+            cut,
             |group, column| {
                 let replay = (|| {
                     if pending.len() == 0 {
@@ -613,7 +638,15 @@ impl MainTracePolynomialSetV1 {
                             MainTraceColumnKindV1::Aux => descriptor.aux_width,
                         };
                         let end = width.min(column + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
+                        #[cfg(test)]
+                        let source_timer = PhaseTimerV1::start_v1(if cut.is_some() {
+                            PhaseV1::QueryJoinedSourceBatch
+                        } else {
+                            PhaseV1::InitialJoinedSourceBatch
+                        });
                         pending = batch(group, column..end)?.into_iter();
+                        #[cfg(test)]
+                        source_timer.complete_v1();
                         pending_next = Some((group, column));
                     }
                     if pending_next != Some((group, column)) {
@@ -629,7 +662,18 @@ impl MainTracePolynomialSetV1 {
                         AggregateStarkErrorV1::InvalidLayout
                     })
             },
-            |columns, native, common| evaluator.evaluate_v1(columns, native, common),
+            |columns, native, common| {
+                #[cfg(test)]
+                let transform_timer = PhaseTimerV1::start_v1(if cut.is_some() {
+                    PhaseV1::QueryJoinedTransform
+                } else {
+                    PhaseV1::InitialJoinedTransform
+                });
+                let evaluated = evaluator.evaluate_v1(columns, native, common)?;
+                #[cfg(test)]
+                transform_timer.complete_v1();
+                Ok(evaluated)
+            },
         );
         tracing::debug!(target: "zk_x509::transform", actual = ?evaluator.receipt_v1(),
             "completed MAIN joined commitment transform dispatches");

@@ -20,9 +20,6 @@ export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-art
 mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ./gradlew :client-android:buildNativeLibs
 
-# Build the production-featured generated native artifacts
-./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
-
 # Publish to local Maven
 ./gradlew publishToMavenLocal
 ```

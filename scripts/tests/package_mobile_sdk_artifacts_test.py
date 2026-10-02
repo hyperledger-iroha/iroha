@@ -94,6 +94,11 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.output = self.temporary_root / "package-output/mobile-sdk"
         self.output.parent.mkdir()
         self._write_fixture()
+        graph_directory = self.temporary_root / "graph"
+        graph_directory.mkdir()
+        self.lockfile = graph_directory / "Cargo.lock"
+        self.lockfile.write_bytes(b'version = 4\n\n[[package]]\nname = "mobile-package-fixture"\nversion = "0.0.0"\n')
+        self.lockfile.chmod(0o400)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -166,17 +171,17 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         core_jar = gradle / f"core-jvm/libs/core-jvm-{VERSION}.jar"
         client = gradle / "client-android"
         aar = client / "outputs/aar/client-android-release.aar"
-        native_root = client / "generated/jniLibs/default"
+        native_root = client / "generated/jniLibs/production"
         provenance = (
             client
-            / "generated/nativeProvenance/default/iroha/native-build-provenance-v1.json"
+            / "generated/nativeProvenance/production/iroha/native-build-provenance-v1.json"
         )
         core_jar.parent.mkdir(parents=True)
         aar.parent.mkdir(parents=True)
         provenance.parent.mkdir(parents=True)
         core_jar.write_bytes(b"canonical core fixture\n")
         provenance_payload = json.dumps(
-            {"privacy_production_enabled": False},
+            {"privacy_production_enabled": True},
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
@@ -270,7 +275,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             [
                 "/bin/bash",
                 str(self.repository / "scripts/package_mobile_sdk_artifacts.sh"),
-                "--lockfile-path", str(self.repository / "Cargo.lock"),
+                "--lockfile-path", str(self.lockfile),
                 "--root",
                 str(self.repository),
                 *platform_arguments,
@@ -316,7 +321,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 parser.add_argument("--output", required=True)
                 parser.add_argument("--scratch-dir", required=True)
                 arguments = parser.parse_args()
-                if Path(arguments.lockfile_path) != Path(__file__).resolve().parents[1] / "Cargo.lock":
+                if Path(arguments.lockfile_path) != Path(__file__).resolve().parents[2] / "graph/Cargo.lock":
                     raise SystemExit("selected lock was not forwarded to the archive owner")
                 source = Path(arguments.xcframework)
                 output = Path(arguments.output)
@@ -396,6 +401,25 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             name: str(path.resolve(strict=True))
             for name, path in {**directories, **tools}.items()
         } | {"MOBILE_SDK_APPLE_ARTIFACT_DIR": str(artifact_root)}
+
+    def test_disabled_native_provenance_cannot_publish_a_package(self) -> None:
+        client = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android"
+        provenance = client / "generated/nativeProvenance/production/iroha/native-build-provenance-v1.json"
+        provenance.write_text('{"privacy_production_enabled":false}\n')
+        aar = client / "outputs/aar/client-android-release.aar"
+        with zipfile.ZipFile(aar) as archive:
+            originals = [(item, archive.read(item.filename)) for item in archive.infolist()]
+        with zipfile.ZipFile(aar, "w") as archive:
+            for item, original in originals:
+                archive.writestr(item, provenance.read_bytes() if item.filename ==
+                    "assets/iroha/native-build-provenance-v1.json" else original)
+        self._write_android_publications(VERSION)
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mandatory privacy support", result.stderr)
+        self.assertFalse(self.output.exists())
+        # Startup rejection retains the failed stage as diagnostic DATA only.
+        self.assertTrue(self._publish_stages())
 
     def _seed_previous_release(self) -> Path:
         self.output.mkdir(parents=True, exist_ok=True)
@@ -489,7 +513,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
 
     def test_local_integration_provenance_is_rejected_after_external_copy(self) -> None:
         client = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android"
-        provenance = client / "generated/nativeProvenance/default/iroha/native-build-provenance-v1.json"
+        provenance = client / "generated/nativeProvenance/production/iroha/native-build-provenance-v1.json"
         document = json.loads(provenance.read_text())
         document["artifact_scope"] = "local-integration"
         document["source_tree_dirty"] = False
@@ -539,7 +563,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_generated_native_original_mismatch_refuses_client_correlation(self):
-        native = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/default/arm64-v8a/libconnect_norito_bridge.so"
+        native = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/production/arm64-v8a/libconnect_norito_bridge.so"
         native.write_bytes(b"unrelated generated bridge")
         result = self._package()
         self.assertNotEqual(result.returncode, 0)
@@ -776,7 +800,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             [
                 "/bin/bash",
                 str(self.repository / "scripts/package_mobile_sdk_artifacts.sh"),
-                "--lockfile-path", str(self.repository / "Cargo.lock"),
+                "--lockfile-path", str(self.lockfile),
                 "--root",
                 str(self.repository),
                 "--android",

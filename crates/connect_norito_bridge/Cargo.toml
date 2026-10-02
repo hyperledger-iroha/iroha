@@ -29,7 +29,8 @@ required-features = ["dev-tools"]
 
 [features]
 dev-tools = []
-# Enable qualified proving and verification for the generic privacy bridge.
+# Fixed native-build provenance marker. Privacy support is compiled unconditionally;
+# this empty feature grants no proving, provider, hardware or release qualification.
 privacy-production-enabled = []
 # Build the JNI acceleration surface against IVM's real CUDA backend. This is
 # selected only by hardware-qualified release validation; the default bridge

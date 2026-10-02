@@ -1,6 +1,12 @@
 //! Called native C21 owner. App frames supply an original enrollment selector and bounded raw
 //! platform originals; they cannot create C, replace policy/issuer/time or approve themselves.
 //! Monetary methods stay unavailable until a separate genuine constrained financial owner exists.
+#[path = "ordinary_current_control.rs"]
+mod current_control;
+pub use current_control::{
+    KagemushaOrdinaryNativeCurrentControlRequestV1, KagemushaOrdinaryNativeCurrentControlResponseV1,
+    invoke_kagemusha_native_ordinary_current_control_v1,
+};
 use super::{
     KagemushaCoreCoordinatorBackendErrorV1 as Error, KagemushaCoreCoordinatorBackendV1,
     KagemushaCoreCoordinatorMethodV1 as Method, install_kagemusha_core_coordinator_backend_v1,
@@ -16,6 +22,7 @@ use iroha_core_zk::kagemusha_v1_recursion::{
 };
 use iroha_core_zk::kagemusha_v1_state::{
     KagemushaDurableCapacityV1, KagemushaNativeOrdinaryBootstrapOwnerV1 as BootstrapOwner,
+    KagemushaNativeOrdinaryCashOwnerV1 as CashOwner,
     KagemushaOrdinaryAppEnrollmentAttemptV1 as Attempt,
     KagemushaOrdinaryAppPossessionAttemptV1 as Possession,
     KagemushaOrdinaryEnrolledFinancialOwnerV1 as FinancialOwner,
@@ -53,8 +60,16 @@ pub struct KagemushaNativeOrdinaryAppIdentitySourceV1 {
     platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
     integrity_policy_original: Option<Vec<u8>>,
     bootstrap: Option<BootstrapMaterial>,
+    cash: Option<CashMaterial>,
     native_account_session:
         Option<Arc<super::ordinary_native_startup::BoundNativeAccountSessionV1>>,
+}
+struct CashMaterial {
+    inventory: Arc<iroha::client::KagemushaAdmittedOrdinaryNativeInventoryV1>,
+    lineage_policy_original: Vec<u8>,
+    disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
 }
 struct BootstrapMaterial {
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
@@ -118,6 +133,7 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             platform_disposition,
             integrity_policy_original,
             bootstrap: None,
+            cash: None,
             native_account_session: None,
         };
         this.recheck_originals(&this.path)?;
@@ -173,6 +189,33 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
         self.recheck_originals(&self.path)?;
         Ok(self)
     }
+    /// Retain the independently installed Native cash recovery choice and admitted original
+    /// catalog. Managed frames cannot choose Fresh/Recover or construct verified lease/FI
+    /// holders. A cash journal is opened only after the actual same-owner State publication.
+    /// # Errors
+    /// Refuses duplicate/missing Bootstrap material, over-bound catalogs or fresh recovery data.
+    pub(super) fn with_native_cash_recovery_material(
+        mut self,
+        inventory: Arc<iroha::client::KagemushaAdmittedOrdinaryNativeInventoryV1>,
+        disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+        integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
+    ) -> Result<Self, Error> {
+        self.recheck_originals(&self.path)?;
+        if self.cash.is_some() || self.bootstrap.is_none()
+            || integrity_leases.len() > 1024 || receivers.len() > 1024
+            || (disposition == KagemushaOrdinaryEnrollmentDispositionV1::Fresh
+                && (!integrity_leases.is_empty() || !receivers.is_empty())) {
+            return Err(Error::Rejected);
+        }
+        let lineage_policy_original = inventory.lineage_policy_original()
+            .map_err(|_| Error::Rejected)?;
+        self.cash = Some(CashMaterial {
+            inventory, lineage_policy_original, disposition, integrity_leases, receivers,
+        });
+        self.recheck_originals(&self.path)?;
+        Ok(self)
+    }
     pub(super) fn with_native_account_session(
         mut self,
         session: Arc<super::ordinary_native_startup::BoundNativeAccountSessionV1>,
@@ -181,6 +224,13 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
         self
     }
     fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
+        if let Some(cash) = &self.cash {
+            cash.inventory.recheck().map_err(|_| Error::Rejected)?;
+            if cash.inventory.lineage_policy_original().map_err(|_| Error::Rejected)?
+                != cash.lineage_policy_original {
+                return Err(Error::Rejected);
+            }
+        }
         if let Some(session) = &self.native_account_session {
             session.recheck()?;
         }
@@ -453,6 +503,8 @@ struct Owner {
     financial: Option<FinancialOwner>,
     bootstrap_started: bool,
     bootstrap: Option<BootstrapOwner>,
+    cash_started: bool,
+    cash: Option<CashOwner>,
 }
 struct OrdinaryBackend {
     path: PathBuf,
@@ -1236,6 +1288,7 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
         }
         owner.handle = None;
         owner.bootstrap = None;
+        owner.cash = None;
         owner.financial = None;
         owner.retail = None;
         owner.possession = None;
@@ -1863,15 +1916,44 @@ mod tests {
             b.invoke(h, Method::PreparedAppOperationApproval, &bootstrap_request),
             Err(Error::Unavailable)
         );
-        // A well-formed typed entry cannot manufacture missing bootstrap verifier/custody.
+        // An invalid zero ticket is refused before missing bootstrap verifier/custody.
         for phase in [9u32, 10] {
-            for ticket in [0u64, 17, u64::MAX] {
+            let zero_ticket_request =
+                super::super::kagemusha_core_coordinator_encode_request_v1(&[
+                    phase.to_le_bytes().to_vec(),
+                    0u64.to_le_bytes().to_vec(),
+                ])
+                .unwrap();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_request_v1(
+                    Method::PreparedAppOperationApproval,
+                    &zero_ticket_request,
+                ),
+                Err(super::super::KagemushaCoreCoordinatorFrameErrorV1::Field),
+            );
+            assert_eq!(
+                b.invoke(
+                    h,
+                    Method::PreparedAppOperationApproval,
+                    &zero_ticket_request
+                ),
+                Err(Error::Rejected),
+            );
+            assert!(b.owner.lock().unwrap().financial.is_some());
+            assert!(b.owner.lock().unwrap().bootstrap.is_none());
+            // Well-formed correlation tickets cannot manufacture the missing Native owner.
+            for ticket in [17u64, u64::MAX] {
                 let publication_request =
                     super::super::kagemusha_core_coordinator_encode_request_v1(&[
                         phase.to_le_bytes().to_vec(),
                         ticket.to_le_bytes().to_vec(),
                     ])
                     .unwrap();
+                kagemusha_core_coordinator_validate_method_request_v1(
+                    Method::PreparedAppOperationApproval,
+                    &publication_request,
+                )
+                .unwrap();
                 assert_eq!(
                     b.invoke(
                         h,

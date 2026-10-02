@@ -35,6 +35,8 @@ pub(crate) use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
     KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
     verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,

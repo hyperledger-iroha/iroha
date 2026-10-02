@@ -95,7 +95,7 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1Test {
         assertFailsWith<IllegalStateException> { holder.originalRetailCertificate() }
         holder.signOriginalAccount { endpoint.expectedSignature.copyOf() }
         val request = holder.finishRequestOriginal()
-        assertEquals("/v1/offline/enrollment/ordinary/finish", request.path)
+        assertEquals("/v1/kagemusha/enrollment/ordinary/finish", request.path)
         assertEquals(KagemushaOrdinaryIdentityHttpCodecV1.retailRequestId(endpoint.id, "finish"), request.requestId)
         val body = KagemushaOrdinaryIdentityHttpCodecV1.retailFinishBody(endpoint.id, endpoint.expectedSignature)
         assertContentEquals(body, request.body())

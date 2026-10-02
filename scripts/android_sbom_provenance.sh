@@ -51,7 +51,7 @@ SDK_PROJECT_CACHE="$MOBILE_SDK_ANDROID_ARTIFACT_DIR/sbom-project-cache"
 echo '==> Generating canonical SDK runtime SBOMs'
 "$SDK_GRADLE_WRAPPER" -p "$REPO_ROOT/kotlin" --no-daemon --no-configuration-cache \
   --project-cache-dir "$SDK_PROJECT_CACHE" \
-  -PirohaSdkVersion="$SDK_VERSION" -PprivacyProductionEnabled=true \
+  -PirohaSdkVersion="$SDK_VERSION" \
   :core-jvm:cyclonedxDirectBom :client-android:cyclonedxDirectBom \
   :kagemusha-wallet-android:cyclonedxDirectBom
 

@@ -2,11 +2,11 @@
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
 for the current instruction records and concrete generic instantiations. Its 331
-type rows preserve 367 populated values and 1,468 complete root, vector, option
+type rows preserve 373 populated values and 1,492 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`3d3d7d276f4ade9e05805c4d936ed44cf8be73c0ad81f2f7570b1975328992de`.
+`4de5be96e0a1e11b767d2b806201da24cc9fe777a41c04320628fa9867ba3813`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -123,7 +123,7 @@ on-chain penalty exists to cancel. The merged first-release inventory retains 33
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
-The current capture contains 331 rows, 367 populated cases and 1,468 frame forms.
+The current capture contains 331 rows, 373 populated cases and 1,492 frame forms.
 Earlier dated counts and checksums above describe only their original candidates.
 
 The current scoped-artifact candidate recaptures the six artifact lifecycle records
@@ -138,5 +138,12 @@ The current `SetSorafsReputationJournalAuthorityPolicy` capture includes the gov
 `isi::sorafs::tests::print_reputation_policy_record_fixture_row` producer constructs
 the typed policy and verifies all four current codec frame roundtrips before printing.
 Its nominal and directional identities, all other captured record bytes, and the
-331-type, 367-case inventory remain unchanged. This structural codec capture grants
+331-type, 373-case inventory remain unchanged. This structural codec capture grants
 no governed publication or release authority.
+
+The merged capture retains both existing typed frame cases for each of the six
+artifact lifecycle records: the full-width dataspace and the explicit universal
+dataspace. It also retains the positive account-recovery request generations and
+both private-root records. This gives 331 rows, 373 cases and 1,492 frame forms.
+The merged collection requires fresh native decoding, recapture and all-container
+roundtrip validation; combining prior captures is not current-source qualification.

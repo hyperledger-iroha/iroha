@@ -1,0 +1,3710 @@
+{
+  "schema": "iroha.norito.public-fuzz-corpus.v1",
+  "entries": [
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/023ad41e9ccc4a50b35a5ca88121dbaa35facb65",
+      "sha256": "5fd0269647f4cd4b4b7dd60870eeaa32a1aaefe11bbf9811f75513d02e569fcc",
+      "bytes": 178
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/02bd8dc9b19f2a274deaaa4eb4a0eceeee16ea45",
+      "sha256": "6d4a5df259f0bb769f58d95f2ba559d72197ec0ac94295cffc3c1e2c9457ecc5",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/02d43e99327b72cf21981ca3c189db806cb36ea1",
+      "sha256": "f682347e030cb616f4cdc63c3b01228c222ac017c81f8758933b83c7f5d7e494",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/042222671929f4b4c022582de1ae2cafcadc8d27",
+      "sha256": "86cf15304e6e82f674334513b9352cce694468119883f5236bbe2a00c238a7e9",
+      "bytes": 35
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/051e0737705735896db1a5fd4e332d3f504c4861",
+      "sha256": "816c2fd7e6c9ff6c12810241ac600b334b9866d1732bb9c99c901dc9639f0353",
+      "bytes": 259
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/08ead7ec5555df1d792586f389fac2b0ae145078",
+      "sha256": "d84c3607f2c3c389e82427b5244c421bf78e4706692a00f1d1488bf0175ff81d",
+      "bytes": 212
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/0920f50274464c4cea384fb6080a72ec1f24a4a9",
+      "sha256": "6b38da48a5f880b43042662edc1f41be84203fc2daad90a1f1e6971427d7b35d",
+      "bytes": 83
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/0c869442c5370b4a4da18cb0a9459880e9d3932a",
+      "sha256": "660a3764896c3e1db404ee781f0e2c451a5486840ff98ef1c4db19c5f45ad81b",
+      "bytes": 80
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/0f9350443c5115203b2301d6ef1450a55dcac895",
+      "sha256": "1d3b4c7c7ffca93e1f3238a899d76ffc5a76f6c3ac3bc8acaba59344da14e18d",
+      "bytes": 85
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/117eb500c829f73066950c534d532dd29fa2ad1b",
+      "sha256": "fd02e5ad068296cfb3ab5eb828cb3995c16f38cbbc171c91561026ec85e81357",
+      "bytes": 120
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/15f723f38c3879df1bc0df848ca493c1134b8642",
+      "sha256": "d2d66735bb3cf28f76c35e130390c8ea497c1494da0eaa7f4636921c4dc172d9",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/16071794efc209041b97096706e63eb4e1ec1d29",
+      "sha256": "790be5ca54ea764ce99840ef22cabf03ed53e92179e7f7e2cfc29f4fff093b3f",
+      "bytes": 89
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/19e08ccf1e1e3bb5c938bb207d5aa24c4d396213",
+      "sha256": "f3af305b0e83eb9720088a2c5171bf28642b4897ff65dc29959a3b3037c0be74",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/1a5d5346488a26aad0d9e82dae40e9234596bf95",
+      "sha256": "f38fbe5770b36fb1b042093f2b94072518123b91d1529d78f2387e26ccacf7b8",
+      "bytes": 82
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/1c2caddde3dbac5cc3b55d97ba0992793263345d",
+      "sha256": "e8bd74ac234b1928baaf4624ad93450749c2943552ab6b7572d44c9a46856b39",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/1c9734164a095af1538f8f2a56e3dddc0548702c",
+      "sha256": "7a44409dca576805697645959049aa7f46d32dcaad9a398fb7d90f83259da904",
+      "bytes": 262
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/1ded229441361169e4b2bd871286209ec3e11196",
+      "sha256": "27d5d2dc2cb3740985479561cde90056498981b1959fad9c65365367815d1da9",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2038fae64070d1b73a141ebac07a84e4d195e3e2",
+      "sha256": "332158533225bb934833ed1bd608011edaca41871254618b7daa676024866581",
+      "bytes": 87
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/209e0dba2db3752f89870fc0c987666deaaf8d3b",
+      "sha256": "7ce3854ba9e3a93d3490d031a0fe59ba2327a948f97e7002a2b8cf6867e1cf26",
+      "bytes": 34
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/21b9d5a5e2418f60803399632b1466670f23373b",
+      "sha256": "b6d7a994c0baa9b075f465765699e19f76f3fcf5b9219bf4f5203c6c18062fbc",
+      "bytes": 69
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/21d8d4911efa8ab0f6dedc294f025ebaeb35db4d",
+      "sha256": "3f91d38d5cdc4060ea69687782469da5bc5c940b7916ad931d2a38b584e180c8",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/22a2ef98101b7a4c4931f46ab89bdfa48df35bc9",
+      "sha256": "f7f87938d8d62b5d3a48032baf338834a722e4a5b5000a7dfef5401179dec965",
+      "bytes": 216
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/242f2a9dd79db3602aa16f9d268e55f4fd01ea53",
+      "sha256": "a73f1fcc79163adfc0b361f35ee213a75f6e72d05b6b18a76474a8e183e4dcec",
+      "bytes": 82
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/25e5ac392f4b9be1f5c50f7119bb0201031d69bd",
+      "sha256": "608ae92ce4802fb7cfc60e1ed96d4cf5802116330345428a5d553c556a2f78d6",
+      "bytes": 236
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/285db0dc7f47d859f149cac170c90151e0f33a1b",
+      "sha256": "3fcf70206ddd6dddb3f091d29438af87b21821bad0fba493f1ed1ea0528ea267",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/29629dc20a041a52e363263f9bbd243adcba7932",
+      "sha256": "7b25f67a197690cf6b1e66112e3b035f9666498c97fd3329d6443ed8b686e70c",
+      "bytes": 67
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2a4c173eea64c1471ce6054fa3f2bdc22ea10e93",
+      "sha256": "dae35173e30d8e38410291b3e65bd2678f2553fa71778e915244bd765239ac76",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2b61a0c8c51abfc4512c49115e257c12f3f157cd",
+      "sha256": "54ee11600b57b0a06096c63b3653b7fb8da2950a03c3fe64337fb5b98f964d2a",
+      "bytes": 214
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2b92e486c069807b4d1b409c94d5683ed33aff95",
+      "sha256": "63b58ea07c9f9f5c474c3bcf914422d5c9e46ad6d6c5e5112a504aa8ba1d0e8a",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2bd1eccc7e6575a81f118ecacb19cc1504d5038f",
+      "sha256": "443f3fda9c1485a40bdf4d0fedfcf7c1f04fa6baee695de22479964d7042e52f",
+      "bytes": 310
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2c39d8f0583f4ec724f582887e4bce6be6eb57ce",
+      "sha256": "4b285cf5c8628e638b766296c89426e6a040852b7e5ed064f20e2b9ea9b7de35",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/2e318ce6bf2fbe5928c2e807d7ee45aa9b32bb1a",
+      "sha256": "bcd7136df57dab7aae1ebf44772dc9939d3e9348f99195d0165da3e4af58ab21",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3014aa7ce9ebf6308fa0db7927de8339fe104919",
+      "sha256": "1ade92a2a6d6f6d3b7f9ed90a52784c4e3aeabd6bcbf9f22567816cc18664dea",
+      "bytes": 277
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/327813f8420a3f5a792c76f8f1ae06c9bab87074",
+      "sha256": "6a11a63fc1ad1c2e5fc61fc1ce1fc839db3899072f9f0e7d9c7ebcca4daefc0e",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3305a8f3089a8cc57396fb5dc7499b08b5d2de81",
+      "sha256": "5c4f7a91bc7a244a39783829a01eff3471faa730466c501f3c84f1d840d76594",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/33d1c6ca73428807448c67650b1e3e9c690fcf99",
+      "sha256": "492d8ca5c69604adaf99c1aff52058d3f72d47a2467696f818a456b138fcf172",
+      "bytes": 181
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/38b4088ec85429931f5a4a3eb05789d3159d39bd",
+      "sha256": "75834117ef1f458f85a4b880430dcc0318f8c696351f0dd65104850154c23158",
+      "bytes": 67
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/39aa100ac2c084061d453209aaba23131d9bbfaa",
+      "sha256": "9a972eee0ba6a3081a4b8e2aa3e9d0de5b88e69dc29f9739bc4998ab249f1cd8",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3a717676885d7bba4c2cce7a9ef5ada15239a755",
+      "sha256": "ac304fc74ed08c91043afa5bea5387c1519590e9290bc13db40d8056c86e3fc9",
+      "bytes": 112
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3cc9d0e5fe0977ba8a2174bd1c1d4a14aa8219cd",
+      "sha256": "f62603e4ae500cbd55f05b1045022589b91eb5d3135b8acda7850b4d950757bd",
+      "bytes": 99
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3ed9219daae57f8f92c24a7c777458c9f8cfc467",
+      "sha256": "f8520cee3ff95b7f1a9d2cad58b9dea3bf53bf8a89b7096bfd45afd07010132a",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/3fe020f354f75d1e247d2e4475ae9aa41bbaf41c",
+      "sha256": "a7a12cf3d8606454c5de9185761c4b37f41da4212d34f6d2c8cef5025f8d9f1b",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/40bf0ac80040824cece93424337c93fcdfc643b0",
+      "sha256": "6682dd9f650cfd11358037847d52bb14b459ca87a64677c4591afe8af38c5fca",
+      "bytes": 281
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/40fe4ee548819251836334ec567a50ff30a34112",
+      "sha256": "92a6053bb2e2ce3d6e7ce360e5c921d491bc8c69a159c00417016a20a0a4e1aa",
+      "bytes": 200
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4133b7e8cc341f4d0fe2b7740966b5b97e511050",
+      "sha256": "e8af63f8661721bdea769cf4bf5c8c40fab5d6b8741b99bb0e96befc80055083",
+      "bytes": 216
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4163d3376b9a838aeaf0e7e7fa977d64bf49f55b",
+      "sha256": "d0c92aac644f951a6ea69ac4b47a1f4098cba113b398e44c864f5d159b58c099",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/41c1d4a46b05d1f24a467f643ae440f7293a8b20",
+      "sha256": "aa1c81a70f523cb595065a5aa5bc3b4ea3ce93f33a7f2c52229c9fa8068c21bd",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/451a85a6344148a540efdd6685218dc7c36cb5e8",
+      "sha256": "5c1a6fc7e2bf9dfb62f2130e205431a40f68190fa1c553e5f3564afca244c334",
+      "bytes": 250
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/45a06e75278c978fcfc492acede16ece4c50634d",
+      "sha256": "0dc39d02997a304ff36ae1e044563fe3c52a434b7e92d6c99c0ac79241301b8f",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/48353c769a39b4fd4a122e44850b36c336e009c8",
+      "sha256": "0299d0b19b0f58a509132e995c7602bad1d06f94485f98dbad68820097302146",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/49e2f2e8d13de198cbafc7374e082d74a288eb7f",
+      "sha256": "0753eb1f9cad84f4f2a78db52c70c46783025615481cc46599d32fd73289ce6b",
+      "bytes": 83
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4ac715ad2aae3d58f2c22bf62c0b71fdadc03e09",
+      "sha256": "d50de20f336bd03e589ef5e64469698dab56f30ee8384d720e17597bcbea75aa",
+      "bytes": 276
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4c824be796090cd0eb015f1a5345a923f8ce078d",
+      "sha256": "d026509a73e0446a7dbb42a9b219d1ba451e0bbb85f5a8afba924c8761ff4918",
+      "bytes": 87
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4cb763272b93a0a756ca33a8dd3850daeed1ac72",
+      "sha256": "267fc2efa0e33d4142c26bc6db94308ca7d1d3d399e62a1fce87bc1f01e44a31",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4e92c2598ffae02e7b608a4c5263246c3dc201b1",
+      "sha256": "48eac37c79848d419e6e0ae3c816c4ee75a8c6b2d830a9374d0af60cc7ad9dd7",
+      "bytes": 35
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/4e97f98da8a12c13e19bb0fe2a240be68ef694ee",
+      "sha256": "d279201d749a87e1167940961dc03f1a1dd0b4876513f3b7194c3e7219bb57a9",
+      "bytes": 73
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/5286471614c225799d64fee7e16e2979fd8170c4",
+      "sha256": "815ab267ee1ed520dec8c1b6a87167067b95eca99bd3047173cfc3c3e480bbd1",
+      "bytes": 78
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/53124df02ebd2631822e62d0a5d2361fccbb4570",
+      "sha256": "cb4c316143297e6cb0d112760a30535074fab3f2285d13bb643927019c386d6f",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/53590d2533b9082dd87c5f7624822727da013d4a",
+      "sha256": "bd435a7bfa74051c4d3ae5e734c8aa989f02ef804684a987a9415c0ddee58c04",
+      "bytes": 72
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/55a693587f82a743ad1e2c6337d80b6288900c7d",
+      "sha256": "b68201bdc3a7745d6a4656902f38470e4f5f659186ce234cbb8c6f1524445cab",
+      "bytes": 317
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/5652a9dad50add53b7058d81973fd06d46baab36",
+      "sha256": "1dc9198a170a22ead8c818e3b6ff5b24d3ed9d417805d9e7e6247d8ed2a595e9",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/57d0fd4f30ff140129df9ddb451b0b68f05027a9",
+      "sha256": "f606f611192237919136e713da5cbce5fb7f20c6588fe3713f5c3c71c9a6d362",
+      "bytes": 172
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/57dc082301b3f1156fbfa9a1a818d6a369b01907",
+      "sha256": "cfda025a09fbfed4d103c1cbf50eefc737150d7660e06a2d7cf847cbea226c81",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/58fcb13049d62a1495dc8b55aae0bfb999234726",
+      "sha256": "1f04ddb8710e5dbc2d7569e90720e083e4c8c4a50accdf2b1e52a0122f135b6e",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/59c1d3596d65af29e42c8c93358e5bdb3de521bc",
+      "sha256": "fe5d0ae7f8affa26e610cb52ffe32b4563f94b26a602ae15ffe73113608b3817",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/5a7c66d6c5dc206176fa719ef2641f8755f83f02",
+      "sha256": "b1213cb06e4cf2f45efaaaf2cdb1378ef5731c4d25965b0301e7373f70a246ba",
+      "bytes": 80
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/5ab08cd1466790c853ec84cf1801af4d322deb5f",
+      "sha256": "3159f40e9ee56c9924a3e7ee0d179ea43d5ac67437c66f2c70ad0c5be8c45722",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/5b384b3af9f3e6e01f535f61705ce266209f36b2",
+      "sha256": "993d8fe5b4365119d3ab3033d2ff712fdc042e360925e5c47529f8ec3b642a91",
+      "bytes": 168
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/62f7265fe666facc7309d4f9d89f4ab98da369ef",
+      "sha256": "921cdf9783dad1181e610ebd7f0d42347f07146dac12d01c280cd2ae6a3e75cb",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/6323f567f9c4b89219ff8d808a91f6ca15115160",
+      "sha256": "a25c04edbffdc059d6126ffe246a7a4739703aeca06d066ff4c1d5fe5c7d186d",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/63b97c56c10f9dfa0624c7bc119fb0adfb9a2dff",
+      "sha256": "ce45a5c6e7c4af17c07723e1dc25e3ddc2ebbb7c5c367b64a1d8b6cd9b255f21",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/64dec279920e16cbf1d5a48e44e2569cfea859c7",
+      "sha256": "37cc13a0beb12827c4b5dcd96a3e1187625c32b4b2b38b5079ef31a2c3bedfa7",
+      "bytes": 27
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/662091abfd796e119b7db0f40887f61d29959bf3",
+      "sha256": "2e9e32cc071a8d9d9f6865816fbf3e897809bac2ce6e65045eecac0c60d8c5f2",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/6723ac3147ac7a2460a61f5af4fc7a0992ee81bf",
+      "sha256": "b1b9540dd96dbfc8daeab29751df8508dcfe40b22748eb4841f01bd4c7de4bb7",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/6abb3d4ffe28dd0aea3ab3e616dc52e6829fb611",
+      "sha256": "5823d639c65abd9bc79a3f08d68dd4ef5511746b5c7b9c9d5d5112f55e528647",
+      "bytes": 242
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/716a97919671c1ad7498972203a3130b02bd3941",
+      "sha256": "59f47fc9430aa36b6f68d226441c92134fd219fab1dc7ff9a4a8a216e9700c1c",
+      "bytes": 45
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7b3e2a81377284b99200f86799ad04ec193018d8",
+      "sha256": "d0e8217d410781c31763129b03b866984e535e9186bad3ff4d94a28685cfb84e",
+      "bytes": 85
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7bea4f4ef40ef23c00424cc97b3dd01718af739b",
+      "sha256": "0457bf9262dc92d76450fe74399fe5d45c36403207a0d25bebaa73712574c689",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7d9ec60ecd0cb436f1c25b9987221d36ff340c30",
+      "sha256": "d1a09444f98873c02bd0321d387b8d7e2735e507ed6c6af7868934f2a0eccd19",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7e1178c18c688b740613b162a157d85bea9b20fc",
+      "sha256": "6dd87df6057b2e7ca4eff0625dedfc95c347339be06d137909dc3c36abe196bc",
+      "bytes": 239
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7e35232a37aa1403aee60df3f79d4bbfc7983320",
+      "sha256": "5c15fb0aaaeb1f72040ffe108c9b92b8d44752ad1e6885ffd406e30315f1f020",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/7f60cd6de32db25e5afc494e110d3c7e153054c0",
+      "sha256": "3706766d00ffa4137203a49181bc7e9a737400ac65460b1756529613bd978487",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/821c58f23d33e681910eac344247dba630894024",
+      "sha256": "9f9b43eca3a92b11f10f5b4e07b6c451aa85190b28b00f407580d720630309c4",
+      "bytes": 150
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/82c2dcdc97ac6c8a28b77d3337261af21437376a",
+      "sha256": "a460e9e8f24d90a979933903cc9578b576e5a91778ff47d59977be2524db513a",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/85261ef08ef11dac6ad09c00b631e92be969a2b1",
+      "sha256": "9aa0b7c4b759d32a3a9b74c3963fe24944b6d880de112cac7d151bfc265119d9",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/87dff37d3d88888a7abdf3ee28ad9b5c2b643f04",
+      "sha256": "7369d6a4247b2bd1a608764d59fdb151e9ceccf32da5732b4578c4e9b40abdc1",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/88c9717f709231741b29e0d5090269a7f8242dcf",
+      "sha256": "71d4cfd8b708bdb045cb1ba2f6a8198979ac75d1c3e6f915cc1839d683fa3e83",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8a41169bb4731b39a5ea09eb1c2391e6cdd3d52a",
+      "sha256": "a7054d7ca1a88613a8775ff6350145b842f83afa31fac6a36b5eba0cec60e72f",
+      "bytes": 132
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8bc34df2f0794d42b65f1010d13e648413883d9b",
+      "sha256": "a64ce56f2fdb7fe0d21b9fa7e512d83227a7b0d196a33964d165f280d02e0f07",
+      "bytes": 79
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8bd72ca3a94b0829c5ae974aa72380817f621fb4",
+      "sha256": "0872eb3e9035af164788b760076a52436d0c72fac7d72eb4b448bb9b8ea0d471",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8d36d9f19d87cbf73168676e6e2eb4c71fb8c959",
+      "sha256": "4c527ae443ba75e7842e0598fbecaf547b02775f8bfef933dc3f618f69dcf210",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8d81827f7a190d8a77cbcfbbbfa114201bddc13b",
+      "sha256": "f378baad9ac5d42c3d4572aa49b9d73faf02567b71a3933801fa940b3ba1737c",
+      "bytes": 33
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/8ec61cd6378913b7cd6bb373b4888fa2c6f67948",
+      "sha256": "db715168b5a9231bb7805b1608921b9d1097e72147e79624723956f90a1faa71",
+      "bytes": 174
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/94a20cc5f38eebbce8af61e294f77f213acec763",
+      "sha256": "6020ef16dd2b44499dc731dbbe3a38b40f44c0653101c9a2faef81f57ab39b8f",
+      "bytes": 315
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9512037b2c2961574f4af31888b7e5a91cca7f5a",
+      "sha256": "22f216ced8dcc91ae063fe36482905a7efeb680a4d08ab721fb5aa7fdab19392",
+      "bytes": 162
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/961fdc0cf8b4d304b84f590936eff444ae6c6e51",
+      "sha256": "2aa2f40da3cdf522d04883342b5a5f2c27b106723a96fa2d4e1f7800117d2ba8",
+      "bytes": 258
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9738d0261b90a91472d82e28e38fff45d7834269",
+      "sha256": "aef428b9de37e7d9dd1be682eaabb588c1cbb303e944b61716c166141f3915e2",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/989f65215068b827cb054cdd8b014ad4192501e2",
+      "sha256": "ac69f810ca284a63cf57c5a022795f43b2a2c086b5b3335405fa7be7f19cb79c",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9914f279d0bbcc0ddf24ee85116936ee95230b5b",
+      "sha256": "6402f93e212b93a0ddb6505b4e0db0915f7e21686b3727e7335ed5c3d2a89c7a",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/99593661dcf7d592a6ab05da9abf184100f01dbd",
+      "sha256": "318b874f48dedf0e254a41ca152c7e1b3d03803960fe464d4a4e3ae7ed70b69e",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/99ff8170d81955199bbdaca44f926dec39153b8e",
+      "sha256": "8a58c8c19106975072aca9627df8537dc566f76f227247ddd0a6781c75315fea",
+      "bytes": 66
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9a9fbc2e2313c52c21f4f369ed8663d2b6601ec1",
+      "sha256": "96ef6658c05d439ff49a97ed6115fcc13f7127d1f6f73f7b92b6193772f1499e",
+      "bytes": 68
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9cbf34a0785487166fb3dd98f50a808ebc041765",
+      "sha256": "62940247151aefffffc1151949f6879d5b301079e20653f1e8577f995dc1b43c",
+      "bytes": 37
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9d01b37b846b97f6b382fcb181b33ab644b09adb",
+      "sha256": "6f5aeae1e2fb02f5593a9c95671924db0acced96a33076f06237260e1b6374f2",
+      "bytes": 242
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/9fb12d1dec03eca740652e91455f67dc8c0c7df6",
+      "sha256": "07465d4cac19276164d8dccdc75ab4f1567df60ab86a012f98f77686da4e35e0",
+      "bytes": 237
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a1475905f8dcabfed8f351993d354cc6ab753573",
+      "sha256": "b22057191bc13025237c82cf29531c18a8fa34d1a1f4f84e8bd3f80c155a9d21",
+      "bytes": 88
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a219b049a95fe4f339ff97c2377ec000c28779f2",
+      "sha256": "f6443830aa1e1b62e678077434c09e3e4da9d6f78e97aefeb2413846cf50770a",
+      "bytes": 142
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a219d86d694b717a4dde1de7984352488795ab73",
+      "sha256": "eb0a54c326cdd373ca89e4ad8e4abfdb2e89b83e9aa41b02a18d495f6c7a88bd",
+      "bytes": 82
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a3263c7aba7248004cfa6cb5bd605d142d7ca364",
+      "sha256": "d04e341fb06ec0ef82888306b8ffaf1ff2d467516f8eb6c3072f79ab86f570e9",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a526961d00d69ec73f6a00f99cef7b7d5c3a2e4d",
+      "sha256": "7e51de5111845d0b91a860733e7220a37a878587fb14fe2b9b52151edf3a8e65",
+      "bytes": 80
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a5f758cf7f7f84ec1ddb6c0877117156889608ae",
+      "sha256": "60477a86f876cc981db580022422409632a8402637a6b12441753f32d9f3b73f",
+      "bytes": 162
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a791107465e935c3b47c4d896cf3f7049596c6ad",
+      "sha256": "78896154a2ac01de3f6ff2d66e92c30810565c01542dc51e448b5e4a0976482a",
+      "bytes": 323
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/a8c562ab06fbfa43ecd7323f9645b7c9905c0b15",
+      "sha256": "5c0ea2660dab5da74c7d73f66576fb0a1f1c85b2f35ba2b551a67f2924837dfa",
+      "bytes": 212
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/aaa8b84c2f27d29ac01696b1662ebc53f5980c96",
+      "sha256": "8f2f5467152ccd0917a57086e4a98799b72ca3926b1c05a4b05729f51f6b6f6e",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ab50eb6582e2d565dddfe7af9ea8b3a705803f66",
+      "sha256": "7109dc5fa5a50c015748008faac4d2b628590ac3dac78a12055aef3f10517ed7",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ac60491759fc39a9fb130666c3efb38bfd834e57",
+      "sha256": "d4876b50d4024f845c4cff20657e0f5fe36ede702f309e8d26a9289ea23da2f3",
+      "bytes": 86
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ae26c8cc153dddc867b2cbb8fd405c06e46980ab",
+      "sha256": "750c31b3cb1b72e86f3b881865619dc69484f0cd182698a75c51b78cf4f66f6b",
+      "bytes": 112
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/b0d755a35ab01f250b4f6b3338f9804e35ebd55a",
+      "sha256": "f34accbac446e61f9cb68a9df417ebada92b0fe56596cb10cba6b6fe29c985fe",
+      "bytes": 94
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/b18c54cbdc980af2ba8f3b4656334585d68d3458",
+      "sha256": "a263a20af69b2b19ba677ddab1bb7368a86d3383c29fb5876112f9115f940158",
+      "bytes": 80
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/b5811acc4352242bcbc79a57422b8de92dc17f71",
+      "sha256": "ea314bf5fdecc16c808cbb28a78e882e40f610e72244d970552bb825e56716e8",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/b8d3ecd501c92a12cff80671372667d2179ec048",
+      "sha256": "9c89f58c15157efd7576ddf3defddd98a7e612ccde12ad14ad13be20a6a4fac0",
+      "bytes": 132
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/b9585ab40da5d1ac6930909cfbf09a33a5470d2a",
+      "sha256": "f9fb04206b50dcb0f6d7599af5bd9d59fdc5406f58459f6d42e774c0d73467a2",
+      "bytes": 99
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/bd8bac0f670b491940af20a4478ea218df6b626e",
+      "sha256": "7fc89c8f15b9e2170f5ec2d44b09c2ed60854cadcd58660fd635b63bc120ee29",
+      "bytes": 325
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/be7994fa145cd0d29201ab809fb3af2182210d60",
+      "sha256": "ece77d872dce11c62b06cf553636048e3de3bd0d98640c2def3c758fba78d2a2",
+      "bytes": 79
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c02e4c6d0e26ed2dfd482dfc781c4c3abd19e68f",
+      "sha256": "50573987d4d19d71e89b82d0c7fa9e69c2d5f994b33d6d63f972674726121b7a",
+      "bytes": 310
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c2709c2c92b0ad653cf8955a799621d2e08c9d3f",
+      "sha256": "9f572c828faa37da36c420dbbf10cc0be948e0f52e2dd436625977279ac27dcf",
+      "bytes": 81
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c3cbdcc7de51bd2e10ade89d9bd3eff7b5e860cd",
+      "sha256": "cbe2afdc5dec27d42b9fb9217fa1ce8999783626f4322e6c271092fe13599b20",
+      "bytes": 77
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c42029465b5754db59e4db8b912dad529ec8d2ca",
+      "sha256": "37ab76bed1b74f9da45d3f3173f3f05c3340b5caf01a94a67b91cb5e543f6eb2",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c457e348d7eafe3f9273edf1b8067804d337b6f6",
+      "sha256": "bed633bff111d78e5f582bbce4ac1eeb3aeff2e5e925f3124a51ca69e8315299",
+      "bytes": 166
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c6716a9df08e40f0d8843f486baa768994a9c492",
+      "sha256": "9900c7796e5d4d3c03f4da55a282537e1d8de2eb05842e7ec2763456b72d3394",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c776247ec99fa315a36424d6ca1e32045406c6c1",
+      "sha256": "b967d7445bd5505603909f2ec268ff89a9e0a3ad249dda00f0e2bce7cdaff42e",
+      "bytes": 315
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c7b0b0253299d6a87fd1c42848e28aa3f4f810f6",
+      "sha256": "49d33f9be87386721d04da8b85264e0b5bae96de9dce657900e1e6895e3df5a0",
+      "bytes": 173
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c875cc04b7b8f71805b59f250648859876e01f00",
+      "sha256": "57ca1c338840193ad9fc69b1a5635b72c402943788c8b337b6d17992193eb267",
+      "bytes": 67
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c8e5c14b88aa3b5a6ab62f7ca9762e61520037c5",
+      "sha256": "7679c025400a343875b890e512a525ac15af83bf6273d6ead8d4da4f8fe379f9",
+      "bytes": 67
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/c99e24a35c379d42a4bbd7e507b0689fbf7015cc",
+      "sha256": "d21116fdada4714b2881d55ab87df8b030f1cebf6e26da8a2351bd06363e84ee",
+      "bytes": 81
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ca3dcd56f7ba622a554fe1ea745cd8447dc0fd27",
+      "sha256": "7fea982ef7912d3b9ca818aa04f31b2d7ec9501682df9c4f8174689f2952e738",
+      "bytes": 68
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ca6b3b4e3c97e3110d32900444c6d49d92747d1a",
+      "sha256": "d85e5d4de50f0e9565ea4c24dd9ebbce326cab859eb370eb221290d6c5e1c27a",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/cb3869c2b8c7af9fa78f5fb4d970251e13ed4fde",
+      "sha256": "85e9dad71a750f594fd0b49d82327235f528eea4a00fcb719d8c60a6005ebdf7",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ce92135d5018a8bedb269f01106570e4256bee23",
+      "sha256": "38487b25b0969f56b4c2bb9a1a2fdd0dbdad58672c2461a96b29dcb5e7ced50f",
+      "bytes": 253
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d0655789abe958f161fc382b8782ec9468f68bf3",
+      "sha256": "a0adf79d257c6dee56b287c0bd002cb2a4c55378ca13ef39d4907a05a897f082",
+      "bytes": 282
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d1c02d4f3a3ff4d6acae6fb4ae681f94cfaeaa94",
+      "sha256": "0599adfd0a14a85af1e364ba973c6f41d04a4633ae29e5ce6e89f320efeeda3e",
+      "bytes": 84
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d29151e0ce66ee4af161f3f91f4a25e823c426c7",
+      "sha256": "e683ba04562dc7dd9aa3ce3a3cb571146212005ff94ade71ae68a6f124e9c748",
+      "bytes": 168
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d2afff9996eb2c4573aab6884e751c42c56d6dda",
+      "sha256": "a5f4f0ce64382a1d0db71327aaaa71f01f597ee457e5b999bd35e51aad23cec4",
+      "bytes": 173
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d30050a0a7fb7050a66abb7c8c005c9665d2f1f9",
+      "sha256": "a512f6d74306d17b11907f7ce5f72686bd7b27dac72d0529d032b111a51f1357",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d3d4f6ba129041aba7546b23e4124d26e9f39e12",
+      "sha256": "410c5c8b9d77804479e203e01a4c4e5073afe4d019f1c8fbce40db71a827db45",
+      "bytes": 138
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d474fd58aba5e0886ff25894c908ac4b16f626e7",
+      "sha256": "b8184f37bb400dcde8e13f8e11cf643dc411aec8fbc5d189550c4f97b600347a",
+      "bytes": 204
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d4968b8e647e01078a2367b6ae791946d751754d",
+      "sha256": "c62c057aab949e3b63d739b12d3c48e872b425f34cff9bfefb47608d8099a2ae",
+      "bytes": 86
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d6897c17a692dac1675b0a0c5b17236f553ea0b1",
+      "sha256": "2030450287c744dc1d3fdd9b0e9a2e5254fac43ce3bb07ff73d7fbc8dc97f113",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/d832010d675ac8313b34eda53346cc4ffc3b3577",
+      "sha256": "c6ed382d680bb5f6134871c911ec5c88f0668838103651335d2afd673891c740",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/db70771ff30acc708352630fbd2f06e49d0bd7e5",
+      "sha256": "1aa909d76e91e2e1490ca3da0d3929aeb03a220808041361bd1c615e5d12ace5",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ddfb2301f262b55b52c323c9d2b742c2b7771dda",
+      "sha256": "9266b3e79e2ccfbf01d5fbcfe6f5c9aa47a62926913ef79b157a82a03bce6f1d",
+      "bytes": 111
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/de9f49a7fd661889e424bd5da57fe049aa83828a",
+      "sha256": "ef4e924f11fe6c8b2783832d97af61ff8d7a2edd775ccbde2d733275f534678c",
+      "bytes": 26
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/e1ac9434e9bfc694ca13179845746e940858b181",
+      "sha256": "2fbe9f359661dc87ec3bd4c837521298e17677d86975002e1ea437e3c9e5bda1",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/e33ffd9c4106fe80bf462c9a5838683f34005507",
+      "sha256": "2a13142f4493639d70d3095e454f9e47e1aa7454f3cb7082823160aa42fc36b3",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/f676acf17dd912a0ffb9cf73622545018471df3c",
+      "sha256": "182343edd392ae1f46ea5ebc5a0ae9c331a3f764b6a667f1228436c8820df1a7",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/f689c16f248dd6512026eeeab917dac5888adfa1",
+      "sha256": "da550aceb8a11e8d48a08036f092a5b0f2b55bf772b4de3fcb3d6127e951fac7",
+      "bytes": 330
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/f725d55eeb657fd7aef1eb4f0871377087f66875",
+      "sha256": "9ffe20df00119755d60328098155a70a74f84a4f261d99e82941c273166408c7",
+      "bytes": 106
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/f816b4f6da73ee7a8e86f2f3d7cd9bf5e1d51172",
+      "sha256": "74d384cec1b5950a7bda572b0156185fd1bce6838114df02970745855f7750f2",
+      "bytes": 213
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/f92e39758b22be9743f0be8d5dcb7c2b1c8baacb",
+      "sha256": "3c1ddac46c59b0ca2670300c64e17f15167b4bb687797b967cb5ca9cc70ca127",
+      "bytes": 244
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/facc7ed24a966d259254f25bbb7c6dda9d63bc17",
+      "sha256": "5c56012752176d8bcc223e4a151541bfc0b70e4a302700bbac3ecfa2303a4a7e",
+      "bytes": 245
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/fb2d584d1b3914717d5d2960e23b55b402d14543",
+      "sha256": "11bd7718e60380e8d80e228edf6c97ab82e0bb24f6c7b0d969ea9ca7aa21c2d7",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/fd0008bed99d407ab381d6169c9d89cdc767dcf0",
+      "sha256": "7b42201b4f1daf0557156003fa967e4d3f1da67ddb607ceaf02e902b506e5a4c",
+      "bytes": 49
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/fd42acbfef314bc9416e0ce4a39e327b34bbdb9d",
+      "sha256": "281851ae4f076bd75ff4041a59f3822c117d60115913ea1d12dd4ce298d0811b",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/fdb7fee8cb0d308bbc4d0dd29a37a889dabe4810",
+      "sha256": "3aab654d1126a18295619ebee7f687130c2185c3ee19d8fb285c9563a543cc70",
+      "bytes": 153
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/fe44ecc6525d5c81fa9a9805c5b60696f243aa42",
+      "sha256": "28c955b988cc4c0d9461ed81f89313a89f6ff4a3b9b9f2fe4fcf98dbb37166b3",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/febc6d3a3229135e2c97797609ba33b7604ec432",
+      "sha256": "953f6dadda951be7830fa62a413cdf03a059ccf519e2456dc755d42c368e9d83",
+      "bytes": 265
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/febf6ee5b0b597da02f6622f79110c928be6e307",
+      "sha256": "b1d43c6cbef42e9d96e67cc771cbf685842d910dc70964a7996475be8e2e790d",
+      "bytes": 124
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_from_json_equiv/ffdb476295619b4fe57aa58a3a42957183a30509",
+      "sha256": "44d607e7ee176b32e0aa630593a61c4cfb819635a11ca81d1827084df098c724",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/037096075df7d67ef01d23fcef89a83640d718fa",
+      "sha256": "4ec75bee9abf24399be138ab938469f99f20d0f650cfe4ecffc7a62b14212020",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/04dde972911176e1d49749d4a9cc1d1cd8df0522",
+      "sha256": "410611339d9ec4f1a0a0de63f846d5fab77acc5e45a50d6ea06bd56131f7b3f9",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/08534f33c201a45017b502e90a800f1b708ebcb3",
+      "sha256": "a9253dc8529dd214e5f22397888e78d3390daa47593e26f68c18f97fd7a3876b",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/0acba4606709fe30c8570c814b71bc8ac2268eb4",
+      "sha256": "8c5a34ae5bf54de74e67c9d920d04c9c1a3d75fe0ed3cbeec5dde51318f5f4e9",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/0ea3b5b306e935de21b724e05bb5c0eb0cae8cb7",
+      "sha256": "ef4bcdb0bcfb534f576c0c87a57858ef49639e2e543397c303819575627d1277",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/0fa8176ec5c4c6de8bd480b78899c8a326931867",
+      "sha256": "eb9d833b99536667aa07123f53062fe72fee886e2a678844d87f4fccf49ae5d6",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/17d39ff2892073b45e89f867fe20401aaf2a5b82",
+      "sha256": "bb21d30acc92d506d686afa7ed866377cc17f4d0239ad47f943d7acc694a16ed",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/1bdcb82c8422d336fcae5590b50400129b2f8c82",
+      "sha256": "d94d523affabe3dd2cef7d7f2e7cd00ec544dac5686f1ea031933b0b37e0f410",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/1ddb72b2c881e3a3bf5f1e52b02efafcfc97efa3",
+      "sha256": "769975c05f7b4b5a70d92002ce7b954cdabf76fc52b34044497d4888b9988d90",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/24b94b0da7d2ca05629b0d4a55ff4c68010dc5a3",
+      "sha256": "7572f01dbca7cd252be9a4f4c15ef26165be41789e7b28af70dcff9ee5bf55f2",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/27b47a90f98be6c3aa624f2874f598dc2e670f5a",
+      "sha256": "dae158e34c04f976bb6c446b8b4e75f5536ddcc24b7e1a188b52a704255a905c",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/28408bc772b639a27eb736f99fdea1f479d63ec9",
+      "sha256": "5b87ae4538db3eeb944e0ef41b38ce00d0497d8712a5b95ecee4781f837ac899",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/2e5372016f516a20189e72b51116e539f2f1b5a7",
+      "sha256": "b82f803839da2b3806cd3698feaefd1b30c870cbfef63bf93b7253fe6ae4edd0",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/2f7740ee5888f3a9201913c594058efa9264df6f",
+      "sha256": "026850cf3bf0e33b94d7642967646bd662df950e2be11096f892d09aff013ed2",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/2f96020513f1f4ae282019db51b4695956c5ea86",
+      "sha256": "fe17bf6dabb75fb3afe5483ab6e83a6a0ab380b34ddd20edc5953623a37cb0d4",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/39d4aeacaa117138ecc7a2e5b3e2c67ae2e869cb",
+      "sha256": "cbd0e5853c15f137df293cc809133d31d88c495920ab85cea0a0a30a66cbe136",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/3cdbd0f7050c6e9eb10290db3ef6271995e9965a",
+      "sha256": "440872cce5b900dce3485e97148b1df372e6039af9a3f8f3c8dc6efdce6562da",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/3e495c2e05e5d0f40ad9681d2cc7deebcc1023d2",
+      "sha256": "ac13db8b32427150ee279904580e1bf8f10779759118272622a6cc8b0fbc7ee1",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/40d8d38f400221b4f31805b2b2df331c98b9c450",
+      "sha256": "2169c3f800bb6bcda0772e9d16bf7c9ff984a1c21334a9a67ad0f44676956418",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/469004c1dec745932f943f3c59d1109f2376b40e",
+      "sha256": "d387fb87d3619bb10a0a61fc24a22abfb65ab24ede689bf88f602266c5d20db9",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4709dd8be7af1277b950566f1f49839d562a3e44",
+      "sha256": "ba804c44ef023a3543fc91e645651fb23b7bc86515d1cb92002c6d89faa58458",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/488c63d766845c8cfbf24729d4e073053b1349e2",
+      "sha256": "071638b0098f96e3cf1702bb1715b86ee9947edc86935ac4f488730f4f771346",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4c2edcc15b49499f1dd0f201bfff229a20f9dee0",
+      "sha256": "3ed4fea2fcdb736b6620b3f8049a8b7a57bb9c195d7fd5b706c4d01af0f5f5b1",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4c44915f8a491e2280aafe65e6b842f1a5d54885",
+      "sha256": "3761029624ffb2b1869fd22c38eba156942fa67f100b124d87407e5617e88e6e",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4d53451bec4b746525e63cac212c0ac580bc0707",
+      "sha256": "18d64428a0c9793c76efc713f87821823188ed8736b5b6a81b49aa0180faf959",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4efa2e4611fc4409686465c0bc5c3ff99eadffd8",
+      "sha256": "9e2464f3c7b82d9234ee098121f9bc8ef2895502114088f4c4fb2aa3697b2ca0",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4f271709e575c1c3ad95324dd56b2e1c35c3fc07",
+      "sha256": "3367057fbc0511e45567616749cd6b3983919e0ea6d98dbbee406f30316d31d1",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/4ffeda45515e83e6fd78e3efda2f45263cdf6bd1",
+      "sha256": "62fb0c7615a5a98ad4b28ccd8bcfd9ec3e3530351e46ffe43010d5da1e249579",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/50f1d4e31932e1dabff34ac83dc57669a28beb01",
+      "sha256": "293029529a47f5b26669404660447ef4311de1e28d8ea7d9cb20d45d30c86413",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/525a3e68bb3c4130de0f994692c1e5d4019a6e3c",
+      "sha256": "ab003f32881bc5aaada4961564e583a4eb174fbf4f409f1ffa84d64b3431133e",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/5353380f1374b6a7829f19e2c9bf66f81cce3067",
+      "sha256": "8d25d6ffce46466234eda6b9ead022fbb9e6686e1c2207486c1c9599ac3ba9b0",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/53f5a95fa6c130c8421c2b780219e1d6b98dcd1f",
+      "sha256": "8e0cf663fedaf44e72539c36c2a90b6915f674525c950cc341b9f903c1a42cba",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/5a02b5de9e97d92a2334b5f866b5f51f533ed3de",
+      "sha256": "f7a52fc1ffc394f73d86cff606bbff1de3721268972e82af58d105b50b3aeb67",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/5e7a76d4a38b352010c4a8c8ad4aa461f6218793",
+      "sha256": "1ebcc8f6a7a4f4f57c1a48f9ec050a6aa062711e303d1b0ddcd88dc55a8294a3",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/5ffac0633e2cfcc4254e230b3963bbe262ba5c05",
+      "sha256": "70ec249fa15d5c0b852069fb8776c63a6b424e97055390949aa3475db806f11b",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/644a6764c04722ef560652acd48b29f01de57cea",
+      "sha256": "7e30e7d36c2b5cab5b37ef7f41fd2628f507152134578feb911d31620e760042",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/65af065021ed7f20f82951c871c19ca05ae94408",
+      "sha256": "653998145f4cc51c93b36b3a41df58f76b6566be2ad277ae6e5206a128f99774",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/6af6863e5344da2454b01b05d3b764e89012ed9e",
+      "sha256": "500b7767563fa4ceaf48c0fe7fd68294b00d24e7a3649074eb0fbbd5e42d1649",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/70bf2517c15f694fbd7bfc7e97dfd33de9c6a7af",
+      "sha256": "0964a33bc4a3ebc3edb02c1ed101be8547b5988045cd3d0bbf27ce1514275ae7",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/72886c8ccdc85001ca8b81aa77df757f144698b0",
+      "sha256": "f8316347616597887d88587504c9d83e8e49c51b89f67d951d7707a6aafd85fe",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7767e2426be826ecdacdce4d3fdb011bce3670c2",
+      "sha256": "e16c80456c6809e41c9f19aa9ea0678ee8d486b7010c41ca324d66e87d90ce63",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7874cedb4461334c55182b6543dd733ca63cf466",
+      "sha256": "9c528dbcc589566cafc4f0044b10a01e524007f035186ee11a5d1a3e6737cb7d",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/799f36bc4ced8d4cfaaec5105d2cbaa40490b5b3",
+      "sha256": "8e2cb68a83693eaa24027d7a0c042af218a6fd616ced9224f1b81a9d9e6a5fde",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7c3d3ccd0f35bcf7932f9edba419c6a9636fb90a",
+      "sha256": "1d96e8cd85eb1f8febfa068a23a9532a2fb608a74b7cf57d023ffa5347dba0db",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7c7e75d31b3abf75372e4f841a722bc37bd19ca3",
+      "sha256": "ca769f1582cafd6b9f666b99516e9b99e24db29aeb7c31d9754f56037522ccc0",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7f05dfb3b98b93ac7232914d809e41bf76ecda37",
+      "sha256": "6b2f728c2ed5a46406adfd997e743b13a2473d5cbb438b8602b00e05c3036e94",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/7f8977473c0859b46154c01864d67cac783fb01c",
+      "sha256": "e9fd89f6245dce9ae0e7f93061355cac39ca911d85c2fa6532868c162f69f714",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/80c0c8897169db54a5100e906a4e93f31c5dd642",
+      "sha256": "9a88719cfd4567ed535d70d438e61ebc0d13ddab7d8b2a7cb95ee790149c54c9",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8114fa371ac084ec80413e368206cfaf90ff0c03",
+      "sha256": "2c2dad821d53f808dddc94dc22dfdfde5cb463cf3425ece312f8c579a0fd134b",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8159deb32bcd355713217a9b237f0d273dcfd3d4",
+      "sha256": "b5a9ba9137f8fc429f388ef84f746a0e6613743afc77ab220d05fb4003ab98c8",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8282bc69c1c94dec04df212e60237f29d9182424",
+      "sha256": "ae49c519e49983a62df3fdf185ba46de311e9f0d4f0338e7f4e5c707f7f74cfa",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8503ee13bf73be0abcae460141459c2da5017a11",
+      "sha256": "4bd3f925dd80155c0cb9a80f418f555e2d7266aa9b59711106c2524c7eff5cd4",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/878489fae060cb7bd59b3a89cbbf62ee27e81be8",
+      "sha256": "f1dd551f5811093eb8b690059c2713ce991db72805052521c33181ca24bdb954",
+      "bytes": 33
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/88488ab6c37d3d2f279bec2c560dae040570e724",
+      "sha256": "3133f24f891c7f162266a7fec1b57c5857b2d6ed6e3ea65e596d3b3ec42edc2b",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8913d20f316d0467b641022cb4849149f6468506",
+      "sha256": "fb1681fc8ddd5dfa4d5b010ac06c4d52d81f56ce45fe8336345874720643da1e",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/89716cbbc1efc8477ef190502311325054cafdcf",
+      "sha256": "8edb29fddbb3a4c995203d89f1ac4c4d96537fa3f23c481c0ee3dce87ff105bd",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/898e6d82f93132bf9df01fabf0e44c83aaa174a0",
+      "sha256": "a26626162e08674c798499e8763cb2b25d062991ac4959cacfead0edc3419194",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8bb26c83b77239ef4e7f32089044d1913cf81cb6",
+      "sha256": "084fbecf5109459ab1b9c7278a45946ee18df626d59fb97a147b37e44093b813",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8c0550e6d4cd18039248a9b13a1063fbf8020373",
+      "sha256": "f2b42144c823ca2b3770a573aba91ef0b10a1feceb69028726d6f29008e9686a",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8d883f1577ca8c334b7c6d75ccb71209d71ced13",
+      "sha256": "beead77994cf573341ec17b58bbf7eb34d2711c993c1d976b128b3188dc1829a",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/8dfd0f767620011df860b50adee3540ca7385c81",
+      "sha256": "1ecf24982ee1b4aca5cab66ec50f12510c022f32ffaa2c43a31a39f709c5fdf9",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/91b698b8c260101c1f22a3fb7b069ce5e2af9a99",
+      "sha256": "97fc5d8996b8088a466ecda617eb5862eff8c0fa684dfe8ae052461f4be9df65",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/9536a8c71b3f3a226695b0ceb2f501b54a46f5c3",
+      "sha256": "8a808acccfc8a0e390ae438e0f30c26610a2ebcd8f163b892e79968a1191af10",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/953f04e69d04eaf4f3a8fd2836f9bea3b5d156b5",
+      "sha256": "865ccadef359bc2761e264764dfafff3b7a1793d3df6cf6bead4aaf5102463b1",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/957f96508ef50bec8eaa75d8846c8f9e4e1597ae",
+      "sha256": "ac65fee38935df4cc9b347e94714d32547f16293c0d83b0a0e33e5f6296ded36",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/99e47a3f6e8048b37889c420ea7ea30a0262764a",
+      "sha256": "6038c4e65ea19e552ab32d27808a79b6fdec00211cb0a4f38ba26ec07e242ea2",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/9a1f3ca245bb6c24573847f9757dd60106f8bdc6",
+      "sha256": "c34dd09dd3bd2c15cbd278b080ac816850ada4b8c186d52fa47a5af083b445c2",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/9ae0b4bd7d1cf0151e2e49414f34c3a6cb41a407",
+      "sha256": "5d20e2e951cbe53527f630b7df44c9ad2e78598d9fbae0c3302b1ba2da012ded",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/9e85bbf19b9d5ac0d962f3780020898825e8603c",
+      "sha256": "f5d96e6045e800e5202946c04d0386770005a571a5d86818e222906d588bde7b",
+      "bytes": 35
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/9f0cd6104c0df493fc95882166e1d74806a1a3e8",
+      "sha256": "8113bd1e5ff3e3b564aa50701131f466fb7dfea29548fbf6556faf8b750eb92d",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/a8236d421ee6d15ccbb5e6d7b05ec94f16719fb1",
+      "sha256": "1ce8642c15b8d30b53d971290cdb6255c842f0eb08d25dd86ae5429e5eddfafd",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/a892036a62b821e2769a1ea9290379c47472436b",
+      "sha256": "b0295fd37c597a051ea43c9a20f39d5818689f8ec8e2a0cd302751af5c387850",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/aeda1ad7e35057fa6d89646b49457a5ff89575cd",
+      "sha256": "255cc49c95db22259484a657f9724dbd3e124ded49603a0aae4b3c4266298492",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/aef70c0fc52d4d0db1858e42c0957133d6b0ba23",
+      "sha256": "cb58a345da679d8b9cef57897b4ae2e979ccf1e9644e5c52d50698ea51288580",
+      "bytes": 35
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/b4ed8bf44c1e23bfa0010f7b3459f38ab7e694e0",
+      "sha256": "3b2e6e7cc7d59e618d8664ba02011a5cd214ed9d3f9b03927254d0f470b8e67e",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/b6df02c5f0543e5d288feb4fe4bd3ccf176cff8d",
+      "sha256": "9bd7f5352bd08ee6490ce99f22e3bcb252f2bc64a75d6a629a255c35e9a0a583",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/b8c132599889916050365c8e4f98311e53a61270",
+      "sha256": "e359c860a43a9e2fd31e72d465b693230097b36947876102abe51dcc7853ad08",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/b9ba990557a41c66d1a56821c3a30ab82be31cba",
+      "sha256": "bf0ea2bdcbc5b937ad1be9e071e24ffd84d12976f229dd12146e1718b1606110",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/baa5299308d328a61a77b71c1cf5eaf9b5886eeb",
+      "sha256": "dc88f5c09ab74ed72e430f2fad6032a7de342d0937a70bb81185371a3e45057a",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/bb1548dd900b509f4fbb273748be0113649fcd77",
+      "sha256": "b2e9aa9294d41c2be25e18bb22e2dd2e47abc53fe7a6a1fa3037486cb1cf44a7",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/bd6b1f64d2b8b429dc77aa4a9ff92e513a2b262d",
+      "sha256": "79f5350ae33a40d30c83e96044d19fd67d39eae5d332ea1da279b0fc7d32f37c",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/be876ad58ea7fa9a2bccffde06c5b8bf05be9803",
+      "sha256": "7a027f5b5420c40715b024bd7af91107b8f13f54d6971b97634540704cdfc4b9",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/c00d5af6bea96b952fc3388261cb027b4037f2f0",
+      "sha256": "6c85640cd7966cfd25a5fdd837de8e9b3a0f0373c3d7c100c6ad352d3f4df3ce",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/c88bb9cc74e09290ce533974f3a10e0e6b634f26",
+      "sha256": "58190d9764f4e05bbb3258e68ad4668987013050d033b1a98e97f4e81ef53092",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/c8d41471411267af47d7151b7718a95e7bfa3c46",
+      "sha256": "0f0014d25638fcf1068a8688e610f781c53745618534d6cfb51b541734ad7cff",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/cadc8b580f69afd801e8d11ea0318ff6a44f783e",
+      "sha256": "8c8ac4851df65ae4dbd1462acdc4ec8042eb005529030bfd70f3b6711b8dec2c",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/cc3862c72012cd7787e60cea64f0e31a292fff31",
+      "sha256": "28cb5f728910a161e486c785199377039ac7a09eba41a1cdec1c844d09e81c82",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/ce32d9e9612fee9145f99aa2be5a4b8a922da11c",
+      "sha256": "9980de507ac6da82a05bb50a1ba6da9b79cc91bb16bb01f8ac62597fd9d5f58c",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/ced51b60d8324467c0f3472fb3dcdffb8956c212",
+      "sha256": "f9948b7289012aed805c34193acbae1c04f70b6e647f2b3892bce01256486ca2",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/cef2fec6ad26867442e4c0373cf4631f0591fe61",
+      "sha256": "6f1cd6bf1c682f1782ab1753f6bbcc44a4da995088b4ff9a64b3ea1a12ad9052",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/cf630efc914241d44b27e5ea80325296d75af5c3",
+      "sha256": "586b7c996c3f25ddf2e594263b293345467edadadf4aea9c8a284a3720bf3f5a",
+      "bytes": 32
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/cfd405894a0afe17ea3ccc92dd6c2e343214b5a7",
+      "sha256": "e55abeb24689e4574841421640287c587aa831e31fd40338571c9ce4e1f0632f",
+      "bytes": 31
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/d160e0986aca4714714a16f29ec605af90be704d",
+      "sha256": "72dfcfb0c470ac255cde83fb8fe38de8a128188e03ea5ba5b2a93adbea1062fa",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/d7173649775474cb2f1b5d94da3301cadfd32737",
+      "sha256": "796f4fc70f1acfdd1beaaa00fac13c9acb19cd27af97c4420ea326e05bf2aa6d",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/d78b2a344d05e692d27737e2ba7f6813dcb17dc2",
+      "sha256": "033ee56e182633f549e78a442665966d5db7dd8ca3aa147a7d55d3559d972fd4",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/d7ab38fd279f18f32d86a4204f680836dd5e4e6b",
+      "sha256": "8dadfdeccc508632687a13ade96c32c9687ab17f7e74e6770655b92b9f615a50",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/d9eccfe0cdb1580fab5c91ea52cca39a5488a54a",
+      "sha256": "44d9edc4811cccacf0cf1715dce11bb9c24ab15d447c7dcaff3ddd686e5398c5",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/dae3cb039a7b5318df42933dc64ad5ee6d43cf75",
+      "sha256": "96be0b15eee973e8b82f539a1dc2581da539c6b1a9aa72f9fb7a9b23c1f9529e",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/de0cf494f8d719de1c2625497834425509b148f0",
+      "sha256": "bbf03773cfe09a57839440d9952d4199ccf8c8ce8f9c33676f12b1657fc696ff",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/e113b01a7dac092320ded0d31b4836a076d7031e",
+      "sha256": "8dc3578a4cc87e7b50b183c16ee13193973f1e702a8a07ba620dac3b1e689a0e",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/e78ba8fccd76a3f2abe40f81e9415d24a2b27bc0",
+      "sha256": "25bdffe7901fdfe5a758246349b906bda16fa86168c7eecf84a11566421f4c66",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/e95b064206b5a834c9c89a877d445ce60c04dda3",
+      "sha256": "126d2977eaf4ab05b0966f62d7a62c8deed076f324c3d0324f1160566c10cc95",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/eb3c04e88ff5e57caab0427a3f7b53e8f2f1579b",
+      "sha256": "715554f90709308de75675ef07f5f00f28e328ad1b6821a2619dc6344d2b3058",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/eef9b4373b45b8e8d180ee637027435c281858c5",
+      "sha256": "2fdd0ad94dd1a77d6bd0b11feaa09c40e3281b26d6bf3451b8702d27b3c481ad",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/efbde7d27d9ff3d466671f959ceac5a498f6ccd3",
+      "sha256": "aecc79c3c2de29c86e444c8fefcbf42a6a09468be2829840a84bf2d8fb7e450d",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/f56d0d9bd850740840d019581c791019556f53bb",
+      "sha256": "61b6ed7314cb143f8005ee45d7c19bd034a23ee57305bc54faa8410c0912465a",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/fba186a95b03b46835d4883166887d61de42d7c0",
+      "sha256": "d08f9e221b9ce6a82acd20d4831936431f97880794f54e4eb234f42a439602a6",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string/fbcd77a454743d04240e71c81daf7374defbc6f2",
+      "sha256": "203861cbf1f798eeb407e668745f5c35e96b2a0507588736e93a6f7fcee45ae7",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/005acf91db0ce0bb6443c08d57e6d11efa635f66",
+      "sha256": "25174d3c2a83743edd2510d648c71853ccf230ad2233672c3c7edb94f62b9b98",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/031d947eb2825d3ebbe7d5f4cc2af480dc7c4269",
+      "sha256": "12446534bbbc54a12fccd005b9f24a3485695f7189dbaa5f046ac528ed3cc44c",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/049275f923ef8b8febebdc50fd51726aaee8164e",
+      "sha256": "aaaedd6d6defce371c044e6c6b6b7816761ebf1003f05ee4f8346769b3e69f9e",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/051067927bd7e1eb27f5743bc664f8ce89c28152",
+      "sha256": "649e876d92420c7689bf7ed02ed1508d02e208f4f2098f57c04eca87e80756e6",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/059326961c03ef97c1d9bb28111aad8d83925325",
+      "sha256": "f92f1a441b174103d29819d5261bd34a0b586c6fe5a36ad3e36591455363c49b",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/076196c823c31d1b6988767e83e2f4d04d59f961",
+      "sha256": "010faa489299c9750bf7631f0261abdf23d03af1d960331c7cfc996af7f5b0a7",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/08f71ca691c9ad48a0b755c18c6b42f9655f83d6",
+      "sha256": "f2c59cf389cbc783b50e5db9e26bae15bc2a02beccecf95b6af2d56924f74482",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/0a914bf109fe0bf924b83571ae52473e995124ac",
+      "sha256": "85a2490911cc01d3bac41c7edb8e0f6a1b9dedeaa44555b7ba95882cade48e2b",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/11b3fef2583a9a96c692c866ed16fc5e3981e0b5",
+      "sha256": "97b9640381a618f9729ad21689fc4e954e2fac781a7fed70b668f24752a02e32",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/12a768c912530b63dd5927a0972db5d758d2e803",
+      "sha256": "7b93fe47e1b62cc4744cb3f1d05e67a449c6ce33a7e6aa71e6b9b772b8daf40a",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/14c4e87687037cef87709b5eba59baf293615f69",
+      "sha256": "47ae63a56f1d8ce73bf2f8acf47ef500bd133f45655687e5c723ef75dc946206",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/17b1e367cf227079ccd7e0ef53eca93b38233ebf",
+      "sha256": "9f634a8e0ce8603cae70f9d3790e2fd22b564556637cac09c144750230282ea3",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/189eb5d6e4f592da6356f9253d6157bef772b7de",
+      "sha256": "6211fbd6203f1443d7e5306dd72d3fe6b47583e1a73c6b5d98401f1669b66fab",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/1a1f08ba947baac81d7a7ddf01323e4330b8f96c",
+      "sha256": "03d5fa416738561b7b20682763fac3402914f954cd22faa9e1263a3d834f83e5",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/1c2a9638973f69f0a32dfde77ffba44cd46f5afe",
+      "sha256": "bf1e3fe5b52e7517d6cd1001db14a8dc2c12d0b1b558d4dd150868996e8e9d8a",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/1c652ae7a4d88bebfaf231ec8e143542e07f3043",
+      "sha256": "1c889038ed43923588173c88332af649f9b7fda785df78f84eca6b0247d8a468",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/1dcf0ec2351966fc2b0babee787f535a2683f130",
+      "sha256": "af193a8cdcd0e3fb39e71147e59efa5cad40763d2611f5beff34a274f514362f",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/235c8b4a868cc2befad7b7721346b9e123a687ce",
+      "sha256": "e8d5bf7ff285699ef1a2bfb5616264735fc6d02ef48c485c87ea33fbd8b15a67",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/23ac994406006c3ca64768a4b7fa02ea1414340a",
+      "sha256": "4dc51476f8a6bc2e532eab35d6783d23eeea42289de1995368b7782de4656da9",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/28adfa63ec51f2983ede3c6757d184027496ec91",
+      "sha256": "555e2925ff1a87bb3fddd493cfb34884bbeb921891e03d1becf2a208ef609185",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/2925aeacd22aaac9955595c5263a81f27961eca6",
+      "sha256": "118caba4b1cdb646d5c95371bcf0018b00a77a5ed11b8de29a4be23e2acee146",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/297b9f92e72d26b85dad72de7fade6bea5ccb8d4",
+      "sha256": "b7a308fbeb00c44a05397b960ced4537a56c0d572e81bc1641633f29cc2c790f",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/2ace62c1befa19e3ea37dd52be9f6d508c5163e6",
+      "sha256": "8a331fdde7032f33a71e1b2e257d80166e348e00fcb17914f48bdb57a1c63007",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/2cc85c0fb3b4068d705848d8ccc91dee0abd005c",
+      "sha256": "a68b83799061feeba39949ae6fd39b1bbd1d6b74173d1dfeea6b5cee1c94c1ec",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/2e6fff4b6750b8e03dc07aa4f1f2d77f4950281e",
+      "sha256": "a285d6a4cede000a708facd4e3d6e6e0288bf12ea085662bab6a306e5a08d4f2",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/30ef1ba82ce18f5b9d0839964578e44be5b20cc5",
+      "sha256": "8595892b6d6c182464a469f5fc0f68a406be10cd4d0d0ff199de381dcb111a34",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/32269567ce6de942a35fad1fb0302e34cc4bb014",
+      "sha256": "21b861afe1fd84d7c4fcccc7e23f4350d6ee96c513568e8a36258fb55900ba95",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/366431ea9b0bcc47647c5d080c8ddbcbae97fa53",
+      "sha256": "601048bca3a837cc50411569c0dac3d6ff0d2e559f3b0b6bb72102ad64b3182c",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/382023be4bfc69aa5ce36c47aaa903aac9a3fc9f",
+      "sha256": "8a56da2150f3ea94a59dab049aea8c8c3f933925be222d690c16ed40a384e7c0",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/38323e72dc9db438a682a892a4c558a96a17f2a8",
+      "sha256": "b4e02c2dc8ae9e7ca34c90b634d49b22c80c14f4757d5f08b095c745564f4b0b",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/3903b9b320ebb7401020d4b964e03c2d7bf2fd41",
+      "sha256": "880f741f3319ec7cb956c7232634d4cd316c4ab8aa84b831abeaf1669c4f8bcf",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/3a399afc56ae99b041cb52babe649b9ce02b3d3a",
+      "sha256": "f9cd287dd5dbbb63f80b14cc191b2b3780166b7dfd31bab2d301b938af150649",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/3b8bfe03d477d5a30b978a4426a44001dc3da70d",
+      "sha256": "4ec024f1ebcdb782949c4a5af5ff36f499796b6f27d3ba5a9aa9012c8d160f81",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/3c3dc9c843213f552991ace2d63a6bc9d7cc7d6d",
+      "sha256": "7fd5ed97bc669893999d2abd86832ddb3ef4f7e9db2102532e53331676f99ffe",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/40cb266c1caad6e4a43a59860057ea7e8f7cb2ac",
+      "sha256": "4a490adf662208f7b98051fe1ea2b0c37155c4dcb18a2b00afc01ac21ec591cc",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/42c0751fcf334ac1b1edda6cc60f7e18e47aac0d",
+      "sha256": "cf7a9437e01c673633923e6cb8786b632d0e8011284c1d4c2cc243761250762b",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/42eac81160f72ee0cff43422f31b649413c2394f",
+      "sha256": "5a86e56634013c4abdb1f5977d6ce4383d546c582c20825971f6e0ef740ef58f",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/42f20c329eebb0b29bab91da7f19393de63f5103",
+      "sha256": "3f6b9601fc5ea323cd4f65c4eeee9542705e2d4fb844aa31d60badb10350f2d2",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/46bf1fcf51488db6d104b23832d60e6afbef0a41",
+      "sha256": "438a00d714c695d3bc78335234a7e83879f5e21a957fe5aa5ea233c161ad4d99",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/476bcd6490a620b18236f6246e8b87c00cdda803",
+      "sha256": "ca3ddd88b809411e1f28735ecd643d3b7907f02f0175cfbd544502bdd0b6050f",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/47ab84207457173b0f5ba3313c99cabccfd87bbc",
+      "sha256": "f70d31f7c73cf53b3f7f0cc49c054d9f1bbf5454e0a60b65f8da6b3b7e5f38ff",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/47b9708ce5b8a776c6483f570e9347e2845ba13b",
+      "sha256": "639463039100420208169344ce50a4bcb68866ac8cf9c04c8ba285bc0dec3974",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/491b744da4c219789e31af087099eaf6b341f1b1",
+      "sha256": "564fa6c145140e4b7b6fdb8210a80790affe046f1265f7f04d30403c71bef7f9",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/519f796ea191844c76177d5582ff21557c6a5bbd",
+      "sha256": "0bfa44cc430f864433c50c1063af7886923b9135531e605f4acca464d9124e95",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/5423cd25f3ae122a176893281981810f7eda3235",
+      "sha256": "1d3a7b7d2895bdfc46d6dfc061bd895c5c5192da7c626330de76a1a8332c33ba",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/554eca30a8ac035705972444af3b7dd39958c045",
+      "sha256": "85c52482935077be9abdf7d1dca46341d625dd11916c140069794f1ad068087b",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/575fb5705b67d385d4201e7e0905507e27919da1",
+      "sha256": "93c8431dc3df67ab1324a3165a03ed15ec8574cdbf77125dc459180baba0f911",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/57ea59eb1d74508d3e6998f7de43b58d3d4305bd",
+      "sha256": "c2dd925016b87bd21cb6b574d0e2dc3ea1a5f438f19caadf14c4e452d08c038b",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/5fd612e3740868faa48fa737c29c1baafc316f2c",
+      "sha256": "2da59b011802729e8c460b07852e32404db5d81135326d185fd140888f60d5f5",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/606afeb18e4f28a03d60b65906ce8b5b321c5196",
+      "sha256": "d892f9246b3f520997b622659223384c90d816d356b1e972fb9120c95125344c",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/60e1713d3714c954c5c3ef7230d212c6bb5ac854",
+      "sha256": "35136f183354a896cb555b8784b5c049ea4e7f18f74fa8ccf8a10278cfdb3fe5",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/66ce4867d44145719a1fc83d73beda853ca1e2e5",
+      "sha256": "cd18be8ffee68a3e510f4553a6f9548ca8ce6ef77306fb28e3bfda3449414cf5",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/673f1b6d2a3710f62c039184c536c72f19322293",
+      "sha256": "1a12180cd03cc879cce9e255413313b7e9250d05ed145fc73267e166bd5dd72c",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/6b09d27f91b466fe317d30577a1baa863f515436",
+      "sha256": "755816f0c6a6bec0d7c83ef77f4435bd448e3fba6d4801985f16f38147c48474",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/6d4a45006bc4f60d86d48ab674a5f3803b621e43",
+      "sha256": "55550fbb65345b52a4d57e4dca54afcbd8851a197b93b6f64d34ba675d8636b7",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/6f1820712e298432063848d4505070aee9198b19",
+      "sha256": "7f78a36029887e57fce767cca1c94772b1a44438affb3bab870cdcede37a8d36",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/75469e32d20549b8eb022f0234d132c3fce55228",
+      "sha256": "9ead4b25ef786ecf51ece9784b29b9e790e6657ce0e6e8dd905f66ae945dfd62",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/75c917097f9453cfa8a5f70abf025521cc3af50c",
+      "sha256": "f92b5265428769f54e058c63db71e1a2a828cf4ad61d086f2856ff3eb11a9767",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/771bb2e29aeb24ba447b13071c870d0ddf805983",
+      "sha256": "74997e1e8a0e27f4e53b2b5059d69537048ff0eec44dc7469f8dbd4013e44e71",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7d8756adcd71d7d488e08fba4aaa48161b5d8e23",
+      "sha256": "c89a30cb8495c88675963aabcb2118bd3537bf11e721f07c44ada8a3075572c2",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7df840a3b1e6f9df57962d567b321e7c866f5c30",
+      "sha256": "3c9d711f877f7ad815e434747f7db332f6a6ff7cf3469d18e511c2f931b955a2",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7e9428fd3fe1fccf1052d7d68f6adbbe6ca084a8",
+      "sha256": "35702934516dcff48dd8071f88b80011055dccd98f30e9b77f027da7534ab8dd",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7ef754904f531db497e8bff30b623018d08e0aa9",
+      "sha256": "d03311992b5ed69cca21e01c9ca60fc8eca2ff744dfc9030ff394744d626f317",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7ef824900e8d1b166874d4e1089651eea90c8776",
+      "sha256": "7fdf527d32c50fafe7d82f91e935d35761047a6d63cebf265f7e75cc889909fc",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7f8fd4adb6ad6cd2aed1d765003ad1d89caee767",
+      "sha256": "05bc57619ae368520fdcc32e125cbc31c25523045ef434159637c54eec43dfb1",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7f9cc8fb60ba853020e32cce42d4600cf638d9d6",
+      "sha256": "25e187411894f6341423e519b1bae47641879afd38c7c99336e9bae6b94fb31e",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/7fbd2814b6e80854245ae5dd523292795dd0d04d",
+      "sha256": "c752fafc61e21cda93eff4c1e7e5582e043a28aa6c0069b1f68a76b1110a9f68",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/80d46e8d490b44d7a723b5747e3690d2307b6d13",
+      "sha256": "71fd42537d43bf3879cf5780c92982a80cde1e7476c003043c926bd06acd957c",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/81d566988ebd0fd42b32d7931ab41b3cd54828b5",
+      "sha256": "c859b680b5767c8b0ec35c962d9c657b9b68df99857e82c2c35bee347b763d9c",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/84dda4cb0e7fb4952bb0ed21e6b0ae03e3631813",
+      "sha256": "2786d43052188fe1824213bf0347ae3730cd25421f86a4f8035c00612030ecfe",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/877779908eb42720280d4ecb05db0371447cf394",
+      "sha256": "db2650fc168775de7a172827c1a0f0abe83be513cd7722d12ce9955305a111c1",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/89b0477ab7ca67ee89f6170cb7ad95f6419e013b",
+      "sha256": "e846b79792caf44ae3641445a5464815ea153f32ed20082d0a307477409d688a",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/89c96fa4dc4ec0127a6235f76b77984f00b48393",
+      "sha256": "b95b911e9f8519e196c7056b0978f01dd4f0a9680ade8f5592bd30e08edffb20",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8a14f8adaa9244c75bab087596580d87fb790ffe",
+      "sha256": "eb905259822b970304597facded1edeedee7cbed129c648ecfe51466baea5c40",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8c55a12db2addb7370e0d2b2cea4f3f2486bd170",
+      "sha256": "0d63b26fdcd1b67e1c43177854a9bd46606b7bf00663cbef2aab7281705a5998",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8c573b8549e9985bd54e05d56278134bae8947bb",
+      "sha256": "e20e4d03ea489f992e2111c6c25ca04dfb928a1bc149b2f88a73342b7818dd39",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8dc5d5a9279df255d9e395688dacea4a998baade",
+      "sha256": "2413c3d49ef39d7f7cb74af4e97eb2bbbc7380c89337b18f8997a58f194894c8",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8de979487d1163b269331068bf281ed7d3843b22",
+      "sha256": "4b6e04ac629916708749cd1fbd1024cc1efd34adaefd6a3c45d421056b6f9609",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/8e640f734e39f26228a343556b009c35edb78bb8",
+      "sha256": "be430fd1567968b231c973942f2e6ac4156bce2d6a69ff6ac5d9afe6550738fb",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/968926380076c2b98300d755ab869814520a98e7",
+      "sha256": "91a1da3777e6cf6647981b15497d694bc86eb58f409c23a0b7c6acf4e79f03b3",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/9a12d4fa7737e7323a9778c088ab24bc6f4013ed",
+      "sha256": "ac0c58563a3d604dd1379ae4e1ddb20a8479a05196132a5de5b8bc5c19034130",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/9c9c1d13d979e5098cd0dab39fe19037d13d1876",
+      "sha256": "31683e2e339d8116cff75e822cf61183378d19c0d92654864f09085e8589d07b",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/9e220e2353b2005fc535c24ec6e6f78593b24a02",
+      "sha256": "51afcb8c59f820c6c0ac46939a10fbc7b833104a914768c269989d4fc126ebd1",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/a17972385703ed5f9475d47b2e5e86147075c790",
+      "sha256": "7904ae4a8b10ecfac61434522bac1dbaa55c7a46d8262c2442cfdb44658d236b",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/a35a023c1922c2ddd1abd7ed140c21c9661b5b18",
+      "sha256": "7d84bda4a5ae3343dc83d218f1daf0fb3fa7c3c9e462bde0618271feef9a115e",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/a59193d589b93d20eaf00c429a1f74747ffb57a1",
+      "sha256": "179b60f742c69abba0e31c09e4ca18020f9c659542801503b3bfcd54d4992be8",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/a7adea9f9d270ec128dd255b91cfb8ffe336417c",
+      "sha256": "d819d59287a1021608677ff40c17594de9612a79b7fed9d291b5ead4359fb337",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/a8c5e4232167d0bf02555bb4470028e9856a1d99",
+      "sha256": "ac84e56bc6aeb453a190798e54eab160bffccfe8943d1fe67af92aaaefbffc8c",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/aa157a877f00a23d9a06bae7f44e7e3d0adb22f5",
+      "sha256": "731bb46ec56535a88bb7654b5e934aab15edba9738794155d8256a88809797c8",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/aa25f35a0821b5ef545e71c044f1f15afd238039",
+      "sha256": "ebf5dd7a732b2dcaa2ed224e4b91af14175086c7276d0878c0fc10da2d77df89",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/aa389698f521c36a8d1def44fce698a2579df7eb",
+      "sha256": "fbdc9072aa3d1b97bdde1b18d5babeedfa1c3519d5e51a5f90567ce7bdd86589",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ac68df090c0a9956e2fb21619d7b074d9c27d30f",
+      "sha256": "372089bc474ead3b71b0dc202c74ad40a1f2b501feba2d331fbe930eb4997339",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ae7fc52db7fb65df97f9819f2971a9ddc073fefd",
+      "sha256": "22e37efb6312220f54286c4be3186b8ccb456adc30e34bac05b68abbbe105238",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/b883805df982fb0c14e7259bf1560161a251ccc1",
+      "sha256": "88103eff0d6d8e45c04feca6e899fffedf4116410fd88d512c755b01972e9ec4",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ba3d047b0a9b41946facec1ce53bbf150a7583fb",
+      "sha256": "a37d77dc208aac55bead22d5d8880bf67bf21e16aa7a4870ac7b2d1b157edf46",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/bb6392ba39545e5245e6f4405b3ea293ba0acf40",
+      "sha256": "75eafb3f07513cbc656553fc22dbf5f3bcc87d023aeae68ee641bccb27efc065",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/bbd62f0ab1c45d88b07f00bbc2d2321b83c9596a",
+      "sha256": "67c89fe66ed8ee27bdaae0a9c753a5f51028d058e3b2cb8297f247d5afa1a078",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/c3323246ce0ac457858af71229c7c24924bd8a0e",
+      "sha256": "63708ae70d1bee554c9ead61360839dc0e684d21e1afd6702321c9ec3f80ed1d",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/c5020ba1b9cdab3b6ac999a029a817ddfc92cb3b",
+      "sha256": "09bf89f6bafe24e2928ff4286b49d4110261be3f2d3d470c4f5810c0fdbdb703",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/c5389c2bd0c1a49c232241315bbba631bec52a1c",
+      "sha256": "49637403c8fcdb682ea9aba54ddd1995af2e58e806f2459eb86205aed83c117f",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/c7d19d4d7b67600069fa9ddc6fdf3091cb7b943e",
+      "sha256": "494a1b8ba96308aecb7dd9862d1e29a63f7fd7416dbf6bc07efe0aeec9c73ba3",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/c9532b1a2f586ecb155c5884340df091fa5deb59",
+      "sha256": "f398dfcb5ca511123ce073f66c22fb9945be2666483689005959b53647f15859",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ca37c217e94c8b7c25756d20659539bfbc2d0aca",
+      "sha256": "135c274f21369ae764f3397ca13460ef72769ad1667f96bf262aa2c047ce2e75",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/cb445321135f6c0b072b89d8d1f76c4d718283ae",
+      "sha256": "dd3b02094fb45a0989079bfdeb81eb102d50efdd271b0f3e88eaee78665c307a",
+      "bytes": 9
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/cba88cd84a17d96b5215e35f79a87766cc9d7d54",
+      "sha256": "91de96a47054890e8b307ad9c0e0311b4214e67e21ae06c31756f00537f2356f",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d0d97a22de721dc6cac3c6ffa20a2ea63568a2cf",
+      "sha256": "3e1d616f969f20e5a9a2577fdd4ae72a5c9fe344e3a3d05dc75be3eb30d7db50",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d248f4c278906ddd523a62ea8d8f9fbc55aa08de",
+      "sha256": "87196140dbe504df6b0f31c5025e68868fb614296b43d5984e374f46a882df67",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d41bc041c57e6c357ea7c8bcc27819a489106e1c",
+      "sha256": "93c0ffaf880678116855b5deea8f3d5f2af0618675cc8ab7fa8427f28b889cc6",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d507454ae0341583d2fd6e42708714264b84d7a2",
+      "sha256": "daec0f6681de19a50bda82831e6bb7e8d409b4e1790c8bbf85a0553f4c53f9f3",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d778e2489701ab903c1e3634fbf4133308b0cd5f",
+      "sha256": "7a027fae64dff36d32193f48bd072b44276da5ce764993cb02a8efe17b33dfbb",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d7df000a35a061916dad38ef05ad282f0612777d",
+      "sha256": "a5a5afae12f1a7ea63c30cf062b004844d2d8a490ba56b8cdce5c4592d6bf093",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d810d6667dd3ea423838b819fd3bc6e342053ec8",
+      "sha256": "03c020fd845c53553cf30e52278e4b392847865494c51b05d63c463284c4b155",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/d86e092a6671b835079b9d3d66b41eaddcbce529",
+      "sha256": "2e46744f8d32af6fdea4171c8cc3409606d1a377d0d1bad0e24d9098af7594fa",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/dd29ecf524b030a65261e3059c48ab9e1ecb2585",
+      "sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/e0b7da52d9fa05f91f246653f45bdf2849c02ebd",
+      "sha256": "072de0b3e6979e1e6d61087d83e3db85637462f4509aade20aa4deb59c433c66",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/e2081a7c9584b381e683599682a0e527515beca6",
+      "sha256": "26e8fec639e866003c7d35eecd380a22dd11e341e93b0bfa7be4d6fa4c1e515d",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/e3d0e00a627053d446b1b5b059018cf794b68594",
+      "sha256": "c25afa369fcc67565c1cb0281d33d78f80c09b2fca6733f1cfa2ce9bafedf1fa",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/e57f938ff779b40eb40b2c4b6fa6128fa4d1dacc",
+      "sha256": "2ca41c145eba745f3b2904b644103ad8807b392582840a633723debed0febbf8",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/e58178c30f3816c1496d7b9b583590ea7af99c0f",
+      "sha256": "59cab7842e596941fb371c6ebbd1bfe129b41fb9f8dadc5c082a76d35720489d",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/eb310524742ec8f2a7da41298cf685d7f8bbcd8f",
+      "sha256": "a074208dc462289e15556fa625145dc617c34dd6a097496b1dae315e01facafa",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/eccac38fc3a53d491e430c5f61ed07521ba2d1b5",
+      "sha256": "f77f0640084e40a9867d5d2b6d9841aa023e23e2db0ab9e8e65aa6b37144ac3c",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ef230df3b716b4df6401039aec17b14f86aa71ed",
+      "sha256": "fad17905c703bb52a749f80db85e9a84ab36f96e0195523dff319513f62f8d0c",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/ef995f0ee1b0170c3569370572401243db616971",
+      "sha256": "67d3829305953ce4480fb132a3db2c73aef72c2b191da7d34ab1cef0d3970490",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/f0271020c75a76c70f5f55dd49dd2f43f292250d",
+      "sha256": "c0993d7a6098fb889457566fd1d501043712b64ce68c925c1c8486f7ef2ef760",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/f6a03a57bb3be15fdc521e938e57c8859ff6add3",
+      "sha256": "0f66a09a5dbfd02312b0b099bd64fa7ee5a67bf764b72bf286dbb1c3f707e471",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_parse_string_ref/f7235109c8e5f89ec07e5d745a8031e9eba4e4fe",
+      "sha256": "386cf314bb05acdaaabdf4da1caf140167271a26bd08bf34c3a7427d4bc4431f",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/00426c91c59e8aa00cb25ab6535092923e100924",
+      "sha256": "b638c4b4289a51c96d91781386bc75cb9a8958e2e04522aafd7e9ff95e42f547",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/007d73e47874345c71218d1bd4f7d35ac6145ce1",
+      "sha256": "d61ab8283184d1a1c30b00a66188e6aa0f2f3c34fa6137a041b915e0d9086c37",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/016110960cbf2ea98980f2e5ee7fb43fdc317e29",
+      "sha256": "f21a902f14c4b970915d242867b1caa761b7c4d4b1123dc5f73de641ff1e9c5b",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/022af750649cc45b183b310c1b762600e2a68db5",
+      "sha256": "79f8451da354253050fbfa692acc7a3a578469cd2670a681ab352395b4fd4365",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/02835ceb0abaa86e7b038871ee7361ab6b5f8b21",
+      "sha256": "6f1ca56e12b195a3cadac9092649c390060fde174c185a98b5792c9e774a2dd3",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/04ddf44cb30b94a3cdbe346751907b90439d3ee6",
+      "sha256": "da5d8d71c74c77da80bd1259328c468469ed53816b174605b06f41f7e5d8e469",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/04e7d347b0eef74cb936d85ed722bab696320ea6",
+      "sha256": "c93970600065aef19255e7099646a2d77cbf12f581826419e35056a8d9d598b6",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/04f3829151dcde18692a77b40e25d1c332e00ffa",
+      "sha256": "fda60608ce6bf524d1a6a7c9e84d8ea9eff97187cd8eeddfdb93572bdc3c02c8",
+      "bytes": 36
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/051ad1bb02128f526bbc5c8e98e10333e31da765",
+      "sha256": "7fce1fed478b8f864a09a65771e0338d46322f5288b3d108fe055eebd5245c1e",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/06bd1a5dbdd9b5e4a88de8b3c974f74ccef5d027",
+      "sha256": "b2b0e41d5c37f76214bde457b653d076efd455ef0b9c1b32d99406df7b8df5a9",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/077e717751ad2d1011b284703a40b18d8af6b580",
+      "sha256": "e076b6d6a33cde04936840f6266c210dd8531cd89294114e746f4feab9225bec",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/08c557c063a16ba6c80a2cdc9fa2ba528b43de1a",
+      "sha256": "0f2c00228a4a4539c4ca430db5b51afb504547b18acbb9560f83f3f63651ae6c",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/095b78eddbe6ecfc9d77e25454e360f9771d8c6c",
+      "sha256": "bbcafebc303ddb90919f602f833502614515c43d5445754de9ac04a8f2a74c1d",
+      "bytes": 58
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0a92582f9eef31da6d2851bd1c30545f183076ee",
+      "sha256": "8dd25ffd95f723c7ac218275c42098ce952e686c84156cd01e52f97952ce93a7",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0af91cba2d4a65574e6c991b5dbe46e17aa992d3",
+      "sha256": "aac9fbeaad5a9cd1745b06e96e0c42e8f139d23deba7bf2c36eba977974b8285",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0c3af5d88e83deb671601240ff34ef854e213eea",
+      "sha256": "031c1b5d7d9e22ff473ff8a9ac8c5a7dc079d34b6aa69b72cde7952b65dc2ae0",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0c8262c76a0dc0fc6690ec811e14ff8f3cb593ca",
+      "sha256": "178e56bf7e1a872b81bc7df3dc10d378ee9871e9055ad0761b2822760cd765f8",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0d30ee624380ed9480b2dc0ffc803a591c19bdbb",
+      "sha256": "5b0596e7ccb0dd69cb81135933bfd0a571fe226095859ffd60b3ccd3c7450876",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0d68f5b76307a8e00a68b5028cfc10c72420a277",
+      "sha256": "ef64ffc62412e40b55e3aa2934caa00097a58a889ae8b045fc61352dbd61561f",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0e138370baac697df4a24e49e03afc8362c49e78",
+      "sha256": "c420b26e994a972a8fae3af3f07f3da0b69c66910e0ac90e6475d1c9ea69d32f",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/0ff427184bb05b9816a4c565e8b028590bb793ac",
+      "sha256": "b62c0f27badcd51c556d4ef9e76f7ca2e5c9d9da1b67f80bf657a28bb6a84294",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1031f5d4a320e0d037e11f5c7353fd7e107512e6",
+      "sha256": "bea7cec8111e1b2fca44a708f6da30240ebbd6ae96646bb2d4de014768c376a3",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/105700cf6818039083f70af0a325464a280617c2",
+      "sha256": "dc1838308d8c3f8310f496ec5ad150976f98e20c83b8b2bdd1f40446f19ffcf9",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1089aa82b8f3e59be784cf8aa8671fb5b4713553",
+      "sha256": "a707d2958e23f39b183f1085ec7948f0643f3f244e8d9d6152ce1b776bb56769",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1099d0dd2b82713bc493e1de8b88d615c4255821",
+      "sha256": "b6b2b5eba30e85a813d34a4a2a24b87ff9dca2f92adadc40aa142d3c58ee5795",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/10afa61317fb4445d534741ceee3c6be180be2f8",
+      "sha256": "69f012ef35c88510fead70a393b1d660fdf7780b493246bc7b5470a38baf84b2",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/10eaaee5645c3fe1046765c364359acc3a4a0067",
+      "sha256": "70323c7f8e12e66cfe2b948595eb3854303980e6822b765996d93bbee9674944",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/10ec185757cc1e21ce36fe525d4605585c3e5e6f",
+      "sha256": "02492ec8ab39dfe17d10da2f716480d3789cfd23a5b371b5cc53f12866270ddb",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/11b996b3ea65908009ca60b0bbada4f49184967f",
+      "sha256": "d36b6f8f1e7e5a2aba55f308f35b74c38a6e2dc7b34e67434052b5331595bc45",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/11df784e89d5ade3380871a560f103e897a796a6",
+      "sha256": "f99b1bade6a8a10b040ceba44d7e40af2f3afbd361cd6df7a74b0c54e0741193",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1287dcc532380486852bb7a4b11a46b2ec62c99d",
+      "sha256": "aab732597186af621a272371ba80b920f95ca2e6de662c06243862ff54e7a999",
+      "bytes": 39
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/12956e7f0d15f8ca9ffe4d53d185144d19fad09c",
+      "sha256": "1ecbb946d0ff695734819fe54530438cdaff11a3a1ef4f559acb259d2198fb55",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1304b9834f908c4b4cf861ba3d5f1eb944b98d25",
+      "sha256": "6e8c56ed72993f477c0e8d5d12253791a48e62fe80f5aa077fcf845fd287f280",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/13710b6ce68770f0771fe16ca0a7a54984a692dc",
+      "sha256": "ac8b6e3ba05aa879d56ccf38c96aa5e3a5a4a3c5a5611f39537077c1518a2de5",
+      "bytes": 34
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1577c8de25d21ca240ae64d595bc92dc9327fa06",
+      "sha256": "3520273cb35cb9798149c0fa863005398f625be8b270c15411048be9c22c9820",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/162c68d7d76367aeb3135c6e3b583ee8246c74dc",
+      "sha256": "7478aaad0595039ad4e2d9aa0ecb506d69e97b9e8eb68f567de5ad80f031c930",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1667c547ebb48d79767f5dbbb9b89e8adbdd1e74",
+      "sha256": "2ed8ec1c7cafb79975b13df6d30eb1baa87b43239fc4407edcc66e93fbd3ea10",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/172affe46dc6b4d985233e5737773d4081fedfc2",
+      "sha256": "93d80e65624ec06e300c6bc782b99e3f9121cad2e18e88777e8dceb0ddbb6602",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/189eaf996dee8e792807054afc449de86f76c4af",
+      "sha256": "f5ae0960f0d6027e11e2218ac8587fa1396ecac47b4b9310a5e75ce64f789b41",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/19163621d3b195946b4c67bbfe24317a5aeaeacb",
+      "sha256": "c1ab12e49ebf12ffab2e8262d24944982d0af581980133dd759eb7082caf0005",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1a50810b4f329d21906e45129b8db14d6a39d796",
+      "sha256": "330570472c2fa15380d025c4ddccdc9a6dec8d7a5ff65c7c638d67967da74b79",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1ae17241a531455d59b90b44f9ad03f285f8b83b",
+      "sha256": "304448625f1795135a53586580533ed347cc753e40e5dcc1e3d251e168401694",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1c1738073c7546c11011e6ae6a1ee7a0aa1f4cee",
+      "sha256": "39cb64cedee5328a92c5ee3ffa3cc1fa6fe4eb5349e19a994aa0444bb2c88c04",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1cf525102847a0c359cd9cff6eb60aa33ae9d088",
+      "sha256": "681e1a4765a2f7301c76d1be991a244eb48131771535d009af53d627088035a3",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1cf85b4e7ef6373ccb0e345619dea6b52c1005ac",
+      "sha256": "96a944827ad3b40f9efa4ae7a43ab72bc749f5d44871c7b7f620f5bb1e05b1a4",
+      "bytes": 28
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1d28f4aa1359054992dc260fe56db2343b7f41fc",
+      "sha256": "052ba302cbfbe3d3e44e96827e1783f5c4461d80dcc8a0185628a3990f0c9a72",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1e5c2f367f02e47a8c160cda1cd9d91decbac441",
+      "sha256": "245843abef9e72e7efac30138a994bf6301e7e1d7d7042a33d42e863d2638811",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1f6be0b51cd06b6a60719b9cfbf9dbaf581f661d",
+      "sha256": "d701bab3492689d77d4ee07a05b39e0c07f96ba7a8837b50b4e6df40c85ff52e",
+      "bytes": 27
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/1fe7288ca4bae7000f0c12b51213ea86b1583f99",
+      "sha256": "29f6fb6c198fd72a6947d9dc3227ea3569752a3e609d38fe67044b7b03f14f60",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/21093f587238b7d00e2d6d78db8adc3979317f93",
+      "sha256": "b052eeb5ef8a3c5efd60d6c39f4abf5af897f34b6745bce89c7d7c5b89413984",
+      "bytes": 55
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2289d341635b8a477c6b2451e0f8676e1a4ed8d4",
+      "sha256": "39cdf2516711fcef10ac1338bb883b3f88a67e6b18cf0bd20cfcb921137148aa",
+      "bytes": 26
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/22a543c4ca090bf932bfa5afdc925a63ae64f628",
+      "sha256": "55fc40ff080f8a7d94b4cb457686eac6dab4720fd30c9233fe5a7ac3f23568c9",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/236104cc56e5bea709f4667d11e219d9415183cf",
+      "sha256": "e633ee49724e447d1ffabb4c9164b0eb2d8fca17a50d533401ba0747bad42aee",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2380e27f9155d96f04723c6a281f1652d68689ad",
+      "sha256": "956a73de0906916b59a0e94f9344a514fbf4e8988a9683658899872e1be32a96",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/24ae399aa14b6825e345217758cd7d29f413c7a4",
+      "sha256": "d6e5b4b71753bdb1b6be65020536a00d6c64eb0794b664e3ad55240b7ebab9e2",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/251db988442b96d73aeb442dab8a7fe244bcca31",
+      "sha256": "8ab18d809a6ce55ffdf829821fa5f1a7f8919c05aa5d9801f128bd37f250d8cb",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/25eb7ef0dec8e5b43a57c70e62aaec84bb4750d4",
+      "sha256": "c98b72cde37c02701415119a9c36920f3e6c1d4ad2243652beeda15bcd9bb220",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/268dab0f746ac67ded59847589fbb0dd0754c1d3",
+      "sha256": "56637272858e456464c68d7b458585967b12332d83688c0d5705c37521d38a53",
+      "bytes": 52
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2777af8e26980da1c949fbfee8586719d943d1b5",
+      "sha256": "b4ee87b0344926dad38b5ee84bd0b925495d20f863110ab48af0297d0ba9d795",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/27b925e1856f09f71e8d128790e365ae946e3b0c",
+      "sha256": "3ed5381250ae633695cf0f6b9066a180f93a6bfc29e97d7bd90c1b23bc4ed819",
+      "bytes": 29
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/27e1eaad0f3e3f1ff96e348f89de59383731f4d6",
+      "sha256": "b3c3a1623d494da1b24dc0f676ab85925e1bb62a73c1eec8cd6d0de7eebd7e65",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/28c0fcee70f1ffce1435d1c7a5645553eaef9d09",
+      "sha256": "c333b6cf0b7a9967dea1ee125e75640b04c8499aa85b642efc9750ac531f5387",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/29722cb64d87a145a00f4d7c266de814d87b731c",
+      "sha256": "0e41e5f739d9da0985c711de955d2a698360997a43974f9600fd5eed2697a651",
+      "bytes": 49
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2ad11c323dad55272f352508802f97aed4d0ab4e",
+      "sha256": "7d79bea91c2f82b1553a2d4e95a663213369ffcf3d399f03fef08655da181b90",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2ad4862f90590ec304b99bf97c53c60fdfd98080",
+      "sha256": "e449c0dfc91d4c58f5ead6a16ef7f389c31ff4dc23e2d40e57a571b5e9bc5185",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2ad7a3a1597ed0736b5d58bc5728b22f59a2fb02",
+      "sha256": "9d4f8c3aded51f59ba17f55546e3d344477175aecccbe781332a261e66ce5848",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2b6863feb971eddceb33ef6f23bb4aa4c95d87d9",
+      "sha256": "1e2cbfce29372ab0769b0b06d32ad35296556d480f5f70d7b379ab4a41bcc5ec",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2bd0045e6e2d0003794f67c28179611ef8c91951",
+      "sha256": "77dbe700278e3e867c444c87b2ccc9f2b1f085cd2fa9eac73f1d8380bfeb7536",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2c2cf3ed517cc86d8d05ee668c3d90d68594fd29",
+      "sha256": "57fabd934ce3de2e17decef8524220969cc5c317bade4dec875063d86ebdaeb9",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2e908f99252a278ab7218424ec1edf9b6390820f",
+      "sha256": "bdd77372fdb1ab0fb28b85e6e94efe15f14157f544276a2932a7d481d9caa8c1",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/2f068679904ae50b8238e1a567029373ada74f48",
+      "sha256": "f76dec1036d843d005c5d6ba21771500e27ad7cb9392c066ec825fd11dee3152",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/32be85c22fe32c9f6ec27e6a4b85cfb571a95caa",
+      "sha256": "ab5d032610022fb715e4805ae047914301ea947b004ff6d7fd893567b3117bf0",
+      "bytes": 52
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/34ff11d0925561fd30841fb1865ccb117489819a",
+      "sha256": "442d212e3170385747242ee699d8d84e2614330abebe28947f6e1f691bb244d2",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/352921229975f8658d390fb13d2200b80d4684f7",
+      "sha256": "a805d98b96694b6053acbd7814d30159a84655bbe4c7117b0106c40eab0a0fe8",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3551d0bd7dce3e95b77573c97d0001a9e6a09d3c",
+      "sha256": "2c072223664bd6223f17cc7777178ee26748c2a44992e93af6848a5b56ee4256",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/38ca192bcdc494d6c402173bfed712b00ce606b0",
+      "sha256": "a0227e158b9936bfca7ad0edd6c43ed3999df6f6a786fd44a06f6ed206eae4d0",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/39dfe868d1692782c0b6bbc774dc65de9c8becc2",
+      "sha256": "b37f2952546d5c3e4db7145992033f5fb85bfcc9d1795c7412cab0a263e0e996",
+      "bytes": 51
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3a0d36faf06ecf5445bdb214747e964d26e8d6c6",
+      "sha256": "00fb3b6473447cdb92c496c446d439c630c0ec878bb64ca53e770f64c39fbfe8",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3abf9d0d56b764d4fae4e30077c2911ef348972f",
+      "sha256": "6cd4a76d6d6ae630de3bb5070d551bb68b125057d486d4b4019c8c0ec556146c",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3b5a72d37b9b17a43d9cb40e54e9b0dc095a3fd4",
+      "sha256": "d5e5b93cdcbfa0c14f25b5687329d75caf324230e99e8763a30c0b01712ca09e",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3c268d0427a1343226a1abf5713fe704fc0d39b5",
+      "sha256": "1c5c47f1ee83a96d43bbbb5964324f81b3ebfcdfff74fc69bfb697060dbfa9df",
+      "bytes": 37
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3cbe52359cbf7ac7137ec0e804283701aa80be04",
+      "sha256": "8cbe12841755d540dfcc7b572dfec4925fac29dfa30a0baa87d4e171da445219",
+      "bytes": 27
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3d2d73eeee2efce4dc82a97d2c7203a7e88a4192",
+      "sha256": "a90ecaa0bf8e8056aa85a4595314e2a0c3f813f21125939892723525299c7537",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3e3a4b885d31bd51b6c2ab3eb44c9c2dda7833a6",
+      "sha256": "43e6b79662f69fad9930dd0f63e6969d0307e1915085cb0ca82af0dff18e5657",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3e4635c677e68ae88caef0bb8ae1a2ad1a37c85b",
+      "sha256": "1e3b75c3c0d5e7ea93cf13d9db34ba001f778f0b8ef5befc45642290cd027f2f",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3e5674ad695ef35f7825968b4f662b488c8e7627",
+      "sha256": "b88839bfd99d0acfba82189f0b80b4490c874f52445d6911e35c833b4bc39ae3",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3e95bdc3d06f9c7541d1a0fd5f39a9c3f3ca156d",
+      "sha256": "dd8497df420bc7a84efbf1395f9d2a498338d79ad5795711bb802616860b3d7e",
+      "bytes": 29
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3f120f9b54d313ee63fdf3295099b78ae6fcf945",
+      "sha256": "f5e9767b4034389c7b660648bfde35e2f30b43d5eb8dbd6a643a21740b7a33a0",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3f3e9209d52c36f0896f5e4f4f1663ce479754f4",
+      "sha256": "a35d0c015361f0a3c0364cf62bd93fbec2d17b458fc7a143bc86a15cef3f470a",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/3ff8366b02fa4c2a7015e234aa6d89ed2e09f545",
+      "sha256": "0487cc6f576708cb32055f202047f35ada095e252d0bc3e5a7074673dd821ca8",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4021fc7845a8679ddbc81b460208b1976d0216e9",
+      "sha256": "6e368418a0a2d349277efe79d028dfd35cb335c1aa756a26dd30eac4d80b72b5",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4199981983d3036f7924bd500533b7265aeb6a19",
+      "sha256": "0e9fd2a59491b544d90f9f2d4f3c5d02e54dbafcc388506aaea35845c5172d95",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/41a14f77aa5f34b8bba5d33300022f7be38ce683",
+      "sha256": "8758314f17b9a2c06c29198cadda148b5a55bfe74ac77e10f063a78e7e9bf55b",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4295746023f9fafe5f1b6ce4309fe3f2a653cc84",
+      "sha256": "9b555764538d521881a1aa9a8336760a4fdc8036bbd1560a556a4572e356d5f5",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4318380e031c5c4485b7dc6b3139011769c32547",
+      "sha256": "f29e6d072768f3e74a546be8e3c071473229c047d71add89ede59c727235726d",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4819ef55302dad478e8155c9019a645f5aad5cf7",
+      "sha256": "0a24ccbd5845b2a72781b8163a9d599981ad1c1ca3053bad277b435d560beece",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/49c0ae076b669ccf385ba9c6dc57752205588899",
+      "sha256": "0cd0db39e9d030aaf17c7e4c797de72acc4c821992f6c48033e9f4a5ac0ace84",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/49d10ccafa25ee5a65625b61891ea67ce027fc42",
+      "sha256": "e5fee200f46a99852527f44ea586df4951280bdc19a39de62d0b8a3869d6e3f0",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4a693ad14716f862349ee8436f9d0e96cd1db3d5",
+      "sha256": "be98ecd2f87ec723f7b58bdfb9f7ef287f93c8631346b6cd99424a1c35e645dd",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4aa00dd078665443d6fd63599e42c040bfaadbaf",
+      "sha256": "7c247fd2b6a617870b248879d255d6f9c2f6ebc040f411814ef61d9f8732c1c1",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4aae0acc327d9dbae70dad21b586d99047e13f34",
+      "sha256": "eeac2b27efc96d47dbcf97d00a6ca1697b1f415255330151d3c0cddf5bf571eb",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4af2bd6142c2d90d818699fc2964a50f515d7ebb",
+      "sha256": "5417bd53ddae4a29f3b5ec0070db41b2741ecabceb41061b78f2ebb59443b59d",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4b2b1d7997eb241110011d109b727ca8c8129b96",
+      "sha256": "233a1c23e844be8c04511ee5b38ece780cd3d443103d8064d80c0ea660ddc86d",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4b4f66ebc94b6ba3c60a9d041b4f2a17a72aa55d",
+      "sha256": "b4b0bd598f1eb6d3f49ffc510c23a33326acf5f2dcef7b5ddc8600841fe567f3",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4b6b7e608fd25bfc058f8900794aa518c695a775",
+      "sha256": "afe4b958bb4d315ceeacdf922d56f6b7b83c8a70c1544301b1590330d8a4d603",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4bd5514ec9802211a7d5c9c51c4852c9f61da198",
+      "sha256": "dfa1d8eae5f9985282b8dcfb5fcd9b3e8f6dc61f31502f575169944c64f20d37",
+      "bytes": 51
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4bdf715fac5cb561d5c1a4667aaa151c17ab17a4",
+      "sha256": "1c3494980bb0e05c1f7520466a607e5d93c8bd22d68446e67979b1073232480c",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4c207911f52b79da1964ad606d3f1b31d83f3c6f",
+      "sha256": "6ca091888a013035dc1d8652d4c2d30d6425f8750b537f9da2d0b08863129477",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4c992303ffb0b6cafcea5d609b104cb9bcd57149",
+      "sha256": "8b7232ab8ed0107ed777b9ad34344ef4e53850514c51db742454ac47f7ca8bb9",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4d7c79a305a9cf2e2786069bab62b3a558be4f3f",
+      "sha256": "04865701077c99076a97ac2acb643379d5933e142bd839fd3a5929a6fb6c57bc",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4db0886db9678d27cc6316766c8fb66b79609e78",
+      "sha256": "170052c1f75b65597e3e6542be97c1f761db05ee04803641bd8710a284b44b2d",
+      "bytes": 58
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4e7fcc52f7dfe7afc28b016de19ebf3f63135c21",
+      "sha256": "db48c09942a16f7ee3c41dc91732f14e95d3a086b1fa51d8aaa7338f45b5b530",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4e942cafb38a3bd8460e48850c67f9a94c154de1",
+      "sha256": "aaea44b6011c88d7b9e089e136a78a7502edb7fe5193ab9bb82ad6ec97b39135",
+      "bytes": 28
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/4fcde538a4242bb9c93ee2b18ad3578e9cc0f024",
+      "sha256": "ec2e3a4e9ff91694356ac4d1654b7ea82713d77d14063bc9d85189de5fb0bab5",
+      "bytes": 14
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5010e3e89b0c64b91e38775784c4310b32a0c9aa",
+      "sha256": "3847bac97e7eec8565cde9e71b4e66a1e8eab8dc11bd457180517bca905cb6fe",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/506d3eb80c9a0fa632835e215093abe236cb59b0",
+      "sha256": "6153ea2f031618b02e9f993138473b51c9202b076bb5af9454b8c5b5a29fcfff",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/513ffca81b5ff082beb28c5d2488f171e1b1e153",
+      "sha256": "b4e4b398a12cfabed8364f454e0aaa7c2c7a00c5b59d42bbf35dbe60c3bd194a",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5164b4c6db5e5896142e9ed4d76c9445aa765337",
+      "sha256": "3d89e213d79eb3f5b00d2769f49ffc3e5bf5aa76fa23949a2614393b84af1e31",
+      "bytes": 28
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/53003f900e8a03c79b30d87e994998ba8cacbe2c",
+      "sha256": "adea84fd1a00ab2422f5c5273d21cb31b56a8e793a65cfd4b2a710d9d0abb220",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/532570f6064e0a869fa70bae302c753ac0c5881c",
+      "sha256": "487018b0260fb38b9cb21112d548df1c34dac0e98a4a412cdd70086b15f45ffa",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/53a3e5dba2838ea28d96988398b325f47797dcf4",
+      "sha256": "cb4da04df0d9ec56cd1e6a74ab0a1fd5548ddf615664f9a13c904740c206b991",
+      "bytes": 58
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/546453ddcc7dc3e1be746962a7ecc0408a6207dc",
+      "sha256": "750c6f2e44d9681d3744fcd2243ea0854edf49c83097650a02854931d7e02187",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/54b301b221b3e337e9caa3218d9ff44d31376109",
+      "sha256": "5fb670dadc1e8efe92c5eae7d4c172f6335e62ec7021809bba48a104c792d4c2",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/55b66e2575bde1f4131ed1a800dc81354bec17dc",
+      "sha256": "fd66955e0c02a9b0c8c9b5245ed98a67dacbc7aa7de0131e521f8fbd8b0518c1",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/55fb453e30e97815d6f5e6f6a23c96cd01a4c886",
+      "sha256": "2d155db30dcbe202c3d6af9c9f7dcabcb3b96696683910155dc01be64dcfae97",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/56734049d03ddadbef972ca500b9dcf04a8d04f1",
+      "sha256": "b9d89a8d08f56cb56c29d78ac2f42291c5d2866b15aa401dddd1068d589036e9",
+      "bytes": 36
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/578acebfaa9c5b2af91663ce6ea4cb264d5a5a36",
+      "sha256": "162439a34f5939ed8b7b4ed45c65b54cbb84d2179c91a4fd33da15088fbc2401",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/57a29e5afa75470cef43e20d49f91ff8ba22da6d",
+      "sha256": "3966038cfe45854b0f8cff7a9456b6fd40e1680d0013dd4eafce4d717e9dce7c",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/58d2ee6de436b18183ada1d38b09ef2d5d951ffa",
+      "sha256": "2ca0162cdc43d186eefe692369db089a548b6691dbb89a232e07ef2a7f24f617",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/59bc51b594ba07b89dc02caf50f6cc65c8df1afd",
+      "sha256": "76eeb29a07932c6bedd525477d8187694a57d4fd4dd98a00c0deb3a4c7919e6f",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/59e8b1923573062e1a24d00beab537f91d9b831c",
+      "sha256": "e18f3a8d3628d342c962832f0a8b7fd89dc58a48b9841c66b40a9567c32608e3",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5b5eae48d0f0906a85946406683fd8be1cb0ba78",
+      "sha256": "f3163b6793bc1ca3d1c377f24aa0dd39a4539154b2765b7867895cff87157b4c",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5b8c7f9a5aef3dbab83a544d05e54b2f68428a1a",
+      "sha256": "ce8f993db60ac499f9e8faa2f1eed32a223a3095ecee799022ae24a71992e12b",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5ba93c9db0cff93f52b521d7420e43f6eda2784f",
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5bbc4937587dc46609a630ca7053e0d5e6ab81c7",
+      "sha256": "712a9c30c6d44f60b108950be2063c158fe82a583198f505d587f668e7d700ad",
+      "bytes": 16
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5befe90eaa5a03f64d10b81142ced72722bb958d",
+      "sha256": "081ba4eb8adc3253ebd31021964208bed8bf95357cb1c7d33de890925079d425",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5c62aa8015e63afec642d8b21162afeb060a82ce",
+      "sha256": "0f40a40c4ec598de3a7877100627046783345461f29a9ef056740230fe6da2ee",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5d01d716a0dc1a7394dd6e684ec2624009d6d842",
+      "sha256": "4c4fb9e3179ebead7c42c23dcdc9b3f049346932031aaef87e5134b3f2b4d3d9",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5d4fcecded5d07d4a0cff0e4c4eca1bf9b2d8c7d",
+      "sha256": "3e1f1e8ee193f23cea2bea87133b60d08029268269484214c214f32ff2fb280e",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5d8cbfe9b79eeb29cd3626a37234ae40b692ebe0",
+      "sha256": "d5a71658b8c29f52b6b246e6493cd8e8f541042e024557ca36e968626ef41324",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/5eca942447472c02eea7f2eac3084bd54942ea4e",
+      "sha256": "acc312c5ff20afd131dd33304e1a080fd5d71211e61bb787be644f5b0b7a8f7b",
+      "bytes": 39
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/64f805f8a45bbb58e1a741e3cabe34e52d5684ee",
+      "sha256": "37c367643f9ac674d4a995f2529015373eedfc837df7f0d9834d335bc5a816a0",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6509796cc3344f44c633516813b609392b66014e",
+      "sha256": "cfdf0ebb120abd241554df3491f2141f404782780597f726d70759ba8ea9414c",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/65189210fa7b00c934a5f79d15bd170092ab7284",
+      "sha256": "422d5cd43fc74cf107095a5b31f8a88170de8c76c7d2d8312e71e2e8eafacbeb",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/655bd32e2d7cd0e103ec6196a39294bd733b0f74",
+      "sha256": "05acafcb8abac0d3194328dfdacf3d84d5b85c121db89edaecd7427d7d3c800d",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6648e125d7fa7034dcbbe68a1929e47d737b74e1",
+      "sha256": "cc9a58e99057a2e6161f9f2bac1467e14edeecf1615b2d5ee58e44f85f303e64",
+      "bytes": 40
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/683cd975bcd39629fb556aa61337f2d210d484fd",
+      "sha256": "838407e2bc5fefd39c88ede2030fe60b092a035de53c48ac5bbdc146dce56641",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/693348780e430c497bc8a0d75c746d6197478016",
+      "sha256": "1650c6277e120f3bb727c44a0909b2e6772cd00cfbd372318530333825c96a0a",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/697cb98c29b9f39390c1512c630360772b57dbfa",
+      "sha256": "b2f48db84bd2c390e1f70518d275e5699b39957780b8772a5d60b1ff564ff22c",
+      "bytes": 29
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6993e78885320d1ea63262edb14b22d534cfbb26",
+      "sha256": "0ad602e9717f83eb2a89756127f61bd2bd92d7b062a5d963947dc68772990a02",
+      "bytes": 22
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/69dffc0f269f221b9894430ec60e830d67bc14ff",
+      "sha256": "53358a2d012eb8667cac3497fdea734b1b2e10040efc455c03fb0390b7372e78",
+      "bytes": 28
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6a3b5a8777d6b1fccfa764108d5128f4ccd425ad",
+      "sha256": "67c81e89cef3a3708135bcf8756acc2c45c639984e43953082d27e804c8c9dfc",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6ae72a0cb3234fcfd09affbeac21792b07e9bb80",
+      "sha256": "d116627f4129368213c487c19755ae64619ecd0e09bae22b04f2d75b885edad0",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6b2a8d2244969496bd899214b5e535d9688778f0",
+      "sha256": "ae7226bd2ee5a088bf909ededc9bb6343cc79659b00550b91023208b31d28a28",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6b802457a00d45f0f56b8a9c51b351a2b6ef345b",
+      "sha256": "11eeb9af495cb906c4a97e3c8ce8dc10570c186697921206f9f23f5a4e35b827",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6bf2740f39714c4d0159f64ac3640873ae943af2",
+      "sha256": "49e4c727e062c476bc6c8f6eccba88cbad64ac88e94ef605125ab075d8c457c0",
+      "bytes": 60
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6c2842745d087b8405f0a937af94be1f70942eb1",
+      "sha256": "26b6f93936c0eca94bfb2f961e0ec60634becfc7a752342ee331dc5836ba2a85",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6eb78d2e6cf11779f65d6f012d28b1ca0a0fbbaf",
+      "sha256": "c28e587d536d802a1a657edc80068945186899f9072309eae0056b50f3e0ca91",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6ec5b7a2210dd31ca46e57e9aad816331b8c4c92",
+      "sha256": "8ec83b9635161e7bda1791365c88050f1f1b24c5af3808c69389a3df6605562f",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6ef4188201ead17cdac875b1444dec4205f13945",
+      "sha256": "7236bd531b4da4582acc577bf16c0db5f800830d196a3922aeca5759711fe843",
+      "bytes": 51
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6f593e767592ea5d3e5bdf9a94e035887b4a0d1d",
+      "sha256": "ebf899f0850c9edf7ff35654fc1de1882522a5c4035ca582d33bfb00e90c2427",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/6fc1ec460fa1b498b6f1613421b55eafba8c38a8",
+      "sha256": "c93acb094bfb82df1a7abda49300f2a665eb93d4bf30ab20dcfdac47fe8eec11",
+      "bytes": 52
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/709b5c59867173fb5bf22866903478bb2809d1c6",
+      "sha256": "7082eccf51222d89b3d21b4f9bd1fe8ed5e54c9e71003651ef3dfe6e12f31cd7",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7103f8af259aa0c82b3f40200a5320a451493e5c",
+      "sha256": "c735cb246313f5047a984b36aff541c3f5e83eee5fb32e6a076c7e52d6185f5b",
+      "bytes": 32
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/723f7aa216bc91950e53389bf5f03bf24e6bb415",
+      "sha256": "476028c6d4c3c4c7253314b2708a46dca5165f7c914ed20d30b4c428b7f9eb8f",
+      "bytes": 33
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7334a31bff614ea7a3deaf49ee44b1fe02a64c4b",
+      "sha256": "57f71e44f67e67e8fa2030af8e4283d5e8f58cbc6df1e5fa4b5c9447709249c9",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/73f5e71224cf8cf840a71d22f5dcefbda0d1ebb9",
+      "sha256": "0e328b14301201f239f67b2bb619795ad8e01721bdbfa2647f9dcb60de04d339",
+      "bytes": 41
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/74659c69e1564cfeaaf8a5e9fd5aaf57e0bd85e8",
+      "sha256": "c377bd3bf8c8e4ef05fc813bbebca90dc0c41615c2f8a3867c002968c34a67da",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/74bb51003a0a840a147768d242439cf2750e80be",
+      "sha256": "d4d301f7dc836337bc6094c78d377c99fa1bb61c526eddf55981e740ac5fb0dd",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7570b0e3d83b1562fbed0a5eec838e0c9dbfcc04",
+      "sha256": "3ff61afa87d73345b7869115517d3267e4839ce6bc879cc6dacc152c8713db85",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/75dc3462ba5af4adfd45d1334cb2f778e005236b",
+      "sha256": "4a60c90f31cd91551e99904db948629f04afead0ff8e322090ffc5272e8d1e7d",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/76f3e259a2ab77d5f88d5a9da7efd2d5670a8b4a",
+      "sha256": "51754699965bf582a8bd69f156d8026409ebcde57b36f133d5b5741d2ab5cf5d",
+      "bytes": 24
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7baa31994a2fe96b4df8f88546338c058090ff7b",
+      "sha256": "e48e8af6662523c522c6bbca0a5a194c5f9b5ab2724e252e912508e1eb79b89a",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7bdc34ead1923f13bc3b641916fa9cbd4bb86dda",
+      "sha256": "ee360ab5266544a53dff73d092a3964ad6f0cad20e83b91447d33f4209d1fca8",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7c74fa5edae22be4f7763a89ffddf833f21e8c77",
+      "sha256": "bf6dd78b14bb628bc672fb2a37c4f3bde095b7ccee3fc9bca2b62b40a10fa18e",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7c93cffcec16f047f5893becb9846179586a5684",
+      "sha256": "a2027b11f9905da3216f8a6f851ed6ca15058526d469258e1fe6968ba15fc12b",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7d11cdb7b71379edacf0991f694b2e05d98239fb",
+      "sha256": "09b15b69fe0b70aab543ff3fdb9e35924364f6b9289b12f0991bf52e0575ec34",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/7e1172ebc343b6d4652fb4d9ed18eab7ed2afa97",
+      "sha256": "be2fdb2c25ead4e1a754a5812de9fc6ed8178e5ac463ffb014cc4a4209ccb825",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/82ac59ec6fc39c4d49af88a0eb273aa95286ec7f",
+      "sha256": "0a8e5fde056a6d4b8caee2c1d77ce1cea774e9de97030070762df17a3323f51c",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8342b19aebe90dda6c99cf37cc48a027aa4acc2e",
+      "sha256": "ff3a096f5fb3845ccf51bab18eb2ccd11cb9617c95283ae70d729b939f7fceff",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8387368512218554846c9cc7315b4573c61fa541",
+      "sha256": "62b53767066eb65c88c305f4efa5a6a908dbaf63d6e5327ee279e62f56b9dbfa",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/83c04655237b7f9d9ffd911837c7c9c759ca843c",
+      "sha256": "6d20c3cec786e8398cf5a4be1bb40758b1d7bfd12c422323e4e9e3bcfe405201",
+      "bytes": 45
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/842e6c823e05159ee6817526d241a9eb988ab3c5",
+      "sha256": "e968a6bce94293891025122e4a5601acc8572ac0353663a543bc842d7e964af9",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/84a0512c4d417228da3468f8aa564157a1f1fb0f",
+      "sha256": "55164685ce536344d522e46e1a49ae32df9a2461fa30116ce442d2c8db8dae55",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/88653987258355e4d35cf3ac550fb338997e71ad",
+      "sha256": "4f65be5d7535395b9b48f7de0ac3dd3acab856147f7b2866f54dbc820a2b5123",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/899bdd78d38c0781e146f6b4d88999d56413ed33",
+      "sha256": "818d78ce1ed894ee0f8c590c808a26102fc934b6fbc7cbac9c6003e3879efc27",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/89b7b8d0f379a28b816a5f651724578668853607",
+      "sha256": "0426dbe823a93b5eee9a3f46096e5d1b065952887cd5e7d37220b9e88d4a13de",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8a83fd4fa57f2050570603d85672ec6feddd5b1f",
+      "sha256": "a69cd84d843062cdb34edad494c5155516072514c87dcdfe2665077e16a4d84c",
+      "bytes": 26
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8b2337514b43b64bd4a3259634acba5fa76de270",
+      "sha256": "91650cac8948ecc169807aff629702a8d87b4e16b4069835a6e4ec161570b217",
+      "bytes": 44
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8c051c9c2ced3578999fa906aa2647311d32d68b",
+      "sha256": "0009cd9fe51d9be0c47c070aa467d467e2f28343578a8e9fc401d7d666ad1fde",
+      "bytes": 40
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8cb119f2df85dab633226ef49dc9043e6bb77de3",
+      "sha256": "75b50c9d44a6f8ae4fa23e06b7f03c04825187d49bef05cfeed271ecc2ccbb7f",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8d229a1841affabe466f1bb1c481b45a9d8aba28",
+      "sha256": "d6213a867f10f518fa65f1c010c5c8c3443ad271966347760ee0e3032dae7553",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8e1cf06495e94956cb59f2494c370fca5998cbc1",
+      "sha256": "351e4a296596f053bd02a2cf0d025b73362e2a8c24615811eb017be45124f85d",
+      "bytes": 36
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/8f501a7f65b81b36e74e3ee19e8587002dfb3424",
+      "sha256": "9ce52812b0aeb9181efe513e1244200143103f00ae3428b6ad5ff19f2a0d5f31",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/92e9845d11860a276c99afaf7bd039cbb3650afa",
+      "sha256": "9a11229fcec9c7b711ed793dde06e65d7e3c5c4f868c91601e2aa439758070ce",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/944958994825203c2faf5942179487b675e1ce12",
+      "sha256": "c4696bee2ff72e104a7d36ed025f6a7d2e3e3a839d898e9b79e6a977f4bd45b8",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/94b55a8960ebb0a937f5c37a88d203fede43c674",
+      "sha256": "7b24bb0b00afbeace3c931e3cdbb5fdf374b922c0a5ceaee186c6f16b8f59c7d",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9522f3f16320308d6bfadb070af444692f242810",
+      "sha256": "44a4859ff55998bcd534b1ef6e0fddb604625b7a992579ce6c2b1e75c7ba7d88",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/959d5ec5a14b66d90358a0742001e1ebe6e5a9ca",
+      "sha256": "0813a0c6ae41644d6e4b9dbcd178f2a2ba01e3fb2bee28bc23c9d2d54ea828be",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9637bf32569f991e506e6db7bb8905487c1ae2f6",
+      "sha256": "15edcf09621df2910efe28b7c3ba3b1b4db623fa0d46c11282f00757296e4e90",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/96911f143cc5fd1e710d2ce3d0e87a259fce1118",
+      "sha256": "93d90e482c9f36f6ce96db57fc0b6e8b47a43a6d2005f1c635b53d7e350af276",
+      "bytes": 53
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/96d7677d6b97615a96e8d75edcdc7c74ccf09a0b",
+      "sha256": "8e4e895935f42675c82f69050de1d95a93ccc50fd9566e60eab2c0a6aed03760",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9701155b9bba4f256bf2cf287b7600006b6c557a",
+      "sha256": "84d38f71ae6efd376a5c922588d692c2f354df386dab71a1aa64dd06d9f0d449",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/973cb670198f72fa4eac2de970f9eb35d3303216",
+      "sha256": "a5cdf3e4b5255fcf4c7642eeef206042e9c140f3d2149462fd1da15f75075d14",
+      "bytes": 24
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9756e7233e78b90c59c14346751aabd2bad39c40",
+      "sha256": "a33176c40497cb239cbf7b6dec4b25fb07c257ddc1a2ae03f7c070ce529605f9",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/97b0c34dd486e04e799350808078e0aa0a0e75e3",
+      "sha256": "15a0e733afd7dcbbecb7859d75219b1ab57167a232083b733d85af0be8c6ff14",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/99dfa98f84809545c01e0702e8e9c8892d9795ba",
+      "sha256": "77130ef357b10baa52eb6bdfe520e47ded84065a2c462503e575357599b4a451",
+      "bytes": 54
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/99e701d0e8f45ed506aa51422556ab03948368d8",
+      "sha256": "43f096e7b9fbe6a7416378aa188a86b7c11bb80bee1315f920254880fc62ef3c",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/99fe234656d7696f1dc85a3e8eff0875c68b06a6",
+      "sha256": "6aa320e5d3b36863a8758f5312245963931b4ccd71c73e2f05b9c5ed5dd0d29a",
+      "bytes": 2
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9a3e14fb69574c14cca9b79fb82fe0aa4f9fb4e5",
+      "sha256": "630722bb02b6a691b3a8de4b01a4e2f841e44ac12bb872dab491ed5ea6e9b518",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9aea7b2139126ec192eae77f94c15387a6843495",
+      "sha256": "58792163a828a4ee7799f14d099d53a23b4585f314a14a4e060fabfda15cd2fa",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9c65b6aaef8c7f9f985f396d20a5d4819830f4d9",
+      "sha256": "20f1bc0c8eb6f66b7389085aafa8fbf063dd48f10261abbba82243ee2117cee4",
+      "bytes": 29
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9cb3ba17f5e98ca8d9c78fc2ea4bcf4bd5c5f7f0",
+      "sha256": "2892ec75ceae400f97b4bd82a8d4b63d2cbce972af903e6121daeaab331038f9",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9d312da523e1646dfc0f84f9584932a87f67e88d",
+      "sha256": "fd779f090b66921f61cbcfa9dfd54e2938920e68d0a968d8ccafa112a5bcda92",
+      "bytes": 37
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/9fefad49279ee19ff137f49dcae30bc001f374dc",
+      "sha256": "b289aed1ffefeeb229bbe6688c391632d2a070779b18cb66fbf63de740ea5e80",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a0b193384c502d2b8f0eeb3efb2822bd56d8520d",
+      "sha256": "e3663ccef736937f0cf20e35cc00f37e1ac7373e363fd9d2a97a7247df38dd71",
+      "bytes": 12
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a1c2032feca065d7b897f2cabb22d9cfdf7fa7c5",
+      "sha256": "52b12445fbad86adfe585a46e5216fa90bf95c8472bf1dadb61e039456cd7585",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a1e89b9ee98f38b2bc207b47f4a3cbde2f5dd753",
+      "sha256": "ebb3495615e47d352d3755dabf812d282a92a827a581b0514c527bb73a9ad0a8",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a2fa62fc5de5169d51e61f88c17516497ac1d5c8",
+      "sha256": "26f6ff85ddcb38435d3a982d7379e80275468fd1e95f247871add0040ea1ec59",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a32df065b1cb37833e626a997ca9ef4f0cedbc21",
+      "sha256": "fc592636ff395d2cad793ef2faf0322d7c99e7649cf0a65d099343ef11ec79cf",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a33af2e1c9c6b5dbc0ad4251ffb985b09854f0cb",
+      "sha256": "c3256e58a515c3847e96b0dd86d988f74fa8c55b4a039da35d2364e6f824740e",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a3db485f63294803bc6224357f46a1d149184e23",
+      "sha256": "f7916e210296641534c25064f06b6768a57908b77bc3445335d037924fc75377",
+      "bytes": 45
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a485a8238e24594e5f35b56a150ffe38f79083eb",
+      "sha256": "631254403398b6eaeea9fc0715b468fcb93611fc5dfc2dddb9a6bdf34d287c6d",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a55f68670b834e16eb3deae653040610308b55fc",
+      "sha256": "3253423aad01b3662240ab14e227625e1860712446bfa09096d9bd8d4e495409",
+      "bytes": 22
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a5d23812e2f37521b18f49a96fb69c130e5d4849",
+      "sha256": "b298023869a9c4450f68bb2b49a76bf9015c25cb2e44cbaa0e2378e44fe664d9",
+      "bytes": 47
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a5e84a176c05bf3312e80636351fd43adb249617",
+      "sha256": "8c8a6f6b8b356cd7257fc1213c8e940a1f11579b7262b56ea5a0ff0e432d35f8",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a6051f33c2c6e795f2cb976992fa442792b22710",
+      "sha256": "fbf57c1751e9cc6d3377e2f10f99c4e9b716fe54a8a9a31b558c409b639c91e7",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a6078d7f31471f2f9df480778715eb30b02fd67f",
+      "sha256": "180c6b312c911fde3f6e9441ec613760975deab85e1c94960d02a4279e56fed0",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a83e3e8d1e36333026e21825b8315fb56e671e19",
+      "sha256": "715ccd6829347307b55c9ff146b499a83436e430c0302e05e149f8116853eebb",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a976bdf75d303449724e2821c0155fb659c61624",
+      "sha256": "d0d94786bf2214a9da6885cd02c225272c1c0115ec70faae009e077e6d54eba8",
+      "bytes": 55
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/a9e763500a6b39e6622f47ea02d1468a904d6f9c",
+      "sha256": "0b70a0525e0e72f1d0bd652aa53b3388b0fce896799950212a60b1a64ce9f6a6",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ab0da09bb24873353fcf5c530718872367cb77c3",
+      "sha256": "c0a00c6132710c90b433fcdeafd62e138acd3eb1d990f894ab7e78827b66de36",
+      "bytes": 41
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ab727cc8a110fbcaa3035b917ccda2b7d9292317",
+      "sha256": "9253d76cf763857b2aa694a71cc17f398d95db53f0354c951c78197893cf5208",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ac6b648732c1863a40292e1174197fe43daf32a4",
+      "sha256": "6d99d4c31a633eddc36b56e6471a0d65c2c2449821dc25f6ec66ca62a3ff1e2b",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/acb405004f29c0144630366539f2e91e32fd84e4",
+      "sha256": "f4f8745129d3099eace1b926c1eb938a9fc670cd1727644a47a6a5f2e660ce43",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ad1147d6c309ec59e51e7cfe53551dad43d20f4e",
+      "sha256": "929612d735516d10226405266e081ba982a3320509b7b6f16bf85295e94d2d40",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ad19d39eff0c154c1759cdd52dd2b8741de7a7c6",
+      "sha256": "9d9772289fad618cd1e98128ecbddc07c58811cd639dcd9012527c7ab21da7b3",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ad76eafc1c0599135067425c0baf4dfd261df0be",
+      "sha256": "a1bd6c76383ab397fadf7a6e21cd19f1ba82ff72554077e9e5df66cd74afc15b",
+      "bytes": 22
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ae44fac78f858020bd78ddc74d8da9514ed20d17",
+      "sha256": "183e8c982d55b94f0566837e4dea2090eb7c932371b72ef448897a3aa4e3201d",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/af366a01d25eef728c26ae7e32db4c02c6aa86d3",
+      "sha256": "0ae7a4c4a4f4c333ffd62b597f95bab2eb8838b96854e88fc470de3d2a66c5a9",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/af83f2614945f4273226c68ecd83dda6ed6a18d8",
+      "sha256": "d6aef5a2304e1952239631962dfbb753084be21a503b6a69e5dc7aac45d74a50",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b086a67203a3c9c26764c3141f3e20973abc5ba8",
+      "sha256": "9ec491f3dc794d7c66da561f3021e9c65f00df3bc2705a445ed21a8ebc8ae465",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b1408e105338cbfee7975061297964d5f9385925",
+      "sha256": "c55b3098fa0f2d69ecd195a93f737f02c371d8ffa2eefaf57d46b4c3d12f5f18",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b17ded39c7e48528ed07670d917858d0fe4b2f26",
+      "sha256": "41c6bfa13c47e24da69d07c2e32ee4f01f1585a5f17ff0f8eb1c096e77501456",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b2b2dcdf6fcdeaafc49d1b5389a3fb63355f4b3f",
+      "sha256": "186490975d2789b98046a66a019825dfba4e60dac01d6619c52dd25ac19f3de9",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b2bc833b4312c46ad92dbf3a0542de7746dd623a",
+      "sha256": "b21df050800a0a5b3324bd72f427f21e24ced04bbc93de2c6f7f16a77405f522",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b3c602ec96bdccf700faf2d34ac20b273932539f",
+      "sha256": "93b08dabe6345e6515ddac1c90a108a9f4b9043b0cea4b2081ddc1b1c45d2e26",
+      "bytes": 22
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b3e6da3747349f41795e7e08c93a2c09bfb4b86f",
+      "sha256": "0730b5b6ff7345a87cbb188cf11665a8f16bf9e50f8cdb3492b41932abba6c41",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b51c735a3b40391d646cc9c5fdd7dfbe8ee1d5a3",
+      "sha256": "2042179b657df9572a46cc5d10e65e26edb2d2547096465282963f9d7be7e282",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b625eaa5fd4b29b79367c7a9c417364a709eeb95",
+      "sha256": "553e3945803ecaa2f0f63f8f79cdc9e99a97ad5c46f72edc0faf507f43647a43",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b66483618473ec1b756a1aa2a25ef1cb604b4dbf",
+      "sha256": "4a95d667a171e8cb05fd3ce286bb70239376a545fc48a5c9d70b6646f5b6daac",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b6ccd0ccf44dac5f65e1bd4ee5534f4418f6e2ef",
+      "sha256": "37392f3ac92b86d707e74cebf145e853f1296a9e6304059250e1e789baf394cc",
+      "bytes": 19
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b6e05e53edb45e2a28640f15f524a63f49599ad8",
+      "sha256": "cc594217df3c1f2872d6b696a2263c399d40c546c7cfbe726c4d7fea49a6f95e",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b7a4df229782e89cb068e5e01034f1faf98d48c0",
+      "sha256": "6bc62dd98c1f6b8428d42f6caf9c7a59d19df5dfd98f3c293abf647b02bf0c10",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b7b6634e73c43992311646f232808cf5ffa10faf",
+      "sha256": "81712ad82176b55869801893a33814cb8c1b2f8772c11b070738c0b22fa7051b",
+      "bytes": 53
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/b981258ca621e5ccf72180716ce8e89af96df413",
+      "sha256": "9566892ef1fef97f640b3d7b21886402b135ffc2222309e8726af29e20b25fdf",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/be45ed8a85b071ca66a30e0d64b1f2b0a10b1b7e",
+      "sha256": "5f96fba074824422395dbf0eacd6972d30307e6e2f9d76f162120217b800a256",
+      "bytes": 42
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/be465eedb16d5243bed145d965135ec22ce4a5bb",
+      "sha256": "d67206e531f05e6e96145d50f670a1f063a8fe6ee5ce5c6cf83cbfb673b1c52c",
+      "bytes": 21
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c25c2440da2e1ba3fbad180252c93ae3c8469efd",
+      "sha256": "452a267682226a02f855661da286a991916de89277b387b739204099af36765c",
+      "bytes": 3
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c32527b0b38ddcd9a705dd46786d9e05eb0e76f0",
+      "sha256": "a47e7c114393c70e4514b2957fe762ed3522b947fb12bdd7a67a512506962f37",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c3e388c66f6c5576b495166917a88cb7562a5c95",
+      "sha256": "a61b968b3d0c13f6276fd6dd6af7e8c8498acda10375165887588dc955e976a9",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c41491383624b714a6e4ca340b7da8b436cab060",
+      "sha256": "78e85e3c7dd49db4a8e4aadb10d914df2a00e09cecad1b211b2df70d0737c0d5",
+      "bytes": 22
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c512fd63de44df18a5d35afc7f3a43585c7a46be",
+      "sha256": "88897bbcf143e8be300e2c00849bd78a2f8598fec60d92433d027bba7cbe7e8e",
+      "bytes": 48
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c68f07afc39c1ae98f7f123d78ff6026ea5b5325",
+      "sha256": "d3a9c06c08fa164e7d898ebc8c931d3e6eff254a207399f37c2a8acff02a25ea",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c6cb968890d20f3b21c6cf945b2997f72cd6c63c",
+      "sha256": "3d6ebef981c3c1cdbcf5e1844255e8b395b72bc73ac79d3549a2cbde7b6c3ec6",
+      "bytes": 39
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c7625250af6fd7ab14b652c230eb2c70d020fcd2",
+      "sha256": "4c4cb5e1b32f633bd44dfb28f9c39856be839e0ef0770b53096762a6a95b6be1",
+      "bytes": 6
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c7b0b76c75638b064e283f48a0fd0f7670c20548",
+      "sha256": "cac3ad64682fec05c0784f06045ff4e0d9713a7360b16de0bf856ccdb3408a9a",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c846ceac038ab4de4f92989b4e992a8cd7e6c15a",
+      "sha256": "17ec727dc2da2f3e371fa6e3cf6f3265b1a7c8c0c2a35b2cb3e4af6c73daa79d",
+      "bytes": 36
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c876eb919f959306393992437a9925df6ce4379c",
+      "sha256": "02e3ea4dd023bfd42927e70948babaf574968bd2d630493159207c51bd334e8b",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c8a5d8eb51c1bfc72a505307ad6ed00553936472",
+      "sha256": "6a2a68941ad2141e268534e9b3e31396c3224170a975c09472be645262db43bd",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c9972c27b04e8fabb05217bcfed80fd9b83b10f1",
+      "sha256": "54cb9c834d4d0a10d817036138a14fb132485c4461b238d0113ee6370ccb37b7",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/c9a65c78b5eb65c8a8ebde705d9b52efa0d3b796",
+      "sha256": "2887fab16ad511f6f0edfb2cd7ca4065e3c519c192d96a850987ab43de8d3260",
+      "bytes": 59
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/cc5a30d0071bd0ccbcf59716087d3138f0d6600e",
+      "sha256": "e929317fb4392148aab97a304270182de57e9f51abebb2224d95cdb530116101",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ce7485c322d7231ec8c34ed2305673a5dc648dd2",
+      "sha256": "1691aabdc4e0ff86177e2f6f572639d40a7a380cb47cff86175e847ac659de69",
+      "bytes": 45
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/cebda758f14d218034ff2dbfd578d3fe7802af1b",
+      "sha256": "dd201a94d2e5326b08898dea98f5e7f262dc1d6e4a54021d846b43aee5cce7b7",
+      "bytes": 32
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/cf7e828559eb7ff6e0fd35792d67915bceaffe8f",
+      "sha256": "a98e5714a12e6f0bd421c7f971d1d14a3f861ce635fa588d95cf3893ea188618",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d318dd4a2191d6a24ef01681970fe735ce743ddc",
+      "sha256": "6b95f24286c6ea5deb683dad21419ca970ee8ac52cc175c1bd1302d7b882a1c1",
+      "bytes": 24
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d341103d3cac97a105801f819b4c56e7f1209665",
+      "sha256": "c713c1c4c74943894cc89841f018c025ba9886ce6fb20d1029339b28c9b2a890",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d43ed3222ca82b6fd34b0bcb3fab1e4d37efc4c5",
+      "sha256": "ce381de3473ef0a56fd0937131286dcbe59d483ecf5595eb21b853d964cc7f33",
+      "bytes": 25
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d49fbd74cb0433ebce392e25ffb8c371cbb16fd9",
+      "sha256": "6647a2ebba6b00d1a05cfe2527a8dbcdba1b8f653e19e491201001f330c5e606",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d4c8fa00bbf959cbdc4d7d210be90e78f52ab8e7",
+      "sha256": "e48f9f4ea3083ca0f7fc84bb4f650191d56fb00794ea36f4707818079141f74e",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d589efe4c5b5999e766a75aa08c126226b2d89da",
+      "sha256": "47527e728f3b2459dc7e172d523e421a0619f7565aa34d7ae0d4e78dc58000d1",
+      "bytes": 33
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d5c4f9da4ac0118c5fb2e14ad07353a72b0bb841",
+      "sha256": "bc0f3723b49b1a3c5388c76e27687249b6a48ff84f5fbce29681822d67ab813f",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d73b0607bc205cdfaee2d32bcfce3b5df29caf24",
+      "sha256": "47f5f532269e61a4e316995d29ed694a788fe9086064516620a159b8691ec060",
+      "bytes": 30
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d7c20b6c008bdecac22456fcddb9520b7e495c87",
+      "sha256": "0af93c943800889c9c00cc32b20dce7b6e49828263b73647d222e0d71d5a40f0",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d87a1e67fbd0fd7067f08caf24e28fb1db9df148",
+      "sha256": "e2bc33b9a0726e2cd3da130a42883ef1aea2eb4ec01b640a7f4299c3148db995",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d8a71d9268c363d9ec828c4b96518847c1e55f53",
+      "sha256": "ac1c59940ee625f5494cd8fbc17524a35dfe56644620c4702a2246b588d74070",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d8c076fbab22b2e211f36e439f8dfdee7a14a163",
+      "sha256": "c8bd17b4f685137fd47cb116055a755a20990f75b191ce3b757d88b7256e4123",
+      "bytes": 46
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/d93064321190a96d3ef50d0a3f4045f04e544310",
+      "sha256": "ad5e57dd230f989fb86212b73b72d83ac893568ca11c9b170b147e262624403f",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/da94e8af9866da376d724986141a96d41a14ff76",
+      "sha256": "e35564d2dbab082fb8026bdab82a89e83aac373ca288cdd9d2ef2d1d5a19012f",
+      "bytes": 51
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/db2c55d2fe2919b32ea7382a9bd72348d34be8fa",
+      "sha256": "a57ffa875b45a51503681cfab23340dc89647ecbb098a42039b6724e19b1fca3",
+      "bytes": 27
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/dc293f0ba54a682ed5adb48b4eb887f7f285f587",
+      "sha256": "bd9ffb8e7d7c0e275756b82c0dabe5515c5b500db0e88e4a0e281ab90e48c0de",
+      "bytes": 11
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/dd5e13c0efd4199dddbcfac1bc2c5316524e3aab",
+      "sha256": "d9fb519ef7b510400d167c454251d4d05974f8fd5468e77a3fb0a4cc407af8ab",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/dd61a44663aa66e09ebee0024c867b2dd5f42481",
+      "sha256": "2b0bd85b3ebe6679f21605057d8306d4a99875dd23116793ada1cbe215e58470",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/dec2d079de6e47747f06af91895b791a6b9c95e9",
+      "sha256": "c31c9f7c380a1f7dab93f97b19853985946e3ac327540da8510bdac993a89216",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/df1a55765b496c0e616e98f7b91a41c399829c40",
+      "sha256": "882e93fd46960709ee04e837d66dde55fd540c0adade528a957a846aaf28f29b",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e04ad3d95cde85fef43a13b0c7f51487d9add664",
+      "sha256": "e0de4788d4911c08ac7e3678035f15c8558b01f2685d23f7cfcd568bb1664e7b",
+      "bytes": 23
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e30cc1d78c3e236ee4ed667612e99c69f3f92e87",
+      "sha256": "55f54f0478e4375ab662a31d8f5aa7fb35285b219589e3a22b4ca82cfed6ab9f",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e320f783f27ccdf4e1dd26f862bc96dba7cf12c1",
+      "sha256": "638bb1c9128772be4686d8dcbc2533921f284f13601e5bbb1def52dceb60363d",
+      "bytes": 20
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e46c04c34a9778e4e1dc4ee6fbe8f441257cc28d",
+      "sha256": "88dec8af1b8d74436dd7c859b44115e91de2eaea0485940511c04138b334bd72",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e5d482e9e6967b6757e81fae63da2ea8bff3b1ee",
+      "sha256": "4d2a7aa0f837ce81d625ed78bb8f4b1fb37224b0cb7d32f97b07448573e62a57",
+      "bytes": 49
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e6724582d1c2307e8ef1a08fa70f573eb0b42e06",
+      "sha256": "414e40b50bf6c8122bc91d3c029bc2248834839fa603bf3a64f876f7e7c2a06b",
+      "bytes": 8
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e69f20e9f683920d3fb4329abd951e878b1f9372",
+      "sha256": "f67ab10ad4e4c53121b6a5fe4da9c10ddee905b978d3788d2723d7bfacbe28a9",
+      "bytes": 1
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e6ce928a8fbbf6783d28498a057685996590aed1",
+      "sha256": "97be6199ac27be001004c15841ab8153b8b6c24b6e0a76a3ce9376382d011683",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e6e6f801c80d96be32f6e8f1d376025b9f315c13",
+      "sha256": "9e39d3bc63ad504d5b0b93c5258a31acf54ad32cdf290aecfe63caa010fe5933",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e7ab74f34332d4c79f14a3682c0a25d667843e03",
+      "sha256": "a59fdea8aeec70bc1b456ab674b21e9a431053f6b5bffcf2c6cf898a1a5b661e",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e89a197f78ddb0be2e202cd28661115797c930d8",
+      "sha256": "e7368178beab76eca2be49ce1376823dadfbeaa65d9c2b53ac13f3665441105b",
+      "bytes": 17
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/e8d25a532eadb5f8bb7c42ac386a6bb3ad8a3871",
+      "sha256": "4f6c3a136b18bc5c759646ee98759980ce236247c01c9b5f18b5d9d445b4aca6",
+      "bytes": 50
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ed155cad740a25a0b5589228e429db1e628c294e",
+      "sha256": "66792a4e0808311caf079ae8e462919071eecea73955448bcd50f16bf7dd0998",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ef726e25f48d24197e53fabae443dc286341975f",
+      "sha256": "7362c9a7de6acddf3345c196c21ad89f32530a0436cdaa15e0a9fdc2cde83f1b",
+      "bytes": 57
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ef7db85506c79acc77607c3a2aa4cda274bf5270",
+      "sha256": "18a8056130946a27192ca7a12009502011ea3079b0dffe82581d002f2ed041d8",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ef8ff56964c356127f43d31f4262b8e2e3359a50",
+      "sha256": "ff00b4fe6c69f6329e8798b62a635cb0338dc3befa1162271489080f42f3280a",
+      "bytes": 63
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f01855a5859deb325b0eca237ab5af8bb0dc868b",
+      "sha256": "21cf88d5a9c34b07294bfb46083c02d007e42e9c6189781fdc086b1e172fb586",
+      "bytes": 61
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f01e71f5df260f22a42805004eecd3e08238acd1",
+      "sha256": "2147f3c9564594da0cfba6ae1419f4cd79cdee22806bc5488a616966f3f8dc4c",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f086785a25c92baecd11f13f5244ef076e6171ba",
+      "sha256": "8f85e407a6e758f43efb73b45d8d0692f0080ea7d0dc93c83c5e631de4d49fba",
+      "bytes": 18
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f0edec7c245df1a7e092a43209133ef81d15a501",
+      "sha256": "1b32d9687e65db7ad3c515668fa820f993a2d60db44dc466cbb45e6d876b7aa1",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f125a1a75890cc56deca0c54db5ce6d53c5d4873",
+      "sha256": "62d7bef70647103a976760bc7189988a0a8ee0df9f49d085521df2d4f0da85ac",
+      "bytes": 10
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f174e8a3f626d182d070ddfc85030bdc2811241b",
+      "sha256": "100a2b5d31eba23b889f247aa7cf076b929933920880822d0557a38e5b3c05f0",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f1bfb5f4d16ae9575ae541fb87229883b072df87",
+      "sha256": "a2214238c195f80dd03780eb77fb2b14134ea8e09fd2c4421de3eb14cf740871",
+      "bytes": 62
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f22e450de9c38d4aa4088e0c9d64348cda72aa6a",
+      "sha256": "83e570e289f6f81ee868c938e9b49fce115f8923bf1c107142659b6dc8c81a6e",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f233cfad3ab77abe00dff4d0e2f94f019b38d2f2",
+      "sha256": "bfe32c811a361b4653b473d509982e8f66fd1d29fa01f0253641ef3dc1d5cf4e",
+      "bytes": 4
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f28c43577ccbe275b8330935010ba60e6f56ebcd",
+      "sha256": "bc2800a2ce6369292d4b141f25b310f1c9f10d1a43eadc3fbbaa6e6c67377021",
+      "bytes": 55
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f2f37bdda09db83040cda346d009573b2c879717",
+      "sha256": "bb86e70930e90d203b17cd6a746ca411de6cb13e9f0fd00f79d5547797a8fe14",
+      "bytes": 15
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f32a00b495da06a61a43a19dca2027d3c4629324",
+      "sha256": "bd2ac1b45980477bb7548db30baf49518d0c1ce42973d7aced93485f3cfd141c",
+      "bytes": 45
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f38a2ff6433fe51cb71f89bbd18b93d39a757f0e",
+      "sha256": "5010e78c99d483d2830beae8b9f6bfe29a679a0051a14f62f15df2548ecb74e3",
+      "bytes": 64
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f45dcf9fdd0caec6c0f16a367c5df6c3f28dacbb",
+      "sha256": "b45fce806dd31c6e72bcc83fa0999f31c46d1f87829c12974f63468d914cfc23",
+      "bytes": 5
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f5532bcdca544dd35f94913b28bf6578b0a22a1e",
+      "sha256": "731509a793eb2caf6dc8d26cc849c64845e53c85e317215013a41f9d831d8b52",
+      "bytes": 33
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f5f938f6b665e3e2668ed75121d0225058e3aebe",
+      "sha256": "3f3280b21c6e9bcd44e2c843feeb38a7a4bf087f53ab46856e09a045e3a73c4a",
+      "bytes": 51
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f6101dbe98cbd430e49b8212311a07dab2beaafa",
+      "sha256": "72b68856f18b175bcea17d6cd4759e25d8acdd0078284cf277b2852dd40474dd",
+      "bytes": 43
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f6a4ff1f49c030c7377e88c6c1e1b27925f12ec9",
+      "sha256": "d58428d92e268a9a71f1c1697887a853bb7926ce5cc2793de911fa67982eedeb",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f6b3fe2a184a4b1f4c94f5f4483c17f5d9c48f11",
+      "sha256": "9fcd174d779393bb693045c86c41b0282f9ef74a7c31073ebddbc2503ef4e7b7",
+      "bytes": 56
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f862d825e533a0d208e36b504d5beeae1fb398f2",
+      "sha256": "d31973aee3227422433f707c0c9ac49a5a7fe48c5cfa125ab6fb46945cd47d40",
+      "bytes": 65
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/f896a19bfb00db761aa339522e85a998391c6613",
+      "sha256": "0e07d629337b233a1a209f71daf30ee00bb018db26d3506aeb8a497a4b64a625",
+      "bytes": 53
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/fa972f2cd168c61b5971f6274cb4ba9050dd97c1",
+      "sha256": "0f9c7ede2d9765655559adba1e497e1ceea803bd6bde316051446848549eebfb",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/fb470d70cf6489bcc7e9511c7272e28e13671b30",
+      "sha256": "61451da909ac6ed3e31e743fddc7f9823167d872cf01e0fc6d9b7aecd7937548",
+      "bytes": 13
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/fc713c36396ed43840c88bb2666994c0bb269c3a",
+      "sha256": "6b2b3f5b16e378236895188a0ee70e472ad2a7f1b91b0f6201595f6432bfb52d",
+      "bytes": 7
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/fda388834964e12516892e6600bdf2f79e9ed42c",
+      "sha256": "899659007541612e844a57496b9050cc7f4b259951623a5a46f4f0ff1a889e4a",
+      "bytes": 26
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ffb4cb445c5901c8483f347629bb33e848e5947b",
+      "sha256": "70f160445f1be5cfb062edb82900fee2d156bf0cc3b7f0d3dfe9689a3ce612b3",
+      "bytes": 38
+    },
+    {
+      "path": "crates/norito/fuzz/corpus/json_skip_value/ffbbfc2372270d28973fdb695dfa1dfc1c1d5816",
+      "sha256": "0e9ab40090754ee4cbbaa39c4c3b8933908695ad6fb9e32f496d31a3d512e0c1",
+      "bytes": 47
+    }
+  ]
+}

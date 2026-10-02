@@ -37,6 +37,16 @@ use super::der_air::rfc5280_io_witnesses_v1;
 use super::p256_aggregate_adapter::P256CrossTraceTerminalRoleV1;
 #[cfg(test)]
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::{
+    credential_pre_aux::ZkX509CredentialPreAuxBindingV1,
+    der_air::{
+        ZkX509DerAirErrorV1, ZkX509DerDocumentTraceV1, ZkX509Rfc5280DocumentKindV1,
+        ZkX509Rfc5280DocumentProvenanceV1, ZkX509Rfc5280NodeProvenanceV1, ZkX509Rfc5280TraceV1,
+    },
+    io_air::ZkX509IoEndpointV1,
+    sha_call_bus_stark::ZkX509ShaBatchSegmentAuxSourceV1,
+};
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
@@ -64,16 +74,8 @@ use super::{
     sha_call_bus_stark::{
         ZK_X509_SHA_BUS_LANES_V1, ZK_X509_SHA_CA_CALL_COUNT_V1, ZK_X509_SHA_CA_LEAF_CALL_V1,
         ZK_X509_SHA_CALL_COUNT_V1, ZK_X509_SHA_SEGMENT_COUNT_V1, ZkX509ShaCallBoundaryTerminalV1,
-        ZkX509ShaCallTerminalV1, ZkX509ShaSegmentTerminalV1, zk_x509_sha_ca_call_identity_v1,
+        ZkX509ShaCallTerminalV1, zk_x509_sha_ca_call_identity_v1,
     },
-};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::{
-    der_air::{
-        ZkX509DerAirErrorV1, ZkX509DerDocumentTraceV1, ZkX509Rfc5280DocumentKindV1,
-        ZkX509Rfc5280DocumentProvenanceV1, ZkX509Rfc5280NodeProvenanceV1, ZkX509Rfc5280TraceV1,
-    },
-    io_air::ZkX509IoEndpointV1,
 };
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
@@ -95,12 +97,12 @@ mod temporal;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed102:constraints1702:degree4:output-metadata-six-verifier-fixed-equations:five-key-outputs-der-node-byte-lookups-length66-offset1:max-private-active-rows238481:fixed-public-nonpadding-rows284014:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-relation-four-lane-union-bound-at-least171-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:eighteen-independent-four-lane-output-role-products:governed-root-spki-and-certificate-slot-active-products-air-bound:x5r1-exact1292-byte-eighty-record-output-claims:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-final-row-claim-replay:x5q1-exact4876-byte-four-segment-plus-thirteen-compact-ca-call-boundaries-304-record-sha-terminal-claims:sha-terminal-segment-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-envelope1310-108-fixed-records:ca-single-log13-trace8192-base695-aux128-fixed80-constraints1379-degree3-13chunks:ca-local-lde-log16-mask696-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed102:constraints1618:degree4:output-metadata-six-verifier-fixed-equations:five-key-outputs-der-node-byte-lookups-length66-offset1:max-private-active-rows238481:fixed-public-nonpadding-rows284014:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-relation-four-lane-union-bound-at-least171-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:eighteen-independent-four-lane-output-role-products:governed-root-spki-and-certificate-slot-active-products-air-bound:x5r1-exact76-byte-four-record-governed-root-consumer-claims:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-final-row-claim-replay:x5q1-exact3340-byte-thirteen-compact-ca-call-boundaries-208-record-sha-terminal-claims:private-sha-union-sixteen-constant-native-centers-replacing-retired-output-aggregate-columns:sha-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-envelope1310-108-fixed-records:ca-single-log13-trace8192-base695-aux128-fixed80-constraints1379-degree3-13chunks:ca-local-lde-log16-mask696-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x62, 0x39, 0xd2, 0x61, 0x95, 0xad, 0x08, 0x75, 0xc5, 0x3d, 0x9c, 0xb8, 0x51, 0x1e, 0x8f, 0xd9,
-    0x10, 0x97, 0xf7, 0x8d, 0xae, 0xfe, 0x63, 0x13, 0x0b, 0xff, 0xc6, 0x4d, 0x10, 0x46, 0xf4, 0x19,
+    0x03, 0x87, 0xb8, 0xbb, 0x3d, 0x57, 0x8d, 0xee, 0x81, 0x9c, 0x20, 0x45, 0x43, 0xd4, 0xca, 0x6f,
+    0x2f, 0x2e, 0xd6, 0x88, 0xe1, 0x9e, 0xe3, 0xd7, 0x95, 0x88, 0xc8, 0xaf, 0x57, 0x2b, 0xd6, 0xcf,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub(crate) const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -146,8 +148,8 @@ const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
         "output-metadata-and-private-geometry",
         11 + KEY_OUTPUT_RESIDUES_V1 + ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
     ),
-    ("fixed-products", 48),
-    ("fixed-product-terminals", 80),
+    ("fixed-products-and-private-sha-centers", 40),
+    ("governed-root-public-terminal", 4),
     ("output-role-products", 144),
     ("shared-copy-products", 28),
     ("grammar-ordinal-products", 28),
@@ -695,6 +697,10 @@ impl ZkX509Rfc5280StarkShapeV1 {
         };
         shape.validate()?;
         Ok(shape)
+    }
+    /// Original disclosure count retained by the validated public statement shape.
+    pub(super) const fn disclosed_attribute_count(&self) -> u8 {
+        self.disclosed_attribute_count
     }
     pub(crate) const fn family_counts(&self) -> [usize; FAMILY_COUNT_V1] {
         [
@@ -3628,6 +3634,67 @@ fn compile_output_topology_v1(
     }
     Ok(entries)
 }
+/// Exact producer rows for the five keys and the optional-certificate selector.
+/// Only the public statement shape and existing fixed output topology are consumed.
+/// Every key block is the original 65-byte SEC1 source, before P-256 dummy selection.
+pub(crate) fn zk_x509_rfc_key_join_rows_v1(
+    shape: ZkX509Rfc5280StarkShapeV1,
+) -> Result<([usize; 6], [u32; 6], usize, usize), ZkX509Rfc5280StarkErrorV1> {
+    shape.validate()?;
+    let shift = u32::from(shape.disclosed_attribute_count) * 2;
+    let channels = [14_u32, 17, 20, 27, 28, 11].map(|channel| channel + shift);
+    let topology = compile_output_topology_v1(shape)?;
+    let strict_der = u8::try_from(endpoint_role_code_v1(ZkX509IoSegmentRoleV1::StrictDer)?)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let p256 = u8::try_from(endpoint_role_code_v1(ZkX509IoSegmentRoleV1::P256)?)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let producer_start = shape.family_counts()
+        [..ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize]
+        .iter()
+        .try_fold(0_usize, |sum, count| sum.checked_add(*count))
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut rows = [0_usize; 6];
+    for (index, channel) in channels.into_iter().enumerate() {
+        let role = if index < 5 {
+            ZkX509Rfc5280OutputRoleV1::P256PublicKey
+        } else {
+            ZkX509Rfc5280OutputRoleV1::CertificateSlotActive
+        };
+        let length = if index < 5 {
+            ZK_X509_UNCOMPRESSED_P256_BYTES_V1
+        } else {
+            1
+        };
+        let start = topology
+            .iter()
+            .position(|entry| entry.channel == channel)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Output)?;
+        let end = start
+            .checked_add(length)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+        let block = topology
+            .get(start..end)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Output)?;
+        if block.iter().enumerate().any(|(offset, entry)| {
+            entry.channel != channel
+                || entry.role != role
+                || entry.offset as usize != offset
+                || entry.producer_endpoint_role != strict_der
+                || entry.consumer_endpoint_role != p256
+                || entry.endpoint_instance != 0
+        }) || topology
+            .get(end)
+            .is_some_and(|entry| entry.channel == channel)
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::Output);
+        }
+        rows[index] = producer_start
+            .checked_add(start)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    }
+    Ok((rows, channels, BASE_VALUE, BASE_CERT2_ACTIVE))
+}
+
 /// Verifier-owned family ranges. It stores only O(1) boundaries, never `2^18` fixed rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkFixedScheduleV1 {
@@ -4287,10 +4354,7 @@ const AUX_PROFILE_LOOKUP_ACCUMULATOR: usize = 16;
 const AUX_PROFILE_TABLE_INVERSE: usize = 20;
 const AUX_PROFILE_QUERY_INVERSE: usize = 24;
 const AUX_PROFILE_ZERO_ACCUMULATOR: usize = 28;
-const AUX_OUTPUT_PRODUCER_BEFORE: usize = 32;
-const AUX_OUTPUT_PRODUCER_AFTER: usize = 36;
-const AUX_OUTPUT_CONSUMER_BEFORE: usize = 40;
-const AUX_OUTPUT_CONSUMER_AFTER: usize = 44;
+
 const AUX_SERIAL_SOURCE_BEFORE: usize = 48;
 const AUX_SERIAL_SOURCE_AFTER: usize = 52;
 const AUX_SERIAL_CONSUMER_BEFORE: usize = 56;
@@ -4327,35 +4391,23 @@ const AUX_GRAMMAR_ORDINAL_SOURCE_BEFORE: usize = 176;
 const AUX_GRAMMAR_ORDINAL_SOURCE_AFTER: usize = 180;
 const AUX_GRAMMAR_ORDINAL_TABLE_BEFORE: usize = 184;
 const AUX_GRAMMAR_ORDINAL_TABLE_AFTER: usize = 188;
+const AUX_SHA_UNION_CENTERS: usize = 32;
 const AUX_OUTPUT_ROLE_PRODUCTS: usize = 192;
-const TERMINAL_RELATIONS_V1: usize = 2;
 const RFC5280_TERMINAL_CLAIM_MAGIC_V1: [u8; 4] = *b"X5R1";
 const RFC5280_TERMINAL_CLAIM_VERSION_V1: u16 = 1;
 const RFC5280_TERMINAL_CLAIM_ADAPTER_V1: u16 = 3;
-const RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1: usize = 2 * ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-const RFC5280_OUTPUT_ROLE_TERMINAL_CLAIM_RECORDS_V1: usize =
-    OUTPUT_ROLE_COUNT_V1 * OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-const RFC5280_TERMINAL_CLAIM_RECORDS_V1: usize =
-    RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 + RFC5280_OUTPUT_ROLE_TERMINAL_CLAIM_RECORDS_V1;
-const RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1: usize = 2 + 2 + 2 + 2 + 8;
-const RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1: usize = 4 + 2 + 2 + 2 + 2;
-/// Exact X5R1 proof-carried terminal-claim frame size.
+const RFC5280_TERMINAL_CLAIM_RECORDS_V1: usize = ZK_X509_RFC5280_STARK_BUS_LANES_V1;
+const RFC5280_TERMINAL_RESIDUES_V1: usize = RFC5280_TERMINAL_CLAIM_RECORDS_V1;
+const RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1: usize = 16;
+const RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1: usize = 12;
+/// Exact X5R1 frame carrying only four governed-root consumer products.
 pub(crate) const ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1: usize =
     RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1
         + RFC5280_TERMINAL_CLAIM_RECORDS_V1 * RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1;
-// Wire family, internal relation slot, and final auxiliary product column.
-const RFC5280_TERMINAL_CLAIM_RELATIONS_V1: [(u16, usize, usize); 2] = [
-    (3, 0, AUX_OUTPUT_PRODUCER_AFTER),
-    (3, 1, AUX_OUTPUT_CONSUMER_AFTER),
-];
-const _: () = assert!(
-    AUX_OUTPUT_ROLE_PRODUCTS
-        + OUTPUT_ROLE_COUNT_V1 * OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1
-        == AUX_NUMERIC_INVERSE
-);
+const _: () = assert!(AUX_SHA_UNION_CENTERS + 16 == AUX_SERIAL_SOURCE_BEFORE);
+const _: () = assert!(AUX_OUTPUT_ROLE_PRODUCTS + OUTPUT_ROLE_COUNT_V1 * 8 == AUX_NUMERIC_INVERSE);
 const _: () = assert!(AUX_NUMERIC_ZERO_SUM + 4 == ZK_X509_RFC5280_STARK_AUX_WIDTH_V1);
-const _: () = assert!(RFC5280_TERMINAL_CLAIM_RECORDS_V1 == 80);
-const _: () = assert!(ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1 == 1_292);
+const _: () = assert!(ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1 == 76);
 const fn output_endpoint_index_v1(consumer: bool) -> usize {
     if consumer { 1 } else { 0 }
 }
@@ -4366,18 +4418,15 @@ const fn output_role_fixed_selector_column_v1(role_index: usize, consumer: bool)
 }
 const fn output_role_aux_column_v1(role_index: usize, consumer: bool, lane: usize) -> usize {
     AUX_OUTPUT_ROLE_PRODUCTS
-        + (role_index * OUTPUT_ENDPOINT_COUNT_V1 + output_endpoint_index_v1(consumer))
-            * ZK_X509_RFC5280_STARK_BUS_LANES_V1
+        + (role_index * OUTPUT_ENDPOINT_COUNT_V1 + output_endpoint_index_v1(consumer)) * 4
         + lane
 }
-/// One canonical role-addressed pair of independently committed RFC output products.
+/// Sole public RFC output endpoint consumed by the independent compact-CA proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
     pub(crate) role: ZkX509Rfc5280OutputRoleV1,
-    pub(crate) producer_products: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
-    pub(crate) consumer_products: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
+    pub(crate) consumer_products: [F; 4],
 }
-/// Exact typed address of one X5R1 terminal record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ZkX509Rfc5280TerminalClaimAddressV1 {
     family: u16,
@@ -4385,184 +4434,65 @@ struct ZkX509Rfc5280TerminalClaimAddressV1 {
     lane: u16,
     endpoint: u16,
 }
-/// Ordered public output products. DER handoffs are private joined equations.
-/// Only aggregate output products and independently committed output roles are encoded.
+/// Only four governed-root consumer products have a public RFC representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkTerminalClaimsV1 {
-    pub(crate) relations: [[F; ZK_X509_RFC5280_STARK_BUS_LANES_V1]; TERMINAL_RELATIONS_V1],
-    output_roles: [ZkX509Rfc5280OutputRoleTerminalClaimsV1; OUTPUT_ROLE_COUNT_V1],
+    output_roles: [ZkX509Rfc5280OutputRoleTerminalClaimsV1; 1],
 }
 impl ZkX509Rfc5280StarkTerminalClaimsV1 {
     fn canonical_identity_v1() -> Self {
-        let relations = [[F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1]; TERMINAL_RELATIONS_V1];
         Self {
-            relations,
-            output_roles: core::array::from_fn(|role_index| {
-                ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
-                    role: OUTPUT_ROLES_V1[role_index],
-                    producer_products: [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
-                    consumer_products: [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
-                }
-            }),
+            output_roles: [ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
+                role: ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor,
+                consumer_products: [F::ONE; 4],
+            }],
         }
     }
     #[cfg(test)]
     pub(crate) fn canonical_test_v1() -> Self {
         Self::canonical_identity_v1()
     }
-    pub(crate) fn output_role_products_v1(
-        &self,
-        role: ZkX509Rfc5280OutputRoleV1,
-    ) -> ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
-        self.output_roles[output_role_index_v1(role)]
+    /// Independently committed governed-root consumer fields for compact-CA.
+    pub(crate) fn governed_trust_anchor_products_v1(&self) -> [F; 4] {
+        self.output_roles[0].consumer_products
     }
-    pub(crate) fn governed_trust_anchor_products_v1(
-        &self,
-    ) -> ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
-        self.output_role_products_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor)
-    }
-    #[cfg(test)]
-    pub(crate) fn certificate_slot_active_products_v1(
-        &self,
-    ) -> ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
-        self.output_role_products_v1(ZkX509Rfc5280OutputRoleV1::CertificateSlotActive)
-    }
-    fn claim_address_v1(claim_index: usize) -> Option<ZkX509Rfc5280TerminalClaimAddressV1> {
-        if claim_index < RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 {
-            let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let (family, relation, _) = RFC5280_TERMINAL_CLAIM_RELATIONS_V1
-                .get(relation_index)
-                .copied()?;
-            let endpoint = match relation {
-                0 => 1,
-                1 => 2,
-                _ => 0,
-            };
-            return Some(ZkX509Rfc5280TerminalClaimAddressV1 {
-                family,
-                address: 0,
-                lane: u16::try_from(lane).ok()?,
-                endpoint,
-            });
-        }
-        let local = claim_index.checked_sub(RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1)?;
-        let role_index = local / (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let endpoint_lane = local % (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let endpoint_index = endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-        let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-        Some(ZkX509Rfc5280TerminalClaimAddressV1 {
+    fn claim_address_v1(index: usize) -> Option<ZkX509Rfc5280TerminalClaimAddressV1> {
+        (index < 4).then_some(ZkX509Rfc5280TerminalClaimAddressV1 {
             family: 3,
-            address: u16::try_from(role_index.checked_add(1)?).ok()?,
-            lane: u16::try_from(lane).ok()?,
-            endpoint: u16::try_from(endpoint_index.checked_add(1)?).ok()?,
+            address: ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor as u16,
+            lane: index as u16,
+            endpoint: 2,
         })
-        .filter(|_| role_index < OUTPUT_ROLE_COUNT_V1)
     }
-    fn claim_value_v1(&self, claim_index: usize) -> Option<F> {
-        if claim_index < RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 {
-            let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let (_, relation, _) = RFC5280_TERMINAL_CLAIM_RELATIONS_V1
-                .get(relation_index)
-                .copied()?;
-            return self
-                .relations
-                .get(relation)
-                .and_then(|products| products.get(lane))
-                .copied();
-        }
-        let local = claim_index.checked_sub(RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1)?;
-        let role_index = local / (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let endpoint_lane = local % (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let consumer =
-            endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1 == output_endpoint_index_v1(true);
-        let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-        let role = self.output_roles.get(role_index)?;
-        if consumer {
-            role.consumer_products.get(lane).copied()
-        } else {
-            role.producer_products.get(lane).copied()
-        }
+    fn claim_value_v1(&self, index: usize) -> Option<F> {
+        self.output_roles[0].consumer_products.get(index).copied()
     }
     fn set_claim_value_v1(
         &mut self,
-        claim_index: usize,
+        index: usize,
         value: F,
     ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-        if claim_index < RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 {
-            let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let (_, relation, _) = RFC5280_TERMINAL_CLAIM_RELATIONS_V1
-                .get(relation_index)
-                .copied()
-                .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
-            self.relations[relation][lane] = value;
-            return Ok(());
-        }
-        let local = claim_index
-            .checked_sub(RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
-        let role_index = local / (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let endpoint_lane = local % (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-        let consumer =
-            endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1 == output_endpoint_index_v1(true);
-        let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-        let role = self
-            .output_roles
-            .get_mut(role_index)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
-        if consumer {
-            role.consumer_products[lane] = value;
-        } else {
-            role.producer_products[lane] = value;
-        }
+        *self.output_roles[0]
+            .consumer_products
+            .get_mut(index)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)? = value;
         Ok(())
     }
     fn validate_v1(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-        if self
-            .relations
-            .iter()
-            .flatten()
-            .chain(
-                self.output_roles
-                    .iter()
-                    .flat_map(|role| role.producer_products.iter()),
-            )
-            .chain(
-                self.output_roles
-                    .iter()
-                    .flat_map(|role| role.consumer_products.iter()),
-            )
-            .any(|value| F::canonical(value.0).is_none())
-            || self
-                .output_roles
+        if self.output_roles[0].role != ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor
+            || self.output_roles[0]
+                .consumer_products
                 .iter()
-                .zip(OUTPUT_ROLES_V1)
-                .any(|(actual, expected)| actual.role != expected)
+                .any(|x| F::canonical(x.0).is_none())
         {
             return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
-        }
-        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-            let (producer, consumer) =
-                self.output_roles
-                    .iter()
-                    .fold((F::ONE, F::ONE), |(producer, consumer), role| {
-                        (
-                            producer.mul(role.producer_products[lane]),
-                            consumer.mul(role.consumer_products[lane]),
-                        )
-                    });
-            if producer != self.relations[0][lane] || consumer != self.relations[1][lane] {
-                return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
-            }
         }
         Ok(())
     }
     /// Encode the sole canonical proof-carried terminal frame.
     ///
-    /// Only the two output aggregates and eighteen role products are public.
-    /// Private DER products and retired reserved slots have no wire fields.
+    /// Only the independently committed governed-root consumer products are
+    /// public. All other endpoints and SHA centers stay in original aux columns.
     pub(crate) fn encode_x5r1_v1(
         self,
     ) -> Result<[u8; ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1], ZkX509Rfc5280StarkErrorV1> {
@@ -4670,42 +4600,29 @@ const SHA_TERMINAL_CLAIM_VERSION_V1: u16 = 1;
 const SHA_TERMINAL_CLAIM_ADAPTER_V1: u16 = 4;
 const SHA_TERMINAL_CLAIM_INSTANCE_V1: u16 = 0;
 const SHA_TERMINAL_CLAIM_FAMILIES_V1: usize = 6;
-const SHA_TERMINAL_CLAIM_RFC_STREAMS_V1: usize = 4;
-const SHA_TERMINAL_CLAIM_RECORDS_PER_SEGMENT_V1: usize =
-    SHA_TERMINAL_CLAIM_FAMILIES_V1 * ZK_X509_SHA_BUS_LANES_V1;
-const SHA_SEGMENT_TERMINAL_CLAIM_RECORDS_V1: usize =
-    ZK_X509_SHA_SEGMENT_COUNT_V1 * SHA_TERMINAL_CLAIM_RECORDS_PER_SEGMENT_V1;
 const SHA_CA_BOUNDARY_CLAIM_FAMILIES_V1: usize = 4;
 const SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1: usize =
     SHA_CA_BOUNDARY_CLAIM_FAMILIES_V1 * ZK_X509_SHA_BUS_LANES_V1;
 const SHA_CA_BOUNDARY_CLAIM_RECORDS_V1: usize =
     ZK_X509_SHA_CA_CALL_COUNT_V1 * SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1;
-const SHA_TERMINAL_CLAIM_RECORDS_V1: usize =
-    SHA_SEGMENT_TERMINAL_CLAIM_RECORDS_V1 + SHA_CA_BOUNDARY_CLAIM_RECORDS_V1;
+const SHA_TERMINAL_CLAIM_RECORDS_V1: usize = SHA_CA_BOUNDARY_CLAIM_RECORDS_V1;
 const SHA_TERMINAL_CLAIM_RECORD_BYTES_V1: usize = 2 + 2 + 2 + 2 + 8;
 const SHA_TERMINAL_CLAIM_HEADER_BYTES_V1: usize = 4 + 2 + 2 + 2 + 2;
-/// Exact X5Q1 proof-carried SHA segment-terminal frame size.
+/// Exact X5Q1 proof-carried compact-CA boundary frame size.
 pub(crate) const ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1: usize =
     SHA_TERMINAL_CLAIM_HEADER_BYTES_V1
         + SHA_TERMINAL_CLAIM_RECORDS_V1 * SHA_TERMINAL_CLAIM_RECORD_BYTES_V1;
 const _: () = assert!(ZK_X509_SHA_BUS_LANES_V1 == ZK_X509_RFC5280_STARK_BUS_LANES_V1);
 const _: () = assert!(ZK_X509_SHA_CALL_COUNT_V1 == 29);
 const _: () = assert!(ZK_X509_SHA_SEGMENT_COUNT_V1 == 4);
-const _: () = assert!(SHA_TERMINAL_CLAIM_RFC_STREAMS_V1 + 2 == SHA_TERMINAL_CLAIM_FAMILIES_V1);
-const _: () = assert!(SHA_SEGMENT_TERMINAL_CLAIM_RECORDS_V1 == 96);
 const _: () = assert!(SHA_CA_BOUNDARY_CLAIM_RECORDS_V1 == 208);
-const _: () = assert!(SHA_TERMINAL_CLAIM_RECORDS_V1 == 304);
-const _: () = assert!(ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1 == 4_876);
-/// Ordered proof claims for all SHA call-bus products.
-///
-/// The 29 fixed calls are packed whole into four verifier-owned physical segments. Each segment
-/// carries the source-word product, digest-word product, and four independently constrained
-/// RFC-consumer streams in four challenge lanes. No call identity, family, lane, or segment is
-/// selected by the prover: X5Q1 fixes all 304 addresses in this exact order.
+const _: () = assert!(SHA_TERMINAL_CLAIM_RECORDS_V1 == 208);
+const _: () = assert!(ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1 == 3_340);
+/// Ordered public claims for the thirteen compact-CA SHA call boundaries.
+/// Whole segment and RFC stream products remain in genuine private native owners.
+/// X5Q1 fixes all208 call/family/lane addresses; no private segment record exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaSegmentTerminalClaimsV1 {
-    /// Segment terminals in verifier-owned physical registration order.
-    pub(crate) segments: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     /// Cumulative starts and call-local terminals for calls `16..=28`.
     pub(crate) ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 }
@@ -4713,13 +4630,6 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
     #[cfg(test)]
     pub(crate) fn canonical_zero_for_test_v1() -> Self {
         Self {
-            segments: core::array::from_fn(|segment| ZkX509ShaSegmentTerminalV1 {
-                segment: u8::try_from(segment).expect("four SHA segments fit u8"),
-                source_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                digest_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                rfc_stream_products: [[F::ZERO; ZK_X509_SHA_BUS_LANES_V1];
-                    SHA_TERMINAL_CLAIM_RFC_STREAMS_V1],
-            }),
             ca_calls: core::array::from_fn(|index| {
                 let (call, role) =
                     zk_x509_sha_ca_call_identity_v1(index).expect("canonical compact-CA call");
@@ -4734,13 +4644,12 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
             }),
         }
     }
-    /// Construct claims only from the four terminals returned by the SHA AIR segment providers.
+    /// Construct claims from the exact thirteen CA boundaries returned by genuine SHA AIR sources.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn from_sha_air_terminals_v1(
-        segments: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
         ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
-        let claims = Self { segments, ca_calls };
+        let claims = Self { ca_calls };
         claims.validate_v1()?;
         Ok(claims)
     }
@@ -4748,42 +4657,13 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
         if claim_index >= SHA_TERMINAL_CLAIM_RECORDS_V1 {
             return None;
         }
-        if claim_index < SHA_SEGMENT_TERMINAL_CLAIM_RECORDS_V1 {
-            let segment = claim_index / SHA_TERMINAL_CLAIM_RECORDS_PER_SEGMENT_V1;
-            let local = claim_index % SHA_TERMINAL_CLAIM_RECORDS_PER_SEGMENT_V1;
-            let family = local / ZK_X509_SHA_BUS_LANES_V1;
-            let lane = local % ZK_X509_SHA_BUS_LANES_V1;
-            return Some((segment, family, lane));
-        }
-        let local = claim_index - SHA_SEGMENT_TERMINAL_CLAIM_RECORDS_V1;
-        let call = local / SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1;
-        let family = SHA_TERMINAL_CLAIM_FAMILIES_V1
-            + (local % SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1) / ZK_X509_SHA_BUS_LANES_V1;
-        let lane = local % ZK_X509_SHA_BUS_LANES_V1;
-        Some((call, family, lane))
+        let call = claim_index / SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1;
+        let family = 6 + (claim_index % SHA_CA_BOUNDARY_CLAIM_RECORDS_PER_CALL_V1) / 4;
+        Some((call, family, claim_index % 4))
     }
     fn claim_value_v1(&self, claim_index: usize) -> Option<F> {
         let (segment, family, lane) = Self::claim_address_v1(claim_index)?;
         match family {
-            0 => self
-                .segments
-                .get(segment)?
-                .source_products
-                .get(lane)
-                .copied(),
-            1 => self
-                .segments
-                .get(segment)?
-                .digest_products
-                .get(lane)
-                .copied(),
-            2..=5 => self
-                .segments
-                .get(segment)?
-                .rfc_stream_products
-                .get(family - 2)
-                .and_then(|stream| stream.get(lane))
-                .copied(),
             6 => self
                 .ca_calls
                 .get(segment)?
@@ -4819,19 +4699,6 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
         let (segment, family, lane) =
             Self::claim_address_v1(claim_index).ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
         let target = match family {
-            0 => self
-                .segments
-                .get_mut(segment)
-                .and_then(|terminal| terminal.source_products.get_mut(lane)),
-            1 => self
-                .segments
-                .get_mut(segment)
-                .and_then(|terminal| terminal.digest_products.get_mut(lane)),
-            2..=5 => self
-                .segments
-                .get_mut(segment)
-                .and_then(|terminal| terminal.rfc_stream_products.get_mut(family - 2))
-                .and_then(|stream| stream.get_mut(lane)),
             6 => self
                 .ca_calls
                 .get_mut(segment)
@@ -4855,18 +4722,6 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
         Ok(())
     }
     fn validate_v1(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-        for (expected_segment, terminal) in self.segments.iter().enumerate() {
-            if usize::from(terminal.segment) != expected_segment
-                || terminal
-                    .source_products
-                    .iter()
-                    .chain(&terminal.digest_products)
-                    .chain(terminal.rfc_stream_products.iter().flatten())
-                    .any(|value| F::canonical(value.0).is_none())
-            {
-                return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
-            }
-        }
         for (index, terminal) in self.ca_calls.iter().copied().enumerate() {
             terminal
                 .validate_identity_v1(index)
@@ -4960,13 +4815,6 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
             return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
         }
         let mut claims = Self {
-            segments: core::array::from_fn(|segment| ZkX509ShaSegmentTerminalV1 {
-                segment: u8::try_from(segment).expect("SHA segment fits u8"),
-                source_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                digest_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                rfc_stream_products: [[F::ZERO; ZK_X509_SHA_BUS_LANES_V1];
-                    SHA_TERMINAL_CLAIM_RFC_STREAMS_V1],
-            }),
             ca_calls: core::array::from_fn(|index| {
                 let (call, role) =
                     zk_x509_sha_ca_call_identity_v1(index).expect("canonical compact-CA call");
@@ -5029,19 +4877,18 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
         Ok(claims)
     }
 }
-/// Compare proof-decoded X5Q1 claims with the four terminals already bound by
-/// the SHA opened-row evaluator.
+/// Compare proof-decoded X5Q1 claims with the thirteen CA call boundaries
+/// already bound by the SHA opened-row evaluator.
 ///
 /// `committed` is verifier output, never witness metadata. The fixed record order makes every
 /// mismatch a distinct residue without a host-selected segment, family, or lane.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
-    committed: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     committed_ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
     claims: ZkX509ShaSegmentTerminalClaimsV1,
 ) -> Result<[F; SHA_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
     let committed =
-        ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(committed, committed_ca_calls)?;
+        ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(committed_ca_calls)?;
     claims.validate_v1()?;
     Ok(core::array::from_fn(|claim_index| {
         let expected = committed
@@ -5053,15 +4900,13 @@ pub(crate) fn evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
         expected.sub(claimed)
     }))
 }
-/// Decode X5Q1 and replay all 304 verifier-side terminal equalities.
+/// Decode X5Q1 and replay all208 verifier-side compact-CA terminal equalities.
 #[cfg(test)]
 pub(crate) fn replay_zk_x509_sha_segment_terminal_claims_v1(
-    committed: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     committed_ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
     encoded_claims: &[u8],
 ) -> Result<[F; SHA_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
     evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
-        committed,
         committed_ca_calls,
         ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(encoded_claims)?,
     )
@@ -7269,7 +7114,7 @@ fn product_relation_factor_v1(
     row: &ZkX509Rfc5280StarkBaseRowV1,
     lane: usize,
     der_challenges: ZkX509DerStarkChallengesV1,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
+    _challenges: ZkX509Rfc5280StarkChallengesV1,
 ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
     match relation {
         0 => Ok(zk_x509_der_stark_input_byte_factor_v1(
@@ -7296,7 +7141,6 @@ fn product_relation_factor_v1(
             lane,
             der_challenges,
         )?),
-        4 | 5 => Ok(output_row_factor_v1(row, lane, challenges)),
         _ => Err(ZkX509Rfc5280StarkErrorV1::Shape),
     }
 }
@@ -7307,12 +7151,37 @@ fn product_relation_family_v1(
     match relation {
         0 => Ok(ZkX509Rfc5280StarkFamilyV1::SourceByte),
         1 => Ok(ZkX509Rfc5280StarkFamilyV1::SourceNode),
-        4 => Ok(ZkX509Rfc5280StarkFamilyV1::OutputProducer),
-        5 => Ok(ZkX509Rfc5280StarkFamilyV1::OutputConsumer),
         _ => Err(ZkX509Rfc5280StarkErrorV1::Shape),
     }
 }
-/// Compile public output products; private DER products stay only in auxiliary owners.
+// Original private source-admissibility preflight, independent of the public
+// claim inventory. Fixed selectors are reconstructed from the same material's
+// actual canonical schedule; no supplied selector or role grants proof authority.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn selected_output_role_preflight_v1(
+    row: &ZkX509Rfc5280StarkBaseRowV1,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+    consumer: bool,
+) -> Result<usize, ZkX509Rfc5280StarkErrorV1> {
+    let mut selected_role = None;
+    for role_index in 0..OUTPUT_ROLE_COUNT_V1 {
+        let selector = fixed[output_role_fixed_selector_column_v1(role_index, consumer)];
+        if selector == F::ONE && selected_role.is_none() {
+            selected_role = Some(role_index);
+        } else if selector != F::ZERO {
+            return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+        }
+    }
+    let role_index = selected_role.ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
+    if row[BASE_ROLE]
+        != F(output_role_from_index_v1(role_index)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)? as u64)
+    {
+        return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+    }
+    Ok(role_index)
+}
+/// Compile only the governed-root consumer products; all other products stay private.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
@@ -7322,6 +7191,7 @@ pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
     der_challenges.validate()?;
     challenges.validate()?;
     let mut claims = ZkX509Rfc5280StarkTerminalClaimsV1::canonical_identity_v1();
+    let governed_role = output_role_index_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor);
     for row_index in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
         let row = material.base_row(row_index)?;
         let fixed = material.fixed_row(row_index)?;
@@ -7329,45 +7199,17 @@ pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
         if row[BASE_ACTIVE] != F::ONE {
             continue;
         }
-        for relation in [4, 5] {
-            if family != product_relation_family_v1(relation)? {
-                continue;
-            }
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                claims.relations[relation - 4][lane] = claims.relations[relation - 4][lane].mul(
-                    product_relation_factor_v1(relation, &row, lane, der_challenges, challenges)?,
-                );
-            }
-        }
         if matches!(
             family,
             ZkX509Rfc5280StarkFamilyV1::OutputProducer | ZkX509Rfc5280StarkFamilyV1::OutputConsumer
         ) {
             let consumer = family == ZkX509Rfc5280StarkFamilyV1::OutputConsumer;
-            let mut selected_role = None;
-            for role_index in 0..OUTPUT_ROLE_COUNT_V1 {
-                let selector = fixed[output_role_fixed_selector_column_v1(role_index, consumer)];
-                if selector == F::ONE && selected_role.is_none() {
-                    selected_role = Some(role_index);
-                } else if selector != F::ZERO {
-                    return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
-                }
-            }
-            let role_index = selected_role.ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
-            if row[BASE_ROLE]
-                != F(output_role_from_index_v1(role_index)
-                    .ok_or(ZkX509Rfc5280StarkErrorV1::TerminalClaim)? as u64)
-            {
-                return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
-            }
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                let factor = output_row_factor_v1(&row, lane, challenges);
-                if consumer {
-                    claims.output_roles[role_index].consumer_products[lane] =
-                        claims.output_roles[role_index].consumer_products[lane].mul(factor);
-                } else {
-                    claims.output_roles[role_index].producer_products[lane] =
-                        claims.output_roles[role_index].producer_products[lane].mul(factor);
+            let role_index = selected_output_role_preflight_v1(&row, &fixed, consumer)?;
+            if consumer && role_index == governed_role {
+                for lane in 0..4 {
+                    claims.output_roles[0].consumer_products[lane] = claims.output_roles[0]
+                        .consumer_products[lane]
+                        .mul(output_row_factor_v1(&row, lane, challenges));
                 }
             }
         }
@@ -7388,37 +7230,20 @@ pub(crate) const fn zk_x509_rfc_der_terminal_columns_v1() -> [usize; 8] {
         AUX_DER_NODE_AFTER + 3,
     ]
 }
-/// Bind every proof-carried relation and role terminal to its independently
-/// committed final auxiliary product in verifier-fixed address order.
+/// Bind the four public governed-root consumer fields to their independently
+/// committed original final auxiliary product. Other role endpoints stay private.
 pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1<A: PolynomialAirFieldV1>(
     last_aggregate: A,
     aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     claims: ZkX509Rfc5280StarkTerminalClaimsV1,
 ) -> Result<[A; RFC5280_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
     claims.validate_v1()?;
-    Ok(core::array::from_fn(|claim_index| {
-        let claimed = claims
-            .claim_value_v1(claim_index)
-            .expect("bounded RFC terminal claim");
-        if claim_index < RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 {
-            let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            let (_, _, auxiliary_after) = RFC5280_TERMINAL_CLAIM_RELATIONS_V1[relation_index];
-            last_aggregate.mul(aux[auxiliary_after + lane].sub(A::from_base(claimed)))
-        } else {
-            let local = claim_index - RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1;
-            let role_index =
-                local / (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-            let endpoint_lane =
-                local % (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-            let consumer = endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1
-                == output_endpoint_index_v1(true);
-            let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            last_aggregate.mul(
-                aux[output_role_aux_column_v1(role_index, consumer, lane)]
-                    .sub(A::from_base(claimed)),
-            )
-        }
+    let role = output_role_index_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor);
+    Ok(core::array::from_fn(|lane| {
+        last_aggregate.mul(
+            aux[output_role_aux_column_v1(role, true, lane)]
+                .sub(A::from_base(claims.output_roles[0].consumer_products[lane])),
+        )
     }))
 }
 /// Decode proof bytes and replay their final-row binding without any prover
@@ -7455,8 +7280,6 @@ fn product_aux_column_descriptor_v1(column: usize) -> Option<(usize, usize, bool
     let starts = [
         (0, AUX_DER_BYTE_BEFORE, AUX_DER_BYTE_AFTER),
         (1, AUX_DER_NODE_BEFORE, AUX_DER_NODE_AFTER),
-        (4, AUX_OUTPUT_PRODUCER_BEFORE, AUX_OUTPUT_PRODUCER_AFTER),
-        (5, AUX_OUTPUT_CONSUMER_BEFORE, AUX_OUTPUT_CONSUMER_AFTER),
     ];
     for (relation, before, after) in starts {
         if (before..before + ZK_X509_RFC5280_STARK_BUS_LANES_V1).contains(&column) {
@@ -7935,17 +7758,142 @@ pub(crate) fn build_zk_x509_rfc5280_stark_aux_column_v1(
     }
     Ok(values.into_vec())
 }
+/// Private native SHA centers. Only the actual four bound SHA sources can
+/// construct a production owner; no wire codec, Copy or raw-array factory exists.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) struct ZkX509ShaUnionCentersV1 {
+    products: [[F; 4]; 4],
+    present: u8,
+    binding: Option<ZkX509CredentialPreAuxBindingV1>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl ZkX509ShaUnionCentersV1 {
+    fn empty_v1() -> Self {
+        Self {
+            products: [[F::ZERO; 4]; 4],
+            present: 0,
+            binding: None,
+        }
+    }
+    fn install_segment_v1(
+        &mut self,
+        segment: usize,
+        streams: &[[F; 4]; 4],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        if segment >= 4
+            || self.present & (1 << segment) != 0
+            || streams
+                .iter()
+                .flatten()
+                .any(|x| F::canonical(x.0).is_none())
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+        }
+        for lane in 0..4 {
+            self.products[segment][lane] = streams.iter().fold(F::ONE, |p, s| p.mul(s[lane]));
+        }
+        self.present |= 1 << segment;
+        Ok(())
+    }
+    fn validate_v1(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        if self.present != 15
+            || self
+                .products
+                .iter()
+                .flatten()
+                .any(|x| F::canonical(x.0).is_none())
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+        }
+        Ok(())
+    }
+    fn products_v1(&self) -> &[[F; 4]; 4] {
+        &self.products
+    }
+    /// Replay genuine original SHA sources under the exact shared capability.
+    /// Segment and compact-CA coverage/order are checked before returning an owner.
+    pub(crate) fn from_bound_sources_v1(
+        sources: &[ZkX509ShaBatchSegmentAuxSourceV1<'_>; 4],
+        binding: ZkX509CredentialPreAuxBindingV1,
+    ) -> Result<(Self, [ZkX509ShaCallBoundaryTerminalV1; 13]), ZkX509Rfc5280StarkErrorV1> {
+        let mut owner = Self::empty_v1();
+        let mut boundaries = Vec::new();
+        boundaries
+            .try_reserve_exact(13)
+            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+        for (index, source) in sources.iter().enumerate() {
+            let terminal = source
+                .rfc_union_air_terminals_v1(binding, index)
+                .map_err(|_| ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
+            if usize::from(terminal.segment.segment) != index {
+                return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+            }
+            owner.install_segment_v1(index, &terminal.segment.rfc_stream_products)?;
+            boundaries.extend(terminal.ca_call_boundaries);
+        }
+        let calls: [ZkX509ShaCallBoundaryTerminalV1; 13] = boundaries
+            .try_into()
+            .map_err(|_: Vec<_>| ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
+        for (index, terminal) in calls.iter().copied().enumerate() {
+            terminal
+                .validate_identity_v1(index)
+                .map_err(|_| ZkX509Rfc5280StarkErrorV1::TerminalClaim)?;
+        }
+        owner.validate_v1()?;
+        owner.binding = Some(binding);
+        Ok((owner, calls))
+    }
+    #[cfg(test)]
+    fn identity_fixture_v1() -> Self {
+        Self {
+            products: [[F::ONE; 4]; 4],
+            present: 15,
+            binding: None,
+        }
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509ShaUnionCentersV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ZkX509ShaUnionCentersV1 { <private products redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ShaUnionCentersV1 {
+    fn drop(&mut self) {
+        zeroize_field_rows_v1(&mut self.products);
+    }
+}
+/// Fixed original coordinates consumed by the independent MAIN private union plan.
+pub(crate) const fn zk_x509_rfc_sha_union_columns_v1() -> ([[usize; 4]; 4], [[usize; 4]; 4]) {
+    let roles = [1_usize, 2, 3, 6];
+    let mut bridges = [[0; 4]; 4];
+    let mut consumers = [[0; 4]; 4];
+    let mut segment = 0;
+    while segment < 4 {
+        let mut lane = 0;
+        while lane < 4 {
+            bridges[segment][lane] = AUX_SHA_UNION_CENTERS + segment * 4 + lane;
+            consumers[segment][lane] = output_role_aux_column_v1(roles[segment], true, lane);
+            lane += 1;
+        }
+        segment += 1;
+    }
+    (bridges, consumers)
+}
 /// Sole production column provider for the RFC 5280 registration.
 ///
 /// Challenge-independent base/fixed rows and challenge-dependent auxiliary
 /// products are replayed from the same canonical material. Terminal claims
-/// are compiled once from those base rows and exposed only through X5R1.
+/// are compiled once from those base rows; only governed-root consumers have X5R1 fields.
+/// Private centers are consumed from the same genuine shared binding.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509Rfc5280StarkColumnProviderV1<'a> {
     material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
     challenges: ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: ZkX509Rfc5280StarkTerminalClaimsV1,
+    sha_union: ZkX509ShaUnionCentersV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509Rfc5280StarkColumnProviderV1<'_> {
@@ -7955,13 +7903,31 @@ impl core::fmt::Debug for ZkX509Rfc5280StarkColumnProviderV1<'_> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
+    /// Consume the private union owner from the same original X5B1 phase.
     pub(crate) fn new_v1(
+        material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
+        binding: ZkX509CredentialPreAuxBindingV1,
+        sha_union: ZkX509ShaUnionCentersV1,
+    ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
+        if sha_union.binding != Some(binding) {
+            return Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim);
+        }
+        Self::with_centers_v1(
+            material,
+            binding.main_post_base().der(),
+            binding.rfc5280(),
+            sha_union,
+        )
+    }
+    fn with_centers_v1(
         material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
         der_challenges: ZkX509DerStarkChallengesV1,
         challenges: ZkX509Rfc5280StarkChallengesV1,
+        sha_union: ZkX509ShaUnionCentersV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
         der_challenges.validate()?;
         challenges.validate()?;
+        sha_union.validate_v1()?;
         let terminal_claims =
             compile_zk_x509_rfc5280_stark_terminal_claims_v1(material, der_challenges, challenges)?;
         Ok(Self {
@@ -7969,7 +7935,26 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
             der_challenges,
             challenges,
             terminal_claims,
+            sha_union,
         })
+    }
+    #[cfg(test)]
+    /// Local test fixture for RFC recurrences; grants no production union owner.
+    pub(crate) fn fixture_v1(
+        material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
+        der_challenges: ZkX509DerStarkChallengesV1,
+        challenges: ZkX509Rfc5280StarkChallengesV1,
+    ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
+        Self::with_centers_v1(
+            material,
+            der_challenges,
+            challenges,
+            ZkX509ShaUnionCentersV1::identity_fixture_v1(),
+        )
+    }
+    /// Borrow the same owned, binding-checked centers for the parent MAIN proof builder.
+    pub(super) fn sha_union_centers_v1(&self) -> &[[F; 4]; 4] {
+        self.sha_union.products_v1()
     }
     #[cfg(test)]
     pub(crate) fn base_row_v1(
@@ -8009,6 +7994,19 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         &self,
         column: usize,
     ) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
+        if (AUX_SHA_UNION_CENTERS..AUX_SHA_UNION_CENTERS + 16).contains(&column) {
+            let local = column - AUX_SHA_UNION_CENTERS;
+            let mut values = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+            values
+                .try_reserve_exact(ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
+                .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+            values.resize(
+                ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
+                self.sha_union.products[local / 4][local % 4],
+            );
+            return Ok(values.into_vec());
+        }
+
         build_zk_x509_rfc5280_stark_aux_column_v1(
             self.material,
             self.der_challenges,
@@ -8835,10 +8833,6 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1
         &mut residue_section_start,
         RFC5280_RESIDUE_SECTIONS_V1[10],
     );
-    let output_producer =
-        active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::OutputProducer);
-    let output_consumer =
-        active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::OutputConsumer);
     residues.extend(output_metadata_residues_v1(current, fixed));
     residues.extend(key_output_residues_v1(current, fixed));
     // Every private family is a canonical active prefix of its fixed
@@ -8891,18 +8885,6 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1
                 source_node,
                 der_node_factor,
             ),
-            (
-                AUX_OUTPUT_PRODUCER_BEFORE + lane,
-                AUX_OUTPUT_PRODUCER_AFTER + lane,
-                output_producer,
-                output_row_factor_v1(current, lane, challenges),
-            ),
-            (
-                AUX_OUTPUT_CONSUMER_BEFORE + lane,
-                AUX_OUTPUT_CONSUMER_AFTER + lane,
-                output_consumer,
-                output_row_factor_v1(current, lane, challenges),
-            ),
         ] {
             residues.push(
                 current_aux[after]
@@ -8911,6 +8893,11 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1
             residues.push(first.mul(current_aux[before].sub(A::ONE)));
             residues.push(continue_gate.mul(next_aux[before].sub(current_aux[after])));
         }
+    }
+    for column in AUX_SHA_UNION_CENTERS..AUX_SHA_UNION_CENTERS + 16 {
+        // Cyclic native recurrence, including the final→first transition.
+        // Original independent masks are handled by the joined vanishing quotient.
+        residues.push(next_aux[column].sub(current_aux[column]));
     }
     assert_residue_section_v1(
         residues.len(),
@@ -9342,6 +9329,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     include!("rfc5280_stark_preflight_tests.rs");
     include!("rfc5280_key_output_tests.rs");
+    include!("rfc5280_sha_union_tests.rs");
     fn challenges_v1() -> ZkX509Rfc5280StarkChallengesV1 {
         ZkX509Rfc5280StarkChallengesV1 {
             tuple: core::array::from_fn(|lane| {
@@ -9366,60 +9354,25 @@ mod tests {
     fn terminal_claims_v1() -> ZkX509Rfc5280StarkTerminalClaimsV1 {
         ZkX509Rfc5280StarkTerminalClaimsV1::canonical_identity_v1()
     }
-    fn recompute_output_aggregates_v1(claims: &mut ZkX509Rfc5280StarkTerminalClaimsV1) {
-        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-            claims.relations[0][lane] = claims.output_roles.iter().fold(F::ONE, |product, role| {
-                product.mul(role.producer_products[lane])
-            });
-            claims.relations[1][lane] = claims.output_roles.iter().fold(F::ONE, |product, role| {
-                product.mul(role.consumer_products[lane])
-            });
-        }
-    }
+
     fn nontrivial_terminal_claims_v1() -> ZkX509Rfc5280StarkTerminalClaimsV1 {
         let mut claims = terminal_claims_v1();
-        for (role_index, role) in claims.output_roles.iter_mut().enumerate() {
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                role.producer_products[lane] =
-                    F(1_000
-                        + u64::try_from(role_index * 100 + lane).expect("small producer fixture"));
-                role.consumer_products[lane] =
-                    F(2_000
-                        + u64::try_from(role_index * 100 + lane).expect("small consumer fixture"));
-            }
+        for lane in 0..4 {
+            claims.output_roles[0].consumer_products[lane] = F(1000 + lane as u64);
         }
-        recompute_output_aggregates_v1(&mut claims);
         claims
     }
     fn terminal_aux_v1(claims: ZkX509Rfc5280StarkTerminalClaimsV1) -> ZkX509Rfc5280StarkAuxRowV1 {
-        let mut aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
-        for (_, relation, after) in RFC5280_TERMINAL_CLAIM_RELATIONS_V1 {
-            aux[after..after + ZK_X509_RFC5280_STARK_BUS_LANES_V1]
-                .copy_from_slice(&claims.relations[relation]);
-        }
-        for role_index in 0..OUTPUT_ROLE_COUNT_V1 {
-            for consumer in [false, true] {
-                let products = if consumer {
-                    claims.output_roles[role_index].consumer_products
-                } else {
-                    claims.output_roles[role_index].producer_products
-                };
-                for (lane, product) in products.into_iter().enumerate() {
-                    aux[output_role_aux_column_v1(role_index, consumer, lane)] = product;
-                }
-            }
+        let mut aux = neutral_aux_v1();
+        let role = output_role_index_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor);
+        for lane in 0..4 {
+            aux[output_role_aux_column_v1(role, true, lane)] =
+                claims.output_roles[0].consumer_products[lane];
         }
         aux
     }
     fn sha_segment_terminal_claims_v1() -> ZkX509ShaSegmentTerminalClaimsV1 {
         let mut claims = ZkX509ShaSegmentTerminalClaimsV1 {
-            segments: core::array::from_fn(|segment| ZkX509ShaSegmentTerminalV1 {
-                segment: u8::try_from(segment).expect("SHA segment fits u8"),
-                source_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                digest_products: [F::ZERO; ZK_X509_SHA_BUS_LANES_V1],
-                rfc_stream_products: [[F::ZERO; ZK_X509_SHA_BUS_LANES_V1];
-                    SHA_TERMINAL_CLAIM_RFC_STREAMS_V1],
-            }),
             ca_calls: core::array::from_fn(|index| {
                 let (call, role) =
                     zk_x509_sha_ca_call_identity_v1(index).expect("canonical compact-CA call");
@@ -9520,6 +9473,49 @@ mod tests {
         )
         .expect("canonical five-signature P-256 AIR terminals")
     }
+    #[test]
+    fn key_join_rows_match_all_fixed_producer_bytes_and_selector_for_every_disclosure_count() {
+        for count in 0..=4 {
+            let mut shape = ZkX509Rfc5280StarkShapeV1::default();
+            shape.disclosed_attribute_count = count;
+            shape.disclosed_attribute_indices = core::array::from_fn(|index| {
+                if index < usize::from(count) {
+                    index as u8
+                } else {
+                    0
+                }
+            });
+            let (rows, channels, value, activity) = zk_x509_rfc_key_join_rows_v1(shape).unwrap();
+            assert_eq!(value, BASE_VALUE);
+            assert_eq!(activity, BASE_CERT2_ACTIVE);
+            let fixed = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
+            for index in 0..6 {
+                let length = if index < 5 { 65 } else { 1 };
+                for offset in 0..length {
+                    let row = fixed.fixed_row(rows[index] + offset).unwrap();
+                    assert_eq!(
+                        row[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize],
+                        F::ONE
+                    );
+                    assert_eq!(row[FIX_EXPECTED + 1], F(u64::from(channels[index])));
+                    assert_eq!(row[FIX_EXPECTED + 4], F(offset as u64));
+                    assert_eq!(row[FIX_EXPECTED + 5], F::ONE);
+                    assert_eq!(row[FIX_REQUIRED_ACTIVE], F::ONE);
+                }
+                assert_ne!(
+                    fixed.fixed_row(rows[index] + length).unwrap()[FIX_EXPECTED + 1],
+                    F(u64::from(channels[index]))
+                );
+            }
+        }
+        let mut invalid = ZkX509Rfc5280StarkShapeV1::default();
+        invalid.disclosed_attribute_count = 5;
+        assert!(matches!(
+            zk_x509_rfc_key_join_rows_v1(invalid),
+            Err(ZkX509Rfc5280StarkErrorV1::Shape)
+        ));
+    }
+
     pub(super) fn canonical_trace_v1() -> ZkX509Rfc5280TraceV1 {
         let fixture = fixture();
         build_zk_x509_rfc5280_trace_v1(
@@ -9630,7 +9626,7 @@ mod tests {
     fn neutral_aux_v1() -> ZkX509Rfc5280StarkAuxRowV1 {
         let mut aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
         aux[AUX_DER_BYTE_BEFORE..AUX_PROFILE_LOOKUP_ACCUMULATOR].fill(F::ONE);
-        aux[AUX_OUTPUT_PRODUCER_BEFORE..AUX_SERIAL_BYTE_LOOKUP_ACCUMULATOR].fill(F::ONE);
+        aux[AUX_SHA_UNION_CENTERS..AUX_SERIAL_BYTE_LOOKUP_ACCUMULATOR].fill(F::ONE);
         aux[AUX_GRAMMAR_ORDINAL_SOURCE_BEFORE..AUX_NUMERIC_INVERSE].fill(F::ONE);
         aux
     }
@@ -9907,263 +9903,229 @@ mod tests {
     #[test]
     fn x5r1_terminal_claim_codec_and_final_row_replay_reject_every_malleation() {
         let claims = nontrivial_terminal_claims_v1();
-        let encoded = claims.encode_x5r1_v1().expect("canonical X5R1 claims");
-        assert_eq!(encoded.len(), 1_292);
-        assert_eq!(RFC5280_TERMINAL_CLAIM_RECORDS_V1, 80);
-        assert_eq!(claims.relations.len(), 2);
-        assert_eq!(&encoded[..4], b"X5R1");
+        let aux = terminal_aux_v1(claims);
+        let encoded = claims.encode_x5r1_v1().unwrap();
+        assert_eq!(encoded.len(), 76);
+        assert_eq!(RFC5280_TERMINAL_CLAIM_RECORDS_V1, 4);
         assert_eq!(
             ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&encoded),
             Ok(claims)
         );
-        for length in 0..encoded.len() {
-            assert_eq!(
-                ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&encoded[..length]),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "truncated X5R1 length {length} is rejected"
-            );
+        assert_eq!(
+            replay_zk_x509_rfc5280_terminal_claims_v1(F::ONE, &aux, &encoded).unwrap(),
+            [F::ZERO; 4]
+        );
+        for len in 0..encoded.len() {
+            assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&encoded[..len]).is_err());
         }
         let mut trailing = encoded.to_vec();
         trailing.push(0);
-        assert_eq!(
-            ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&trailing),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        for byte in 0..RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1 {
+        assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&trailing).is_err());
+        for byte in 0..12 {
             let mut changed = encoded;
             changed[byte] ^= 1;
-            assert_eq!(
-                ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&changed),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "header byte {byte} is canonical"
-            );
+            assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&changed).is_err());
         }
-        let final_aux = terminal_aux_v1(claims);
-        assert!(
-            replay_zk_x509_rfc5280_terminal_claims_v1(F::ONE, &final_aux, &encoded)
-                .expect("verifier terminal replay")
-                .iter()
-                .all(|residue| *residue == F::ZERO)
+        for lane in 0..4 {
+            let start = 12 + lane * 16;
+            for byte in 0..8 {
+                let mut changed = encoded;
+                changed[start + byte] ^= 1;
+                assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&changed).is_err());
+            }
+            // Mutate the canonical wire value while keeping the independently
+            // committed original auxiliary row unchanged. Exercise the actual
+            // decoder and address-to-residue routing, not only a struct helper.
+            let mut changed = encoded;
+            changed[start + 8..start + 16].copy_from_slice(
+                &claims
+                    .claim_value_v1(lane)
+                    .unwrap()
+                    .add(F::ONE)
+                    .0
+                    .to_be_bytes(),
+            );
+            let residues =
+                replay_zk_x509_rfc5280_terminal_claims_v1(F::ONE, &aux, &changed).unwrap();
+            assert_eq!(residues.iter().filter(|x| **x != F::ZERO).count(), 1);
+            assert_eq!(residues[lane], F::ZERO.sub(F::ONE));
+            let mut malformed = encoded;
+            malformed[start + 8..start + 16].copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
+            assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&malformed).is_err());
+            let mut bad = claims;
+            bad.set_claim_value_v1(lane, F(GOLDILOCKS_MODULUS_V1))
+                .unwrap();
+            assert!(bad.encode_x5r1_v1().is_err());
+        }
+        let mut reordered = encoded;
+        let first = encoded[12..28].to_vec();
+        reordered[12..28].copy_from_slice(&encoded[28..44]);
+        reordered[28..44].copy_from_slice(&first);
+        assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&reordered).is_err());
+        for role in OUTPUT_ROLES_V1 {
+            if role == ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor {
+                continue;
+            }
+            let mut wrong = claims;
+            wrong.output_roles[0].role = role;
+            assert!(wrong.encode_x5r1_v1().is_err());
+        }
+        for size in [1292, 1420] {
+            let mut retired = encoded.to_vec();
+            retired.resize(size, 0);
+            assert!(ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&retired).is_err());
+        }
+        assert_eq!(
+            ZkX509Rfc5280StarkTerminalClaimsV1::claim_address_v1(4),
+            None
         );
-        for claim_index in 0..RFC5280_TERMINAL_CLAIM_RECORDS_V1 {
-            let start = RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1
-                + claim_index * RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1;
-            for field_byte in 0..8 {
-                let field = ["family", "address", "lane", "endpoint"][field_byte / 2];
-                let mut wrong_address = encoded;
-                wrong_address[start + field_byte] ^= 0x40;
+        assert_eq!(claims.claim_value_v1(4), None);
+        let mut bad = claims;
+        assert!(bad.set_claim_value_v1(4, F::ZERO).is_err());
+    }
+    #[test]
+    fn private_output_role_preflight_preserves_every_original_source_admission_fence() {
+        let mut material =
+            build_zk_x509_rfc5280_stark_base_material_v1(&canonical_trace_v1()).unwrap();
+        let mut seen = [[false; 9]; 2];
+        for row_index in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+            let (family, _) = material.schedule.family_and_ordinal(row_index).unwrap();
+            if !matches!(
+                family,
+                ZkX509Rfc5280StarkFamilyV1::OutputProducer
+                    | ZkX509Rfc5280StarkFamilyV1::OutputConsumer
+            ) {
+                continue;
+            }
+            let row = material.base_row(row_index).unwrap();
+            if row[BASE_ACTIVE] != F::ONE {
+                continue;
+            }
+            let fixed = material.fixed_row(row_index).unwrap();
+            let consumer = family == ZkX509Rfc5280StarkFamilyV1::OutputConsumer;
+            let role = selected_output_role_preflight_v1(&row, &fixed, consumer).unwrap();
+            let endpoint = output_endpoint_index_v1(consumer);
+            if seen[endpoint][role] {
+                continue;
+            }
+            seen[endpoint][role] = true;
+            let mut wrong = row;
+            wrong[BASE_ROLE] = F(((role + 1) % 9 + 1) as u64);
+            assert_eq!(
+                selected_output_role_preflight_v1(&wrong, &fixed, consumer),
+                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
+            );
+            for malformed in [F::ZERO, F(2), F(GOLDILOCKS_MODULUS_V1)] {
+                let mut changed = fixed;
+                changed[output_role_fixed_selector_column_v1(role, consumer)] = malformed;
                 assert_eq!(
-                    ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&wrong_address),
-                    Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                    "claim {claim_index} {field} cannot be omitted, reordered, or duplicated"
+                    selected_output_role_preflight_v1(&row, &changed, consumer),
+                    Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
                 );
             }
-            let mut noncanonical = encoded;
-            noncanonical[start + 8..start + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
+            let mut duplicate = fixed;
+            duplicate[output_role_fixed_selector_column_v1((role + 1) % 9, consumer)] = F::ONE;
             assert_eq!(
-                ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&noncanonical),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "claim {claim_index} rejects the modulus alias"
-            );
-            let mut changed_claim = encoded;
-            let raw = u64::from_be_bytes(
-                changed_claim[start + 8..start + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                    .try_into()
-                    .expect("fixed claim record"),
-            );
-            changed_claim[start + 8..start + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .copy_from_slice(&(raw + 1).to_be_bytes());
-            match replay_zk_x509_rfc5280_terminal_claims_v1(F::ONE, &final_aux, &changed_claim) {
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim) => {}
-                Ok(residues) => assert!(
-                    residues.iter().any(|residue| *residue != F::ZERO),
-                    "canonical mutation of claim {claim_index} remains AIR-bound"
-                ),
-                Err(error) => panic!("unexpected claim {claim_index} replay error: {error:?}"),
-            }
-        }
-        for claim_index in 0..RFC5280_TERMINAL_CLAIM_RECORDS_V1 - 1 {
-            let first = RFC5280_TERMINAL_CLAIM_HEADER_BYTES_V1
-                + claim_index * RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1;
-            let second = first + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1;
-            let mut reordered = encoded;
-            for byte in 0..RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1 {
-                reordered.swap(first + byte, second + byte);
-            }
-            assert_eq!(
-                ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&reordered),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "adjacent records {claim_index} and {} cannot be reordered",
-                claim_index + 1
-            );
-            let mut duplicated = encoded;
-            let first_record: [u8; RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1] = duplicated
-                [first..first + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .try_into()
-                .expect("fixed X5R1 record");
-            duplicated[second..second + RFC5280_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .copy_from_slice(&first_record);
-            assert_eq!(
-                ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&duplicated),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "record {claim_index} cannot replace record {}",
-                claim_index + 1
+                selected_output_role_preflight_v1(&row, &duplicate, consumer),
+                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
             );
         }
-        for claim_index in 0..RFC5280_TERMINAL_CLAIM_RECORDS_V1 {
-            let mut changed_aux = final_aux;
-            let auxiliary_column = if claim_index < RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1 {
-                let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-                let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-                RFC5280_TERMINAL_CLAIM_RELATIONS_V1[relation_index].2 + lane
-            } else {
-                let local = claim_index - RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1;
-                let role_index =
-                    local / (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-                let endpoint_lane =
-                    local % (OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1);
-                let consumer = endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1
-                    == output_endpoint_index_v1(true);
-                let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-                output_role_aux_column_v1(role_index, consumer, lane)
-            };
-            changed_aux[auxiliary_column] = changed_aux[auxiliary_column].add(F::ONE);
-            assert_eq!(
-                evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(F::ONE, &changed_aux, claims,)
-                    .expect("canonical claims")
-                    .iter()
-                    .filter(|residue| **residue != F::ZERO)
-                    .count(),
-                1,
-                "claim {claim_index} has one independent final-row AIR binding"
-            );
-        }
-        // The retired DER and reserved slots have no public representation.
-        let mut retired_shape = encoded.to_vec();
-        retired_shape.resize(1_420, 0);
+        assert!(seen.iter().flatten().all(|value| *value));
+        // A malformed active private producer cannot be ignored merely because
+        // it contributes no public governed-root record. The real compiler must
+        // preserve its original fail-fast source rejection before encoding.
+        let family = ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize;
+        let row = material.family_rows[family].iter_mut().next().unwrap();
+        assert_eq!(row[BASE_ACTIVE], F::ONE);
+        row[BASE_ROLE] = F::ZERO;
         assert_eq!(
-            ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(&retired_shape),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        let mut inconsistent_output = claims;
-        inconsistent_output.relations[0][0] = inconsistent_output.relations[0][0].add(F::ONE);
-        assert_eq!(
-            inconsistent_output.encode_x5r1_v1(),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        assert_eq!(
-            evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
-                F::ONE,
-                &final_aux,
-                inconsistent_output,
+            compile_zk_x509_rfc5280_stark_terminal_claims_v1(
+                &material,
+                der_challenges_v1(),
+                challenges_v1()
             ),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        assert_eq!(
-            ZkX509Rfc5280StarkTerminalClaimsV1::claim_address_v1(RFC5280_TERMINAL_CLAIM_RECORDS_V1,),
-            None
-        );
-        assert_eq!(
-            claims.claim_value_v1(RFC5280_TERMINAL_CLAIM_RECORDS_V1),
-            None
-        );
-        let mut out_of_range = claims;
-        assert_eq!(
-            out_of_range.set_claim_value_v1(RFC5280_TERMINAL_CLAIM_RECORDS_V1, F::ZERO,),
             Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
         );
     }
     #[test]
     fn rfc_role_air_bindings_reject_one_sided_coordinated_and_compensating_mutations() {
-        let claims = nontrivial_terminal_claims_v1();
-        let final_aux = terminal_aux_v1(claims);
-        let mut one_sided = claims;
-        one_sided.output_roles[0].producer_products[0] =
-            one_sided.output_roles[0].producer_products[0].add(F::ONE);
-        assert_eq!(
-            one_sided.validate_v1(),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        let mut coordinated = claims;
-        coordinated.output_roles[0].producer_products[0] =
-            coordinated.output_roles[0].producer_products[0].add(F::ONE);
-        recompute_output_aggregates_v1(&mut coordinated);
-        coordinated
-            .validate_v1()
-            .expect("internally consistent decomposition");
-        assert_eq!(
-            evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(F::ONE, &final_aux, coordinated,)
-                .expect("canonical coordinated claims")
+        let current = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+        let mut fixed = [F::ZERO; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
+        fixed[FIX_CONTINUE] = F::ONE;
+        let aux = neutral_aux_v1();
+        let claims = terminal_claims_v1();
+        let offset = RFC5280_RESIDUE_SECTIONS_V1[..14]
+            .iter()
+            .map(|x| x.1)
+            .sum::<usize>();
+        let evaluate = |next: &ZkX509Rfc5280StarkAuxRowV1| {
+            evaluate_zk_x509_rfc5280_stark_residues_v1(
+                &current,
+                &current,
+                &aux,
+                next,
+                &fixed,
+                der_challenges_v1(),
+                challenges_v1(),
+                claims,
+            )
+            .unwrap()
+        };
+        assert!(
+            evaluate(&aux)[offset..offset + 144]
                 .iter()
-                .filter(|residue| **residue != F::ZERO)
-                .count(),
-            2,
-            "the aggregate and independently committed role product both reject the mutation"
+                .all(|x| *x == F::ZERO)
         );
-        let multiplier = F(7);
-        let inverse = multiplier.inv().expect("nonzero Goldilocks multiplier");
-        let mut compensating = claims;
-        compensating.output_roles[0].consumer_products[2] =
-            compensating.output_roles[0].consumer_products[2].mul(multiplier);
-        compensating.output_roles[1].consumer_products[2] =
-            compensating.output_roles[1].consumer_products[2].mul(inverse);
-        compensating
-            .validate_v1()
-            .expect("the compensating decomposition preserves its aggregate");
-        assert_eq!(compensating.relations[1], claims.relations[1]);
-        assert_eq!(
-            evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(F::ONE, &final_aux, compensating,)
-                .expect("canonical compensating claims")
-                .iter()
-                .filter(|residue| **residue != F::ZERO)
-                .count(),
-            2,
-            "two independently committed role products defeat inverse cancellation"
-        );
-        let mut wrong_role = claims;
-        wrong_role.output_roles[0].role = ZkX509Rfc5280OutputRoleV1::CertificateSlotActive;
-        assert_eq!(
-            wrong_role.validate_v1(),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        let slot_index = output_role_index_v1(ZkX509Rfc5280OutputRoleV1::CertificateSlotActive);
-        let mut optional_shape_substitution = claims;
-        for consumer in [false, true] {
-            let first = if consumer {
-                optional_shape_substitution.output_roles[0].consumer_products
-            } else {
-                optional_shape_substitution.output_roles[0].producer_products
-            };
-            let slot = if consumer {
-                optional_shape_substitution.output_roles[slot_index].consumer_products
-            } else {
-                optional_shape_substitution.output_roles[slot_index].producer_products
-            };
-            if consumer {
-                optional_shape_substitution.output_roles[0].consumer_products = slot;
-                optional_shape_substitution.output_roles[slot_index].consumer_products = first;
-            } else {
-                optional_shape_substitution.output_roles[0].producer_products = slot;
-                optional_shape_substitution.output_roles[slot_index].producer_products = first;
+        for role in 0..9 {
+            for consumer in [false, true] {
+                for lane in 0..4 {
+                    let col = output_role_aux_column_v1(role, consumer, lane);
+                    let slot =
+                        offset + (role * 2 + output_endpoint_index_v1(consumer)) * 8 + lane * 2;
+                    let mut changed = aux;
+                    changed[col] = changed[col].add(F::ONE);
+                    let got = evaluate(&changed);
+                    assert_eq!(got[slot], F::ONE);
+                    assert_eq!(
+                        got[offset..offset + 144]
+                            .iter()
+                            .filter(|x| **x != F::ZERO)
+                            .count(),
+                        1
+                    );
+                }
             }
         }
-        optional_shape_substitution
-            .validate_v1()
-            .expect("role-product swap preserves only aggregate decomposition");
-        assert!(
-            evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
-                F::ONE,
-                &final_aux,
-                optional_shape_substitution,
-            )
-            .expect("canonical optional-shape substitution")
-            .iter()
-            .filter(|residue| **residue != F::ZERO)
-            .count()
-                >= 8,
-            "CertificateSlotActive cannot be substituted for another fixed role"
+        // Inverse cancellation across two private roles cannot defeat their
+        // independent native recurrences, despite preserving a host product.
+        let mut compensated = aux;
+        compensated[output_role_aux_column_v1(0, true, 2)] = F(7);
+        compensated[output_role_aux_column_v1(1, true, 2)] = F(7).inv().unwrap();
+        assert_eq!(
+            evaluate(&compensated)[offset..offset + 144]
+                .iter()
+                .filter(|x| **x != F::ZERO)
+                .count(),
+            2
         );
+        // A coordinated current/next substitution must still satisfy the actual
+        // native first-row product-one fence; endpoint/direction products are
+        // intentionally distinct, never equated to one another.
+        fixed[FIX_GLOBAL_FIRST] = F::ONE;
+        let mut substituted = aux;
+        substituted[output_role_aux_column_v1(8, false, 1)] = F(7);
+        let got = evaluate_zk_x509_rfc5280_stark_residues_v1(
+            &current,
+            &current,
+            &substituted,
+            &substituted,
+            &fixed,
+            der_challenges_v1(),
+            challenges_v1(),
+            claims,
+        )
+        .unwrap();
+        assert_eq!(got[offset + 8 * 16 + 2 + 1], F(6));
     }
     #[test]
     fn private_der_rfc_native_endpoints_preserve_handoff_and_local_binding() {
@@ -10193,7 +10155,7 @@ mod tests {
         let der = zk_x509_der_stark_terminal_claims_v1(&der_trace).unwrap();
         let der_fields = [der.input_byte, der.node].concat();
         let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
-        let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+        let provider = ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(
             &material,
             der_challenges_v1(),
             challenges_v1(),
@@ -10288,177 +10250,87 @@ mod tests {
     #[test]
     fn x5q1_sha_segment_terminal_frame_is_exact_typed_and_independently_replayed() {
         let claims = sha_segment_terminal_claims_v1();
-        let encoded = claims.encode_x5q1_v1().expect("canonical X5Q1 claims");
-        assert_eq!(encoded.len(), 4_876);
-        assert_eq!(&encoded[..4], b"X5Q1");
+        let encoded = claims.encode_x5q1_v1().unwrap();
+        assert_eq!(encoded.len(), 3340);
+        assert_eq!(SHA_TERMINAL_CLAIM_RECORDS_V1, 208);
         assert_eq!(
             ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&encoded),
             Ok(claims)
         );
         assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(
-                claims.segments,
-                claims.ca_calls,
-            ),
-            Ok(claims)
+            replay_zk_x509_sha_segment_terminal_claims_v1(claims.ca_calls, &encoded).unwrap(),
+            [F::ZERO; 208]
         );
-        assert!(
-            replay_zk_x509_sha_segment_terminal_claims_v1(
-                claims.segments,
-                claims.ca_calls,
-                &encoded,
-            )
-            .expect("verifier X5Q1 replay")
-            .iter()
-            .all(|residue| *residue == F::ZERO)
-        );
-        for length in 0..encoded.len() {
-            assert_eq!(
-                ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&encoded[..length]),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "truncated length {length} is rejected"
-            );
+        for len in 0..encoded.len() {
+            assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&encoded[..len]).is_err());
         }
-        let mut trailing = encoded.to_vec();
-        trailing.push(0);
-        assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&trailing),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        for byte in 0..SHA_TERMINAL_CLAIM_HEADER_BYTES_V1 {
+        for byte in 0..12 {
             let mut changed = encoded;
             changed[byte] ^= 1;
-            assert_eq!(
-                ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&changed),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "header byte {byte} is fixed"
-            );
+            assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&changed).is_err());
         }
-        for claim_index in 0..SHA_TERMINAL_CLAIM_RECORDS_V1 {
-            let start = SHA_TERMINAL_CLAIM_HEADER_BYTES_V1
-                + claim_index * SHA_TERMINAL_CLAIM_RECORD_BYTES_V1;
-            for field_byte in start..start + 8 {
+        for index in 0..208 {
+            let start = 12 + index * 16;
+            for byte in 0..8 {
                 let mut changed = encoded;
-                changed[field_byte] ^= 1;
+                changed[start + byte] ^= 1;
+                assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&changed).is_err());
+            }
+            let mut changed = encoded;
+            changed[start + 8..start + 16].copy_from_slice(
+                &claims
+                    .claim_value_v1(index)
+                    .unwrap()
+                    .add(F::ONE)
+                    .0
+                    .to_be_bytes(),
+            );
+            let residues =
+                replay_zk_x509_sha_segment_terminal_claims_v1(claims.ca_calls, &changed).unwrap();
+            assert_eq!(residues.iter().filter(|x| **x != F::ZERO).count(), 1);
+            assert_eq!(residues[index], F::ZERO.sub(F::ONE));
+            let mut malformed = encoded;
+            malformed[start + 8..start + 16].copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
+            assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&malformed).is_err());
+            let mut bad = claims;
+            bad.set_claim_value_v1(index, F(GOLDILOCKS_MODULUS_V1))
+                .unwrap();
+            assert!(bad.encode_x5q1_v1().is_err());
+            for canonical in [F::ZERO, F(GOLDILOCKS_MODULUS_V1 - 1)] {
+                let mut boundary = claims;
+                boundary.set_claim_value_v1(index, canonical).unwrap();
+                let bytes = boundary.encode_x5q1_v1().unwrap();
                 assert_eq!(
-                    ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&changed),
-                    Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                    "claim {claim_index} typed-address byte {field_byte} is fixed"
+                    ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&bytes),
+                    Ok(boundary)
                 );
             }
-            let mut noncanonical = encoded;
-            noncanonical[start + 8..start + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
-            assert_eq!(
-                ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&noncanonical),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "claim {claim_index} rejects the modulus alias"
-            );
-            let mut false_claim = encoded;
-            let raw = u64::from_be_bytes(
-                false_claim[start + 8..start + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                    .try_into()
-                    .expect("fixed SHA claim"),
-            );
-            false_claim[start + 8..start + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-                .copy_from_slice(&(raw + 1).to_be_bytes());
-            let residues = replay_zk_x509_sha_segment_terminal_claims_v1(
-                claims.segments,
-                claims.ca_calls,
-                &false_claim,
-            )
-            .expect("canonical but false SHA claim parses");
-            assert_eq!(
-                residues
-                    .iter()
-                    .filter(|residue| **residue != F::ZERO)
-                    .count(),
-                1,
-                "claim {claim_index} has one independent verifier equality"
-            );
         }
-        let first = SHA_TERMINAL_CLAIM_HEADER_BYTES_V1;
-        let second = first + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1;
         let mut reordered = encoded;
-        let first_record = reordered[first..first + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1].to_vec();
-        let second_record = reordered[second..second + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1].to_vec();
-        reordered[first..first + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-            .copy_from_slice(&second_record);
-        reordered[second..second + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-            .copy_from_slice(&first_record);
-        assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&reordered),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        let mut duplicated = encoded;
-        duplicated[second..second + SHA_TERMINAL_CLAIM_RECORD_BYTES_V1]
-            .copy_from_slice(&first_record);
-        assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&duplicated),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
-            let mut wrong_segment = claims;
-            wrong_segment.segments[segment].segment ^= 1;
-            assert_eq!(
-                wrong_segment.encode_x5q1_v1(),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-            );
+        let first = encoded[12..28].to_vec();
+        reordered[12..28].copy_from_slice(&encoded[28..44]);
+        reordered[28..44].copy_from_slice(&first);
+        assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&reordered).is_err());
+        for call in 0..13 {
+            let mut changed = claims;
+            changed.ca_calls[call].call ^= 1;
+            assert!(changed.encode_x5q1_v1().is_err());
         }
-        for claim_index in 0..SHA_TERMINAL_CLAIM_RECORDS_V1 {
-            let mut noncanonical = claims;
-            noncanonical
-                .set_claim_value_v1(claim_index, F(GOLDILOCKS_MODULUS_V1))
-                .expect("bounded claim address");
-            assert_eq!(
-                noncanonical.encode_x5q1_v1(),
-                Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
-                "claim {claim_index} is validated before encoding"
-            );
+        let mut malformed = claims.ca_calls;
+        malformed[12].digest_products[3] = F(GOLDILOCKS_MODULUS_V1);
+        assert!(
+            evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(malformed, claims).is_err()
+        );
+        for size in [3341, 4876] {
+            let mut retired = encoded.to_vec();
+            retired.resize(size, 0);
+            assert!(ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&retired).is_err());
         }
-        let mut extremes = claims;
-        for claim_index in 0..SHA_TERMINAL_CLAIM_RECORDS_V1 {
-            extremes
-                .set_claim_value_v1(
-                    claim_index,
-                    if claim_index % 2 == 0 {
-                        F::ZERO
-                    } else {
-                        F(GOLDILOCKS_MODULUS_V1 - 1)
-                    },
-                )
-                .expect("bounded claim address");
-        }
-        let extremes_encoded = extremes.encode_x5q1_v1().expect("canonical field extremes");
         assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(&extremes_encoded),
-            Ok(extremes)
-        );
-        let mut malformed_committed = claims.segments;
-        malformed_committed[0].segment = 1;
-        assert_eq!(
-            evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
-                malformed_committed,
-                claims.ca_calls,
-                claims,
-            ),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        let mut noncanonical_committed = claims.segments;
-        noncanonical_committed[3].rfc_stream_products[3][3] = F(GOLDILOCKS_MODULUS_V1);
-        assert_eq!(
-            evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
-                noncanonical_committed,
-                claims.ca_calls,
-                claims,
-            ),
-            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-        );
-        assert_eq!(
-            ZkX509ShaSegmentTerminalClaimsV1::claim_address_v1(SHA_TERMINAL_CLAIM_RECORDS_V1),
+            ZkX509ShaSegmentTerminalClaimsV1::claim_address_v1(208),
             None
         );
-        assert_eq!(claims.claim_value_v1(SHA_TERMINAL_CLAIM_RECORDS_V1), None);
+        assert_eq!(claims.claim_value_v1(208), None);
     }
     #[test]
     fn private_p256_product_owner_preserves_all_fields_roles_and_zero_factors() {
@@ -10530,6 +10402,7 @@ mod tests {
     fn every_auxiliary_column_has_one_canonical_replay_descriptor() {
         for column in 0..ZK_X509_RFC5280_STARK_AUX_WIDTH_V1 {
             let descriptors = [
+                (AUX_SHA_UNION_CENTERS..AUX_SHA_UNION_CENTERS + 16).contains(&column),
                 product_aux_column_descriptor_v1(column).is_some(),
                 output_role_aux_column_descriptor_v1(column).is_some(),
                 serial_product_aux_column_descriptor_v1(column).is_some(),
@@ -10563,7 +10436,7 @@ mod tests {
     fn batched_native_base_replay_matches_every_row_and_bound_provider() {
         let trace = canonical_trace_v1();
         let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
-        let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+        let provider = ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(
             &material,
             der_challenges_v1(),
             challenges_v1(),
@@ -10654,7 +10527,7 @@ mod tests {
         let der_challenges = der_challenges_v1();
         let challenges = challenges_v1();
         let provider =
-            ZkX509Rfc5280StarkColumnProviderV1::new_v1(&material, der_challenges, challenges)
+            ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(&material, der_challenges, challenges)
                 .expect("canonical RFC column provider");
         let base_active = provider
             .build_base_column_v1(BASE_ACTIVE)
@@ -10769,38 +10642,10 @@ mod tests {
         }
         let output = zk_x509_rfc5280_output_terminals_v1(&trace, challenges)
             .expect("independent output terminals");
-        let mut expected_producer = [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1];
-        let mut expected_consumer = [F::ONE; ZK_X509_RFC5280_STARK_BUS_LANES_V1];
-        for role in 0..OUTPUT_ROLE_COUNT_V1 {
-            assert_eq!(claims.output_roles[role].role, OUTPUT_ROLES_V1[role]);
-            assert_eq!(
-                claims.output_roles[role].producer_products,
-                output.producer[role]
-            );
-            assert_eq!(
-                claims.output_roles[role].consumer_products,
-                output.consumer[role]
-            );
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                expected_producer[lane] = expected_producer[lane].mul(output.producer[role][lane]);
-                expected_consumer[lane] = expected_consumer[lane].mul(output.consumer[role][lane]);
-            }
-        }
-        assert_eq!(claims.relations[0], expected_producer);
-        assert_eq!(claims.relations[1], expected_consumer);
+        assert_eq!(claims.output_roles.len(), 1);
         assert_eq!(
-            claims.governed_trust_anchor_products_v1().consumer_products,
+            claims.governed_trust_anchor_products_v1(),
             output.consumer[output_role_index_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor)]
-        );
-        assert_eq!(
-            claims.certificate_slot_active_products_v1(),
-            claims.output_roles
-                [output_role_index_v1(ZkX509Rfc5280OutputRoleV1::CertificateSlotActive)]
-        );
-        assert_eq!(
-            claims.relations.len(),
-            2,
-            "no private DER or reserved public slots"
         );
         let root_role_index = output_role_index_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor);
         let root_selector = output_role_fixed_selector_column_v1(root_role_index, true);
@@ -10880,22 +10725,12 @@ mod tests {
             "the role product is gated only by the authenticated verifier selector"
         );
         let mut final_aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
-        for (_, relation, after) in RFC5280_TERMINAL_CLAIM_RELATIONS_V1 {
-            for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
-                let column = provider
-                    .build_aux_column_v1(after + lane)
-                    .expect("terminal auxiliary column");
-                assert_eq!(column.len(), ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
-                final_aux[after + lane] = *column.last().expect("nonempty native column");
-                assert_eq!(final_aux[after + lane], claims.relations[relation][lane]);
-            }
-        }
         for role_index in 0..OUTPUT_ROLE_COUNT_V1 {
             for consumer in [false, true] {
                 let expected = if consumer {
-                    claims.output_roles[role_index].consumer_products
+                    output.consumer[role_index]
                 } else {
-                    claims.output_roles[role_index].producer_products
+                    output.producer[role_index]
                 };
                 for (lane, expected) in expected.into_iter().enumerate() {
                     let auxiliary_column = output_role_aux_column_v1(role_index, consumer, lane);
@@ -12309,7 +12144,7 @@ mod tests {
                 3
             );
         }
-        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 1_702);
+        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 1_618);
         assert_eq!(
             (
                 ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,

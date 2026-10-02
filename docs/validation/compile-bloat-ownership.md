@@ -23,7 +23,7 @@ non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
 source TODO records the remaining direct-owner migration.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
-moved compiler/model and all six Norito grouped harnesses. The current privacy
+moved compiler/model and all six Norito grouped harnesses. The earlier retained ordinary privacy
 harness registers 2,264 tests, including 52 ignored qualification cases. Twelve
 rewritten private-terminal controls map to the original field-mutation and forgery
 coverage. Core authority and bridge controls retain their recorded passes and
@@ -36,8 +36,13 @@ certificate, attestation, preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
 IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
 retired-codec pattern check. The SDK native-custody feature has an exact shipping pin; FASTPQ is selected by
-the existing STARK feature, avoiding its unrelated Halo2-only dependency path.
-Current dependency costs and the native proving context still require review. The normal production-feature
+the existing STARK feature, reducing the measured Halo2-only Native dependency
+graph from 418 to 403 packages. This graph reduction does not establish a build
+speedup. A separate shipping Native configuration admits only the reviewed
+CoreZK/Halo2 profiles and ownership paths; ordinary SDK configurations keep their
+existing denials. Native policy validation passes 128 guard tests, all 22 dependency
+configurations and the source budgets. Dependency ceilings account for the committed deployment and
+optional proving paths without speculative growth headroom. The normal production-feature
 Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
 tests pass for the one first-release boxed-challenge layout, including canonical
@@ -48,22 +53,28 @@ Guard-generation import, layout-comparison and recovery-phase fixes compile, and
 both extended regressions pass. All 33 selected proof controls, including MintFold,
 protocol labels and reciprocal claim-carrier binding, pass in the retained harness;
 concurrent source changes limit current-candidate qualification. The
-non-test real-proof harness now enables the P-256 gadget and bounded SHA relation
-used by its equations; focused frontend validation remains open. Unused terminal
+scoped non-test real-proof-harness frontend check passes with all 22 focused
+source pins unchanged. Broader source and merged-candidate qualification remain
+incomplete. Unused terminal
 reference helpers now compile only for tests, preserving their assertion bodies
 and the production private-product/local-AIR path. Strict privacy lint remains open.
-The repaired privacy acceptance run passes all 136 selected controls, including
-strict malformed-input rejection, the independently derived current profile pin
-and exact retired-profile rejection hashes. Concurrent workspace manifest and
-lock changes limit source qualification; the full ordinary suite remains open.
+The retained privacy acceptance run passes 136 selected controls. It selects none
+of the three failures in the earlier retained ordinary suite, which finishes with
+2,209 passed, three failed and 52 original ignored tests. The fresh harness
+registers 2,356 tests, including 56 ignored cases. Its composite-child control
+passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
+remain resource-held. The original build capture remains unqualified because of
+two foreign CoreZK census races. An independent closure check supports the single
+composite result while preserving that failed capture; full ordinary-suite and
+merged-candidate qualification remain incomplete.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
 Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
 fails with concurrent source changes and library rebuilds. The latest workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-The separate chat completed the merge; current test and private-proof
-integration still requires compiler repair. Workspace validation,
+The shared merge has no unresolved entries but remains open. The separate repair
+chat owns its closure and remaining protocol integration repairs. Workspace validation,
 metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.

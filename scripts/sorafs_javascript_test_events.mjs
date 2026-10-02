@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 
-const CONTRACT_SHA256 = "dcd87081a7f214eb6c144a6a72b95627220dd2447f83aa35d0979f76bf6fa7bf";
+const CONTRACT_SHA256 = "70403b063eae91b9e3fbe2889d3ca525fab6bae74c1bd0ab685a0749c3bc5ee9";
 const MAX_EVENTS = 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;
 const BUNDLE_SUITE = "sorafsFixtureBundleValidation";
@@ -147,7 +147,7 @@ export class SorafsJavascriptTestEvents {
     const terminal = ["test:complete", "test:pass"].includes(type);
     const queue = ["test:enqueue", "test:dequeue"].includes(type);
     const row = fields(value, [...COMMON, ...(queue ? ["type"] : []),
-      ...(terminal ? ["testNumber", "details"] : [])], type === "test:pass" ? ["classname"] : []);
+      ...(terminal ? ["testNumber", "details"] : [])]);
     demand(row.tags.length === 0 && Array.isArray(row.tags), "tagged test is not the fixed case");
     for (const key of ["testId", "line", "column"]) integer(row[key], 1);
     integer(row.parentId); integer(row.nesting);
@@ -165,6 +165,8 @@ export class SorafsJavascriptTestEvents {
       test.id = row.testId; test.location = [row.line, row.column]; this.#ids.set(row.testId, test);
     }
     demand((this.#ids.get(row.testId) === test && test.stages.has("test:enqueue")) || type === "test:enqueue", "case was not originally enqueued");
+    // The fixed Node24 stream binds the original parent by ID on every event.
+    // It supplies no classname aliases; closed fields above reject injection.
     demand(row.parentId === (test.parent?.id ?? 0), "original test parent differs");
     demand(test.location[0] === row.line && test.location[1] === row.column, "case source coordinate changed");
     if (type !== "test:enqueue") demand(test.stages.has("test:enqueue"), "case precedes enqueue");
@@ -179,10 +181,8 @@ export class SorafsJavascriptTestEvents {
     }
     if (terminal) {
       integer(row.testNumber, 1); demand(row.testNumber === test.number, "case ordinal differs");
-      const parentName = test.parent?.name;
-      const details = fields(row.details, ["duration_ms", "type", ...(type === "test:complete" ? ["passed"] : [])], ["classname"]);
+      const details = fields(row.details, ["duration_ms", "type", ...(type === "test:complete" ? ["passed"] : [])]);
       duration(details.duration_ms); demand(details.type === "test", "terminal suite substitution");
-      demand(details.classname === parentName && row.classname === (type === "test:pass" ? parentName : undefined), "terminal parent label differs");
       if (type === "test:complete") {
         demand(details.passed === true, "test did not complete successfully"); test.duration = details.duration_ms;
         demand(!test.children || test.children.every((child) => child.stages.has("test:complete")), "parent completed before children");

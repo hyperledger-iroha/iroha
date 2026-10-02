@@ -90,7 +90,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
         });
         centers.install_segment_v1(segment, &streams).unwrap();
     }
-    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+    let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
         &material,
         der_challenges_v1(),
         challenges_v1(),
@@ -121,11 +121,17 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
                 480287,
                 521951,
                 ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 2,
+                ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1,
             ] {
                 let current = provider.base_row_v1(row).unwrap();
-                let next = provider.base_row_v1(row + 1).unwrap();
+                let next = provider
+                    .base_row_v1((row + 1) % ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
+                    .unwrap();
                 let fixed = provider.fixed_row_v1(row).unwrap();
-                assert_eq!(fixed[FIX_CONTINUE], F::ONE);
+                assert_eq!(
+                    fixed[FIX_CONTINUE],
+                    F(u64::from(row + 1 != ZK_X509_RFC5280_STARK_TRACE_SIZE_V1))
+                );
                 let mut aux = neutral_aux_v1();
                 for (segment, values) in provider.sha_union_centers_v1().iter().enumerate() {
                     aux[AUX_SHA_UNION_CENTERS + 4 * segment
@@ -156,6 +162,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
     // A final-row-only mutation can satisfy a selected endpoint equation with
     // a coordinated consumer change, but the preceding row still rejects it.
     // The complete joined-plan tests independently bind each endpoint factor.
+    // The cyclic recurrence also covers final→first under the true native next point.
     let last = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1;
     assert_eq!(provider.fixed_row_v1(last).unwrap()[FIX_CONTINUE], F::ZERO);
 }

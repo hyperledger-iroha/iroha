@@ -26,6 +26,14 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
         requireOriginalOwner()
         return workflow.value.beginOrResumeInitialStatePublication().also { requireOriginalOwner() }
     }
+    /** Retire Bootstrap after genuine publication before the same-owner wallet cash dispatch.
+     * This only fences local lifecycle use; Native cash and current FI authentication remain mandatory.
+     */
+    suspend fun prepareCurrentFinancialControlHandoff() {
+        requireOriginalOwner()
+        workflow.value.prepareCurrentFinancialControlHandoff()
+        requireOriginalOwner()
+    }
     internal companion object {
         fun open(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
             accountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,

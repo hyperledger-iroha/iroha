@@ -602,7 +602,7 @@ fn public_relation_for_selected_state(
     Ok(relation)
 }
 
-fn derive_cash_relation(
+pub(super) fn derive_cash_relation(
     selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
     secret: &[u8; 32],
 ) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
@@ -631,7 +631,7 @@ fn derive_cash_relation(
     Ok(relation)
 }
 
-fn derive_terminal_relation(
+pub(super) fn derive_terminal_relation(
     selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
     secret: &[u8; 32],
 ) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
@@ -660,7 +660,7 @@ fn derive_terminal_relation(
     Ok(relation)
 }
 
-fn decode_ordinary_originals(
+pub(super) fn decode_ordinary_originals(
     credential_original: &[u8],
     approval_original: &[u8],
     lease_original: Option<&[u8]>,

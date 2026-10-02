@@ -1,6 +1,6 @@
 //! Separate purpose1 custody selected only after genuine purpose2 Guard and State admission.
 //!
-//! Complete retained proofs are checked again on recovery. The terminal journal and original
+//! Complete retained proofs are checked again on recovery. The single cash journal and original
 //! publication remain locked by one Native cash owner. A signed original is historical only after
 //! its complete bytes have been fsynced and a new actual Native interval still lies inside W1.
 
@@ -23,13 +23,6 @@ use iroha_data_model::kagemusha::{
     kagemusha_ordinary_transition_nullifier_v1,
 };
 
-const TERMINAL_FORMAT: PrivateJournalFormat = PrivateJournalFormat {
-    filename: "ordinary-cash-terminal.norito.wal",
-    magic: b"IKGOCT1\0",
-    hash_domain: b"iroha:kagemusha:v1:ordinary-cash-terminal-frame\0",
-    maximum_payload_bytes: 16 * 1024 * 1024,
-};
-
 /// Original transport inputs; these private data carriers grant no financial or receiver custody.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTransportOriginalsV1")]
@@ -41,7 +34,11 @@ pub(super) enum TransportOriginals {
         receiver_counter_floor: Option<u32>,
         receiver_lease_original: Option<Vec<u8>>,
     },
-    Redeem,
+    Redeem {
+        output: iroha_data_model::kagemusha::KagemushaOrdinaryRedemptionOutputV1,
+        beneficiary: iroha_data_model::account::AccountId,
+        manifest_original: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
@@ -49,6 +46,8 @@ pub(super) enum TransportOriginals {
     name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalSelectionOriginalsV1"
 )]
 struct SelectionOriginals {
+    preselection_cash_prefix: KagemushaRecoveryJournalPrefixV1,
+    financial_control: CapturedFinancialControlIdentity,
     prepared: KagemushaOrdinaryPreparedOutgoingV1,
     state_proof: KagemushaPairedProofV1,
     preparation_guard_original: Vec<u8>,
@@ -65,10 +64,7 @@ struct SelectionOriginals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalRecordV1")]
-enum TerminalRecord {
-    Initialize {
-        originals: [DigestV1; 8],
-    },
+pub(super) enum TerminalRecord {
     Select(SelectionOriginals),
     PlatformFence {
         operation: DigestV1,
@@ -84,6 +80,29 @@ enum TerminalRecord {
     Cancel {
         operation: DigestV1,
     },
+}
+
+impl TerminalRecord {
+    pub(super) fn preselection_prefix(&self) -> Option<KagemushaRecoveryJournalPrefixV1> {
+        match self {
+            Self::Select(originals) => Some(originals.preselection_cash_prefix),
+            _ => None,
+        }
+    }
+    pub(super) fn new_operation(&self) -> Option<DigestV1> {
+        match self {
+            Self::Select(originals) => Some(originals.intent.native_operation_id),
+            _ => None,
+        }
+    }
+    pub(super) fn accepted_counter(&self) -> Option<u32> {
+        match self {
+            Self::ApprovalOriginal {
+                accepted_counter, ..
+            } => *accepted_counter,
+            _ => None,
+        }
+    }
 }
 
 struct TerminalPending {
@@ -105,11 +124,8 @@ struct TerminalPending {
 }
 
 pub(super) struct TerminalJournal {
-    journal: PrivateJournal,
-    prefix: KagemushaRecoveryJournalPrefixV1,
     pending: Option<TerminalPending>,
     used_operations: BTreeSet<DigestV1>,
-    counter_floor: Option<u32>,
 }
 
 /// Exact captured purpose1 loan. Its private constructor borrows the actual retained owner;
@@ -117,77 +133,35 @@ pub(super) struct TerminalJournal {
 pub(crate) struct KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'a> {
     owner: &'a KagemushaNativeOrdinaryCashOwnerV1,
     cash_prefix: KagemushaRecoveryJournalPrefixV1,
-    terminal_prefix: KagemushaRecoveryJournalPrefixV1,
 }
 
 impl TerminalJournal {
-    pub(super) fn open(
-        path: &Path,
-        owner: &KagemushaNativeOrdinaryCashOwnerV1,
-        recover: bool,
-        leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
-        receivers: &[Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>],
-    ) -> Result<Self, KagemushaStateErrorV1> {
-        let initial = TerminalRecord::Initialize {
-            originals: owner.publication.original_commitments()?,
-        };
-        let mut journal = if recover {
-            PrivateJournal::open_existing(path, TERMINAL_FORMAT)
-        } else {
-            PrivateJournal::create_new(path, TERMINAL_FORMAT)
-        }
-        .map_err(storage)?;
-        if !recover {
-            journal
-                .append(&encode_terminal(&initial)?)
-                .map_err(storage)?;
-        }
-        let prefix = journal.recovery_prefix().map_err(storage)?;
-        let mut result = Self {
-            journal,
-            prefix,
+    pub(super) fn new() -> Self {
+        Self {
             pending: None,
             used_operations: BTreeSet::new(),
-            counter_floor: owner.counter_floor,
-        };
-        if recover {
-            let (sequence, original) = result
-                .journal
-                .replay_next()
-                .map_err(storage)?
-                .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-            if sequence != 0 || decode_terminal(&original)? != initial {
-                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-            }
-            while let Some((sequence, original)) = result.journal.replay_next().map_err(storage)? {
-                if sequence >= MAX_ROWS {
-                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                }
-                result.replay(owner, decode_terminal(&original)?, leases, receivers)?;
-            }
         }
-        result.recheck()?;
-        Ok(result)
+    }
+    pub(super) fn has_pending(&self) -> bool {
+        self.pending.is_some()
     }
     pub(super) fn recheck(&self) -> Result<(), KagemushaStateErrorV1> {
-        self.journal.check_owned().map_err(storage)?;
-        if self.prefix != self.journal.recovery_prefix().map_err(storage)? {
-            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        if self.used_operations.len() > MAX_ROWS as usize {
+            return Err(KagemushaStateErrorV1::JournalRevisionOverflow);
+        }
+        if let Some(pending) = &self.pending {
+            if !self
+                .used_operations
+                .contains(&pending.originals.intent.native_operation_id)
+                || ((pending.retained.is_some() || pending.captured.is_some()) && !pending.fenced)
+                || (pending.retained.is_some() && pending.captured.is_some())
+            {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
         }
         Ok(())
     }
-    fn append(&mut self, record: &TerminalRecord) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck()?;
-        if self.prefix.sequence >= MAX_ROWS {
-            return Err(KagemushaStateErrorV1::JournalRevisionOverflow);
-        }
-        self.journal
-            .append(&encode_terminal(record)?)
-            .map_err(storage)?;
-        self.prefix = self.journal.recovery_prefix().map_err(storage)?;
-        self.recheck()
-    }
-    fn replay(
+    pub(super) fn replay(
         &mut self,
         owner: &KagemushaNativeOrdinaryCashOwnerV1,
         record: TerminalRecord,
@@ -198,7 +172,8 @@ impl TerminalJournal {
             TerminalRecord::Select(originals) if self.pending.is_none() => {
                 let operation = originals.intent.native_operation_id;
                 if self.used_operations.contains(&operation)
-                    || originals.counter_floor != self.counter_floor
+                    || owner.used_operations.contains(&operation)
+                    || originals.counter_floor != owner.counter_floor
                 {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                 }
@@ -214,7 +189,7 @@ impl TerminalJournal {
                     originals.state_proof.clone(),
                 )?;
                 let (receiver, receiver_lease) = match &originals.transport {
-                    TransportOriginals::Redeem => (None, None),
+                    TransportOriginals::Redeem { .. } => (None, None),
                     TransportOriginals::Send {
                         request,
                         receiver_lease_original,
@@ -286,7 +261,6 @@ impl TerminalJournal {
                 {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                 }
-                self.counter_floor = accepted_counter.or(self.counter_floor);
                 self.pending
                     .as_mut()
                     .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
@@ -357,7 +331,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         transition_stream: Vec<u8>,
         recovery_stream: Vec<u8>,
     ) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         let terminal = self
             .terminal
             .as_ref()
@@ -365,6 +339,26 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         if terminal.pending.is_some() {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
+        // W1 selects a separately acknowledged actual FI original after slow W2 proving.
+        // Reusing W2 or replacing this retained original during later proving is refused.
+        let captured = self
+            .control
+            .capture_proof_decision(self.publication.cash_financial())
+            .map_err(material)?;
+        let financial_control = CapturedFinancialControlIdentity {
+            original_sha256: captured.original_sha256().map_err(material)?,
+            lower_ms: captured.captured_lower_ms(),
+            upper_ms: captured.captured_upper_ms(),
+        };
+        let (control_issued_at_ms, control_expires_at_ms) = self
+            .control
+            .recheck_retained_capture_original_window(
+                self.publication.cash_financial(),
+                financial_control.original_sha256,
+                financial_control.lower_ms,
+                financial_control.upper_ms,
+            )
+            .map_err(material)?;
         let preparation = self.captured_preparation()?;
         candidate.recheck_preparation_selection(&preparation, &guard)?;
         let prepared = *candidate.prepared_record();
@@ -374,11 +368,20 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .cash_financial()
             .current_cash_clock_context()
             .map_err(material)?;
+        if clock.lower_at_ms < financial_control.lower_ms
+            || clock.upper_at_ms < financial_control.upper_ms
+        {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        clock
+            .validate_within_original_window(control_issued_at_ms, control_expires_at_ms)
+            .map_err(material)?;
         let issued_at_ms = clock.lower_at_ms;
         let expires_at_ms = issued_at_ms
             .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
             .ok_or(KagemushaStateErrorV1::InvalidTrustedCommitTime)?
-            .min(self.credential_floor()?.approval_valid_until_ms());
+            .min(self.credential_floor()?.approval_valid_until_ms())
+            .min(control_expires_at_ms);
         clock
             .validate_within_original_window(issued_at_ms, expires_at_ms)
             .map_err(material)?;
@@ -387,7 +390,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         let mut hash = Sha256::new();
         hash.update(b"iroha:kagemusha:v1:ordinary-cash-terminal-native-operation\0");
         hash.update(self.prefix.head);
-        hash.update(terminal.prefix.head);
+        hash.update(self.prefix.sequence.to_le_bytes());
         hash.update(candidate.candidate_envelope_digest());
         hash.update(&entropy[..32]);
         let operation: DigestV1 = hash.finalize().into();
@@ -397,6 +400,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             || operation == preparation.challenge().operation_id
             || nonce == preparation.challenge().nonce
             || terminal.used_operations.contains(&operation)
+            || self.used_operations.contains(&operation)
         {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
@@ -408,7 +412,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             preparation_id: candidate.preparation_id()?,
             candidate_digest: candidate.candidate_envelope_digest(),
             state_statement_digest: candidate.full_state_sha256(),
-            predecessor_descriptor_prefix_digest: financial_prefix_digest(self)?,
+            predecessor_descriptor_prefix_digest: financial_prefix_digest(self, self.prefix)?,
             sender_credential_digest: preparation.enrollment().app_credential().digest(),
             reservation_digest: prepared.reservation_digest,
             secure_index_before: self.state.secure_index,
@@ -504,6 +508,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .retained_integrity_lease()
             .cloned();
         let originals = SelectionOriginals {
+            preselection_cash_prefix: self.prefix,
+            financial_control,
             prepared,
             state_proof: candidate.proof().clone(),
             preparation_guard_original: guard.original().to_vec(),
@@ -511,7 +517,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             body,
             normalized,
             challenge,
-            counter_floor: terminal.counter_floor,
+            counter_floor: self.counter_floor,
             lease_original: lease.as_ref().map(|l| l.original().to_vec()),
             transport,
             transition_stream,
@@ -524,11 +530,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             receiver.as_deref(),
             receiver_lease.as_deref(),
         )?;
+        self.persist(&Record::Terminal(TerminalRecord::Select(originals.clone())))?;
+        self.used_operations.insert(operation);
         let terminal = self
             .terminal
             .as_mut()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        terminal.append(&TerminalRecord::Select(originals.clone()))?;
         terminal.used_operations.insert(operation);
         terminal.pending = Some(TerminalPending {
             originals,
@@ -562,8 +569,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
-        terminal.append(&TerminalRecord::PlatformFence { operation })?;
-        terminal
+        self.persist(&Record::Terminal(TerminalRecord::PlatformFence {
+            operation,
+        }))?;
+        self.terminal
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
             .pending
             .as_mut()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
@@ -587,19 +598,17 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .map_err(material)?;
         let approved = authenticate_terminal(self, pending, original, &clock)?;
         let digest = authorization(&approved, pending.lease.as_deref())?;
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        terminal.append(&TerminalRecord::ApprovalOriginal {
+        self.persist(&Record::Terminal(TerminalRecord::ApprovalOriginal {
             operation,
             clock,
             original: original.to_vec(),
             authorization_digest: digest,
             accepted_counter: approved.app_attest_counter(),
-        })?;
-        terminal.counter_floor = approved.app_attest_counter().or(terminal.counter_floor);
-        terminal
+        }))?;
+        self.counter_floor = approved.app_attest_counter().or(self.counter_floor);
+        self.terminal
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
             .pending
             .as_mut()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
@@ -636,12 +645,11 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .recheck_at_trusted_time(clock.upper_at_ms)
             .map_err(material)?;
         let record = terminal_record(self, pending, approved, clock)?;
-        let terminal = self
+        self.persist(&Record::Terminal(TerminalRecord::Capture(record)))?;
+        let pending = self
             .terminal
             .as_mut()
-            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        terminal.append(&TerminalRecord::Capture(record))?;
-        let pending = terminal
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
             .pending
             .as_mut()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
@@ -659,14 +667,9 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
         KagemushaStateErrorV1,
     > {
-        let terminal = self
-            .terminal
-            .as_ref()
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         let loan = KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1 {
             owner: self,
             cash_prefix: self.prefix,
-            terminal_prefix: terminal.prefix,
         };
         loan.recheck_selected_originals_and_current_custody()?;
         Ok(loan)
@@ -678,7 +681,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)
     }
     fn require_live_terminal(&self, operation: DigestV1) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck()?;
+        self.require_current_financial_control()?;
         let pending = self.terminal_pending()?;
         require_pending_operation(pending, operation)?;
         require_selection(self, &pending.originals, &pending.candidate, &pending.guard)?;
@@ -704,13 +707,8 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     pub(crate) fn recheck_selected_originals_and_current_custody(
         &self,
     ) -> Result<(), KagemushaStateErrorV1> {
-        self.owner.recheck()?;
-        let journal = self
-            .owner
-            .terminal
-            .as_ref()
-            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        if self.cash_prefix != self.owner.prefix || self.terminal_prefix != journal.prefix {
+        self.owner.recheck_proving_history()?;
+        if self.cash_prefix != self.owner.prefix {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let pending = self.owner.terminal_pending()?;
@@ -747,18 +745,7 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
         approved
             .recheck_at_trusted_time(record.admission_clock_context.upper_at_ms)
             .map_err(material)?;
-        self.owner
-            .publication
-            .cash_financial()
-            .trusted_time_interval()
-            .map_err(material)?
-            .check_both(|now| {
-                if now < record.admission_clock_context.lower_at_ms {
-                    Err(KagemushaStateErrorV1::SnapshotRollback)
-                } else {
-                    Ok(())
-                }
-            })
+        Ok(())
     }
     fn pending(&self) -> &TerminalPending {
         self.owner
@@ -792,6 +779,55 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     }
     pub(crate) fn selected_predecessor_state(&self) -> &KagemushaStateV1 {
         &self.owner.state
+    }
+    /// Exact current PUBLIC paired State original retained by the genuine Main journal.
+    pub(crate) fn selected_predecessor_public_state_original(
+        &self,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let original = self.owner.public_state_original.clone();
+        if original.is_empty() {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.recheck_selected_originals_and_current_custody()?;
+        Ok(original)
+    }
+    /// Require the supplied closed receipt to be the exact acknowledgment in Main's CAS WAL.
+    /// Genuine independent Reserve proof admission remains mandatory for its full bundle joins.
+    pub(crate) fn recheck_lineage_reservation(
+        &self,
+        receipt: &KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1<'_>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let financial = self.owner.publication.cash_financial();
+        receipt.recheck_historical(financial).map_err(material)?;
+        let reservation = receipt.reservation().map_err(material)?;
+        let actual = self
+            .owner
+            .lineage_cas
+            .reservation_receipt(receipt.request_original_sha256(), financial, reservation)
+            .map_err(material)?;
+        actual.recheck_historical(financial).map_err(material)?;
+        let preparation = self.preparation_selection()?;
+        let head = &reservation.selection.predecessor;
+        if actual.original().map_err(material)? != receipt.original().map_err(material)?
+            || reservation.selection.operation_id != preparation.challenge().operation_id
+            || head.state_commitment != self.selected_predecessor_state().state_commitment
+            || head.logical_sequence != self.selected_predecessor_state().logical_sequence
+            || head.state_original_sha256
+                != <DigestV1>::from(Sha256::digest(&self.owner.public_state_original))
+            || reservation.selection.amount != self.transition_statement().amount
+            || reservation.selection.neutral_reservation_digest
+                != self.pending().originals.prepared.reservation_digest
+            || reservation.successor.state_commitment
+                != self.selected_successor_state().state_commitment
+            || reservation.successor.logical_sequence
+                != self.selected_successor_state().logical_sequence
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        actual.recheck_historical(financial).map_err(material)?;
+        self.recheck_selected_originals_and_current_custody()
     }
     pub(crate) fn selected_successor_state(&self) -> &KagemushaStateV1 {
         self.pending().candidate.successor_state()
@@ -863,6 +899,116 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     pub(crate) fn transition_stream(&self) -> &[u8] {
         &self.pending().originals.transition_stream
     }
+    /// Borrow the same private opening that produced the fsynced ciphertext before W2.
+    /// This closed captured selection lends no raw secret constructor to managed callers.
+    pub(crate) fn send_credit_opening(
+        &self,
+    ) -> Option<&iroha_data_model::kagemusha::KagemushaCreditOpeningV1> {
+        if !matches!(
+            &self.pending().originals.transport,
+            TransportOriginals::Send { .. }
+        ) {
+            return None;
+        }
+        Some(
+            self.owner
+                .pending
+                .as_ref()?
+                .send_credit
+                .as_ref()?
+                .originals
+                .credit_opening(),
+        )
+    }
+    pub(crate) fn preparation_clock_context(&self) -> &KagemushaOrdinaryCashClockContextV1 {
+        &self
+            .owner
+            .pending
+            .as_ref()
+            .expect("held exact preparation")
+            .preparation_clock
+    }
+    /// Return the four authentic signed samples for each retained preparation/W1/capture cut.
+    /// These complete historical originals lend no new clock or financial authority.
+    pub(crate) fn retained_signed_clock_originals(
+        &self,
+    ) -> Result<[Vec<u8>; 3], KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let financial = self.owner.publication.cash_financial();
+        let contexts = [
+            self.preparation_clock_context(),
+            &self.terminal_body().clock_context,
+            self.admission_clock_context(),
+        ];
+        let mut originals = [Vec::new(), Vec::new(), Vec::new()];
+        for (original, context) in originals.iter_mut().zip(contexts) {
+            let loan = financial
+                .retained_cash_clock_originals(context)
+                .map_err(material)?;
+            financial
+                .recheck_retained_cash_clock_originals(&loan)
+                .map_err(material)?;
+            *original = loan.canonical_original().to_vec();
+            financial
+                .recheck_retained_cash_clock_originals(&loan)
+                .map_err(material)?;
+        }
+        self.recheck_selected_originals_and_current_custody()?;
+        Ok(originals)
+    }
+    /// Lend three independently verified historical sample originals from actual Native WAL.
+    /// The private callback receives no financial or current elapsed-clock authority.
+    pub(crate) fn with_retained_verified_signed_clock_originals(
+        &self,
+        visitor: &mut dyn for<'clock> FnMut(
+            [&'clock KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1; 3],
+        ) -> Result<(), KagemushaStateErrorV1>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let financial = self.owner.publication.cash_financial();
+        let preparation = financial
+            .verified_retained_cash_clock_originals(self.preparation_clock_context())
+            .map_err(material)?;
+        let intent = financial
+            .verified_retained_cash_clock_originals(&self.terminal_body().clock_context)
+            .map_err(material)?;
+        let admission = financial
+            .verified_retained_cash_clock_originals(self.admission_clock_context())
+            .map_err(material)?;
+        self.recheck_selected_originals_and_current_custody()?;
+        visitor([&preparation, &intent, &admission])?;
+        self.recheck_selected_originals_and_current_custody()
+    }
+    /// Copy the exact acknowledged W1 FI original from this same Native owner.
+    /// Historical proof custody does not renew its original window or permit a live effect.
+    pub(crate) fn financial_control_original(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let identity = self.pending().originals.financial_control;
+        let loan = self
+            .owner
+            .control
+            .borrow_captured_proof_decision(
+                self.owner.publication.cash_financial(),
+                identity.original_sha256,
+                identity.lower_ms,
+                identity.upper_ms,
+            )
+            .map_err(material)?;
+        let original = loan.original().map_err(material)?.to_vec();
+        loan.recheck_historical_originals().map_err(material)?;
+        self.recheck_selected_originals_and_current_custody()?;
+        Ok(original)
+    }
+    pub(crate) fn outbox_reservation_original(
+        &self,
+    ) -> &iroha_data_model::kagemusha::KagemushaOutboxReservationV1 {
+        &self
+            .owner
+            .pending
+            .as_ref()
+            .expect("held exact preparation")
+            .reservation
+    }
     pub(crate) fn recovery_stream(&self) -> &[u8] {
         &self.pending().originals.recovery_stream
     }
@@ -892,7 +1038,34 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
                 pending.receiver.as_ref()?.app_credential(),
                 *receiver_counter_floor,
             )),
-            TransportOriginals::Redeem => None,
+            TransportOriginals::Redeem { .. } => None,
+        }
+    }
+    /// Borrow the independently admitted receiver PI original from this same closed Send.
+    /// The mathematical consumer still authenticates every original and issuer binding.
+    pub(crate) fn send_receiver_integrity_lease_original(
+        &self,
+    ) -> Option<&KagemushaVerifiedPlayIntegrityRefreshLeaseV1> {
+        match &self.pending().originals.transport {
+            TransportOriginals::Send { .. } => self.pending().receiver_lease.as_deref(),
+            TransportOriginals::Redeem { .. } => None,
+        }
+    }
+    /// Borrow full beneficiary/manifest originals from the same fsynced pre-W2 selection.
+    pub(crate) fn redeem_transport_originals(
+        &self,
+    ) -> Option<(
+        &iroha_data_model::kagemusha::KagemushaOrdinaryRedemptionOutputV1,
+        &iroha_data_model::account::AccountId,
+        &[u8],
+    )> {
+        match &self.pending().originals.transport {
+            TransportOriginals::Redeem {
+                output,
+                beneficiary,
+                manifest_original,
+            } => Some((output, beneficiary, manifest_original)),
+            TransportOriginals::Send { .. } => None,
         }
     }
     pub(crate) fn with_borrowed_financial_secret(
@@ -912,13 +1085,21 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
 
 fn financial_prefix_digest(
     owner: &KagemushaNativeOrdinaryCashOwnerV1,
+    selected_prefix: KagemushaRecoveryJournalPrefixV1,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {
+    if !owner
+        .journal
+        .contains_recovery_prefix(selected_prefix)
+        .map_err(storage)?
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
     let mut hash = Sha256::new();
     hash.update(b"iroha:kagemusha:v1:ordinary-financial-descriptor-prefix\0");
     hash.update(owner.state.state_commitment);
     hash.update(owner.financial_journal_revision.to_le_bytes());
-    hash.update(norito::encode_canonical(&owner.prefix).map_err(material)?);
-    for digest in owner.publication.original_commitments()? {
+    hash.update(norito::encode_canonical(&selected_prefix).map_err(material)?);
+    for digest in owner.publication.historical_original_commitments()? {
         hash.update(digest);
     }
     Ok(hash.finalize().into())
@@ -956,7 +1137,10 @@ fn transport_body_components(
     transport: &TransportOriginals,
 ) -> Result<(DigestV1, DigestV1, DigestV1, DigestV1), KagemushaStateErrorV1> {
     match transport {
-        TransportOriginals::Redeem => Ok(([0; 32], [0; 32], [0; 32], [0; 32])),
+        TransportOriginals::Redeem { output, .. } => {
+            output.validate_shape().map_err(material)?;
+            Ok(([0; 32], [0; 32], [0; 32], [0; 32]))
+        }
         TransportOriginals::Send {
             request,
             output,
@@ -995,6 +1179,28 @@ fn require_selection(
 ) -> Result<(), KagemushaStateErrorV1> {
     let preparation = owner.captured_preparation()?;
     candidate.recheck_preparation_selection(&preparation, guard)?;
+    let identity = originals.financial_control;
+    let (control_issued_at_ms, control_expires_at_ms) = owner
+        .control
+        .recheck_retained_capture_original_window(
+            owner.publication.cash_financial(),
+            identity.original_sha256,
+            identity.lower_ms,
+            identity.upper_ms,
+        )
+        .map_err(material)?;
+    originals
+        .body
+        .clock_context
+        .validate_within_original_window(control_issued_at_ms, control_expires_at_ms)
+        .map_err(material)?;
+    if originals.body.clock_context.lower_at_ms < identity.lower_ms
+        || originals.body.clock_context.upper_at_ms < identity.upper_ms
+        || originals.intent.issued_at_ms < control_issued_at_ms
+        || originals.intent.expires_at_ms > control_expires_at_ms
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
     let intent = &originals.intent;
     let body = &originals.body;
     let challenge = &originals.challenge;
@@ -1010,7 +1216,8 @@ fn require_selection(
     if originals.prepared != *candidate.prepared_record()
         || originals.preparation_guard_original != guard.original()
         || originals.state_proof != *candidate.proof()
-        || intent.predecessor_descriptor_prefix_digest != financial_prefix_digest(owner)?
+        || intent.predecessor_descriptor_prefix_digest
+            != financial_prefix_digest(owner, originals.preselection_cash_prefix)?
         || intent.sender_credential_digest != preparation.enrollment().app_credential().digest()
         || intent.candidate_digest != candidate.candidate_envelope_digest()
         || intent.state_statement_digest != candidate.full_state_sha256()
@@ -1076,12 +1283,63 @@ fn require_selection(
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
     challenge.canonical_signing_bytes().map_err(material)?;
+    let pending = owner
+        .pending
+        .as_ref()
+        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+    if pending
+        .reservation
+        .canonical_commitment()
+        .map_err(material)?
+        != originals.prepared.reservation_digest
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    originals
+        .body
+        .clock_context
+        .validate_within_original_window(
+            pending.reservation.issued_at_ms,
+            pending.reservation.expires_at_ms,
+        )
+        .map_err(material)?;
     if let TransportOriginals::Send {
-        request, output, ..
+        request,
+        output,
+        encrypted_credit,
+        receiver_counter_floor,
+        receiver_lease_original,
     } = &originals.transport
     {
+        let retained = pending
+            .send_credit
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        retained.originals.recheck_at_replay_position(
+            owner,
+            pending.operation,
+            &retained.successor,
+            &retained.receiver,
+            retained.receiver_lease.as_deref(),
+        )?;
+        if retained.successor != *candidate.successor_state()
+            || retained.originals.request()? != *request
+            || retained.originals.output() != output
+            || retained.originals.encrypted_credit() != encrypted_credit.as_slice()
+            || retained.originals.receiver_counter_floor() != *receiver_counter_floor
+            || retained.originals.receiver_lease_original() != receiver_lease_original.as_deref()
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         let before = &owner.state;
         let statement = preparation.transition_statement();
+        output
+            .validate_against_clock(preparation.preparation_clock_context())
+            .map_err(material)?;
+        preparation
+            .preparation_clock_context()
+            .validate_within_original_window(request.body.issued_at_ms, request.body.expires_at_ms)
+            .map_err(material)?;
         let expected_nullifier = kagemusha_ordinary_transition_nullifier_v1(
             before.state_commitment,
             before.secure_index,
@@ -1114,8 +1372,33 @@ fn require_selection(
         {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
-    } else if intent.operation != 4 {
-        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    } else {
+        let TransportOriginals::Redeem {
+            output,
+            beneficiary,
+            manifest_original,
+        } = &originals.transport
+        else {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        };
+        let (successor, retained) = pending
+            .redeem_credit
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        retained.recheck_original_data(owner, pending.operation, successor)?;
+        if intent.operation != 4
+            || *successor != *candidate.successor_state()
+            || retained.output() != output
+            || retained.beneficiary() != beneficiary
+            || retained.manifest_original() != manifest_original.as_slice()
+            || output.binding_digest().map_err(material)?
+                != body.prepared_projection_semantic_digest
+            || output.amount != body.amount
+            || output.lifecycle_digest != body.lifecycle_digest
+            || output.artifact_manifest_digest != body.artifact_manifest_digest
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
     }
     Ok(())
 }
@@ -1128,7 +1411,7 @@ fn require_receiver(
     lease: Option<&KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
 ) -> Result<(), KagemushaStateErrorV1> {
     match &originals.transport {
-        TransportOriginals::Redeem if receiver.is_none() && lease.is_none() => Ok(()),
+        TransportOriginals::Redeem { .. } if receiver.is_none() && lease.is_none() => Ok(()),
         TransportOriginals::Send {
             request,
             receiver_counter_floor,
@@ -1266,27 +1549,6 @@ fn selected_lease(
                 .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)
         })
         .transpose()
-}
-fn encode_terminal(record: &TerminalRecord) -> Result<Vec<u8>, KagemushaStateErrorV1> {
-    let original = norito::encode_canonical(record).map_err(material)?;
-    if original.is_empty() || original.len() as u64 > TERMINAL_FORMAT.maximum_payload_bytes {
-        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-    }
-    Ok(original)
-}
-fn decode_terminal(original: &[u8]) -> Result<TerminalRecord, KagemushaStateErrorV1> {
-    if original.is_empty() || original.len() as u64 > TERMINAL_FORMAT.maximum_payload_bytes {
-        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-    }
-    let record = norito::decode_canonical_with_limits(
-        original,
-        norito::canonical_decode_limits(original.len()),
-    )
-    .map_err(material)?;
-    if encode_terminal(&record)? != original {
-        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-    }
-    Ok(record)
 }
 
 #[cfg(test)]

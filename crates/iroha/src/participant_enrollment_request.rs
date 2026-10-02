@@ -42,9 +42,9 @@ impl ParticipantEnrollmentOperationV1 {
     #[must_use]
     pub const fn path_suffix(self) -> &'static str {
         match self {
-            Self::Prepare => "/v1/offline/enrollment/ordinary/prepare",
-            Self::RawAttestation => "/v1/offline/enrollment/ordinary/raw-attestation",
-            Self::Certificate => "/v1/offline/enrollment/ordinary/certificate",
+            Self::Prepare => "/v1/kagemusha/enrollment/ordinary/prepare",
+            Self::RawAttestation => "/v1/kagemusha/enrollment/ordinary/raw-attestation",
+            Self::Certificate => "/v1/kagemusha/enrollment/ordinary/certificate",
         }
     }
     fn tag(self) -> u8 {
@@ -600,6 +600,55 @@ impl VerifiedParticipantEnrollmentRequestV1 {
     pub fn time_window(&self) -> (u64, u64) {
         (self.not_before_ms, self.not_after_ms)
     }
+}
+
+/// Join only actual FI-fetched current originals under its independently held certified prefix.
+/// Raw rows/snapshot are data; this constructor establishes primitive request evidence only.
+/// The FI's actual customer/session/current selection and nonce CAS remain mandatory.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_fi_current_request_cut(
+    challenge: EnrollmentWalletReadChallengeV1,
+    request: &ParticipantEnrollmentRequestV1<'_>,
+    signature: &Signature,
+    verifier: &SumeragiFinalityVerifier,
+    proof: &SumeragiFinalityProof,
+    compiled_schema: Hash,
+    snapshot: iroha_data_model::sumeragi_finality::WorldStateSnapshotV1,
+    signatory_row: (AccountId, iroha_data_model::account::AccountValue),
+    wallet_row: (AccountId, iroha_data_model::account::AccountValue),
+    nodes: &[SelectedEnrollmentReadNodeV1; 4],
+    statements: &[SumeragiFinalityAttestation; 4],
+) -> Result<VerifiedParticipantEnrollmentRequestV1> {
+    ensure!(
+        &signatory_row.0 == request.signatory && &wallet_row.0 == request.wallet,
+        "FI account queries changed the exact requested S/W"
+    );
+    let block = verifier.verify_retained_decision(proof)?;
+    let snapshot = snapshot.authenticate(&block)?;
+    let wallet = VerifiedEnrollmentWalletSignatoryV1::authenticate(
+        challenge,
+        *request.network_id,
+        nodes,
+        verifier,
+        proof,
+        snapshot,
+        compiled_schema,
+        statements,
+        signatory_row.0,
+        &signatory_row.1,
+        wallet_row.0,
+        &wallet_row.1,
+    )?;
+    let verified = wallet.verify_request(request, signature)?;
+    verified.verify_fi_owned_selection(
+        request.network_id,
+        nodes,
+        compiled_schema,
+        verifier,
+        block.height(),
+    )?;
+    verified.recheck()?;
+    Ok(verified)
 }
 
 #[cfg(test)]

@@ -3606,6 +3606,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
 pub(crate) mod test_support {
     use super::*;
     use crate::state::State;
+    use iroha_model_base::chain::ChainId;
 
     /// Component fixture with explicit committed global-root metadata.
     pub(crate) fn with_global_root(world: crate::state::World) -> crate::state::World {
@@ -3619,12 +3620,21 @@ pub(crate) mod test_support {
 
     /// Apply the original signed genesis to its uniquely retained fixture State.
     pub(crate) fn state_after_genesis(world: crate::state::World) -> State {
+        state_after_genesis_with_chain(world, ChainId::from("sumeragi-certified-test-chain"))
+    }
+
+    /// Apply original signed genesis while preserving the fixture's explicit chain identity.
+    pub(super) fn state_after_genesis_with_chain(
+        world: crate::state::World,
+        chain_id: ChainId,
+    ) -> State {
         use crate::sumeragi::{
             startup,
             test_chain::{CertifiedTestChain, TestChainConfig},
         };
 
-        let config = TestChainConfig::new(world, 0);
+        let mut config = TestChainConfig::new(world, 0);
+        config.chain_id = chain_id;
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
         let prepared =
@@ -3668,6 +3678,15 @@ pub(crate) mod test_support {
         drop(pristine_block);
 
         let state = state_after_genesis(crate::state::World::default());
+        assert_eq!(
+            state.chain_id,
+            ChainId::from("sumeragi-certified-test-chain")
+        );
+        let custom_chain = ChainId::from("pipeline-fixture-chain");
+        let custom =
+            state_after_genesis_with_chain(crate::state::World::default(), custom_chain.clone());
+        assert_eq!(custom.chain_id, custom_chain);
+        assert_eq!(custom.committed_height(), 1);
         let view = state.view();
         assert_eq!(view.height(), 1);
         assert_eq!(
@@ -4181,19 +4200,21 @@ mod tests_overlay_manifest {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let state = State::new_with_chain(
-            test_support::with_global_root(world),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-            ChainId::from("hajimari-overlay"),
-        );
+        let state =
+            test_support::state_after_genesis_with_chain(world, ChainId::from("hajimari-overlay"));
         let pending = code::PendingContractLifecycle::Hajimari {
             transition_id: Hash::new(b"hajimari-overlay-transition"),
             code_hash,
         };
         let marker = code::contract_lifecycle_state_key(&contract_address);
         {
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(
+                nonzero!(2_u64),
+                state.view().latest_block_hash(),
+                None,
+                0,
+                0,
+            ));
             let mut transaction = block.transaction();
             code::set_pending_contract_lifecycle(
                 &mut transaction,
@@ -4226,7 +4247,13 @@ mod tests_overlay_manifest {
             Some(pending)
         );
         assert_eq!(overlay.durable_state_overlay.get(&marker), Some(&None));
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
         let mut state_transaction = block.transaction();
         overlay
             .apply(&mut state_transaction, &authority)
@@ -4481,10 +4508,8 @@ mod tests_overlay_manifest {
         )
         .build(&authority);
         let account = build_wonderland_account(&authority);
-        let state = State::new_with_chain(
-            test_support::with_global_root(crate::state::World::with([domain], [account], [])),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
+        let state = test_support::state_after_genesis_with_chain(
+            crate::state::World::with([domain], [account], []),
             ChainId::from("generic-overlay"),
         );
         let metadata = Metadata::default();
@@ -4507,10 +4532,8 @@ mod tests_overlay_manifest {
         )
         .build(&authority);
         let account = build_wonderland_account(&authority);
-        let state = State::new_with_chain(
-            test_support::with_global_root(crate::state::World::with([domain], [account], [])),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
+        let state = test_support::state_after_genesis_with_chain(
+            crate::state::World::with([domain], [account], []),
             ChainId::from("generic-overlay-metadata"),
         );
         let mut metadata = Metadata::default();
@@ -4798,12 +4821,7 @@ seiyaku QuarantineArguments {
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
         let chain_id = ChainId::from("parameterized-quarantine-overlay");
-        let state = State::new_with_chain(
-            test_support::with_global_root(world),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
+        let state = test_support::state_after_genesis_with_chain(world, chain_id.clone());
         let contract_call_metadata = Metadata::default();
         let contract_call =
             TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
@@ -5154,12 +5172,7 @@ seiyaku ProtectedParameterizedOverlay {
         );
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         let chain_id = ChainId::from("parameterized-authorization-overlay");
-        let state = State::new_with_chain(
-            test_support::with_global_root(world),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
+        let state = test_support::state_after_genesis_with_chain(world, chain_id.clone());
         let metadata = Metadata::default();
         let transaction = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
@@ -6656,14 +6669,7 @@ mod tests {
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_with_chain(
-            test_support::with_global_root(world),
-            kura,
-            query_handle,
-            ChainId::from("chain"),
-        );
+        let state = test_support::state_after_genesis_with_chain(world, ChainId::from("chain"));
         let tx = TransactionBuilder::new(
             state.network_id,
             authority,
@@ -6694,11 +6700,7 @@ mod tests {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 101);
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
+        let state = test_support::state_after_genesis(world);
         let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
@@ -6906,10 +6908,8 @@ seiyaku ProtectedProved {
             manifest,
         );
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
-        let mut state = State::new_with_chain(
-            test_support::with_global_root(world),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
+        let mut state = test_support::state_after_genesis_with_chain(
+            world,
             ChainId::from("protected-proved-overlay"),
         );
         state.zk.halo2.enabled = true;
@@ -7134,7 +7134,6 @@ seiyaku ProtectedProved {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -7168,13 +7167,7 @@ seiyaku ProtectedProved {
             }
             .signed(&kp),
         );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query,
-        );
+        let state = test_support::state_after_genesis(world);
         // Build a contract-call style transaction that references the instance.
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7203,7 +7196,6 @@ seiyaku ProtectedProved {
         };
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
         let compiler = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
@@ -7271,13 +7263,7 @@ seiyaku AliasBoundArguments {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query,
-        );
+        let mut state = test_support::state_after_genesis(world);
         state.zk.halo2.enabled = true;
         let summary = IvmCache::new()
             .summarize_program(bytecode.as_ref())
@@ -7595,7 +7581,6 @@ seiyaku AliasBoundArguments {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -7626,13 +7611,7 @@ seiyaku AliasBoundArguments {
             }
             .signed(&kp),
         );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query,
-        );
+        let state = test_support::state_after_genesis(world);
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7661,7 +7640,6 @@ seiyaku AliasBoundArguments {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -7673,13 +7651,7 @@ seiyaku AliasBoundArguments {
         // Bind namespace to code hash but do not seed manifest in WSV.
         let mut world = crate::state::World::default();
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query,
-        );
+        let state = test_support::state_after_genesis(world);
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7704,7 +7676,6 @@ seiyaku AliasBoundArguments {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -7733,13 +7704,7 @@ seiyaku AliasBoundArguments {
             }
             .signed(&kp),
         );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query,
-        );
+        let state = test_support::state_after_genesis(world);
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7779,11 +7744,7 @@ seiyaku AliasBoundArguments {
             }
             .signed(&kp),
         );
-        let state = crate::state::State::new_for_testing(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
+        let state = test_support::state_after_genesis(world);
         let res = build_overlay_for_transaction(&tx, &*execution_block(&state));
         assert!(matches!(
             res,
@@ -7795,7 +7756,6 @@ seiyaku AliasBoundArguments {
     #[test]
     fn pre_execution_policy_allows_scallx_opcode() {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-        use std::sync::Arc;
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
@@ -7804,14 +7764,7 @@ seiyaku AliasBoundArguments {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_with_chain(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query_handle,
-            ChainId::from("chain"),
-        );
+        let state = test_support::state_after_genesis_with_chain(world, ChainId::from("chain"));
         let meta = ivm::ProgramMetadata {
             max_cycles: 8,
             ..ivm::ProgramMetadata::default()
@@ -7834,7 +7787,6 @@ seiyaku AliasBoundArguments {
     #[test]
     fn pre_execution_policy_ignores_literal_table() {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-        use std::sync::Arc;
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
@@ -7843,14 +7795,7 @@ seiyaku AliasBoundArguments {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_with_chain(
-            test_support::with_global_root(world),
-            Arc::clone(&kura),
-            query_handle,
-            ChainId::from("chain"),
-        );
+        let state = test_support::state_after_genesis_with_chain(world, ChainId::from("chain"));
         // Authenticated pointer literal with a 0x62 payload byte to ensure
         // pre-execution opcode scans skip the complete literal section.
         let literal = make_tlv(

@@ -1629,7 +1629,7 @@ if name.startswith("CARGO_TARGET_") and name.endswith(("_LINKER", "_RUNNER", "_R
 def validate_release_source(commit: str, action: str) -> None:
     validate_trusted_release_surface_commit(REPO_ROOT, commit)
 validate_release_source(commit, "Release source preflight failed")
-run_trusted_release_action(commit, "Android Maven publication refused changed release source", lambda: run(publish_cmd, env=release_env))
+run_trusted_release_action(commit, "Android Maven publication refused changed release source", lambda: run(publish_cmd, env=publisher_env))
 validate_release_source(commit, "Aggregate manifest signing refused changed release source")
 validate_release_source(commit, "Release source changed during pipeline execution")
 command = (sys.executable, "-I", "-S", "run_isolated_release_tool.py"),
@@ -1661,6 +1661,11 @@ image_command = [
     )
 
     mutations = (
+        (
+            pipeline.replace("lambda: run(publish_cmd, env=publisher_env)",
+                             "lambda: run(publish_cmd, env=release_env)", 1),
+            "source-commit preflight/recheck changed",
+        ),
         (
             pipeline.replace(
                 'validate_release_source(commit, "Release source preflight failed")\n',
@@ -1795,6 +1800,35 @@ image_command = [
         path.write_text(source, encoding="utf-8")
 
 
+def test_apple_native_recipe_is_mandatory_and_rejects_an_omitted_feature(tmp_path: Path, monkeypatch) -> None:
+    checker = load_checker()
+    catalog = checker.WorkspaceCatalog(
+        package_features={"connect_norito_bridge": frozenset({"privacy-production-enabled"})},
+        binaries={}, native_libraries={"connect_norito_bridge": ("cdylib", "staticlib")},
+        workspace_docker_bins=(),
+    )
+    # This parser unit test scopes only the two mobile build owners. The existing
+    # full-workflow/release-root controls remain separate and unchanged.
+    monkeypatch.setattr(checker, "NATIVE_ARTIFACT_WORKFLOWS", ())
+    targets = checker.native_artifact_targets(REPO, catalog)
+    assert {target.features for target in targets
+        if target.source == str(checker.NATIVE_BRIDGE_BUILD_SCRIPT)} == {("privacy-production-enabled",)}
+    for relative in set((checker.NATIVE_BRIDGE_BUILD_SCRIPT, *checker.NATIVE_BRIDGE_CALLER_WORKFLOWS,
+        *checker.NATIVE_ARTIFACT_WORKFLOWS, checker.ANDROID_NATIVE_BUILD_OWNER, checker.ANDROID_HERMETIC_RUNNER)):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((REPO / relative).read_bytes())
+    owner = tmp_path / checker.NATIVE_BRIDGE_BUILD_SCRIPT
+    original = owner.read_text()
+    owner.write_text(original.replace(
+        "CARGO_FEATURE_ARGS=(--features privacy-production-enabled)", "CARGO_FEATURE_ARGS=()", 1))
+    with pytest.raises(RuntimeError, match="mandatory native recipe changed"):
+        checker.native_artifact_targets(tmp_path, catalog)
+    owner.write_text(original + "\nPRIVACY_PRODUCTION_ENABLED=0\n")
+    with pytest.raises(RuntimeError, match="retired privacy mode selector"):
+        checker.native_artifact_targets(tmp_path, catalog)
+
+
 def test_android_gradle_native_build_owner_rejects_feature_scope_drift(
     tmp_path: Path,
 ) -> None:
@@ -1808,7 +1842,7 @@ def test_android_gradle_native_build_owner_rejects_feature_scope_drift(
         workspace_docker_bins=(),
     )
     targets = checker.android_native_artifact_targets(REPO, catalog)
-    assert {target.features for target in targets} == {()}
+    assert {target.features for target in targets} == {("privacy-production-enabled",)}
 
     for relative in (
         Path(".github/workflows/mobile_sdk_artifacts.yml"),

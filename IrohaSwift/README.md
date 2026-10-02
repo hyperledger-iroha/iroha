@@ -138,8 +138,9 @@ rollover without weakening exact-next checks inside an epoch.
 There is intentionally no built-in software provider. Secure Enclave and App Attest
 signatures alone do not supply an atomic rollback-resistant monetary journal, exact-next
 counter, multi-credit inbox, durable outbox, trusted commit time, and KAGEMUSHA epoch
-rotation. Unless an audited secure backend supplies that entire contract through
-`KagemushaHardwareProviderV1`, Apple clients remain online-only.
+rotation. Apple wallet startup requires a qualified native owner that supplies
+that entire contract through `KagemushaHardwareProviderV1`. Missing ownership
+or custody evidence fails startup; KAGEMUSHA has no disabled product mode.
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -319,13 +320,13 @@ export RUSTC_BOOTSTRAP=1
 export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
 export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
-  --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock \
-  --privacy-production-enabled
+  --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock
 ```
 
-That option passes the existing `privacy-production-enabled` Cargo feature to
-every Apple slice and marks the XCFramework plus its artifact manifest. The
-`Mobile SDK Artifacts` manual workflow exposes the same default-off option.
+Every Apple slice includes the mandatory privacy and KAGEMUSHA support and
+records the fixed `privacy-production-enabled` provenance marker. There is no
+enable/disable option. Provider, hardware, proving and release qualification
+still require their respective evidence.
 The builder always compiles all five target libraries into the one caller-selected target,
 uses the explicitly selected `Cargo.lock`, and fails closed if `xcodebuild` cannot
 package them. The validator, Swift pin projector, and archive owner require the

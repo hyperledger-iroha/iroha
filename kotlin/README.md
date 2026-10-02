@@ -877,18 +877,10 @@ malformed provenance, extra native file (including another Rust `cdylib`), or
 any size/hash difference among raw cargo-ndk output, generated stripped output,
 provenance, and the AAR.
 
-Debug/JVM unit-test compilation deliberately does not register the shipping JNI
-and provenance directories, so it never launches Cargo/NDK merely to compile
-tests. An actual Debug app or instrumentation run that needs native calls must
-pass `-PirohaDebugNativeBridge=true` with the same external artifact root and
-authenticated NDK configuration. This registers the maintained generated JNI
-and provenance outputs for the Debug AAR; it does not copy source-tree libraries,
-enable native proving, or qualify an Offline device provider. Only exact `true`
-and `false` property values are accepted. For example:
-
-```bash
-./gradlew :client-android:assembleDebug -PirohaDebugNativeBridge=true
-```
+Every app and instrumentation variant includes the sealed native bridge and its
+provenance. Ordinary JVM unit-test compilation uses its compiler task graph and
+does not launch Cargo or the Android NDK. The `irohaDebugNativeBridge` selector
+has been removed; native packaging has no opt-out.
 
 For local device integration inside this checkout, create the ignored
 `dist/norito-bridge-android-local` directory with mode `0700` and set
@@ -903,15 +895,15 @@ that scope, including when the source is clean. It supplies local test evidence,
 not release or physical-device qualification by itself. Ordinary release output
 continues to require the external artifact root.
 
-The property also applies to this SDK when an Android app includes it as a
-composite build. Release packaging always includes the bridge independently of
-this Debug property. An unchanged raw build is reusable only while its saved source seal still
-matches the live checkout; release packaging always re-runs the inexpensive
-strip/provenance phase and its final seal check.
+This also applies to an Android app consuming the SDK as a composite build.
+An unchanged raw build is reusable only while its saved source seal still
+matches the live checkout; packaging re-runs stripping, provenance generation
+and the final seal check.
 
-The production-gated form passes `--features privacy-production-enabled` to
-`connect_norito_bridge`; the default form intentionally omits that feature so
-unaudited native proving remains disabled.
+Every native build includes KAGEMUSHA and privacy support. The fixed
+`privacy-production-enabled` Cargo feature records the sole build recipe; it is
+an empty provenance marker and grants no provider, proving, hardware or release
+qualification. The `privacyProductionEnabled` property has been removed.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
 executables from exact Rust 1.93.1. It requires one job, incremental compilation
@@ -936,9 +928,7 @@ state remains disabled.
 | arm64-v8a | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
 | x86_64 | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
 
-`<mode>` is `default` unless the property is exactly
-`-PprivacyProductionEnabled=true`, in which case it is `production`. Any value
-other than the exact strings `true` and `false` is rejected.
+`<mode>` is always `production`. There is no disabled native profile.
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 

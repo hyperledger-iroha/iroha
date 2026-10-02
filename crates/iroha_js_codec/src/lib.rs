@@ -3274,6 +3274,7 @@ fn remove_smart_contract_bytes_from_json(
     )?;
     let reason =
         parse_optional_string_value(fields.remove("reason"), "RemoveSmartContractBytes.reason")?;
+    require_exact_json_fields(&fields, &[], "RemoveSmartContractBytes")?;
     let instruction = RemoveSmartContractBytes {
         artifact_id,
         reason,

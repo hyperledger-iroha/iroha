@@ -106,3 +106,27 @@ def test_invalid_catalog_cannot_produce_an_inventory(tmp_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError) as failure:
         inventory.generate(tmp_path)
     assert b"invalid canonical route catalog" in failure.value.stderr
+
+
+def test_mandatory_kagemusha_catalog_preserves_authentication_and_private_reads(generated: bytes) -> None:
+    """Keep the universal protocol routes and exact signed private-read policy."""
+    operations = {row["route_id"]: row for row in csv.DictReader(
+        generated.decode().splitlines()[1:], delimiter="\t")}
+    expected = {
+        "kagemusha.readiness": ("GET", "torii_default", "public", "read", "true", "false"),
+        "kagemusha.top_up": ("POST", "canonical_signed_body", "authenticated_account", "mutation", "true", "false"),
+        "kagemusha.redeem": ("POST", "canonical_signed_body", "authenticated_account", "mutation", "true", "false"),
+        "kagemusha.operation": ("GET", "torii_default", "public", "read", "true", "false"),
+        "kagemusha.authority_state": ("GET", "torii_default", "public", "read", "true", "false"),
+        "ledger.resource_names_state": ("GET", "canonical_account_signature", "authenticated_account", "read", "false", "true"),
+        "ledger.authority_originals": ("POST", "canonical_account_signature", "authenticated_account", "read", "false", "true"),
+        "kagemusha.ordinary_wallet_current": ("POST", "canonical_account_signature", "authenticated_account", "read", "false", "true"),
+    }
+    for route_id, policy in expected.items():
+        row = operations[route_id]
+        assert row["feature_gate"] == "always"
+        assert row["sdk"] == row["openapi"] == "true"
+        assert row["surface"] == "public" and row["transport"] == "http"
+        assert tuple(row[field] for field in (
+            "method", "authentication", "admission", "effect", "mcp", "private_no_store")) == policy
+    assert operations["kagemusha.ordinary_wallet_current"]["path"] == "/v1/kagemusha/ordinary/current-wallet"

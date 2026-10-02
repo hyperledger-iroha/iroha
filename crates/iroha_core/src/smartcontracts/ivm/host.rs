@@ -20886,7 +20886,8 @@ seiyaku Callee {
             vec![caller_contract.subject_id(), callee_contract.subject_id()],
             "root and nested effects retain their respective contract subjects"
         );
-        // Apply component artifacts after bootstrap with ordinary signed-root authority.
+        // Apply these component artifacts in ordinary execution, with no
+        // claim to an authenticated genesis source capability.
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -21836,11 +21837,11 @@ seiyaku Callee {
                 .into_execution_artifacts(None)
                 .expect("export actual artifact");
             assert_eq!(artifacts.queued_instructions().len(), 1);
-            // Apply component artifacts after bootstrap with ordinary signed-root authority.
-            let next_height = core::num::NonZeroU64::new(
-                u64::try_from((state.view().height() + 1).max(2)).unwrap(),
-            )
-            .unwrap();
+            // This is ordinary component artifact execution against the fixture's
+            // original genesis, not a fabricated genesis execution capability.
+            let next_height =
+                core::num::NonZeroU64::new(u64::try_from(state.view().height() + 1).unwrap())
+                    .unwrap();
             let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut tx = block.transaction();

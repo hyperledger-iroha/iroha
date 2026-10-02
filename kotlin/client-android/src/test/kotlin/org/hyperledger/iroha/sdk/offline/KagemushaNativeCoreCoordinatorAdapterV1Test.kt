@@ -898,10 +898,20 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             }
         }
         val provider = lane.provider(refusing)
+        // Establish the independently authenticated credential before exercising original-owner refusal.
+        // The scripted endpoint tests call ordering only and grants no hardware or monetary authority.
+        provider.qualification()
+        assertEquals(listOf(11, 2, 3), lane.nativeMethods)
+        assertEquals(listOf(1), lane.operations)
+        assertEquals(0, checks)
+        assertEquals(0, acquisitions)
+        lane.nativeMethods.clear()
+        lane.operations.clear()
         repeat(2) {
             assertFailsWith<KagemushaIncomingFoldEvidenceUnavailableV1> { provider.foldPendingCredit(lane.selector) }
         }
-        assertEquals(listOf(15), lane.nativeMethods)
+        // Each retry resolves the same native preparation before rechecking its retained originals.
+        assertEquals(listOf(15, 15), lane.nativeMethods)
         assertEquals(2, checks)
         assertEquals(0, acquisitions)
         assertTrue(lane.completed.isEmpty())

@@ -109,32 +109,35 @@ require the explicitly approved OVH target.
 Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
 checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. The normal production-feature Core ZK
-frontend has recorded passes, limited by concurrent source changes. The default-
-feature test harness also builds. Component journal, focused issuer-key, corrected
-enrollment-floor and expired-preparation custody controls pass. Guard-generation
-fixes compile and both extended regressions pass. All 33 selected retained-harness
-proof controls pass, including MintFold, protocol labels and reciprocal claim-carrier
-binding; source changes limit current-candidate qualification. The
-non-test real-proof harness's P-256 and bounded SHA guards match its consumers;
-its frontend remains under validation. Unused terminal reference helpers now
-compile only for tests; strict privacy lint remains open. Repaired privacy
-acceptance passes all 136 selected controls, including
-malformed-input rejection and independently derived current/retired profile pins.
-Concurrent workspace manifest and lock changes limit source qualification; the
-full ordinary privacy suite remains open.
-Eight focused parameter tests pass with the scoped inline-policy annotation.
-Concurrent source changes limit current-candidate qualification. The latest
-workspace check reaches Core test compile errors owned by the separate repair
-chat. That chat completed the merge; current test and private-proof
-integration still needs compiler repair. SDK native-custody and assembly tools have explicit feature/target owners;
-FASTPQ is selected by the existing STARK feature. Current dependency costs and the
-native proving context remain under review. Workspace validation is pending.
-The combined candidate still needs
-fresh compiler and focused-test validation, a merge-free workspace check, genuine
-private-terminal/quotient-mask profile regeneration, current native/SDK consumers
-and executable-metadata freshness. Full workspace tests, physical-device
-qualification and same-candidate release validation remain incomplete.
+These results qualify their recorded source. Privacy component coverage includes
+normal builds, authentic profile pins, ordinary controls, required-Metal
+coefficient parity and RFC key replay. Maximum X509 proofs pass verification and
+byte/RSS limits, but exceed the unchanged 300-second proving limit; observed
+virtual size also exceeds the literal 32 GiB limit on the recorded candidate.
+The retained-query optimization requires fresh native parity, proof verification
+and time/memory measurements. Detailed boundaries remain in the
+[ZK goals](specs/zk_first_release_goals.md).
+
+KAGEMUSHA component coverage includes journal recovery, issuer-key and
+enrollment-floor controls, expired-preparation custody, Guard-generation and
+reciprocal claim-carrier binding. The non-test real-proof frontend, strict privacy
+lint and complete ordinary suite remain under qualification. SDK native-custody
+and assembly tools have explicit feature/target owners; FASTPQ uses the existing
+STARK feature. Current dependency costs and the native proving context remain
+under review.
+
+Ordinary recursive credential generation is blocked by the Eq circuit requiring
+8,584 advice columns against the 1,024-column limit. The complete-circuit
+preflight and compact authenticated carrier layout still need fresh compiler,
+layout, parity and proof qualification.
+
+The combined candidate needs fresh compiler and focused-test validation, genuine
+fixture production, private-terminal/quotient-mask profile regeneration, current
+native/SDK consumers and executable-metadata freshness. Historical Core fixture
+failures and unfinished selections require fresh execution after their repairs.
+Full workspace tests, Kotlin/Swift consumers, four-validator and physical-device
+qualification, and same-candidate signed release validation remain incomplete.
+
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).

@@ -6,8 +6,9 @@
 # Callers must select exactly one lock with
 # IROHA_PRIVACY_CARGO_LOCKFILE_PATH. The selected lock must be external to the
 # repository. The tracked repository-root Cargo.lock owns the reviewed graph
-# but is never a valid SDK build lock selection. The external snapshot has the
-# same authenticated bytes and an independently sealed physical identity.
+# and is the lock consumed by stock Cargo for JavaScript native builds. Other
+# privacy build corridors consume an external snapshot with the same
+# authenticated bytes and an independently sealed physical identity.
 # SDK-specific environment names are outputs derived from that
 # authenticated selection, never aliases or fallback inputs.
 
@@ -1706,7 +1707,7 @@ privacy_sdk_provision_ci_cargo_lock() {
 
   {
     printf 'IROHA_PRIVACY_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
-    printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
+    printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\n' "${canonical_repository_root}/Cargo.lock"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL=%s\n' "${resolved_lock_seal}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=%s\n' \

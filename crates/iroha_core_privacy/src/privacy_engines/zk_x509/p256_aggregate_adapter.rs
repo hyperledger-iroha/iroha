@@ -3469,6 +3469,25 @@ const SINK_SELECTION_REAL_BITS_BASE: usize = SINK_SELECTION_ACTIVE_BASE + 1;
 const SINK_SELECTION_SELECTED_BITS_BASE: usize = SINK_SELECTION_REAL_BITS_BASE + 8;
 const _: () = assert!(SINK_SELECTION_SELECTED_BITS_BASE + 8 == P256_BINDING_SINK_BASE_WIDTH_V1);
 const _: () = assert!(SINK_SELECTION_CONTINUE_FIXED + 1 == P256_BINDING_SINK_FIXED_WIDTH_V1);
+/// Verifier-owned real key bytes and private activity column in the committed sink.
+/// Qx and Qy are the first 64 big-endian bytes, before optional-certificate selection.
+pub(crate) const fn p256_real_key_input_columns_v1() -> (usize, usize, usize) {
+    (
+        SINK_SELECTION_REAL_BASE,
+        SINK_SELECTION_ACTIVE_BASE,
+        P256_INPUT_SELECTION_ROW_START_V1,
+    )
+}
+
+/// Verifier-owned unreduced SHA digest bytes in the same real-input column.
+/// The four preceding 32-byte words are Qx, Qy, r and s; no selected/dummy column is used.
+pub(crate) const fn p256_real_digest_input_columns_v1() -> (usize, usize) {
+    (
+        SINK_SELECTION_REAL_BASE,
+        P256_INPUT_SELECTION_ROW_START_V1 + 4 * 32,
+    )
+}
+
 fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErrorV1> {
     if byte < 4 * 32 {
         Ok(0)
@@ -7378,6 +7397,58 @@ mod tests {
         fixed[SINK_SELECTION_INACTIVE_REAL_FIXED] = F(u64::from(inactive_real));
         (base, fixed)
     }
+    #[test]
+    fn real_input_projections_use_range_checked_unselected_key_and_digest_cells() {
+        let (key_column, activity_column, key_start) = p256_real_key_input_columns_v1();
+        let (digest_column, digest_start) = p256_real_digest_input_columns_v1();
+        assert_ne!(key_column, SINK_SELECTION_SELECTED_BASE);
+        assert_eq!(digest_column, key_column);
+        assert_eq!(digest_start - key_start, 128);
+        let fixed = P256BindingSinkFixedProviderV1::new_with_optional_certificate_v1(
+            P256EcdsaRoleV1::CertificateOrCrl,
+            true,
+        )
+        .unwrap();
+        for (start, count) in [(key_start, 64), (digest_start, 32)] {
+            for row in start..start + count {
+                let actual_fixed = fixed.row_v1(row).unwrap();
+                assert_eq!(actual_fixed[SINK_SELECTION_BYTE_FIXED], F::ONE);
+                let dummy = actual_fixed[SINK_SELECTION_DUMMY_FIXED].0 as u8;
+                let inactive = actual_fixed[SINK_SELECTION_INACTIVE_REAL_FIXED].0 as u8;
+                // Distinct real and selected cells are legal only while inactive:
+                // the projection must retain the committed real source.
+                let (base, _) = selection_byte_row_v1(F::ZERO, inactive, dummy, dummy, inactive);
+                assert_eq!(base[key_column], F(u64::from(inactive)));
+                assert_eq!(base[activity_column], F::ZERO);
+                assert!(
+                    selection_tail_residues_v1(&base, &base, &actual_fixed)
+                        .iter()
+                        .all(|residue| *residue == F::ZERO)
+                );
+                let mut changed = base;
+                let changed_real = inactive ^ 1;
+                changed[key_column] = F(u64::from(changed_real));
+                write_byte_bits_v1(
+                    &mut changed[SINK_SELECTION_REAL_BITS_BASE..SINK_SELECTION_REAL_BITS_BASE + 8],
+                    changed_real,
+                );
+                assert!(
+                    selection_tail_residues_v1(&changed, &changed, &actual_fixed)
+                        .iter()
+                        .any(|residue| *residue != F::ZERO)
+                );
+            }
+        }
+        assert_eq!(
+            fixed.row_v1(digest_start + 32).unwrap()[SINK_SELECTION_SELECTOR_FIXED],
+            F::ONE
+        );
+        assert_eq!(
+            fixed.row_v1(key_start - 1).unwrap()[SINK_SELECTION_BYTE_FIXED],
+            F::ZERO
+        );
+    }
+
     #[test]
     fn binding_sink_commits_all_321_optional_certificate_relations() {
         let mut caught = 0_usize;

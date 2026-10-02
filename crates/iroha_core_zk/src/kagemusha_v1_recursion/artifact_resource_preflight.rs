@@ -1239,7 +1239,7 @@ mod tests {
 
     #[test]
     fn platform_credential_claim_consumer_has_no_k16_sha_auxiliary_columns() {
-        // Empty Base parameters isolate the reciprocal dense-MSM machine. PlatformCredential SHA
+        // Empty Base parameters isolate dense MSM and two disjoint complete-carrier RLC lanes. SHA
         // is proved by the ordered k=12 shard/claim path, so no Table8 selector bitmap or columns
         // may return to this k=16 monetary producer.
         let params = BaseCircuitParams {
@@ -1265,17 +1265,21 @@ mod tests {
         >(16, params)
         .expect("Ep PlatformCredential claim-consumer auxiliary profile");
         assert_eq!(eq, ep);
-        assert_eq!(eq.advice_columns, 148);
+        assert_eq!(eq.advice_columns, 148 + 2 * 14);
+        // These are configured lower bounds, not complete Base layout or RSS qualification.
+        let expected = predict_key_resources_with_selectors_v1(16, 176, 0, 9, 0, 0, 6, true)
+            .expect("closed dense plus two independent RLC auxiliary profile");
+        assert_eq!(eq, expected);
         assert_eq!(eq.instance_columns, 0);
-        assert_eq!(eq.configured_fixed_columns, 1);
+        assert_eq!(eq.configured_fixed_columns, 9);
         assert_eq!(eq.selector_columns, 0);
-        assert_eq!(eq.permutation_columns, 4);
+        assert_eq!(eq.permutation_columns, 6);
         assert!(eq.compress_selectors);
         assert_eq!(eq.materialized_selector_columns, 0);
         assert_eq!(eq.selector_bitmap_bytes, 0);
-        assert_eq!(eq.serialized_fixed_columns, 1);
-        assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 7_340_311);
+        assert_eq!(eq.serialized_fixed_columns, 9);
+        assert_eq!(eq.verifying_key_bytes, 490);
+        assert_eq!(eq.proving_key_bytes, 7_865_183);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
             (KagemushaPastaParityV1::Ep, ep),

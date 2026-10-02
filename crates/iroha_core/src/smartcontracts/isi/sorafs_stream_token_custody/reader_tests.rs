@@ -47,8 +47,8 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         ),
         [true]
     );
-    let original_qc = chain
-        .committed(2)
+    let original = chain.committed(2);
+    let original_qc = original
         .block()
         .commit_certificate()
         .expect("genuine native exact-quorum certificate")
@@ -70,8 +70,28 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         "absence of a provider row cannot bypass finality"
     );
     assert_eq!(read(&policy.binding, 0), Err(Error::StaleHeight));
-    // A successor certificate cannot repair a corrupted historical authority prefix.
+    // Restore only the exact original QC before advancing. A later valid block
+    // cannot replace a missing historical certificate in the required prefix.
+    state
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(original_qc.clone()),
+        )
+        .unwrap();
+    assert_eq!(
+        chain
+            .committed(2)
+            .block()
+            .executed_block_wire_identity()
+            .unwrap(),
+        original.block().executed_block_wire_identity().unwrap()
+    );
+    // A certified successor: the retained row is current at a certified block.
     assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());
+    // Re-corrupt the historical certificate after the actual successor is sealed.
+    // Its otherwise valid newer QC cannot repair the required authority prefix.
+    chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert_eq!(read(&policy.binding, 3), Err(Error::FinalityUnavailable));
     // Restore only the actual original stored QC, without inventing an execution result.
     chain

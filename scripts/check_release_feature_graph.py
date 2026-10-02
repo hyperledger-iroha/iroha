@@ -2432,26 +2432,17 @@ def native_artifact_targets(
         raise RuntimeError(
             f"{NATIVE_BRIDGE_BUILD_SCRIPT}: {package} is not a native library package"
         )
-    optional_features = tuple(
-        sorted(
-            set(
-                re.findall(
-                    r"CARGO_FEATURE_ARGS\+=\(--features\s+([A-Za-z0-9_.-]+)\)",
-                    script,
-                )
-            )
-        )
-    )
-    for feature in optional_features:
-        if feature not in catalog.package_features[package]:
-            raise RuntimeError(
-                f"{NATIVE_BRIDGE_BUILD_SCRIPT}: unknown {package} feature {feature}"
-            )
+    if 'CARGO_FEATURE_ARGS=(--features privacy-production-enabled)' not in script:
+        raise RuntimeError(f"{NATIVE_BRIDGE_BUILD_SCRIPT}: mandatory native recipe changed")
+    if 'PRIVACY_PRODUCTION_ENABLED' in script:
+        raise RuntimeError(f"{NATIVE_BRIDGE_BUILD_SCRIPT}: retired privacy mode selector")
+    if "privacy-production-enabled" not in catalog.package_features[package]:
+        raise RuntimeError(f"{NATIVE_BRIDGE_BUILD_SCRIPT}: missing native provenance feature")
     for caller in NATIVE_BRIDGE_CALLER_WORKFLOWS:
         caller_source = (repo / caller).read_text(encoding="utf-8")
         if str(NATIVE_BRIDGE_BUILD_SCRIPT) not in caller_source:
             raise RuntimeError(f"{caller}: native bridge build script is not invoked")
-    for feature_set in ((), *((feature,) for feature in optional_features)):
+    for feature_set in (("privacy-production-enabled",),):
         targets.append(
             ShippingTarget(
                 package=package,
@@ -2517,7 +2508,6 @@ def android_native_artifact_targets(
         '"--profile",\n                        "android-cargo"',
         '"--locked",\n                        "--offline"',
         '"--lockfile-path",\n                        tools.cargoLock.toString()',
-        'if (privacyProductionEnabled.get()) {',
     )
     if any(marker not in command for marker in required_markers):
         raise RuntimeError(
@@ -2558,7 +2548,7 @@ def android_native_artifact_targets(
         ShippingTarget(
             package=package,
             binary="<native-library>",
-            features=(),
+            features=("privacy-production-enabled",),
             default_features=True,
             source=str(ANDROID_NATIVE_BUILD_OWNER),
         ),
@@ -2739,7 +2729,7 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         "validate_trusted_release_surface_commit(REPO_ROOT, commit)",
         'validate_release_source(commit, "Release source preflight failed")',
         "Android Maven publication refused changed release source",
-        "lambda: run(publish_cmd, env=release_env)",
+        "lambda: run(publish_cmd, env=publisher_env)",
         "Aggregate manifest signing refused changed release source",
         "Release source changed during pipeline execution",
     )
