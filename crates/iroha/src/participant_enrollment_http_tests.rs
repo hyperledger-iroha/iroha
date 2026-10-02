@@ -451,3 +451,136 @@ fn enrollment_http_all_three_purposes_retain_real_originals_and_refuse_cross_pur
         }
     }
 }
+
+#[test]
+fn enrollment_http_common_public_golden_vectors_match_actual_rust_message_and_headers() {
+    // This is only public wire/crypto conformance. No Native custody, certified FI read,
+    // authenticated session, issuer or installation is manufactured by the fixture.
+    use norito::json::Value;
+    fn text<'a>(object: &'a Value, name: &str) -> &'a str {
+        object.get(name).and_then(Value::as_str).expect("public fixture string")
+    }
+    fn bytes(object: &Value, name: &str) -> Vec<u8> {
+        hex::decode(text(object, name)).expect("public fixture hex")
+    }
+    fn original_bytes(vector: &Value, fixture: &Value, name: &str) -> Vec<u8> {
+        hex::decode(
+            vector.get(name).or_else(|| fixture.get(name)).and_then(Value::as_str)
+                .expect("public fixture original hex"),
+        ).expect("public fixture original bytes")
+    }
+    let fixture: Value = norito::json::from_str(include_str!(
+        "../../../fixtures/kagemusha/participant_enrollment_http_v1.json"
+    )).expect("public enrollment common fixture");
+    assert_eq!(text(&fixture, "schema"), "participant-enrollment-http-public-unit-v1");
+    // The exact marked bytes are a public unit NetworkId, not a real genesis admission.
+    let network_raw: [u8; 32] = bytes(&fixture, "network_id_hex").try_into().unwrap();
+    let marked = Hash::from_marked_bytes(network_raw).expect("fixture network marker");
+    let network = NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(marked),
+    );
+    assert_eq!(network.as_bytes(), &network_raw);
+    let signatory = AccountId::parse_encoded(text(&fixture, "signatory_i105")).unwrap();
+    let wallet = AccountId::parse_encoded(text(&fixture, "wallet_i105")).unwrap();
+    assert_eq!(signatory.canonical_i105().unwrap(), text(&fixture, "signatory_i105"));
+    assert_eq!(wallet.canonical_i105().unwrap(), text(&fixture, "wallet_i105"));
+    assert_eq!(crate::client::canonical_request_account_header_value(&signatory).unwrap(), text(&fixture, "signatory_canonical_hex"));
+    assert_eq!(crate::client::canonical_request_account_header_value(&wallet).unwrap(), text(&fixture, "wallet_canonical_hex"));
+    let primary = fixture.get("vectors").and_then(Value::as_array).unwrap();
+    let auxiliary = fixture.get("auxiliary_originals").and_then(Value::as_array).unwrap();
+    assert_eq!(primary.len(), 3);
+    assert_eq!(auxiliary.len(), 2);
+    for vector in primary.iter().chain(auxiliary) {
+        let operation = match text(vector, "operation") {
+            "prepare" => ParticipantEnrollmentOperationV1::Prepare,
+            "raw_attestation" => ParticipantEnrollmentOperationV1::RawAttestation,
+            "certificate" => ParticipantEnrollmentOperationV1::Certificate,
+            _ => panic!("unknown frozen public fixture purpose"),
+        };
+        let expected_tag = match operation {
+            ParticipantEnrollmentOperationV1::Prepare => 1,
+            ParticipantEnrollmentOperationV1::RawAttestation => 2,
+            ParticipantEnrollmentOperationV1::Certificate => 3,
+        };
+        assert_eq!(vector.get("operation_tag").and_then(Value::as_u64), Some(expected_tag));
+        let target = Url::parse(text(vector, "target")).unwrap();
+        assert_eq!(target.as_str(), text(vector, "target"));
+        assert_eq!(target.path(), text(vector, "path"));
+        let body = original_bytes(vector, &fixture, "body_hex");
+        let authorization = original_bytes(vector, &fixture, "authorization_hex");
+        let session_sha256: [u8; 32] = Sha256::digest(&authorization).into();
+        let expected_session = original_bytes(vector, &fixture, "session_sha256_hex");
+        assert_eq!(session_sha256.as_slice(), expected_session.as_slice());
+        let request = ParticipantEnrollmentRequestV1 {
+            network_id: &network,
+            authentication_namespace: text(&fixture, "authentication_namespace"),
+            actor_id: text(&fixture, "actor_id"),
+            session_sha256,
+            signatory: &signatory,
+            wallet: &wallet,
+            request_id: text(&fixture, "request_id"),
+            idempotency_key: text(&fixture, "idempotency_key"),
+            operation,
+            target: &target,
+            body: &body,
+            timestamp_ms: text(vector, "timestamp_ms").parse().unwrap(),
+            nonce: text(&fixture, "nonce"),
+        };
+        // Invoke the actual Rust framing, not a second manual grammar in this consumer.
+        let message = request.signing_message().unwrap();
+        assert_eq!(message, bytes(vector, "message_hex"));
+        assert_eq!(hex::encode(Sha256::digest(&message)), text(vector, "message_sha256"));
+        let signature_raw = bytes(vector, "signature_hex");
+        assert_eq!(signature_raw.len(), 64);
+        let signature = Signature::from_bytes(&signature_raw);
+        signature.verify(signatory.try_signatory().unwrap(), &message).unwrap();
+        let headers = encode_participant_enrollment_http_headers_v1(
+            &request, &signature, &authorization,
+        ).unwrap();
+        let expected_headers = vector.get("headers").and_then(Value::as_array).unwrap()
+            .iter().map(|header| (text(header, "name").to_owned(), bytes(header, "value_hex")))
+            .collect::<Vec<_>>();
+        assert_eq!(headers.len(), 9);
+        assert_eq!(headers.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect::<Vec<_>>(), expected_headers);
+        let original = decode_participant_enrollment_http_original_v1(
+            owner(&request), &body, borrowed(&headers),
+        ).unwrap();
+        let received = original.request();
+        assert!(std::ptr::eq(received.body.as_ptr(), body.as_ptr()));
+        assert_eq!(received.body, body.as_slice());
+        assert_eq!(received.session_sha256, session_sha256);
+        assert_eq!(received.operation, operation);
+        assert_eq!(received.signing_message().unwrap(), message);
+        assert_eq!(original.signature().payload(), signature_raw.as_slice());
+        for name in [
+            "negative_generic_subject_signature_hex",
+            "negative_iroha_prehash_signature_hex",
+            "negative_retail_raw32_signature_hex",
+        ] {
+            let wrong = Signature::from_bytes(&bytes(vector, name));
+            assert!(wrong.verify(signatory.try_signatory().unwrap(), &message).is_err());
+            assert!(encode_participant_enrollment_http_headers_v1(&request, &wrong, &authorization).is_err());
+            let mut replaced = headers.clone();
+            replaced[7].1 = text(vector, name).as_bytes().to_vec();
+            assert!(decode_participant_enrollment_http_original_v1(
+                owner(&request), &body, borrowed(&replaced),
+            ).is_err());
+        }
+        // The real signature cannot authorize a different valid handler purpose/mount.
+        for other in primary.iter().filter(|other| text(other, "operation") != text(vector, "operation")) {
+            let other_target = Url::parse(text(other, "target")).unwrap();
+            let mut other_owner = owner(&request);
+            other_owner.operation = match text(other, "operation") {
+                "prepare" => ParticipantEnrollmentOperationV1::Prepare,
+                "raw_attestation" => ParticipantEnrollmentOperationV1::RawAttestation,
+                "certificate" => ParticipantEnrollmentOperationV1::Certificate,
+                _ => unreachable!(),
+            };
+            other_owner.target = &other_target;
+            other_owner.request_target = other_target.path();
+            assert!(decode_participant_enrollment_http_original_v1(
+                other_owner, &body, borrowed(&headers),
+            ).is_err());
+        }
+    }
+}
