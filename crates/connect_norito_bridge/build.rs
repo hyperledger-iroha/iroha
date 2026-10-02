@@ -79,4 +79,61 @@ fn main() {
     };
     fs::write(out.join("hardware-evidence-compiled-binding.norito"), bytes)
         .expect("compiled public original output");
+    println!("cargo:rerun-if-env-changed=MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE");
+    let ordinary = match env::var_os("MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE") {
+        None => Vec::new(),
+        Some(input) => {
+            let path = PathBuf::from(input);
+            assert!(
+                path.is_absolute(),
+                "ordinary compile original absolute path"
+            );
+            let meta = fs::symlink_metadata(&path).expect("ordinary public compile original");
+            assert!(
+                meta.is_file() && !meta.file_type().is_symlink() && meta.len() == 76,
+                "ordinary exact public compile original"
+            );
+            assert_eq!(
+                fs::canonicalize(&path).expect("ordinary canonical compile original"),
+                path,
+                "ordinary compile symbolic path rejected"
+            );
+            #[cfg(unix)]
+            assert!(
+                meta.nlink() == 1 && meta.mode() & 0o022 == 0,
+                "ordinary public compile custody"
+            );
+            println!("cargo:rerun-if-changed={}", path.display());
+            let mut file = fs::File::open(&path).expect("ordinary compile original FD");
+            assert!(
+                same_original(&meta, &file.metadata().expect("ordinary held original")),
+                "ordinary compile original replaced before read"
+            );
+            let mut bytes = Vec::new();
+            (&mut file)
+                .take(77)
+                .read_to_end(&mut bytes)
+                .expect("ordinary public compile bytes");
+            assert!(
+                bytes.len() == 76
+                    && &bytes[..8] == b"KGMROOT1"
+                    && bytes[8..40].iter().any(|b| *b != 0)
+                    && bytes[40..72].iter().any(|b| *b != 0)
+                    && u32::from_le_bytes(bytes[72..76].try_into().expect("ordinary ABI width"))
+                        > 0,
+                "ordinary public compile shape"
+            );
+            assert!(
+                same_original(&meta, &file.metadata().expect("ordinary held recheck"))
+                    && same_original(
+                        &meta,
+                        &fs::symlink_metadata(&path).expect("ordinary named recheck")
+                    ),
+                "ordinary compile original changed"
+            );
+            bytes
+        }
+    };
+    fs::write(out.join("ordinary-context-compiled-binding.bin"), ordinary)
+        .expect("ordinary compiled public original");
 }

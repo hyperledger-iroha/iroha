@@ -81,17 +81,6 @@ export {
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
 export {
-  VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE,
-  VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES,
-  VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
-  VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS,
-  VALIDATION_FEE_HIJIRI_QUOTE_PATH,
-  VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION,
-  VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA,
-  encodeValidationFeeHijiriQuoteRequestV1,
-  verifyValidationFeeHijiriQuoteResponseV1,
-} from "./validationFeeHijiriQuote.js";
-export {
   computeValidationFeePayoutLifecycleProposalFingerprintV1,
   computeValidationFeePolicyProposalFingerprintV1,
 } from "./validationFeeProposal.js";
@@ -306,6 +295,11 @@ export {
   noritoEncodeTransactionPayloadBatch,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeMultisigProposeRequest,
+  encodeRetailFeeQuoteRequestV1,
+  retailFeePaymentIntentHash,
+  encodeRetailFeeAssessmentV1,
+  retailFeeAssessmentMarkerMessage,
+  decodeRetailFeeAssessmentMarkerMessage,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,

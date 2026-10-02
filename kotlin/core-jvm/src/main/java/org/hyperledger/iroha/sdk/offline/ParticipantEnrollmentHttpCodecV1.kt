@@ -64,7 +64,7 @@ object ParticipantEnrollmentHttpCodecV1 {
         private val original: ByteArray
         init {
             // Preserve unrelated-header behavior; enforce the existing cap before known-value copies.
-            require(!names.contains(name.toLowerCase(Locale.ROOT)) || value.size <= 8192)
+            require(!names.contains(name.lowercase(Locale.ROOT)) || value.size <= 8192)
             original = value.copyOf()
         }
         fun originalValue(): ByteArray = original.copyOf()
@@ -102,11 +102,11 @@ object ParticipantEnrollmentHttpCodecV1 {
         val authority = host + if (port == -1) "" else ":$port"
         require(target.scheme == "https" && target.rawUserInfo == null && target.rawQuery == null &&
             target.rawFragment == null && target.rawAuthority == authority &&
-            host == host.toLowerCase(Locale.ROOT) && port != 443 && port in -1..65535 &&
+            host == host.lowercase(Locale.ROOT) && port != 443 && port in -1..65535 &&
             target.toString() == target.toASCIIString() && target.normalize() == target)
         val path = target.rawPath ?: error("Missing original enrollment path")
         require(path.startsWith("/") && path.length <= 64 * 1024 && path.endsWith(operation.pathSuffix))
-        require(path.split('/').none { val segment = it.toLowerCase(Locale.ROOT).replace("%2e", "."); segment == "." || segment == ".." })
+        require(path.split('/').none { val segment = it.lowercase(Locale.ROOT).replace("%2e", "."); segment == "." || segment == ".." })
         return Context(networkId, authenticationNamespace, actorId, operation, target, "https://$authority", path)
     }
 
@@ -159,7 +159,7 @@ object ParticipantEnrollmentHttpCodecV1 {
         require(actualMethod == "POST" && actualRequestTarget == context.path)
         val values = arrayOfNulls<ByteArray>(9)
         for (header in headers) {
-            val name = header.name.toLowerCase(Locale.ROOT)
+            val name = header.name.lowercase(Locale.ROOT)
             val index = names.indexOf(name)
             if (index >= 0) {
                 require(values[index] == null)

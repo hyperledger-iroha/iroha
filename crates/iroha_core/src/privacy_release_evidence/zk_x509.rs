@@ -1563,7 +1563,6 @@ mod release_kat_tests {
         },
     };
     const SECOND_PROOF_PURPOSE_V1: &[u8] = b"cross-subproof-splice-control";
-    const RELEASE_KAT_THREAD_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
     fn verify_qualification_proof_v1(
         fixture: &crate::privacy_engines::zk_x509::relation::release_fixture::ZkX509ReleaseFixtureV1,
         genesis_hash: [u8; 32],
@@ -1579,16 +1578,6 @@ mod release_kat_tests {
     #[test]
     #[ignore = "explicit canonical positive release-evidence KAT adversarial corpus"]
     fn positive_release_stage_is_the_sole_kat_producer() {
-        let proof_thread = std::thread::Builder::new()
-            .name("zk-x509-release-stage-kat".to_owned())
-            .stack_size(RELEASE_KAT_THREAD_STACK_BYTES_V1)
-            .spawn(positive_release_stage_kat_on_production_stack_v1)
-            .expect("spawn canonical release-stage KAT");
-        if let Err(payload) = proof_thread.join() {
-            std::panic::resume_unwind(payload);
-        }
-    }
-    fn positive_release_stage_kat_on_production_stack_v1() {
         let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
         let started = std::time::Instant::now();
         let PreparedZkX509StageV1 {
@@ -1641,7 +1630,8 @@ mod release_kat_tests {
         let ca_start = (envelope.ca_subproof.as_ptr() as usize)
             .checked_sub(base)
             .expect("CA lies inside X5S1");
-        let mut mutation_offsets = vec![0, 1, 4, 6, 8, 40, 72];
+        let mut mutation_offsets = vec![0, 1, 4, 6, 40, 72, 104];
+        mutation_offsets.extend(8..40); // Every required public nonce byte.
         for proof_start in [main_start, ca_start] {
             let header_start = proof_start
                 .checked_sub(8)
@@ -1698,6 +1688,13 @@ mod release_kat_tests {
         let second_envelope = decode_zk_x509_credential_envelope_v1(&second_encoded)
             .expect("canonical control envelope");
         assert_eq!(envelope.public, second_envelope.public);
+        assert_ne!(envelope.proof_instance, second_envelope.proof_instance);
+        let second_main_start =
+            second_envelope.main_aggregate.as_ptr() as usize - second_encoded.as_ptr() as usize;
+        // Preserve genuine mandatory132-opening bytes from each decoded proof.
+        let first_openings = &encoded[main_start - 8 - 132 * 32..main_start - 8];
+        let second_openings =
+            &second_encoded[second_main_start - 8 - 132 * 32..second_main_start - 8];
         assert_ne!(envelope.main_aggregate, second_envelope.main_aggregate);
         assert_ne!(envelope.ca_subproof, second_envelope.ca_subproof);
         for (label, main_aggregate, ca_subproof) in [
@@ -1712,14 +1709,27 @@ mod release_kat_tests {
                 envelope.ca_subproof,
             ),
         ] {
-            let spliced =
-                encode_zk_x509_credential_envelope_v1(envelope.public, main_aggregate, ca_subproof)
+            for instance in [envelope.proof_instance, second_envelope.proof_instance] {
+                for openings in [first_openings, second_openings] {
+                    let spliced = encode_zk_x509_credential_envelope_v1(
+                        instance,
+                        envelope.public,
+                        main_aggregate,
+                        ca_subproof,
+                        openings,
+                    )
                     .expect("mixed valid subproofs remain canonically framed");
-            assert!(
-                verify_qualification_proof_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &spliced)
-                    .is_err(),
-                "{label} was accepted"
-            );
+                    assert!(
+                        verify_qualification_proof_v1(
+                            &fixture,
+                            ZK_X509_RELEASE_GENESIS_HASH_V1,
+                            &spliced
+                        )
+                        .is_err(),
+                        "{label} was accepted with {instance:?}"
+                    );
+                }
+            }
         }
         let mut truncations = vec![
             0,

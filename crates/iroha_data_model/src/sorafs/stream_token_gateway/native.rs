@@ -190,7 +190,12 @@ fn controller_keys(accounts: &BTreeSet<AccountId>) -> BTreeSet<&PublicKey> {
                 keys.insert(key);
             }
             AccountController::Multisig(policy) => {
-                keys.extend(policy.members().iter().map(|member| member.public_key()));
+                keys.extend(
+                    policy
+                        .members()
+                        .iter()
+                        .map(crate::account::controller::MultisigMember::public_key),
+                );
             }
         }
     }

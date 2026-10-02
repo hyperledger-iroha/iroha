@@ -41,17 +41,20 @@ use super::p256_aggregate_adapter::{
 use super::p256_aggregate_adapter::{P256MainBaseSourceV1, P256MainBoundSourceV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
+#[cfg(test)]
+use super::proof_instance::TEST_PROOF_INSTANCE_V1;
+use super::proof_instance::ZkX509ProofInstanceV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_v1;
+use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_local_residues_over_field_v1;
 use super::{
     accumulator_air::{
         ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
     },
     accumulator_stark::{
-        ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_CHUNKS_V1,
-        ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1, ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
-        ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        ZkX509AccumulatorStarkErrorV1,
+        CA_AGGREGATE_PARAMETERS_V1, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
+        ZK_X509_CA_ACCUMULATOR_CHUNKS_V1, ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
+        ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1,
+        ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1, ZkX509AccumulatorStarkErrorV1,
     },
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
@@ -60,7 +63,6 @@ use super::{
     },
     credential_stark::{
         ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, ZkX509CredentialPublicBindingV1,
-        ZkX509MainCaBindingV1,
     },
     der_air::ZkX509Rfc5280StatementV1,
     der_stark::{
@@ -133,8 +135,8 @@ use super::{
         ZK_X509_CA_TRACE_MASK_DEGREE_V1, ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
         ZK_X509_COMPOSITION_LANES_V1, ZK_X509_FRI_BLOWUP_FACTOR_V1, ZK_X509_FRI_QUERY_COUNT_V1,
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1, ZK_X509_GRINDING_BITS_V1,
-        ZK_X509_LOGICAL_REGISTRATIONS_V1, ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1,
-        ZK_X509_MAIN_COMMON_LDE_LOG2_V1, ZK_X509_MAX_CONSTRAINT_DEGREE_V1,
+        ZK_X509_LOGICAL_REGISTRATIONS_V1, ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+        ZK_X509_MAIN_FRAME_BYTES_V1, ZK_X509_MAX_CONSTRAINT_DEGREE_V1,
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, ZK_X509_MAX_PROOF_BYTES_V1,
         ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1, ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1,
         ZK_X509_PROOF_VERSION_V1, ZK_X509_SUITE_V1, ZK_X509_TRACE_GROUPS_V1,
@@ -149,20 +151,18 @@ use super::{
         evaluate_zk_x509_projection_stark_residues_v1,
     },
     rfc5280_stark::{
-        ZK_X509_RFC5280_STARK_AUX_WIDTH_V1, ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
-        ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
+        ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1, ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
+        ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
         ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
-        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1,
-        ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, ZkX509Rfc5280StarkFixedRowV1,
+        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZkX509Rfc5280StarkFixedRowV1,
         ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
-        ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
         compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
-        evaluate_zk_x509_rfc5280_stark_residues_v1,
+        evaluate_zk_x509_rfc5280_local_residues_v1,
     },
     sha_call_bus_stark::{
         ZK_X509_SHA_BATCH_AUX_WIDTH_V1, ZK_X509_SHA_BATCH_BASE_CHUNKS_PER_SEGMENT_V1,
-        ZK_X509_SHA_BATCH_BASE_WIDTH_V1, ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1,
-        ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, ZK_X509_SHA_BATCH_FIXED_WIDTH_V1,
+        ZK_X509_SHA_BATCH_BASE_WIDTH_V1, ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1,
+        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1,
         ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1,
         ZK_X509_SHA_SEGMENT_COUNT_V1, ZkX509ShaBatchFixedProviderV1, ZkX509ShaBatchRowV1,
         ZkX509ShaCallPublicShapeV1,
@@ -257,6 +257,12 @@ use iroha_data_model::privacy::PrivacyStatementV1;
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyProtocolIdV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) use main_aggregate::main_joint::finish_joint_main_ca_v1;
+pub(crate) use main_aggregate::main_joint::{
+    MainJointVerifierOraclesV1, main_joint_auxiliary_from_proofs_v1,
+};
+pub(crate) use main_aggregate::zk_x509_main_pre_aux_from_proof_v1;
 #[cfg(test)]
 use main_aggregate::{
     MainOpenedProviderSetV1, MainOpenedRowEvaluatorV1, MainTraceColumnKindV1,
@@ -270,9 +276,6 @@ pub(crate) use main_aggregate::{
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
-pub(crate) use main_aggregate::{
-    verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
-};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rand::TryRngCore;
 use std::collections::BTreeMap;
@@ -280,7 +283,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-public-rfc4-and-ca208-plus31-original-column-fp4-DEEP-values-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-nine-private-producer-and-consumer-role-recurrences=144-original-equations:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-with-bound-source-replay-original-masks-no-extra-openings:governed-root-four-public-products:rfc5280-calendar-and-numeric=base285-aux280-fixed102-constraints1618-degree4-five-key-outputs-der-node-byte-lookups-length66-offset1-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-30relation-bound:all-aux-roots-and-X5M1-terminal-claims-before-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then17-key-and-digest-join-descriptors-and-fp4-alphas:then20-private-sha-union-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:ca-complete-fp4-air1379-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claim-free-key-openings-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log12-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=9-normalized-producer+9-actual-consumer-four-lane-aux-accumulators+36-private-equalities+4-private-CA-governed-root-consumer-links+16-private-sha-bridges+20-quartic-joins:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:rfc5280-calendar-and-numeric=base285-aux280-fixed102-constraints1650-degree4-five-key-outputs-der-node-byte-lookups-length66-offset1-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-39relation-bound:local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then17-key-and-digest-join-descriptors-and-fp4-alphas:then20-private-sha-union-descriptors-and-fp4-alphas:then108-CA-private-link-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-binary-fold-arity2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask2100-coefficients:one-shared-transcript-derived-deep-point-current+next+MAIN24-CA108-original-openings-both-local-records-bound-before-mixes:MAIN31-derived-key-and-digest-openings-power2,8,32-admissibility-and-DEEP-authentication:ca-complete-fp4-local-air1363-plus-MAIN108-original-cross-equations-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -384,29 +387,10 @@ const CA_BLOWUP_LOG2_V1: u8 = ZK_X509_CA_FRI_LDE_LOG2_V1 - ZK_X509_CA_ACCUMULATO
 const CA_TERMINAL_SIZE_V1: usize = 1 << ZK_X509_CA_FRI_TERMINAL_LOG2_V1;
 const CA_MASK_DEGREE_V1: usize = ZK_X509_CA_TRACE_MASK_DEGREE_V1 as usize;
 const CA_COMPOSITION_DEGREE_CHUNKS_V1: usize = ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1 as usize;
-const _: () = assert!(CA_BLOWUP_LOG2_V1 == 3);
+const _: () = assert!(CA_BLOWUP_LOG2_V1 == 4);
 const _: () = assert!(CA_TERMINAL_SIZE_V1 == 1024);
-const _: () = assert!(CA_MASK_DEGREE_V1 == 695);
+const _: () = assert!(CA_MASK_DEGREE_V1 == 2_099);
 const _: () = assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 4);
-const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
-    aggregate::AggregateStarkParametersV1 {
-        proof_magic: PROOF_MAGIC_V1,
-        proof_version: ZK_X509_PROOF_VERSION_V1,
-        fri_commitment_layout: aggregate::AggregateFriCommitmentLayoutV1::Paired,
-        security_lanes: SECURITY_LANES,
-        query_count: QUERY_COUNT,
-        blowup_log2: CA_BLOWUP_LOG2_V1,
-        terminal_log2: ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
-        terminal_degree_bound: ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1 as usize,
-        composition_degree_chunks: CA_COMPOSITION_DEGREE_CHUNKS_V1,
-        minimum_trace_log2: ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        maximum_trace_log2: ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        maximum_trace_groups: 1,
-        maximum_segment_instances: ZK_X509_CA_ACCUMULATOR_CHUNKS_V1,
-        maximum_base_columns_per_instance: ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 as usize,
-        maximum_aux_columns_per_instance: ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 as usize,
-        maximum_proof_bytes: ZK_X509_MAX_PROOF_BYTES_V1 as usize,
-    };
 const EXEC_CHANNEL: usize = 0;
 const EXEC_OFFSET: usize = 1;
 const EXEC_VALUE: usize = 2;
@@ -466,11 +450,14 @@ const FRI_NODE_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:fri-node:v1";
 #[cfg(test)]
 const PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:io-public:v1";
 const QUERY_SEED_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:query-seed:v1";
-pub(crate) const ZK_X509_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
+pub(crate) const ZK_X509_FIXED_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::new(
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         b"iroha-zk-x509-stark-p256-release-profile-v1",
     );
+#[cfg(test)]
+pub(crate) const ZK_X509_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
+    TEST_PROOF_INSTANCE_V1.main_context_v1();
 #[cfg(test)]
 /// Construct one opaque 48-byte outer digest for cross-module zk-X509 tests.
 pub(crate) fn zk_x509_test_digest384_v1(seed: u8) -> PrivacyOuterDigestV1 {
@@ -478,8 +465,6 @@ pub(crate) fn zk_x509_test_digest384_v1(seed: u8) -> PrivacyOuterDigestV1 {
 }
 #[cfg(test)]
 const DER_TERMINAL_CLAIMS_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-terminal-claims:v1";
-const MAIN_TERMINAL_CLAIMS_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:stark:main-terminal-claims:v1";
 #[cfg(test)]
 const DER_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-public:v1";
 #[cfg(test)]
@@ -503,30 +488,22 @@ const DER_PROOF_ENVELOPE_BYTES_V1: usize = DER_PROOF_LENGTH_OFFSET_V1 + 4;
 #[cfg(test)]
 const DER_SEGMENTED_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-segmented-proof-v1:wire=X5P1:version1:strict-der-adapter0:claim-count8:typed-lane-records=input-byte-type1-lanes0-3-then-node-type2-lanes0-3:no-duplicate-or-reordered-claims:canonical-goldilocks-u64be:exact-u32-length-prefixed-X5S1-payload:statement-frame=X5H1-document-count-u16-document-lengths-u16-parser-rows-u32-comparator-rows-u32:terminal-claim-transcript-frame=X5C1:query-only-verifier-fixed-columns:first-release";
 const MAIN_PROOF_MAGIC_V1: [u8; 4] = *b"X5M1";
-const MAIN_PROOF_ADAPTER_COUNT_V1: u16 = 2;
-const MAIN_PROOF_HEADER_BYTES_V1: usize = 4 + 2 + 2;
-const MAIN_PROOF_RFC_OFFSET_V1: usize = MAIN_PROOF_HEADER_BYTES_V1;
-const MAIN_PROOF_SHA_OFFSET_V1: usize =
-    MAIN_PROOF_RFC_OFFSET_V1 + ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1;
-/// Exact original-column key and SHA-digest DEEP value count.
-const MAIN_KEY_OPENING_COUNT_V1: usize = main_aggregate::main_key_joins::OPENINGS_V1;
-const _: () = assert!(MAIN_KEY_OPENING_COUNT_V1 == 31);
-const MAIN_KEY_OPENING_BYTES_V1: usize = 4 * 8;
-const MAIN_PROOF_KEY_OPENINGS_OFFSET_V1: usize =
-    MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
+const MAIN_PROOF_KEY_OPENINGS_OFFSET_V1: usize = 4 + 2;
+const MAIN_KEY_OPENING_COUNT_V1: usize = 31;
 const MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1: usize =
-    MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + MAIN_KEY_OPENING_COUNT_V1 * MAIN_KEY_OPENING_BYTES_V1;
-/// Exact fixed framing, public terminal claims and 31 DEEP values around the inner X5S1.
+    MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * MAIN_KEY_OPENING_COUNT_V1;
+/// Exact canonical framing and original key openings around the inner X5S1.
 pub(crate) const ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1: usize =
     MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 + 4;
-pub(crate) const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+adapter-count2+exact-canonical-X5R1+exact-canonical-X5Q1+31-ordered-canonical-fp4-key-and-digest-DEEP-values+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:private-der-rfc8-and-p256184-linear-endpoint-quotients+rfc-nine-private-role-recurrences+four-public-governed-trust-products+thirteen-public-compact-ca-call-boundaries:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-from-exact-bound-sources-original-masks-no-extra-openings:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:aux-roots-then-remaining-public-claims-then-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-17-key-and-digest-join-descriptors-and-alphas-then-20-private-sha-union-descriptors-and-alphas:first-release-no-legacy";
-const _: () = assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 4_420);
-const _: () = assert!(
-    ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
-);
-const AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
+pub(crate) const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+exact31-canonical-Fp4-key-and-digest-join-openings992+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:private-der-rfc8-and-p256184-linear-endpoint-quotients+rfc-normalized-private-producer-consumer36-equalities-and-four-private-CA-governed-root-consumer-links+16-private-native-constant-bridges+20-quartic-original-masked-column-sha-rfc-endpoint-joins-no-extra-openings:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:local-component-history:both-original-aux-roots-then-active-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-17-key-and-digest-join-descriptors-and-alphas-then-20-private-sha-union-descriptors-and-alphas-then-108-ordered-CA-private-link-descriptors-and-alphas:additional31-derived-openings-plus-ordered132-MAIN24-CA108-openings-and-both-local-DEEP-records-before-independent-key-DEEP-and-FRI-mixes:first-release-no-legacy";
+const _: () = assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_002);
+const _: () =
+    assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == ZK_X509_MAIN_FRAME_BYTES_V1 as usize);
+const fn main_domains_v1(
+    proof_instance: ZkX509ProofInstanceV1,
+) -> aggregate::AggregateStarkDomainsV1 {
     aggregate::AggregateStarkDomainsV1 {
-        digest_context: ZK_X509_DIGEST_CONTEXT_V1,
+        digest_context: proof_instance.main_context_v1(),
         base_leaf: BASE_LEAF_DOMAIN,
         base_node: BASE_NODE_DOMAIN,
         aux_leaf: AUX_LEAF_DOMAIN,
@@ -542,7 +519,11 @@ const AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         fri_root_label: b"aggregate-stark-fri-layer-root-v1",
         fri_beta_label: b"zk-x509-fri-fold-beta-v1",
         query_seed: QUERY_SEED_DOMAIN,
-    };
+    }
+}
+#[cfg(test)]
+const AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
+    main_domains_v1(TEST_PROOF_INSTANCE_V1);
 /// Verifier-fixed byte-channel statement for the implemented STARK segment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509IoStarkStatementV1 {
@@ -676,20 +657,10 @@ impl From<P256AggregateAdapterErrorV1> for ZkX509StarkErrorV1 {
         }
     }
 }
-/// All proof-carried MAIN terminal claims in canonical adapter order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509MainTerminalClaimsV1 {
-    /// Four public governed trust-anchor products; private role recurrences remain AIR-owned.
-    pub(crate) rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1,
-    /// Thirteen public compact-CA call boundaries; private SHA/RFC centers remain AIR-owned.
-    pub(crate) sha: ZkX509ShaSegmentTerminalClaimsV1,
-}
 /// Decoded canonical MAIN frame borrowing its sole variable proof record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509MainProofEnvelopeV1<'a> {
-    /// Transcript-bound terminal claims.
-    pub(crate) claims: ZkX509MainTerminalClaimsV1,
-    /// Ordered original-column key and digest DEEP openings.
+    /// Exact ordered original-column evaluations at derived key-join DEEP points.
     pub(crate) key_openings: [E; MAIN_KEY_OPENING_COUNT_V1],
     /// Inner 49-registration aggregate X5S1 proof.
     pub(crate) aggregate_proof: &'a [u8],
@@ -704,7 +675,6 @@ pub(crate) const fn zk_x509_main_proof_envelope_encoded_len_v1(
 /// Encode the sole canonical MAIN frame.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
-    claims: ZkX509MainTerminalClaimsV1,
     key_openings: &[E; MAIN_KEY_OPENING_COUNT_V1],
     aggregate_proof: &[u8],
 ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
@@ -715,18 +685,6 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
 
-    let rfc = claims
-        .rfc5280
-        .encode_x5r1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
-    let sha = claims
-        .sha
-        .encode_x5q1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
-
-    if key_openings.iter().any(|value| !value.is_canonical()) {
-        return Err(ZkX509StarkErrorV1::NonCanonicalField);
-    }
     let encoded_len = zk_x509_main_proof_envelope_encoded_len_v1(aggregate_proof.len())
         .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
     if encoded_len > ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 {
@@ -738,14 +696,11 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     encoded.extend_from_slice(&MAIN_PROOF_MAGIC_V1);
     append_u16_v1(&mut encoded, ZK_X509_PROOF_VERSION_V1);
-    append_u16_v1(&mut encoded, MAIN_PROOF_ADAPTER_COUNT_V1);
-
-    encoded.extend_from_slice(&rfc);
-    encoded.extend_from_slice(&sha);
     for value in key_openings {
-        for coefficient in value.coefficients() {
-            encoded.extend_from_slice(&coefficient.0.to_be_bytes());
+        if !value.is_canonical() {
+            return Err(ZkX509StarkErrorV1::NonCanonicalField);
         }
+        encoded.extend_from_slice(&value.to_be_bytes());
     }
     append_u32_v1(
         &mut encoded,
@@ -756,27 +711,6 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
     Ok(encoded)
-}
-/// Absorb every MAIN cross-adapter terminal before deriving constraint coefficients.
-pub(crate) fn absorb_zk_x509_main_terminal_claims_v1(
-    transcript: &mut TransparentTranscriptV1,
-    claims: ZkX509MainTerminalClaimsV1,
-) -> Result<(), ZkX509StarkErrorV1> {
-    let rfc = claims
-        .rfc5280
-        .encode_x5r1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-    let sha = claims
-        .sha
-        .encode_x5q1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-
-    transcript
-        .absorb(
-            MAIN_TERMINAL_CLAIMS_DOMAIN_V1,
-            &[ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, &rfc, &sha],
-        )
-        .map_err(map_transparent_error_v1)
 }
 fn main_envelope_u32_v1(encoded: &[u8], offset: usize) -> Result<usize, ZkX509StarkErrorV1> {
     let end = offset
@@ -790,29 +724,6 @@ fn main_envelope_u32_v1(encoded: &[u8], offset: usize) -> Result<usize, ZkX509St
             .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
     ))
     .map_err(|_| ZkX509StarkErrorV1::MalformedProof)
-}
-/// Decode the fixed, ordered MAIN key/digest field without allocation.
-fn main_envelope_key_openings_v1(
-    encoded: &[u8],
-) -> Result<[E; MAIN_KEY_OPENING_COUNT_V1], ZkX509StarkErrorV1> {
-    let bytes = encoded
-        .get(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1..MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1)
-        .ok_or(ZkX509StarkErrorV1::MalformedProof)?;
-    let mut values = [E::ZERO; MAIN_KEY_OPENING_COUNT_V1];
-    for (value, record) in values
-        .iter_mut()
-        .zip(bytes.chunks_exact(MAIN_KEY_OPENING_BYTES_V1))
-    {
-        let mut coefficients = [0_u64; 4];
-        for (coefficient, word) in coefficients.iter_mut().zip(record.chunks_exact(8)) {
-            *coefficient = u64::from_be_bytes(
-                word.try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
-            );
-        }
-        *value = E::canonical(coefficients).ok_or(ZkX509StarkErrorV1::NonCanonicalField)?;
-    }
-    Ok(values)
 }
 /// Decode exactly one MAIN frame, rejecting aliases, omissions, reordering,
 /// noncanonical fields, length mismatches, and suffixes.
@@ -829,26 +740,24 @@ pub(crate) fn decode_zk_x509_main_proof_envelope_v1<'a>(
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
         ) != ZK_X509_PROOF_VERSION_V1
-        || u16::from_be_bytes(
-            encoded[6..8]
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
-        ) != MAIN_PROOF_ADAPTER_COUNT_V1
     {
         return Err(ZkX509StarkErrorV1::MalformedProof);
     }
-    let rfc_end = MAIN_PROOF_RFC_OFFSET_V1 + ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1;
-    let sha_end = MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
-
-    let rfc5280 = ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(
-        &encoded[MAIN_PROOF_RFC_OFFSET_V1..rfc_end],
-    )
-    .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
-    let sha = ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(
-        &encoded[MAIN_PROOF_SHA_OFFSET_V1..sha_end],
-    )
-    .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
-    let key_openings = main_envelope_key_openings_v1(encoded)?;
+    let mut key_openings = [E::ZERO; MAIN_KEY_OPENING_COUNT_V1];
+    for (i, value) in key_openings.iter_mut().enumerate() {
+        let mut words = [0_u64; 4];
+        for (j, word) in words.iter_mut().enumerate() {
+            let start = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * i + 8 * j;
+            *word = u64::from_be_bytes(
+                encoded
+                    .get(start..start + 8)
+                    .ok_or(ZkX509StarkErrorV1::MalformedProof)?
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
+            );
+        }
+        *value = E::canonical(words).ok_or(ZkX509StarkErrorV1::NonCanonicalField)?;
+    }
     let aggregate_len = main_envelope_u32_v1(encoded, MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1)?;
     let aggregate_start = MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1
         .checked_add(4)
@@ -866,7 +775,6 @@ pub(crate) fn decode_zk_x509_main_proof_envelope_v1<'a>(
         return Err(ZkX509StarkErrorV1::MalformedProof);
     }
     Ok(ZkX509MainProofEnvelopeV1 {
-        claims: ZkX509MainTerminalClaimsV1 { rfc5280, sha },
         key_openings,
         aggregate_proof,
     })
@@ -1261,7 +1169,7 @@ impl SegmentLayoutV1 {
             base_width: ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
             aux_width: ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
             fixed_width: ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1,
-            constraint_count: ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1,
+            constraint_count: ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1,
             constraint_degree: ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
             physical_chunks: ZK_X509_RFC5280_STARK_BASE_WIDTH_V1
                 .max(ZK_X509_RFC5280_STARK_AUX_WIDTH_V1)
@@ -1303,7 +1211,7 @@ impl SegmentLayoutV1 {
             base_width: ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
             aux_width: ZK_X509_SHA_BATCH_AUX_WIDTH_V1,
             fixed_width: ZK_X509_SHA_BATCH_FIXED_WIDTH_V1,
-            constraint_count: ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1,
+            constraint_count: ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1,
             constraint_degree: ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1,
             physical_chunks: ZK_X509_SHA_BATCH_BASE_CHUNKS_PER_SEGMENT_V1,
         }
@@ -1320,7 +1228,7 @@ impl SegmentLayoutV1 {
             base_width: ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
             aux_width: ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
             fixed_width: ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1,
-            constraint_count: ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1,
+            constraint_count: ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1,
             constraint_degree: ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
             physical_chunks: ZK_X509_CA_ACCUMULATOR_CHUNKS_V1,
         }
@@ -1457,7 +1365,7 @@ impl SegmentLayoutV1 {
                     && self.base_width == ZK_X509_RFC5280_STARK_BASE_WIDTH_V1
                     && self.aux_width == ZK_X509_RFC5280_STARK_AUX_WIDTH_V1
                     && self.fixed_width == ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1
-                    && self.constraint_count == ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1
+                    && self.constraint_count == ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1
                     && self.constraint_degree == ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1 => {}
             SegmentAdapterIdV1::Projection
                 if self.instance == 0
@@ -1475,7 +1383,7 @@ impl SegmentLayoutV1 {
                     && self.base_width == ZK_X509_SHA_BATCH_BASE_WIDTH_V1
                     && self.aux_width == ZK_X509_SHA_BATCH_AUX_WIDTH_V1
                     && self.fixed_width == ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
-                    && self.constraint_count == ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
+                    && self.constraint_count == ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1
                     && self.constraint_degree == ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 => {}
             SegmentAdapterIdV1::CaAccumulator
                 if self.instance == 0
@@ -1484,7 +1392,8 @@ impl SegmentLayoutV1 {
                     && self.base_width == ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1
                     && self.aux_width == ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1
                     && self.fixed_width == ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1
-                    && self.constraint_count == ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1
+                    && self.constraint_count
+                        == ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1
                     && self.constraint_degree == ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1
                     && self.physical_chunks == ZK_X509_CA_ACCUMULATOR_CHUNKS_V1 => {}
             SegmentAdapterIdV1::P256Arithmetic
@@ -2291,7 +2200,7 @@ pub(crate) fn validate_zk_x509_main_proof_budget_v1() -> Result<(), ZkX509StarkE
     )
     .map_err(map_aggregate_error_v1)?;
     let encoded_bytes = inner_bytes
-        .checked_add(super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize)
+        .checked_add(super::profile::ZK_X509_MAIN_FRAME_BYTES_V1 as usize)
         .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
     if encoded_bytes > super::credential_stark::ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 {
         return Err(ZkX509StarkErrorV1::ProofTooLarge);
@@ -2445,6 +2354,7 @@ fn derive_zk_x509_main_fixed_openings_after_profile_validation_v1(
 /// A single joined root binds every column of the six native MAIN groups
 /// before the joint credential transcript can issue auxiliary challenges.
 struct ZkX509MainBaseCommitmentSessionV1 {
+    proof_instance: ZkX509ProofInstanceV1,
     layout: AggregateProofLayoutV1,
     consensus_context_digest: [u8; 32],
     main_profile_digest: [u8; 32],
@@ -2452,6 +2362,7 @@ struct ZkX509MainBaseCommitmentSessionV1 {
 }
 /// Type-level proof that the complete ordered MAIN base row was committed.
 pub(super) struct ZkX509CompletedMainBaseCommitmentSessionV1 {
+    proof_instance: ZkX509ProofInstanceV1,
     consensus_context_digest: [u8; 32],
     main_profile_digest: [u8; 32],
     root: PrivacyOuterDigestV1,
@@ -2460,11 +2371,13 @@ impl ZkX509CompletedMainBaseCommitmentSessionV1 {
     pub(super) fn into_pre_aux_parts_v1(
         self,
     ) -> (
+        ZkX509ProofInstanceV1,
         [u8; 32],
         [u8; 32],
         [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     ) {
         (
+            self.proof_instance,
             self.consensus_context_digest,
             self.main_profile_digest,
             [self.root],
@@ -2473,12 +2386,14 @@ impl ZkX509CompletedMainBaseCommitmentSessionV1 {
 }
 impl ZkX509MainBaseCommitmentSessionV1 {
     fn new_v1(
+        proof_instance: ZkX509ProofInstanceV1,
         layout: &AggregateProofLayoutV1,
         consensus_context_digest: [u8; 32],
         verifier_profile: ZkX509MainVerifierProfileV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         validate_zk_x509_main_verifier_profile_v1(verifier_profile)?;
         Self::new_after_profile_validation_v1(
+            proof_instance,
             layout,
             consensus_context_digest,
             verifier_profile.compiled_profile_digest,
@@ -2486,11 +2401,13 @@ impl ZkX509MainBaseCommitmentSessionV1 {
     }
     /// Private chronology initialization after release-profile validation.
     fn new_after_profile_validation_v1(
+        proof_instance: ZkX509ProofInstanceV1,
         layout: &AggregateProofLayoutV1,
         consensus_context_digest: [u8; 32],
         main_profile_digest: [u8; 32],
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let session = Self {
+            proof_instance,
             layout: layout.clone(),
             consensus_context_digest,
             main_profile_digest,
@@ -2550,6 +2467,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
         self.validate_state_v1()?;
         let root = self.root.ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
         Ok(ZkX509CompletedMainBaseCommitmentSessionV1 {
+            proof_instance: self.proof_instance,
             consensus_context_digest: self.consensus_context_digest,
             main_profile_digest: self.main_profile_digest,
             root,
@@ -4892,11 +4810,13 @@ fn new_transcript_v1(
 }
 /// Construct the release-only MAIN transcript from the sole compiled profile.
 fn new_main_transcript_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public_digest: &[u8; 32],
     verifier_profile: ZkX509MainVerifierProfileV1,
 ) -> Result<TransparentTranscriptV1, ZkX509StarkErrorV1> {
     validate_zk_x509_main_verifier_profile_v1(verifier_profile)?;
     new_main_transcript_after_profile_validation_v1(
+        proof_instance,
         public_digest,
         verifier_profile.compiled_profile_digest,
     )
@@ -4907,6 +4827,7 @@ fn new_main_transcript_v1(
 /// only through `new_main_transcript_v1`, while tests can exercise transcript
 /// separation before the sole compiled-manifest pin is installed.
 fn new_main_transcript_after_profile_validation_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public_digest: &[u8; 32],
     release_profile_digest: [u8; 32],
 ) -> Result<TransparentTranscriptV1, ZkX509StarkErrorV1> {
@@ -4914,7 +4835,7 @@ fn new_main_transcript_after_profile_validation_v1(
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     let transcript_profile_digest = privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        proof_instance.main_context_v1(),
         b"iroha:privacy:zk-x509:stark:release-profile:v1",
         b"release-profile",
         0,
@@ -4924,7 +4845,7 @@ fn new_main_transcript_after_profile_validation_v1(
     )
     .map_err(map_transparent_error_v1)?;
     let transcript_public_digest = privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        proof_instance.main_context_v1(),
         b"iroha:privacy:zk-x509:stark:main-public:v1",
         b"consensus-context",
         0,
@@ -4934,7 +4855,7 @@ fn new_main_transcript_after_profile_validation_v1(
     )
     .map_err(map_transparent_error_v1)?;
     let mut transcript = TransparentTranscriptV1::new(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        proof_instance.main_context_v1(),
         ZK_X509_SUITE_V1,
         &transcript_profile_digest,
         &transcript_public_digest,
@@ -4955,10 +4876,14 @@ fn new_main_transcript_after_profile_validation_v1(
     Ok(transcript)
 }
 fn absorb_aggregate_layout_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     transcript: &mut TransparentTranscriptV1,
     layout_domain: &[u8],
     layout: &AggregateProofLayoutV1,
 ) -> Result<(), ZkX509StarkErrorV1> {
+    if transcript.context() != proof_instance.main_context_v1() {
+        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+    }
     layout.validate()?;
     let registration_count = u16::try_from(layout.registered_segments.len())
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -5038,7 +4963,7 @@ fn absorb_aggregate_layout_v1(
     aggregate::absorb_layout_v1(
         transcript,
         layout.parameters_v1(),
-        AGGREGATE_DOMAINS_V1,
+        main_domains_v1(proof_instance),
         layout_domain,
         &layout.as_shared()?,
     )
@@ -5051,7 +4976,12 @@ fn absorb_p256_registration_v1(
     registration: &P256TraceRegistrationV1,
 ) -> Result<(), ZkX509StarkErrorV1> {
     registration.validate()?;
-    absorb_aggregate_layout_v1(transcript, P256_LAYOUT_DOMAIN_V1, &registration.layout)?;
+    absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
+        transcript,
+        P256_LAYOUT_DOMAIN_V1,
+        &registration.layout,
+    )?;
     let role = [match registration.role {
         P256EcdsaRoleV1::CertificateOrCrl => 1,
         P256EcdsaRoleV1::WalletOwnership => 2,
@@ -6029,13 +5959,17 @@ fn decode_zk_x509_segmented_stark_proof_v1(
     Ok(ZkX509SegmentedStarkProofV1 { aggregate, deep })
 }
 fn query_indices_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     transcript: &TransparentTranscriptV1,
     layout: &AggregateProofLayoutV1,
 ) -> Result<Vec<usize>, ZkX509StarkErrorV1> {
+    if transcript.context() != proof_instance.main_context_v1() {
+        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+    }
     aggregate::query_indices_v1(
         transcript,
         layout.parameters_v1(),
-        AGGREGATE_DOMAINS_V1,
+        main_domains_v1(proof_instance),
         &layout.as_shared()?,
     )
     .map_err(map_aggregate_error_v1)
@@ -6076,6 +6010,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:io-aggregate-layout:v1",
         &aggregate_layout,
@@ -6212,7 +6147,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-    let queries = query_indices_v1(&transcript, &aggregate_layout)?
+    let queries = query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?
         .into_iter()
         .map(|index| {
             aggregate::build_query_v1(
@@ -6299,6 +6234,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:projection-aggregate-layout:v1",
         &aggregate_layout,
@@ -6424,7 +6360,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )
     .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-    let queries = query_indices_v1(&transcript, &aggregate_layout)?
+    let queries = query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?
         .into_iter()
         .map(|index| {
             aggregate::build_query_v1(
@@ -6506,6 +6442,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     let public_digest = der_public_digest_v1(shape)?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:der-aggregate-layout:v1",
         &aggregate_layout,
@@ -6715,7 +6652,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-    let query_indices = query_indices_v1(&transcript, &aggregate_layout)?;
+    let query_indices = query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?;
     let query_skeleton = query_indices
         .iter()
         .map(|index| {
@@ -8589,7 +8526,6 @@ struct MainLog19BoundTraceGroupSourceV1<'a> {
     sha_fixed: ZkX509ShaBatchFixedProviderV1,
     p256: P256MainBoundSourceV1,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
-    claims: ZkX509MainTerminalClaimsV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
@@ -8665,17 +8601,12 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
         let (sha_union, ca_calls) =
             ZkX509ShaUnionCentersV1::from_bound_sources_v1(&sha_aux, binding)
                 .map_err(map_main_rfc_source_error_v1)?;
+        let _private_ca_calls = zeroize::Zeroizing::new(ca_calls);
         let rfc =
             ZkX509Rfc5280StarkColumnProviderV1::new_v1(&assembly.rfc_base, binding, sha_union)
                 .map_err(map_main_rfc_source_error_v1)?;
         #[cfg(test)]
         rfc_timer.complete_v1();
-        let claims = ZkX509MainTerminalClaimsV1 {
-            rfc5280: rfc.terminal_claims_v1(),
-            sha: ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(ca_calls)
-                .map_err(map_main_rfc_source_error_v1)?,
-        };
-
         let der_fixed = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
             .map_err(ZkX509StarkErrorV1::from)?;
         let sha_fixed = ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape())
@@ -8691,7 +8622,6 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             sha_fixed,
             p256,
             post_base,
-            claims,
         })
     }
     fn registration_index_v1(
@@ -8724,9 +8654,6 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
         Ok(binding)
-    }
-    const fn terminal_claims_v1(&self) -> ZkX509MainTerminalClaimsV1 {
-        self.claims
     }
     fn zeroize_private_v1(&mut self) {
         zeroize_main_der_trace_v1(&mut self.der);
@@ -8953,7 +8880,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                 self.der_public,
             )
             .map_err(ZkX509StarkErrorV1::from)?,
-            1 => evaluate_zk_x509_rfc5280_stark_residues_v1(
+            1 => evaluate_zk_x509_rfc5280_local_residues_v1(
                 opening
                     .base_current
                     .try_into()
@@ -8975,7 +8902,6 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 self.source.post_base.der(),
                 self.source.post_base.rfc5280(),
-                self.source.claims.rfc5280,
             )
             .map_err(map_main_rfc_source_error_v1)?,
             2..=5 => {
@@ -8996,14 +8922,13 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 };
-                evaluate_zk_x509_sha_batch_residues_v1(
+                evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                     &current,
                     &next,
                     self.source.post_base.sha_word(),
                     self.source.post_base.sha(),
                     self.source.post_base.rfc5280(),
                     u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    &self.source.claims.sha.ca_calls,
                 )
                 .map_err(map_main_sha_source_error_v1)?
             }
@@ -9719,7 +9644,6 @@ struct MainLog19InstalledFixedOpeningsV1 {
 /// install the verifier-derived opening token bound to all 136 transcript-order queries.
 struct MainLog19VerifierConstraintSourceV1 {
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
-    claims: ZkX509MainTerminalClaimsV1,
     der_public: ZkX509DerStarkPublicTerminalsV1,
     rfc_fixed: ZkX509Rfc5280StarkFixedScheduleV1,
     sha_shape: ZkX509ShaCallPublicShapeV1,
@@ -9733,18 +9657,9 @@ impl MainLog19VerifierConstraintSourceV1 {
         layout: &AggregateProofLayoutV1,
         rfc_statement: &ZkX509Rfc5280StatementV1,
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
-        claims: ZkX509MainTerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         canonical_main_log19_registrations_v1(layout)?;
 
-        claims
-            .rfc5280
-            .encode_x5r1_v1()
-            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-        claims
-            .sha
-            .encode_x5q1_v1()
-            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
         let der_public =
             derive_zk_x509_der_stark_public_terminals_v1(&ZkX509DerStarkShapeV1, post_base.der())?;
         let rfc_shape = ZkX509Rfc5280StarkShapeV1::from_statement(rfc_statement)
@@ -9759,7 +9674,6 @@ impl MainLog19VerifierConstraintSourceV1 {
         let p256 = MainP256Log19VerifierConstraintSourceV1::for_main_v1(layout, post_base)?;
         Ok(Self {
             post_base,
-            claims,
             der_public,
             rfc_fixed,
             sha_shape,
@@ -11566,6 +11480,7 @@ pub(crate) fn verify_zk_x509_io_segmented_stark_v1(
     let public_digest = io_public_digest_v1(statement)?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:io-aggregate-layout:v1",
         &aggregate_layout,
@@ -11621,7 +11536,8 @@ pub(crate) fn verify_zk_x509_io_segmented_stark_v1(
     )
     .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
     absorb_grinding_nonce_v1(&mut transcript, proof.grinding_nonce)?;
-    let expected_indices = query_indices_v1(&transcript, &aggregate_layout)?;
+    let expected_indices =
+        query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?;
     aggregate::verify_all_merkle_openings_v1(
         &proof,
         AGGREGATE_PARAMETERS_V1,
@@ -11681,6 +11597,7 @@ pub(crate) fn verify_zk_x509_der_segmented_stark_v1(
     let public_digest = der_public_digest_v1(shape)?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:der-aggregate-layout:v1",
         &aggregate_layout,
@@ -11738,7 +11655,8 @@ pub(crate) fn verify_zk_x509_der_segmented_stark_v1(
     )
     .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
     absorb_grinding_nonce_v1(&mut transcript, proof.grinding_nonce)?;
-    let expected_indices = query_indices_v1(&transcript, &aggregate_layout)?;
+    let expected_indices =
+        query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?;
     aggregate::verify_all_merkle_openings_v1(
         &proof,
         AGGREGATE_PARAMETERS_V1,
@@ -11812,6 +11730,7 @@ pub(crate) fn verify_zk_x509_projection_segmented_stark_v1(
     let public_digest = projection_public_digest_v1(statement)?;
     let mut transcript = new_transcript_v1(&public_digest)?;
     absorb_aggregate_layout_v1(
+        TEST_PROOF_INSTANCE_V1,
         &mut transcript,
         b"iroha:privacy:zk-x509:projection-aggregate-layout:v1",
         &aggregate_layout,
@@ -11866,7 +11785,8 @@ pub(crate) fn verify_zk_x509_projection_segmented_stark_v1(
     )
     .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
     absorb_grinding_nonce_v1(&mut transcript, proof.grinding_nonce)?;
-    let expected_indices = query_indices_v1(&transcript, &aggregate_layout)?;
+    let expected_indices =
+        query_indices_v1(TEST_PROOF_INSTANCE_V1, &transcript, &aggregate_layout)?;
     aggregate::verify_all_merkle_openings_v1(
         &proof,
         AGGREGATE_PARAMETERS_V1,

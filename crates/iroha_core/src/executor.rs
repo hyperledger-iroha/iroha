@@ -9643,6 +9643,8 @@ mod tests {
         assert!(view.world().account(&address.subject_id()).is_ok());
     }
 
+    include!("executor_ordinary_mint_permission_tests.rs");
+
     fn state_after_genesis(world: World) -> State {
         state_after_genesis_with_instructions(world, |_| Vec::new())
     }

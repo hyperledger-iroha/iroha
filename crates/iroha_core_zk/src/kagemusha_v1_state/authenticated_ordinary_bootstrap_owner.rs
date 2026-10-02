@@ -704,7 +704,7 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
                     &auxiliaries,
                 )
                 .map_err(material)?;
-            Ok(generated.proof)
+            Ok(generated)
         })?;
         let enrollment = self
             .financial

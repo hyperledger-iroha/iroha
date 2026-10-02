@@ -19,6 +19,7 @@ mod enrollment_phase_one_backend;
 mod exclusive_backend;
 mod native_core_work;
 mod native_installation;
+mod ordinary_android_installed_context;
 #[cfg(unix)]
 mod ordinary_app_identity;
 #[cfg(unix)]
@@ -37,10 +38,13 @@ pub use native_core_work::{
 pub use ordinary_app_identity::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
     KagemushaOrdinaryEnrollmentDispositionV1, KagemushaOrdinaryNativeCurrentControlRequestV1,
-    KagemushaOrdinaryNativeCurrentControlResponseV1,
-    bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    KagemushaOrdinaryNativeCurrentControlResponseV1, KagemushaOrdinaryNativeIncomingRequestV1,
+    KagemushaOrdinaryNativeIncomingResponseV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
     invoke_kagemusha_native_ordinary_current_control_v1,
+    invoke_kagemusha_native_ordinary_incoming_v1,
+    KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
+    KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,
     recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
@@ -366,8 +370,10 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
 
     /// Return the exact bound acknowledgment only after independently authenticating the
     /// installed terminal journal, enrolled App Attest key, original selection, raw assertion
-    /// signature and exact-next counter. It must be idempotent for the original operation and
-    /// reject every substituted or merely prepared terminal. Stock backends remain unavailable.
+    /// signature and its raw assertion counter strictly above the retained original floor,
+    /// independently of financial logical indexes. It must be idempotent for the original
+    /// operation and reject every substituted or merely prepared terminal. Stock backends remain
+    /// unavailable.
     /// TODO: Install a phone-qualified durable Core backend before production admission.
     fn acknowledge_committed_app_attest(
         &self,

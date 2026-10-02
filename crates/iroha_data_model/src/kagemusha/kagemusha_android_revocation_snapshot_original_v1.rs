@@ -1,5 +1,5 @@
 //! Exact existing Android SDK ASCII snapshot preimage parser. No new digest/signing codec.
-//! Mirrors AndroidAttestationRevocationPolicyV1 Java/Kotlin canonical bounds, ordered denies
+//! Mirrors `AndroidAttestationRevocationPolicyV1` Java/Kotlin canonical bounds, ordered denies
 //! and half-open freshness; the enclosing actual governance signature authenticates originals.
 use super::MAX_STATUS;
 #[derive(Debug)]
@@ -56,7 +56,7 @@ impl AndroidSnapshot {
         }
         let expires_at_ms = response_date_ms
             .checked_add(age.checked_mul(1000).ok_or("Android status age overflow")?)
-            .filter(|n| *n <= i64::MAX as u64)
+            .filter(|n| i64::try_from(*n).is_ok())
             .ok_or("Android status expiry overflow")?;
         let serial_count = count(next("serial_count")?, 4096)?;
         let mut serials: Vec<String> = Vec::with_capacity(serial_count);
@@ -110,7 +110,7 @@ fn positive(s: &str) -> Result<u64, String> {
     }
     s.parse::<u64>()
         .ok()
-        .filter(|n| *n <= i64::MAX as u64)
+        .filter(|n| i64::try_from(*n).is_ok())
         .ok_or_else(|| "Android signed-long decimal overflow".into())
 }
 fn count(s: &str, max: usize) -> Result<usize, String> {

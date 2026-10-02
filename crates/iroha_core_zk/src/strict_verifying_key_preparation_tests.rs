@@ -2,7 +2,6 @@
 mod strict_verifying_key_preparation_tests {
     use super::*;
 
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn verifier_key_cache_reuses_exact_key_and_rejects_empty_substitution() {
         let params: PastaParams = pasta_params_new(5);
@@ -144,7 +143,6 @@ mod strict_verifying_key_preparation_tests {
         .expect_err("oversized Halo2 key must fail before backend decoding");
         assert!(error.contains("exceeds"), "unexpected error: {error}");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn halo2_preparation_rejects_oversized_declared_tlv_from_tiny_container() {
         let mut bytes = b"ZK1\0CID1".to_vec();

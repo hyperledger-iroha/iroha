@@ -1,17 +1,17 @@
 //! State-machine preparation and atomic installation for one KAGEMUSHA `ReceiveFold`.
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use iroha_data_model::kagemusha::{
     KagemushaCreditOpeningV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
     KagemushaPastaStateCommitmentV1, kagemusha_device_key_reference_v1,
     kagemusha_prepared_transfer_digest_v1,
 };
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use norito::codec::Encode;
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use super::receive_fold::ReceiveFoldV1;
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use super::{
     ConsumedCreditInsertWitnessV1, CreditIdV1, DigestV1, KagemushaHistoryCommitOutcomeV1,
     KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryProofRootBridgeRequestV1,
@@ -28,10 +28,10 @@ use super::{
 use super::{
     KagemushaGuardBundleVerifierV1, KagemushaRecursiveVerifierV1, KagemushaStateMachineV1,
 };
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use super::{KagemushaHistoryDualInsertPreparationV1, require_history_proof_root_bridge_v1};
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 /// Complete private input for one staged peer credit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerCreditFoldInputV1 {
@@ -65,9 +65,9 @@ pub struct PeerCreditFoldInputV1 {
     pub replay_insert_witness: ConsumedCreditInsertWitnessV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 impl PeerCreditFoldInputV1 {
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn transcript_credit(&self) -> ReceiveFoldCreditV1 {
         ReceiveFoldCreditV1 {
             amount: self.amount,
@@ -81,7 +81,7 @@ impl PeerCreditFoldInputV1 {
     }
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 /// One singular receive transition plus its recoverable replay-tree plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerCreditFoldPreviewV1 {
@@ -99,7 +99,7 @@ pub struct PeerCreditFoldPreviewV1 {
     prepared_replay: PreparedConsumedCreditV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedConsumedCreditV1 {
     starting_root: KagemushaPastaStateCommitmentV1,
@@ -107,7 +107,7 @@ struct PreparedConsumedCreditV1 {
     insert: PreparedConsumedCreditInsertV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 impl PreparedConsumedCreditV1 {
     fn prepare(
         index: &ExactConsumedCreditIndex,
@@ -149,7 +149,7 @@ impl PreparedConsumedCreditV1 {
     }
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldEffectV1"
@@ -160,14 +160,14 @@ struct ReceiveFoldEffectV1 {
     receive_credit_binding_digest: DigestV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 const RECEIVE_FOLD_DECISION_ID_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-id\0";
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 const RECEIVE_FOLD_DECISION_VALUE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-value\0";
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionIdV1"
@@ -177,7 +177,7 @@ struct ReceiveFoldDecisionIdV1 {
     credit_id: CreditIdV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionValueV1"
@@ -195,7 +195,7 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: super::KagemushaAuthenticatedHistoryStoreV1,
 {
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Preview folding exactly one staged credit into the aggregate successor.
     pub(crate) fn preview_receive_fold(
         &mut self,
@@ -337,7 +337,7 @@ where
         })
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Return the hardware signing request selecting this fold's dual history roots.
     pub(crate) fn receive_fold_history_root_selection_signing_bytes(
         &self,
@@ -357,7 +357,7 @@ where
         .map_err(map_authenticated_history_error)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Attach the hardware root selection after verifying the same paired state proof.
     pub(crate) fn authorize_receive_fold_history(
         &self,
@@ -409,7 +409,7 @@ where
         self.install_receive_fold(preview, authorization, false)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     pub(super) fn install_receive_fold(
         &mut self,
         preview: PeerCreditFoldPreviewV1,
@@ -581,7 +581,7 @@ where
         Ok(self.state.clone())
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn validate_receive_fold_history_preview(
         &self,
         preview: &PeerCreditFoldPreviewV1,
@@ -613,7 +613,7 @@ where
         Ok(())
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn receive_fold_credit(
         &self,
         credit_id: CreditIdV1,
@@ -668,7 +668,7 @@ where
     }
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 fn receive_fold_effect_digest(
     credit: &PeerCreditFoldInputV1,
     receive_credit_binding_digest: DigestV1,
@@ -683,7 +683,7 @@ fn receive_fold_effect_digest(
     )
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 fn receive_fold_error(_: ReceiveFoldErrorV1) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::InvalidPeerCredit
 }

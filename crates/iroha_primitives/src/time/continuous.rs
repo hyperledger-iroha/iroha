@@ -72,7 +72,10 @@ fn platform_nanos() -> io::Result<u128> {
         .get_or_init(|| {
             let mut info = MachTimebase { numer: 0, denom: 0 };
             // SAFETY: the initialized native SDK struct remains writable for this call.
-            if unsafe { mach_timebase_info(&mut info) } != 0 || info.numer == 0 || info.denom == 0 {
+            if unsafe { mach_timebase_info(&raw mut info) } != 0
+                || info.numer == 0
+                || info.denom == 0
+            {
                 None
             } else {
                 Some((info.numer, info.denom))
@@ -97,7 +100,7 @@ fn platform_nanos() -> io::Result<u128> {
         tv_nsec: 0,
     };
     // SAFETY: this initialized libc timespec is writable for the synchronous native call.
-    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut reading) } != 0 {
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &raw mut reading) } != 0 {
         return Err(io::Error::last_os_error());
     }
     if reading.tv_sec < 0 || !(0..1_000_000_000).contains(&reading.tv_nsec) {

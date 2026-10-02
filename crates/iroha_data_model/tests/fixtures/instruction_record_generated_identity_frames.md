@@ -145,5 +145,12 @@ The merged capture retains both existing typed frame cases for each of the six
 artifact lifecycle records: the full-width dataspace and the explicit universal
 dataspace. It also retains the positive account-recovery request generations and
 both private-root records. This gives 331 rows, 373 cases and 1,492 frame forms.
-The merged collection requires fresh native decoding, recapture and all-container
-roundtrip validation; combining prior captures is not current-source qualification.
+The current `SetSorafsReputationJournalAuthorityPolicyV1` case is recaptured by
+the existing `print_reputation_policy_record_fixture_row` native producer after
+the policy gains `stream_token_delivery`. Two executions produce identical root,
+vector, option and map frames; the other 330 rows and all identities are unchanged.
+Two subsequent complete native captures reproduce all 331 rows and 373 cases
+exactly, including their container roundtrips. The digest assertion uses these
+authenticated fixture bytes. The post-correction native run passes all 335
+ordinary generated-record controls and repeats each complete capture identically.
+Integrated consumers and release qualification remain separate checks.

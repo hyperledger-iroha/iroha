@@ -641,8 +641,10 @@ fn decode_exact(
         lengths,
     )
 }
-/// Data-only exact decoder, always called with authenticated compiled protocol sizes by admission.
-fn decode_profile_exact(
+/// Sole exact DATA decoder. Admission supplies authenticated protocol geometry; a recursive
+/// consumer supplies its exact protocol identities/geometry and subsequently proves them.
+/// This function authenticates no issuer, Native source, history or monetary operation.
+pub(super) fn decode_profile_exact(
     original: &[u8],
     relation: u8,
     release_id: DigestV1,

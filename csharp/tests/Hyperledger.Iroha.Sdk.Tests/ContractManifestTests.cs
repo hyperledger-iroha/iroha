@@ -898,6 +898,28 @@ public sealed class ContractManifestTests
         return (manifest, manifest.Entrypoints!.Single().ReturnSchema!);
     }
 
+    [Fact]
+    public void AssetDefinitionPrecisionRequiresOptionalInteger()
+    {
+        var (name, fields, children) = QueryViews().Single(view => view.Name == "AssetDefinitionView");
+        var valid = new[] { StructNode(name, fields) }.Concat(children).ToArray();
+        var manifest = JsonSerializer.Deserialize<ToriiContractManifest>(ManifestWithReturnSchema(valid, name))!;
+        Assert.Equal(7, manifest.Entrypoints!.Single().ReturnSchema!.WordCount);
+        Assert.Equal(10, manifest.Entrypoints!.Single().ReturnSchema!.Nodes.Count);
+        var retired = new[] { StructNode(name, fields.Where(field => field != "numeric_scale")) }
+            .Concat(children.Take(6)).Append(children[8]).ToArray();
+        var required = valid.Where((_, index) => index != 7).ToArray();
+        var decimalPrecision = valid.ToArray();
+        decimalPrecision[8] = Leaf("Decimal");
+        foreach (var nodes in new[] { retired, required, decimalPrecision })
+        {
+            AssertForgedSchemaRejected(nodes, name);
+            var page = new[] { StructNode("QueryPage", new[] { "items", "next_offset" }), ListNode(64) }
+                .Concat(nodes).Append(NullNode("Option")).Append(Leaf("Int"));
+            AssertForgedSchemaRejected(page, "QueryPage<AssetDefinitionView>");
+        }
+    }
+
     private static void AssertForgedSchemaRejected(
         IEnumerable<string> nodes,
         string advertisedType)
@@ -954,7 +976,7 @@ public sealed class ContractManifestTests
                 new[] { Leaf("AssetId"), Leaf("Quantity") }),
             (
                 "AssetDefinitionView",
-                new[] { "id", "name", "description", "owned_by", "total_quantity", "metadata" },
+                new[] { "id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata" },
                 new[]
                 {
                     Leaf("AssetDefinitionId"),
@@ -963,6 +985,8 @@ public sealed class ContractManifestTests
                     Leaf("String"),
                     Leaf("AccountId"),
                     Leaf("Quantity"),
+                    NullNode("Option"),
+                    Leaf("Int"),
                     Leaf("Json"),
                 }),
             (

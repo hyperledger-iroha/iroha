@@ -228,7 +228,6 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
     }
 
     /// Select the actual credential inventory already authenticated for this held lane.
-    #[cfg(feature = "zk-halo2-ipa")]
     pub(crate) fn current_device_key(
         &self,
         profile: DigestV1,
@@ -248,7 +247,6 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
     // This is not a historical-root factory. Every prefix is replayed from the held original
     // journal, all device signatures are rechecked, and the entire actual tail must equal the
     // sole original incoming CAS successor. A later unrelated commit cannot be adopted.
-    #[cfg(feature = "zk-halo2-ipa")]
     pub(crate) fn select_pending_incoming_predecessor(
         &mut self,
         lane_binding: DigestV1,
@@ -379,7 +377,6 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
             .map_or(&self.state, |pending| &pending.predecessor)
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     pub(crate) fn require_actual_incoming_history(
         &self,
     ) -> Result<(), KagemushaHistoryStoreErrorV1> {

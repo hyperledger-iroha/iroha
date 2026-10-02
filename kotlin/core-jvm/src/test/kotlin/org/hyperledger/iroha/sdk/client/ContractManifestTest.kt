@@ -741,6 +741,7 @@ class ContractManifestTest {
                     "description",
                     "owned_by",
                     "total_quantity",
+                    "numeric_scale",
                     "metadata",
                 ),
                 leafNode("AssetDefinitionId"),
@@ -749,6 +750,8 @@ class ContractManifestTest {
                 leafNode("Bool"),
                 leafNode("AccountId"),
                 leafNode("Quantity"),
+                optionNode,
+                leafNode("Int"),
                 leafNode("Json"),
             ),
             "DomainView" to listOf(
@@ -796,6 +799,20 @@ class ContractManifestTest {
                 leafNode("Int"),
             ),
         )
+    }
+
+    @Test
+    fun assetDefinitionPrecisionMustBeAnOptionalInteger() {
+        val valid = coreViewNodes("AssetDefinitionView")
+        val retired = listOf(
+            structNode("AssetDefinitionView", "id", "name", "description", "owned_by", "total_quantity", "metadata"),
+        ) + valid.subList(1, 7) + valid.last()
+        val required = valid.filterIndexed { index, _ -> index != 7 }
+        val decimal = valid.mapIndexed { index, node -> if (index == 8) leafNode("Decimal") else node }
+        for (nodes in listOf(retired, required, decimal)) {
+            assertCanonicalSchemaFailure("AssetDefinitionView", nodes)
+            assertCanonicalSchemaFailure("QueryPage<AssetDefinitionView>", queryPageNodes(nodes))
+        }
     }
 
     private class ManifestExecutor(private val payload: ByteArray) : HttpTransportExecutor {
@@ -875,13 +892,15 @@ class ContractManifestTest {
                 leafNode("Quantity"),
             )
             "AssetDefinitionView" -> listOf(
-                structNode(name, "id", "name", "description", "owned_by", "total_quantity", "metadata"),
+                structNode(name, "id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"),
                 leafNode("AssetDefinitionId"),
                 leafNode("String"),
                 optionNode,
                 leafNode("String"),
                 leafNode("AccountId"),
                 leafNode("Quantity"),
+                optionNode,
+                leafNode("Int"),
                 leafNode("Json"),
             )
             "DomainView" -> listOf(

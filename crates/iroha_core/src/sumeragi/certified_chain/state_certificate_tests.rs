@@ -548,3 +548,228 @@ fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_r
     assert!(Arc::ptr_eq(certified.block(), current.block()));
     assert_eq!(parent.id(), chain.committed(2).id());
 }
+
+/// One valid quorum chosen by the proposal is common input even when the
+/// independently executed source retains a different valid local certificate.
+#[test]
+fn parent_service_common_proposal_is_independent_of_local_certificate_subset() {
+    use crate::sumeragi::certified_chain::ParentServiceError;
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+    let proposal = chain.proposal(Some(6_000), Vec::new());
+    let offered = proposal
+        .npos_consensus_effects()
+        .unwrap()
+        .parent_service_commit_qc
+        .as_deref()
+        .unwrap();
+    let offered_qc: Qc = norito::decode_canonical(offered).unwrap();
+    let source = frame(&chain, 5);
+    let (_, source_qc) = decode_certificate(source.commit_certificate().unwrap()).unwrap();
+    assert_eq!(offered_qc, source_qc);
+    let other_qc = chain.commit_qc(
+        5,
+        source_qc.block_hash,
+        source_qc.result,
+        source_qc.attest,
+        Signers::LastThree,
+    );
+    assert_ne!(source_qc.signers, other_qc.signers);
+    let other_source = with_parts(&source, |_, qc, _| *qc = other_qc.clone());
+    let predecessor = chain.committed(4);
+    let left = reader
+        .verify_parent_service_at(
+            &proposal,
+            &predecessor,
+            read_frame_attempt(source, 5).unwrap(),
+            offered,
+        )
+        .unwrap()
+        .unwrap();
+    let right = reader
+        .verify_parent_service_at(
+            &proposal,
+            &predecessor,
+            read_frame_attempt(other_source, 5).unwrap(),
+            offered,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(left.height(), right.height());
+    assert_eq!(left.timestamp_ms(), right.timestamp_ms());
+    assert_eq!(left.signers(), right.signers());
+    let full = reader
+        .authenticate_parent_service(&proposal, |_, _| Ok(()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(full.signers(), left.signers());
+    full.require_proposal(&proposal).unwrap();
+
+    let mut other_proposal = proposal.clone();
+    let mut effects = proposal.npos_consensus_effects().unwrap().clone();
+    effects.parent_service_commit_qc = Some(norito::to_bytes(&other_qc).unwrap());
+    other_proposal.set_npos_consensus_effects(Some(effects));
+    assert_ne!(proposal.hash(), other_proposal.hash());
+    let other = reader
+        .authenticate_parent_service(&other_proposal, |_, _| Ok(()))
+        .unwrap()
+        .unwrap();
+    assert_ne!(full.signers(), other.signers());
+    assert!(matches!(
+        full.require_proposal(&other_proposal),
+        Err(ParentServiceError::Invalid(_))
+    ));
+}
+
+#[test]
+fn parent_service_proof_requires_exact_native_quorum_and_complete_subject() {
+    use crate::sumeragi::certified_chain::ParentServiceError;
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+    let proposal = chain.proposal(Some(6_000), Vec::new());
+    let offered = proposal
+        .npos_consensus_effects()
+        .unwrap()
+        .parent_service_commit_qc
+        .as_ref()
+        .unwrap();
+    let qc: Qc = norito::decode_canonical(offered).unwrap();
+    let mut cases = Vec::new();
+    for mutate in 0..7 {
+        let mut changed = qc.clone();
+        match mutate {
+            0 => changed.instance = Hash32([0x17; 32]),
+            1 => changed.height -= 1,
+            2 => changed.block_hash = Hash32([0x27; 32]),
+            3 => changed.result = Hash32([0x37; 32]),
+            4 => changed.attest = !changed.attest,
+            5 => changed.epoch.epoch += 1,
+            6 => changed.agg_sig.0[5] ^= 1,
+            _ => unreachable!(),
+        }
+        cases.push(norito::to_bytes(&changed).unwrap());
+    }
+    for signers in [Signers::BelowQuorum, Signers::All] {
+        cases.push(
+            norito::to_bytes(&chain.commit_qc(5, qc.block_hash, qc.result, qc.attest, signers))
+                .unwrap(),
+        );
+    }
+    cases.push(Vec::new());
+    cases.push(vec![
+        0;
+        iroha_data_model::consensus::PARENT_SERVICE_COMMIT_QC_MAX_BYTES
+            + 1
+    ]);
+    for bytes in cases {
+        let mut changed = proposal.clone();
+        let mut effects = proposal.npos_consensus_effects().unwrap().clone();
+        effects.parent_service_commit_qc = Some(bytes);
+        changed.set_npos_consensus_effects(Some(effects));
+        assert!(matches!(
+            reader.authenticate_parent_service(&changed, |_, _| Ok(())),
+            Err(ParentServiceError::Invalid(_))
+        ));
+    }
+    let mut missing = proposal.clone();
+    let mut effects = proposal.npos_consensus_effects().unwrap().clone();
+    effects.parent_service_commit_qc = None;
+    missing.set_npos_consensus_effects((!effects.is_empty()).then_some(effects));
+    assert!(matches!(
+        reader.authenticate_parent_service(&missing, |_, _| Ok(())),
+        Err(ParentServiceError::Invalid(_))
+    ));
+}
+
+#[test]
+fn parent_service_original_decode_refusal_retries_same_proposal_without_invalidity() {
+    use crate::sumeragi::certified_chain::ParentServiceError;
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+    let proposal = chain.proposal(Some(6_000), Vec::new());
+    let offered = proposal
+        .npos_consensus_effects()
+        .unwrap()
+        .parent_service_commit_qc
+        .as_ref()
+        .unwrap();
+    let current = chain.committed(5);
+    let predecessor = chain.committed(4);
+    let refused = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 128),
+        || reader.verify_parent_service_at(&proposal, &predecessor, current.clone(), offered),
+    );
+    assert!(matches!(refused, Err(ParentServiceError::Deferred(_))));
+    let retry = reader
+        .verify_parent_service_at(&proposal, &predecessor, current, offered)
+        .unwrap()
+        .unwrap();
+    retry.require_proposal(&proposal).unwrap();
+    assert_eq!(retry.height(), 5);
+    assert!(!retry.signers().is_empty());
+}
+
+#[test]
+fn parent_service_source_loss_is_recovery_without_participation_receipt() {
+    use crate::sumeragi::certified_chain::ParentServiceError;
+    let (chain, _) = chain();
+    let proposal = chain.proposal(Some(6_000), Vec::new());
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+    chain
+        .kura()
+        .corrupt_canonical_body_for_testing(NonZeroUsize::new(4).unwrap())
+        .unwrap();
+    assert!(matches!(
+        reader.authenticate_parent_service(&proposal, |_, _| Ok(())),
+        Err(ParentServiceError::Source(_))
+    ));
+}
+
+#[test]
+fn parent_service_source_allowance_counts_every_original_before_authentication() {
+    use crate::sumeragi::certified_chain::ParentServiceError;
+    let (chain, _) = chain();
+    let proposal = chain.proposal(Some(6_000), Vec::new());
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+    let bytes = (4..=5)
+        .map(|height| frame(&chain, height).encode_wire().unwrap().len() as u64)
+        .sum::<u64>();
+    for (work, allowance, success) in [
+        (2_u64, bytes, true),
+        (1, bytes, false),
+        (2, bytes - 1, false),
+    ] {
+        let mut remaining_work = work;
+        let mut remaining_bytes = allowance;
+        let (result, count) = relation_counts::measure(|| {
+            reader.authenticate_parent_service(&proposal, |work, bytes| {
+                remaining_work = remaining_work
+                    .checked_sub(work)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                remaining_bytes = remaining_bytes
+                    .checked_sub(bytes)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                Ok(())
+            })
+        });
+        if success {
+            assert_eq!(result.unwrap().unwrap().height(), 5);
+            assert_eq!(remaining_work, 0);
+            assert_eq!(remaining_bytes, 0);
+            assert_eq!(count.qcs, [5]);
+        } else {
+            assert!(matches!(
+                result,
+                Err(ParentServiceError::Source(
+                    QueryExecutionFail::GasBudgetExceeded
+                ))
+            ));
+            assert!(count.qcs.is_empty());
+        }
+    }
+}

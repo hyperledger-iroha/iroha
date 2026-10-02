@@ -4408,6 +4408,54 @@ fn p256_main_value_fixed_source_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )?)
 }
+/// Borrow the admitted public matrix without allocating another field owner.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256PublicArithmeticFixedDestinationV1<'a> {
+    columns: &'a mut [Vec<F>],
+    committed: bool,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            for column in &mut *self.columns {
+                super::private_table::zeroize_fields_v1(column);
+            }
+        }
+    }
+}
+/// Fill only a complete public arithmetic fixed matrix, with one row per call.
+/// The private replay helpers retain their independent eight-column limit.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_public_arithmetic_fixed_matrix_with_v1(
+    rows: usize,
+    columns: &mut [Vec<F>],
+    mut fixed_row: impl FnMut(
+        usize,
+    ) -> Result<
+        [F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+        P256AggregateAdapterErrorV1,
+    >,
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    if !rows.is_power_of_two()
+        || columns.len() != P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
+        || columns.iter().any(|column| column.len() != rows)
+    {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    let mut destination = P256PublicArithmeticFixedDestinationV1 {
+        columns,
+        committed: false,
+    };
+    for row in 0..rows {
+        let values = P256AggregateAuxRowScratchV1(fixed_row(row)?);
+        for (column, &value) in destination.columns.iter_mut().zip(&values.0) {
+            column[row] = value;
+        }
+    }
+    destination.committed = true;
+    Ok(())
+}
 /// Closed verifier-only fixed preprocessing for every canonical P-256 MAIN registration.
 ///
 /// Construction depends solely on native verifier topology. It accepts no witness rows, proof
@@ -4583,10 +4631,32 @@ impl P256MainVerifierFixedSourceV1 {
             .copied()
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-    /// Fill up to eight arithmetic fixed columns from one canonical row pass.
-    /// The caller owns the already admitted final fixed-polynomial matrix; this
-    /// method retains only one stack row and never accepts a witness schedule.
+    /// Fill the already admitted public arithmetic matrix with one canonical
+    /// row pass. The only scratch is one clearing stack row; the existing
+    /// column allocations stay with the caller on success, error and unwind.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn fill_arithmetic_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        if P256MainRegistrationV1::new_v1(
+            registration.signature_v1(),
+            P256MainAdapterV1::Arithmetic,
+            0,
+        )? != registration
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let fixed = self.arithmetic_v1(registration.role_v1());
+        fill_public_arithmetic_fixed_matrix_with_v1(
+            P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
+            columns,
+            |row| fixed.row_v1(row),
+        )
+    }
+    /// Independent eight-column replay oracle for the public matrix fill.
+    #[cfg(test)]
     pub(crate) fn fill_arithmetic_fixed_columns_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -6296,18 +6366,18 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
-    /// Borrow the exact verifier-owned arithmetic schedule for bounded replay.
-    pub(crate) fn fill_arithmetic_fixed_columns_v1(
+    /// Fill the admitted public matrix from this exact bound owner's verifier
+    /// schedule; private trace replay keeps its separate eight-column limit.
+    pub(crate) fn fill_arithmetic_fixed_matrix_v1(
         &self,
         registration: P256MainRegistrationV1,
-        first: usize,
-        outputs: &mut [&mut [F]],
+        columns: &mut [Vec<F>],
     ) -> Result<(), P256AggregateAdapterErrorV1> {
         self.signature_v1(registration)?;
         self.fixed
             .as_ref()
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
-            .fill_arithmetic_fixed_columns_v1(registration, first, outputs)
+            .fill_arithmetic_fixed_matrix_v1(registration, columns)
     }
     /// Borrow execution replay from this exact checked MAIN owner. As with the
     /// arithmetic replay factory, all terminal copies come from the private

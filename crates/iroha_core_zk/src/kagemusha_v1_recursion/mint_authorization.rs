@@ -139,155 +139,30 @@ pub(super) const MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1: usize =
 
 /// Public-instance offsets shared by both mint-authorization parities.
 pub(crate) mod public_instance {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const VERSION: usize = 0;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const SEMANTIC_LO: usize = 1;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const OPERATION_LO: usize = 3;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const RELEASE_LO: usize = 5;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const SUITE_LO: usize = 7;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const VK_LO: usize = 9;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const MANIFEST_LO: usize = 11;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const NETWORK_LO: usize = 13;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const ASSET_LO: usize = 15;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const INCARNATION_LO: usize = 17;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const SCALE: usize = 19;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const POOL_LO: usize = 20;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const AMOUNT: usize = 22;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const PAYER_LO: usize = 23;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const RECIPIENT_LO: usize = 25;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const CREDENTIAL_LO: usize = 27;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const PROFILE_LO: usize = 29;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const POLICY_EPOCH: usize = 31;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const RECIPIENT_COMMITMENT_LO: usize = 32;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const CREDIT_COMMITMENT_LO: usize = 34;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const RECIPIENT_KEY_LO: usize = 36;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const ISSUANCE_LO: usize = 38;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const CREDIT_ID_LO: usize = 40;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const CIPHERTEXT_LO: usize = 42;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(crate) const HARDWARE_AUTHORIZATION_LO: usize = 44;
     pub(crate) const EQ_AUDIT_LO: usize = 46;
     pub(crate) const EP_AUDIT_LO: usize = 48;
@@ -1645,7 +1520,6 @@ fn mint_authorization_relation_builder_v1<F: KagemushaPoseidonFieldV1>(
 /// This shares the relation builder used by the real recursive circuit, so the shard plan cannot
 /// drift onto a second host encoder. The bytes remain a private proof plan and grant no authority
 /// until the recursive consumer constrains this assigned queue against a completed claim.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) fn mint_authorization_sha_messages_v1<F>(
     witness: &KagemushaMintAuthorizationRelationWitnessV1,
     enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],

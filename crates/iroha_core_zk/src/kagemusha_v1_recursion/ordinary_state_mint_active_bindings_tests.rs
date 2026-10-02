@@ -65,6 +65,8 @@ enum Mutation {
     CreditId,
     Amount,
     Ciphertext,
+    CiphertextTruncated,
+    CiphertextPadded,
     MissingOpening,
     InactiveColumn,
 }
@@ -72,7 +74,7 @@ enum Mutation {
 fn circuit<F: KagemushaPoseidonFieldV1>(
     active: bool,
     mutation: Option<Mutation>,
-) -> BindingCircuit<F> {
+) -> Result<BindingCircuit<F>, String> {
     let fixture = kagemusha_ordinary_mint_codec_fixture_v1();
     let request = &fixture.request;
     let authorization = &request.authorization;
@@ -116,7 +118,16 @@ fn circuit<F: KagemushaPoseidonFieldV1>(
         Some(Mutation::RecoveryOpening) => credit.recovery_nonce.fill(0),
         Some(Mutation::CreditId) => credit.credit_id[0] ^= 1,
         Some(Mutation::Amount) => credit.amount += 1,
-        Some(Mutation::Ciphertext) => cipher[383] ^= 1,
+        Some(Mutation::Ciphertext) => {
+            let last = cipher.len() - 1;
+            cipher[last] ^= 1;
+        }
+        Some(Mutation::CiphertextTruncated) => {
+            cipher.pop();
+        }
+        Some(Mutation::CiphertextPadded) => {
+            cipher.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
+        }
         Some(Mutation::InactiveColumn) => data[0] = F::ONE,
         _ => {}
     }
@@ -168,14 +179,13 @@ fn circuit<F: KagemushaPoseidonFieldV1>(
         },
     );
     let mut jobs = PastaSha256JobsV1::default();
-    constrain_ordinary_mint_state_bindings_v1(ctx, &range, &mut jobs, &column, &state, opening)
-        .unwrap();
+    constrain_ordinary_mint_state_bindings_v1(ctx, &range, &mut jobs, &column, &state, opening)?;
     assert_eq!(jobs.typed_claim_jobs().unwrap().len(), 3);
     builder.calculate_params(Some(UNUSABLE));
-    BindingCircuit { builder, jobs }
+    Ok(BindingCircuit { builder, jobs })
 }
 fn check<F: KagemushaPoseidonFieldV1>(active: bool, mutation: Option<Mutation>) -> bool {
-    MockProver::run(K as u32, &circuit::<F>(active, mutation), vec![])
+    MockProver::run(K as u32, &circuit::<F>(active, mutation).unwrap(), vec![])
         .unwrap()
         .verify()
         .is_ok()
@@ -217,4 +227,12 @@ fn ordinary_mint113_inactive_semantics_emit_same_opening_sha_graph_and_cannot_ca
     assert!(check::<Fq>(false, None));
     assert!(!check::<Fp>(false, Some(Mutation::InactiveColumn)));
     assert!(!check::<Fq>(false, Some(Mutation::InactiveColumn)));
+}
+
+#[test]
+fn ordinary_mint_active_original_rejects_truncation_and_transport_padding_before_assignment() {
+    for mutation in [Mutation::CiphertextTruncated, Mutation::CiphertextPadded] {
+        assert!(circuit::<Fp>(true, Some(mutation)).is_err());
+        assert!(circuit::<Fq>(true, Some(mutation)).is_err());
+    }
 }

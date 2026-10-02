@@ -959,8 +959,6 @@ pub struct ValidationFeePolicyProposal {
     pub proposal_operator: AccountId,
     /// Complete policy to append to the protected validation-fee registry.
     pub policy: ValidationFeePolicyV1,
-    /// Exact previously enacted payout lifecycle required by a policy carrying a payout binding.
-    pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
 }
 /// Proposal payload authorizing one exact validation-fee payout lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3761,10 +3759,8 @@ impl ProposalKind {
             Self::ValidationFeePolicy(_) => {
                 GovernanceSubjectPreimageV1::ValidationFeePolicyRegistry
             }
-            Self::ValidationFeePayoutLifecycle(proposal) => {
-                GovernanceSubjectPreimageV1::ValidationFeePayoutLifecycle(
-                    proposal.payout_binding.lifecycle_seal()?,
-                )
+            Self::ValidationFeePayoutLifecycle(_) => {
+                GovernanceSubjectPreimageV1::ValidationFeePayoutPolicyRegistry
             }
             Self::MusubiRegistryGovernance(action) => match action {
                 MusubiParliamentActionV1::RecoverPackageOwners(recovery) => {
@@ -3826,7 +3822,7 @@ enum GovernanceSubjectPreimageV1 {
     #[codec(index = 3)]
     ValidationFeePolicyRegistry,
     #[codec(index = 4)]
-    ValidationFeePayoutLifecycle([u8; 32]),
+    ValidationFeePayoutPolicyRegistry,
     #[codec(index = 5)]
     MusubiPackage(crate::musubi::MusubiPackageIdV1),
     #[codec(index = 6)]

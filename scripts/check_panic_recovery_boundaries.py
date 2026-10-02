@@ -101,7 +101,8 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs": (
         "let worker_issuer = Arc::clone(&issuer);",
         'sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move ||',
-        "Ok(worker_issuer.issue_token(",
+        "let issued = worker_issuer.issue_token(",
+        "account-read policy changed during token issuance",
     ),
     "crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs": (
         "pub(super) async fn enforce_stream_token_for_request(",
@@ -201,6 +202,10 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_sorafs_provider_governance_tests.rs",
         "executor_sorafs_pop_registry_tests.rs",
         "executor_stream_token_direct_source_tests.rs",
+        "executor_stream_token_gateway_direct_source_tests.rs",
+        "executor_stream_token_gateway_permission_tests.rs",
+        "executor_stream_token_gateway_check_permission_tests.rs",
+        "executor/private_fees.rs",
         "executor_contract_owner_permission_tests.rs",
         "executor_asset_lock_admission_tests.rs",
         "executor/resource_return_tests.rs",
@@ -209,6 +214,9 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_fastpq_rejection_tail.rs",
         "executor_fastpq_rejection_tail/tests.rs",
         "executor_fastpq_rejection_tail/sponsored_alias_tests.rs",
+        "executor_sns_attempt_tests.rs",
+        "executor_ordinary_mint_permission_tests.rs",
+        "executor/root_scope/tests/amx_roles.rs",
     )
 )
 AUDITED_SOURCE_PATHS = (
@@ -865,6 +873,39 @@ def _rust_path_literal(token: str) -> str | None:
     if raw is not None:
         return raw.group("body")
     return None
+
+
+def _halo2_parameter_source_test_boundary_failures(source: str) -> list[str]:
+    """Keep the sole reviewed raw catch inside the exact test-only module."""
+
+    tokens = _rust_tokens(source)
+    texts = [token.text for token in tokens]
+    name = "halo2_ipa_parameter_source_tests"
+    modules = [
+        index for index in range(len(tokens) - 2)
+        if texts[index:index + 3] == ["mod", name, "{"]
+    ]
+    calls = [
+        index for index, token in enumerate(tokens)
+        if token.text == "catch_unwind" and _is_rust_call(tokens, index)
+    ]
+    if len(modules) != 1 or len(calls) != 1:
+        return ["Halo2 parameter-source boundary requires exactly one module and raw call"]
+    module = modules[0]
+    contexts = _inline_module_contexts(tokens)
+    cfg_test = ["#", "[", "cfg", "(", "test", ")", "]"]
+    brace_depth = sum(token.text == "{" for token in tokens[:module]) - sum(
+        token.text == "}" for token in tokens[:module]
+    )
+    if (
+        module < len(cfg_test)
+        or texts[module - len(cfg_test):module] != cfg_test
+        or contexts[module] != ()
+        or brace_depth != 0
+        or contexts[calls[0]] != (name,)
+    ):
+        return ["reviewed raw catch_unwind must remain inside the top-level cfg(test) Halo2 parameter-source module"]
+    return []
 
 
 def _attribute_end(tokens: list[RustToken], start: int) -> int | None:
@@ -1541,6 +1582,86 @@ def _required_recovery_marker_failures(relative: str, source: str) -> list[str]:
     ]
 
 
+def _token_issuance_worker_policy_failures(source: str) -> list[str]:
+    """Seal the original owned worker and its pre/post finalized-policy checks."""
+
+    relative = "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs"
+    failure = f"{relative}: token issuance lost its bounded owned pre/post policy worker"
+    texts = [token.text for token in _rust_tokens(source)]
+
+    def occurrences(sequence: str, values: list[str]) -> list[int]:
+        expected = [token.text for token in _rust_tokens(sequence)]
+        return [
+            index for index in range(len(values) - len(expected) + 1)
+            if values[index:index + len(expected)] == expected
+        ]
+
+    def body_after(opening: int, values: list[str]) -> tuple[list[str], int] | None:
+        depth = 1
+        for index in range(opening + 1, len(values)):
+            depth += (values[index] == "{") - (values[index] == "}")
+            if depth == 0:
+                return values[opening + 1:index], index
+        return None
+
+    functions = occurrences("async fn issue_storage_token(", texts)
+    if len(functions) != 1:
+        return [failure]
+    opening = next(
+        (index for index in range(functions[0], len(texts)) if texts[index] == "{"),
+        None,
+    )
+    if opening is None:
+        return [failure]
+    function = body_after(opening, texts)
+    if function is None:
+        return [failure]
+    values, _ = function
+    owner = """
+        let worker_issuer = Arc::clone(&issuer);
+        let worker_state = state.state.clone();
+        let issued = match sorafs_heavy_blocking_task(
+            &state, "SoraFS token issuance", move || {
+    """
+    workers = occurrences(owner, values)
+    if len(workers) != 1:
+        return [failure]
+    worker_opening = workers[0] + len(_rust_tokens(owner)) - 1
+    worker = body_after(worker_opening, values)
+    if worker is None:
+        return [failure]
+    body, closing = worker
+    expected_body = """
+        let policy = account.as_ref().map(|account| {
+            current_account_read_policy(&worker_state, account, ProviderId::new(provider_id))
+        }).transpose()?;
+        let issued = worker_issuer.issue_token(
+            quota_subject, manifest_cid, provider_id, profile_handle, overrides, policy.as_ref(),
+        );
+        if let Some(account) = &account {
+            if Some(current_account_read_policy(
+                &worker_state, account, ProviderId::new(provider_id),
+            )?) != policy {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    "account-read policy changed during token issuance",
+                ));
+            }
+        }
+        Ok(issued)
+    """
+    expected = [token.text for token in _rust_tokens(expected_body)]
+    joined = [token.text for token in _rust_tokens("""
+        }).await {
+            Ok(issued) => issued,
+            Err(response) => return response,
+        };
+    """)]
+    if body != expected or values[closing:closing + len(joined)] != joined:
+        return [failure]
+    return []
+
+
 def main() -> int:
     audited_paths = torii_audited_files(ROOT)
     source_closure = torii_rust_source_closure(ROOT, audited_paths)
@@ -1582,6 +1703,11 @@ def main() -> int:
         source = (ROOT / relative).read_text(encoding="utf-8")
         failures.extend(_required_recovery_marker_failures(relative, source))
 
+    failures.extend(_token_issuance_worker_policy_failures(
+        (ROOT / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs")
+        .read_text(encoding="utf-8")
+    ))
+
     for relative, snippets in FORBIDDEN_RECOVERY_SNIPPETS.items():
         source = (ROOT / relative).read_text(encoding="utf-8")
         for snippet in snippets:
@@ -1604,15 +1730,7 @@ def main() -> int:
                 f"(expected {expected_count}, found {len(lines)} at {rendered})"
             )
     zk_source = (ROOT / "crates/iroha_core_zk/src/lib.rs").read_text(encoding="utf-8")
-    reviewed_test_call = (
-        "#[cfg(all(test, any(feature = \"zk-halo2\", feature = \"zk-halo2-ipa\")))]\n"
-        "mod halo2_ipa_parameter_source_tests"
-    )
-    if reviewed_test_call not in zk_source:
-        failures.append(
-            "crates/iroha_core_zk/src/lib.rs: reviewed raw catch_unwind is no longer "
-            "inside the cfg(test) Halo2 parameter-source test module"
-        )
+    failures.extend(_halo2_parameter_source_test_boundary_failures(zk_source))
 
     final_audited_paths = torii_audited_files(ROOT)
     final_source_closure = torii_rust_source_closure(ROOT, final_audited_paths)

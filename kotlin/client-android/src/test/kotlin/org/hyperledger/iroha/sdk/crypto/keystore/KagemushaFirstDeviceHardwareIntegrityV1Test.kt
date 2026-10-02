@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto.keystore
 import java.util.concurrent.CompletableFuture
-import org.junit.Assert.*
-import org.junit.Test
+import kotlin.test.*
+import org.junit.jupiter.api.Test
 import org.hyperledger.iroha.sdk.offline.detachedOriginalView
 /** Real shared provider against a synthetic Google future; no decoded verdict/device claim. */
 class KagemushaFirstDeviceHardwareIntegrityV1Test {

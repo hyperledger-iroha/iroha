@@ -25,12 +25,12 @@ def _sources() -> tuple[str, str, str, str, str]:
 def test_current_source_complete_relation_exact_wire_bound() -> None:
     result = SCREEN["screen"](*_sources())
     assert result["proof_cap_bytes"] == 9_437_184
-    assert result["combined_current_max_bytes"] == 9_413_406
-    assert result["headroom_bytes"] == 23_778
+    assert result["combined_current_max_bytes"] == 9_412_944
+    assert result["headroom_bytes"] == 24_240
     assert result["current_trace_columns"] == 5_811
     assert result["current_trace_opening_bytes"] == 6_322_368
     assert result["complete_deep_opening_bytes"] == 424_896
-    assert result["main_section_cap_bytes"] == 7_936_966
+    assert result["main_section_cap_bytes"] == 7_934_010
     assert result["logical_main_groups"] == 6
     assert result["physical_main_base_roots"] == 1
     assert result["p256_signature_count"] == 5
@@ -40,7 +40,9 @@ def test_current_source_complete_relation_exact_wire_bound() -> None:
     assert result["implemented_paired_fri_saving_bytes"] == 867_456
     assert result["current_main_inner_max_bytes"] == 7_908_768
     assert result["current_ca_inner_max_bytes"] == 1_498_816
-    assert result["main_claim_envelope_bytes"] == 12 + 76 + 3_340 + 31 * 32 == 4_420
+    assert result["main_frame_bytes"] == 10 + 31 * 32 == 1_002
+    assert result["ca_frame_bytes"] == 10
+    assert result["public_terminal_product_fields"] == 0
 
 
 def test_closed_frontier_bound_matches_exhaustive_small_trees() -> None:
@@ -72,8 +74,8 @@ def test_candidate_cannot_assume_unimplemented_pair_commitments() -> None:
 def test_source_drift_cannot_silently_reuse_old_component_bound() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     changed = profile.replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_406;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_407;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_945;",
         1,
     )
     assert changed != profile
@@ -130,13 +132,8 @@ def test_complete_calendar_bindings_keep_each_column_and_the_same_ceiling() -> N
     added_aux = 280 - 264
     per_column = 136 * 8 + 2 * 32
     assert result["current_trace_columns"] == 5_623 + added_base + added_aux
-    # The reviewed private RFC/SHA union retains every trace column and DEEP
-    # opening while retiring 7,532 bytes of public claim framing/products.
-    retired_public_claim_bytes = 7_532
-    assert result["combined_current_max_bytes"] == (
-        9_204_362 + (added_base + added_aux) * per_column - retired_public_claim_bytes
-    )
-    assert result["headroom_bytes"] == 14 * per_column + 118 + retired_public_claim_bytes
+    assert result["combined_current_max_bytes"] == 9_204_362 + (added_base + added_aux) * per_column - 7_532 - 4_718 + 4_224 + 32
+    assert result["headroom_bytes"] == 24_240
 
 
 def test_numeric_constants_accept_public_owner_visibility() -> None:
@@ -144,17 +141,65 @@ def test_numeric_constants_accept_public_owner_visibility() -> None:
     assert SCREEN["_constant"]("pub(crate) const OWNER_BYTES: u32 = 123;", "OWNER_BYTES") == 123
 
 
-def test_main_claim_envelope_must_match_independent_native_codec_accounting() -> None:
+def test_joint_original_openings_cannot_be_omitted_or_repriced() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
-    changed = profile.replace(
-        "ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 4_420;",
-        "ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 4_421;",
+    for count in [0, 24, 108, 131, 133]:
+        changed = credential.replace("JOINT_OPENING_BYTES_V1: usize = 132 * 32", f"JOINT_OPENING_BYTES_V1: usize = {count} * 32")
+        assert changed != credential
+        with pytest.raises(SCREEN["GeometryError"], match="component sizes disagree"):
+            SCREEN["screen"](profile, stark, changed, accumulator, native_test)
+    result = SCREEN["screen"](profile, stark, credential, accumulator, native_test)
+    assert result["public_terminal_product_fields"] == 0
+    assert result["joint_original_opening_bytes"] == 4224
+    assert result["outer_framing_bytes"] == 4348
+
+
+def test_required_nonce_cannot_be_omitted_or_repriced() -> None:
+    profile, stark, credential, accumulator, native_test = _sources()
+    result = SCREEN["screen"](profile, stark, credential, accumulator, native_test)
+    assert result["proof_instance_nonce_bytes"] == 32
+    for count in [0, 16, 31, 33, 64]:
+        changed = credential.replace(
+            "PROOF_INSTANCE_BYTES_V1: usize = 32", f"PROOF_INSTANCE_BYTES_V1: usize = {count}"
+        )
+        assert changed != credential
+        with pytest.raises(SCREEN["GeometryError"], match="component sizes disagree"):
+            SCREEN["screen"](profile, stark, changed, accumulator, native_test)
+    changed = credential.replace(
+        "PUBLIC_HEADER_BYTES_V1: usize = 4 + 2 + 2 + 32 + 32 + 32 + 4",
+        "PUBLIC_HEADER_BYTES_V1: usize = 4 + 2 + 2 + 32 + 32 + 4",
+    )
+    assert changed != credential
+    with pytest.raises(SCREEN["GeometryError"], match="component sizes disagree"):
+        SCREEN["screen"](profile, stark, changed, accumulator, native_test)
+
+
+def test_main_frame_must_match_independent_native_codec_accounting() -> None:
+    profile, stark, credential, accumulator, native_test = _sources()
+    repriced_profile = profile.replace(
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_002;",
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_003;",
         1,
     ).replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_406;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_407;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_945;",
         1,
     )
-    assert changed != profile
-    with pytest.raises(SCREEN["GeometryError"], match="independent native codec accounting"):
-        SCREEN["screen"](changed, stark, credential, accumulator, native_test)
+    repriced_native = stark.replace(
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_002);",
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_003);",
+        1,
+    )
+    assert repriced_profile != profile
+    assert repriced_native != stark
+    for candidate_profile, candidate_stark in (
+        (repriced_profile, stark),
+        (profile, repriced_native),
+    ):
+        with pytest.raises(
+            SCREEN["GeometryError"],
+            match="MAIN frame disagrees with independent native codec accounting",
+        ):
+            SCREEN["screen"](
+                candidate_profile, candidate_stark, credential, accumulator, native_test
+            )

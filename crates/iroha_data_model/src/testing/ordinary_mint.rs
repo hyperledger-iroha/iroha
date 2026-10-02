@@ -8,6 +8,7 @@ use crate::kagemusha::*;
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_crypto::{Algorithm, KeyGenOption, KeyPair, Signature};
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+use sha2::{Digest as _, Sha256};
 
 /// Complete unsigned TopUpRequest and real account consent over known-public synthetic originals.
 /// This type has no conversion to a verified Mint proof, financial owner, DATA or finalized debit.
@@ -25,7 +26,34 @@ pub struct KagemushaOrdinaryMintCodecFixtureV1 {
 /// Panics if the maintained canonical data, typed neutral envelope or signature grammar changes.
 #[must_use]
 pub fn kagemusha_ordinary_mint_codec_fixture_v1() -> KagemushaOrdinaryMintCodecFixtureV1 {
-    let (enrollment_fixture, context, _) = make_context(false);
+    build_codec_fixture(None)
+}
+/// Build the same known-public synthetic Mint fixture with an exact full preparation FI-control
+/// original. All context, issuance, credit and approval selectors are rederived by the maintained
+/// model formulas; proof/ciphertext bytes stay inert and no verified owner is constructed.
+/// # Errors
+/// Rejects an empty or oversized full preparation-control original.
+/// # Panics
+/// Panics if the maintained fixture's sole model/signature grammar changes.
+pub fn kagemusha_ordinary_mint_codec_fixture_with_preparation_control_v1(
+    control_original: &[u8],
+) -> Result<KagemushaOrdinaryMintCodecFixtureV1, String> {
+    if control_original.is_empty()
+        || control_original.len() > KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1
+    {
+        return Err("synthetic full preparation FI-control original exceeds its bound".into());
+    }
+    Ok(build_codec_fixture(Some(
+        Sha256::digest(control_original).into(),
+    )))
+}
+fn build_codec_fixture(
+    control_original_sha256: Option<[u8; 32]>,
+) -> KagemushaOrdinaryMintCodecFixtureV1 {
+    let (enrollment_fixture, mut context, _) = make_context(false);
+    if let Some(digest) = control_original_sha256 {
+        context.financial_control_original_sha256 = digest;
+    }
     let (statement, encrypted_credit) = make_statement(context);
     let request = KagemushaOrdinaryTopUpRequestV1 {
         version: 1,
@@ -147,7 +175,7 @@ fn make_statement(
     let raw = envelope
         .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
         .unwrap();
-    assert_eq!(raw.len(), 384);
+    assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
     let s = KagemushaOrdinaryMintAuthorizationStatementV1 {
         version: 1,
         issuance_commitment: context.issuance_commitment().unwrap(),
@@ -209,6 +237,62 @@ fn authorization(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn full_control_option_rederives_ids_and_real_signatures_without_a_proof_grant() {
+        let full_original = b"known-public inert FI-control codec original";
+        let a = kagemusha_ordinary_mint_codec_fixture_v1();
+        let b = kagemusha_ordinary_mint_codec_fixture_with_preparation_control_v1(full_original)
+            .unwrap();
+        let c = kagemusha_ordinary_mint_codec_fixture_with_preparation_control_v1(
+            b"other complete inert original",
+        )
+        .unwrap();
+        assert_eq!(
+            b.request
+                .authorization
+                .statement
+                .context
+                .financial_control_original_sha256,
+            <[u8; 32]>::from(Sha256::digest(full_original))
+        );
+        assert_ne!(
+            a.request.authorization.statement.credit_id,
+            b.request.authorization.statement.credit_id
+        );
+        assert_ne!(
+            b.request.authorization.statement.credit_id,
+            c.request.authorization.statement.credit_id
+        );
+        assert_ne!(
+            b.request.authorization.approval,
+            c.request.authorization.approval
+        );
+        for fixture in [&b, &c] {
+            fixture
+                .request
+                .verify_account_signature(&fixture.account_consent)
+                .unwrap();
+            let c = fixture.enrollment_fixture.verify(1000).unwrap();
+            fixture
+                .request
+                .authorization
+                .approval
+                .authenticate_platform_equation(c.app_credential(), None)
+                .unwrap();
+            assert_eq!(fixture.request.authorization.proof.eq_proof, vec![63]);
+            assert_eq!(fixture.request.authorization.proof.ep_proof, vec![64]);
+        }
+        assert!(kagemusha_ordinary_mint_codec_fixture_with_preparation_control_v1(&[]).is_err());
+        assert!(
+            kagemusha_ordinary_mint_codec_fixture_with_preparation_control_v1(&vec![
+                1;
+                KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
+    }
+
     #[test]
     fn shared_fixture_has_actual_platform_account_equations_and_only_inert_proof_data() {
         let f = kagemusha_ordinary_mint_codec_fixture_v1();

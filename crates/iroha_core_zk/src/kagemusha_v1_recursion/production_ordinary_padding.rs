@@ -1,9 +1,9 @@
-//! Native-owned parser operands for the inactive mint slots of an ordinary zero-State.
+//! Native-owned parser operands for inactive ordinary Mint slots.
 //!
 //! These are private construction data, not credits, authorizations or proof admission. The
-//! enclosing owner only lends them through a Bootstrap-only auxiliary source. No real mint,
-//! payer balance, platform signing or caller-supplied monetary original is needed to initialize
-//! a zero balance. Actual Guard verification and its complete history remain mandatory.
+//! Bootstrap owner requires the exact zero-State; the incoming owner also uses parser operands
+//! for its inactive Mint slot under a zero selector. No real mint or payer balance is needed to
+//! initialize a zero balance. Actual Guard verification and its complete history remain mandatory.
 
 use super::*;
 use iroha_data_model::{
@@ -58,6 +58,41 @@ pub(super) fn bootstrap_mint_padding(
     {
         return Err(proving_error(
             "inactive Bootstrap mint operands require the exact zero State",
+        ));
+    }
+    inactive_mint_parser_operands(
+        state,
+        recipient,
+        artifact_manifest_digest,
+        genesis_authorization_id,
+        eq_authorization_protocol,
+        ep_authorization_protocol,
+        eq_mint_protocol,
+        ep_mint_protocol,
+        eq_history,
+        ep_history,
+    )
+}
+
+/// Parser-only operands for an inactive ordinary Mint slot of an actual selected State.
+/// These invalid AEAD/proof bytes cannot fund or authorize Mint; the active selector stays zero.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn inactive_mint_parser_operands(
+    state: &KagemushaStateV1,
+    recipient: &AccountId,
+    artifact_manifest_digest: [u8; 32],
+    genesis_authorization_id: [u8; 32],
+    eq_authorization_protocol: &PlonkProtocol<EqAffine>,
+    ep_authorization_protocol: &PlonkProtocol<EpAffine>,
+    eq_mint_protocol: &PlonkProtocol<EqAffine>,
+    ep_mint_protocol: &PlonkProtocol<EpAffine>,
+    eq_history: &KagemushaEqAccumulatorV1,
+    ep_history: &KagemushaEpAccumulatorV1,
+) -> Result<BootstrapMintPadding, KagemushaArtifactGenerationErrorV1> {
+    state.validate().map_err(|e| proving_error(e.to_string()))?;
+    if artifact_manifest_digest == [0; 32] || genesis_authorization_id == [0; 32] {
+        return Err(proving_error(
+            "inactive Mint parser release identity is absent",
         ));
     }
     let mut public_x25519_basepoint = [0; 32];
@@ -253,6 +288,10 @@ mod tests {
     use snark_verifier::system::halo2::Config as ProtocolConfig;
 
     fn zero_state() -> KagemushaStateV1 {
+        parser_state(0, 0, 0)
+    }
+
+    fn parser_state(balance: u128, sequence: u128, index: u128) -> KagemushaStateV1 {
         use crate::kagemusha_v1_poseidon::{
             KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, digest_limbs, empty_replay_root,
             encode, from_u128, hash, paired_commitment,
@@ -302,6 +341,9 @@ mod tests {
         let mut state = crate::kagemusha_v1_recursion::tests::state_verification_fixture()
             .0
             .successor;
+        state.balance = balance;
+        state.logical_sequence = sequence;
+        state.secure_index = index;
         state.consumed_credit_root = iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
             eq: encode(empty_replay_root::<Fp>()),
             ep: encode(empty_replay_root::<Fq>()),
@@ -326,6 +368,9 @@ mod tests {
             ($field:ty, $parameters:expr, $width:expr) => {{
                 let mut circuit = BaseCircuitBuilder::<$field>::new(false)
                     .use_k(crate::kagemusha_v1_recursion::KAGEMUSHA_RECURSION_IPA_K_V1 as usize)
+                    .use_lookup_bits(
+                        (crate::kagemusha_v1_recursion::KAGEMUSHA_RECURSION_IPA_K_V1 - 1) as usize,
+                    )
                     .use_instance_columns(1);
                 let range = circuit.range_chip();
                 let cells = (0..$width)
@@ -394,6 +439,47 @@ mod tests {
             Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(reason))
                 if reason == expected_reason
         ));
+        let nonzero = parser_state(17, 3, 4);
+        assert!(make(&nonzero, [21; 32], [22; 32]).is_err());
+        let inactive = inactive_mint_parser_operands(
+            &nonzero,
+            &recipient,
+            [21; 32],
+            [22; 32],
+            &eq_authorization,
+            &ep_authorization,
+            &eq_mint,
+            &ep_mint,
+            &eq_history,
+            &ep_history,
+        )
+        .expect("same real nonzero State supplies only an inactive parser slot");
+        assert_eq!(nonzero.balance, 17);
+        assert_eq!(nonzero.logical_sequence, 3);
+        assert_eq!(nonzero.secure_index, 4);
+        assert_eq!(
+            inactive.authorization.statement.context.release_id,
+            nonzero.release_id
+        );
+        assert_eq!(
+            inactive.credit.statement.lifecycle.liability_pool_id,
+            nonzero.liability_pool_id
+        );
+        assert!(
+            inactive_mint_parser_operands(
+                &nonzero,
+                &recipient,
+                [0; 32],
+                [22; 32],
+                &eq_authorization,
+                &ep_authorization,
+                &eq_mint,
+                &ep_mint,
+                &eq_history,
+                &ep_history
+            )
+            .is_err()
+        );
         let padding = make(&state, [21; 32], [22; 32]).expect("zero-State parser operands");
         let authorization = &padding.authorization;
         let credit = &padding.credit;

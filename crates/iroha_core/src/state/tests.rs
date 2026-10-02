@@ -21033,27 +21033,19 @@ fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLo
     }
 }
 fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRecord {
-    use iroha_data_model::{
-        governance::types::{ProposalKind, ValidationFeePolicyProposal},
-        validation_fee::{
-            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            ValidationFeeChargingMode, ValidationFeePolicyV1,
-        },
+    let kind = crate::governance::parliament::tests::validation_fee_policy_proposal();
+    let iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) = &kind
+    else {
+        unreachable!("typed validation-fee fixture");
     };
-    let proposer = (*ALICE_ID).clone();
-    let_row! { fee_asset = AssetDefinitionId::derive_from_components( DomainId::try_new("validation-fee", "universal").expect("validation-fee domain"), "xor".parse().expect("validation-fee asset name"), ) };
-    let_row! { policy = ValidationFeePolicyV1 { schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION, network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked( Hash::prehashed([0xA5; 32]), )), policy_version: 1, previous_policy_hash: None, ds_asset_id: fee_asset, ds_scale: VALIDATION_FEE_DS_SCALE, fee: Quantity::zero(), treasury_account_id: proposer.clone(), charging_mode: ValidationFeeChargingMode::Disabled, effective_from_height: 1, expires_after_height: None, exemption_classes: Vec::new(), treasury_payout_binding: None, } };
     GovernanceProposalRecord {
-        proposer: proposer.clone(),
-        kind: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-            proposal_operator: proposer,
-            policy,
-            payout_lifecycle_proposal_id: None,
-        }),
+        proposer: payload.proposal_operator.clone(),
+        kind,
         created_height,
         status: GovernanceProposalStatus::Proposed,
     }
 }
+
 fn indexed_deploy_contract_proposal(created_height: u64) -> GovernanceProposalRecord {
     use iroha_data_model::governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
@@ -25783,7 +25775,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     else {
         unreachable!("typed validation fee fixture")
     };
-    proposal.policy.effective_from_height = 2;
+    proposal.policy.notice_published_at_ms += 1;
     let first_proposal_id = first_proposal.kind.fingerprint();
     let second_proposal_id = second_proposal.kind.fingerprint();
     assert_ne!(first_proposal_id, second_proposal_id);

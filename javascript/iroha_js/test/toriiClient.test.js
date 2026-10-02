@@ -102,6 +102,10 @@ import {
 
 const test = nodeTest;
 
+function retailAssessmentFixture() {
+  return JSON.parse(readFileSync(new URL("./fixtures/retail_fee_codec_v1.json", import.meta.url),"utf8")).assessment;
+}
+
 const BASE_URL = "https://localhost:8080";
 
 const UNIT_RETURN_DESCRIPTOR = Object.freeze({
@@ -440,9 +444,7 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "creation_time_ms",
     "fee_payment",
     "memo",
-    "validation_fee_policy_version",
-    "validation_fee_policy_hash",
-    "validation_fee_hijiri_fee_quote_hash",
+    "validation_fee_assessment",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -18422,13 +18424,14 @@ const QUERY_VIEW_LAYOUTS = new Map([
   [
     "AssetDefinitionView",
     {
-      fields: ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      fields: ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
       children: [
         "AssetDefinitionId",
         "String",
         ["Option", "String"],
         "AccountId",
         "Quantity",
+        ["Option", "Int"],
         "Json",
       ],
     },
@@ -19652,22 +19655,18 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     instructions: [instruction],
     feePayment: authorityFeePayment(),
     creationTimeMs: 123456,
-    validationFeePolicyVersion: 7,
-    validationFeePolicyHash: "AB".repeat(32),
-    validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
-    validationFeeInstructionIndex: 1,
-    validationFeeTransferEntryIndex: 2,
+    validation_fee_assessment: retailAssessmentFixture(),
     draftIntent: draftIntentForDraft(draft),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
   const body = Buffer.from(captured.init.body);
   assert.equal(body.subarray(0, 4).toString("ascii"), "NRT0");
-  assertFlattenedAliasSelector(body, "cbdc@banka", "MultisigProposeDto");
+  assertFlattenedAliasSelector(body, "cbdc@banka", "MultisigProposeDtoV1");
   assertMultisigProposeInstructionWireId(
     body,
     "iroha.custom",
-    "MultisigProposeDto",
+    "MultisigProposeDtoV1",
   );
   assert.deepEqual(result, responsePayload);
 
@@ -19677,22 +19676,14 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
       feePayment: authorityFeePayment(),
-      validationFeePolicyVersion: 7,
-      validationFeePolicyHash: "AB".repeat(32),
-      validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
-      validationFeeInstructionIndex: 1,
-      validationFeeTransferEntryIndex: 2,
+      validation_fee_assessment: retailAssessmentFixture(),
     }),
     {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
       fee_payment: authorityFeePayment(),
-      validation_fee_policy_version: "7",
-      validation_fee_policy_hash: "ab".repeat(32),
-      validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
-      validation_fee_instruction_index: "1",
-      validation_fee_transfer_entry_index: "2",
+      validation_fee_assessment: retailAssessmentFixture(),
     },
   );
 });
@@ -19871,86 +19862,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   })) {
     await assert.rejects(
       () => client.proposeMultisig({ ...request, [fieldName]: value }),
-      /unsupported snake_case validation fee field/,
+      /unsupported fee field/,
     );
     assert.throws(
       () => buildMultisigProposeRequest({ ...request, [fieldName]: value }),
-      /unsupported snake_case validation fee field/,
+      /unsupported fee field/,
     );
   }
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
-      }),
-    /requires policy metadata/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeHijiriFeeQuoteHash: "not-a-hash",
-      }),
-    /32-byte hex string/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeeInstructionIndex: 1,
-      }),
-    /requires policy metadata/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeeTransferEntryIndex: 2,
-      }),
-    /requires policy metadata/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeTransferEntryIndex: 2,
-      }),
-    /requires instruction index/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeePolicyVersion: 7,
-      }),
-    /provided together/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeInstructionIndex: -1,
-      }),
-    /non-negative integer/,
-  );
-  await assert.rejects(
-    () =>
-      client.proposeMultisig({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeInstructionIndex: 1,
-        validationFeeTransferEntryIndex: -2,
-      }),
-    /non-negative integer/,
-  );
+  const invalidAssessments = [
+    {}, {...retailAssessmentFixture(), policy_revision: 0},
+    {...retailAssessmentFixture(), fee_minor: 1},
+    {...retailAssessmentFixture(), expires_at_ms: 0},
+    {...retailAssessmentFixture(), state_commitment: Array(32).fill(0)},
+    {...retailAssessmentFixture(), exemption: true},
+  ];
+  for (const assessment of invalidAssessments) {
+    await assert.rejects(()=>client.proposeMultisig({...request,validation_fee_assessment:assessment}),/assessment/);
+    assert.throws(()=>buildMultisigProposeRequest({...request,validation_fee_assessment:assessment}),/assessment/);
+  }
   await assert.rejects(
     () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
     { message: "failed to fill whole buffer" },
@@ -19963,67 +19892,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
   );
-  assert.throws(
-    () =>
-      buildMultisigProposeRequest({
-        ...request,
-        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
-      }),
-    /requires policy metadata/,
-  );
-  assert.throws(
-    () =>
-      buildMultisigProposeRequest({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeHijiriFeeQuoteHash: "not-a-hash",
-      }),
-    /32-byte hex string/,
-  );
-  assert.throws(
-    () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),
-    /requires policy metadata/,
-  );
-  assert.throws(
-    () => buildMultisigProposeRequest({ ...request, validationFeeTransferEntryIndex: 2 }),
-    /requires policy metadata/,
-  );
-  assert.throws(
-    () =>
-      buildMultisigProposeRequest({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeTransferEntryIndex: 2,
-      }),
-    /requires instruction index/,
-  );
-  assert.throws(
-    () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
-    /provided together/,
-  );
-  assert.throws(
-    () =>
-      buildMultisigProposeRequest({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeInstructionIndex: -1,
-      }),
-    /non-negative integer/,
-  );
-  assert.throws(
-    () =>
-      buildMultisigProposeRequest({
-        ...request,
-        validationFeePolicyVersion: 7,
-        validationFeePolicyHash: "ab".repeat(32),
-        validationFeeInstructionIndex: 1,
-        validationFeeTransferEntryIndex: -2,
-      }),
-    /non-negative integer/,
-  );
+
 });
 
 test("proposeMultisig rejects malformed success responses", async () => {

@@ -475,7 +475,12 @@ final class TxBuilderTests: XCTestCase {
                 .instruction(instruction),
             ],
             feePayment: .authority(chargeLimits: [], gasLimit: 100_000),
-            metadata: [:],
+            metadata: [
+                "validation_fee_assessment": .object([
+                    "fee_minor": .number(0),
+                    "retail_enrolled": .bool(true),
+                ]),
+            ],
             ttlMs: 60,
             nonce: 7,
             keypair: keypair
@@ -540,7 +545,17 @@ final class TxBuilderTests: XCTestCase {
         var metadataReader = CanonicalNoritoReader(
             data: try payloadReader.readCompactField()
         )
-        XCTAssertEqual(try metadataReader.readUInt64LE(), 0)
+        XCTAssertEqual(try metadataReader.readUInt64LE(), 1)
+        var entry=CanonicalNoritoReader(data:try metadataReader.readCompactField())
+        var key=CanonicalNoritoReader(data:try entry.readCompactField())
+        let keyLength=try key.readUInt64LE()
+        XCTAssertEqual(try key.readBytes(Int(keyLength)),Data("validation_fee_assessment".utf8))
+        var value=CanonicalNoritoReader(data:try entry.readCompactField())
+        var json=CanonicalNoritoReader(data:try value.readCompactField())
+        let jsonLength=try json.readUInt64LE()
+        let decoded=try JSONDecoder().decode(ToriiJSONValue.self,from:json.readBytes(Int(jsonLength)))
+        XCTAssertEqual(decoded,.object(["fee_minor":.number(0),"retail_enrolled":.bool(true)]))
+        XCTAssertEqual(entry.remaining(),0)
         XCTAssertEqual(metadataReader.remaining(), 0)
         XCTAssertEqual(try payloadReader.readCompactField(), Data([0]))
         XCTAssertEqual(payloadReader.remaining(), 0)

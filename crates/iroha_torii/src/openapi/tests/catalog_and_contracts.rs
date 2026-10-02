@@ -1842,79 +1842,32 @@ fn musubi_chunker_text_bounds_match_the_wire_type() {
     }
 }
 #[test]
-fn multisig_propose_schema_exposes_optional_validation_fee_bindings_as_strings() {
+fn multisig_propose_schema_binds_complete_native_retail_assessment() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
-    let request = schemas
-        .get("MultisigProposeRequest")
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("allOf"))
-        .and_then(Value::as_array)
-        .and_then(|branches| branches.get(1))
-        .and_then(Value::as_object)
-        .expect("MultisigProposeRequest inline schema");
-    let properties = request
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("MultisigProposeRequest properties");
-    let required = request
-        .get("required")
-        .and_then(Value::as_array)
-        .expect("MultisigProposeRequest required fields");
-
-    for field in [
+    let request = &schemas["MultisigProposeRequest"]["allOf"][1];
+    let properties = request["properties"].as_object().unwrap();
+    assert_eq!(
+        properties["validation_fee_assessment"]["$ref"].as_str(),
+        Some("#/components/schemas/RetailFeeAssessmentV1")
+    );
+    assert!(
+        !request["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str() == Some("validation_fee_assessment"))
+    );
+    for retired in [
         "validation_fee_policy_version",
         "validation_fee_policy_hash",
         "validation_fee_hijiri_fee_quote_hash",
         "validation_fee_instruction_index",
         "validation_fee_transfer_entry_index",
     ] {
-        let property = properties
-            .get(field)
-            .and_then(Value::as_object)
-            .unwrap_or_else(|| panic!("MultisigProposeRequest.{field}"));
-        assert_eq!(property.get("type").and_then(Value::as_str), Some("string"));
         assert!(
-            property
-                .get("description")
-                .and_then(Value::as_str)
-                .is_some_and(|description| !description.is_empty()),
-            "MultisigProposeRequest.{field} description"
-        );
-        assert!(
-            !required
-                .iter()
-                .any(|required_field| required_field.as_str() == Some(field)),
-            "MultisigProposeRequest.{field} must remain optional"
-        );
-    }
-    for field in [
-        "validation_fee_policy_hash",
-        "validation_fee_hijiri_fee_quote_hash",
-    ] {
-        let property = properties[field]
-            .as_object()
-            .expect("validation-fee hash schema");
-        assert_eq!(property.get("minLength").and_then(Value::as_u64), Some(64));
-        assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(64));
-        assert_eq!(
-            property.get("pattern").and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$")
-        );
-    }
-    for field in [
-        "validation_fee_policy_version",
-        "validation_fee_instruction_index",
-        "validation_fee_transfer_entry_index",
-    ] {
-        let property = properties[field]
-            .as_object()
-            .expect("validation-fee decimal u64 schema");
-        assert_eq!(property.get("minLength").and_then(Value::as_u64), Some(1));
-        assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(20));
-        assert_eq!(
-            property.get("pattern").and_then(Value::as_str),
-            Some("^(?:0|[1-9][0-9]*)$")
+            !properties.contains_key(retired),
+            "retired explicit fee field {retired}"
         );
     }
 }

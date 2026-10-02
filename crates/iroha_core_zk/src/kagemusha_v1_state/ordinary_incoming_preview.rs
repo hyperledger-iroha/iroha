@@ -404,11 +404,12 @@ fn derive_math_preview(
         logical_journal_sequence_after: journal_after,
     };
     preparation.validate_shape().map_err(material)?;
-    let mut context = transition_guard_context(artifacts, &statement, fresh_clock.upper_at_ms)?;
-    // The ordinary incoming circuit must open the exact306-byte sole Model transcript to these
-    // fields. This native-only preview cannot replace that required consumer relation.
-    context.transition_intent_digest = preparation.binding_digest().map_err(material)?;
-    context.recovery_record_digest = preparation.recovery_binding_digest().map_err(material)?;
+    let context = ordinary_incoming_guard_context_v1(
+        artifacts,
+        &statement,
+        &preparation,
+        fresh_clock.upper_at_ms,
+    )?;
     let normalized =
         KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
             .map_err(material)?;

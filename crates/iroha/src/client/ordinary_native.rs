@@ -20,11 +20,13 @@ mod public_clock;
 use public_clock::ClockNodes;
 
 mod current_wallet;
+mod endpoint;
 mod inventory;
 pub use inventory::{
     KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeInstalledRuntimeAuthorityV1,
-    KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeInventoryV1,
-    KagemushaOrdinaryNativeNodeTargetV1, KagemushaOrdinaryNativeOriginalDescriptorV1,
+    KagemushaNativeOrdinaryInstalledContextV1, KagemushaOrdinaryNativeArtifactResolverV1,
+    KagemushaOrdinaryNativeInventoryV1, KagemushaOrdinaryNativeNodeTargetV1,
+    KagemushaOrdinaryNativeOriginalDescriptorV1,
     assemble_kagemusha_ordinary_native_clock_selection_v1,
     assemble_kagemusha_ordinary_native_inventory_v1,
 };
@@ -885,9 +887,10 @@ impl KagemushaNativeClockTransportV1 {
             .map_err(|_| eyre!("native clock custody rejected"))?;
         for node in &nodes {
             node.validate_context_endpoint()?;
+            endpoint::require_https_directory_base(node.torii_url.as_str())?;
             ensure!(
-                node.network_id == network && node.torii_url.scheme() == "https",
-                "native clock transport changed installed network or HTTPS endpoint"
+                node.network_id == network,
+                "native clock transport changed installed network"
             );
         }
         Ok(Self {

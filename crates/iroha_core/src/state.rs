@@ -334,15 +334,23 @@ mod committed_hash_journal;
 mod committed_transaction_context;
 mod da_hydration;
 mod exec_witness_capture;
+/// Original local owners and completed errors from witness capture.
+pub use exec_witness_capture::WitnessCaptureError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
 mod output_publication;
-pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
+pub(crate) use output_capacity::{
+    ExecutionOutputAttemptError, ExecutionOutputSealError, ExecutionOutputSealMetadata,
+};
 mod fastpq_governance_source;
+mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
+pub(crate) use fastpq_quantity_capture::QuantityCaptureIssue;
+mod fastpq_quantity_storage;
+mod fastpq_quantity_write_plan;
 mod fastpq_rejection_tail;
 #[cfg(test)]
 mod fastpq_source_quota_tests;
@@ -1491,6 +1499,12 @@ use scalar_cell_custody::ScalarCellFixtureBlock;
 
 // Four fixed operation indexes admit child checkpoints through their original pool.
 macro_rules! world_field_transaction {
+    ($field:expr, assets) => {
+        fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
+    };
+    ($field:expr, asset_definitions) => {
+        fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
+    };
     ($field:expr, kagemusha_mint_credit_operations) => {
         $field.try_transaction_admitted()?
     };
@@ -1524,6 +1538,7 @@ macro_rules! build_world_transaction_from_fields {
         // borrowing the entire prepaid owner through DerefMut.
         let fields = &mut **$state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
+            execution_deferral: std::cell::RefCell::new(None),
             dataspace_catalog: fields.dataspace_catalog.clone(),
             quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation::default(),
             axt_last_authorization_identities: authorization_identities,
@@ -1535,6 +1550,15 @@ macro_rules! build_world_transaction_from_fields {
             axt_current_slot: $axt_current_slot,
             axt_lane_map: $axt_lane_map,
             current_dataspace_id: None,
+            retail_fee_now_ms: 0,
+            retail_fee_height: 0,
+            retail_fee_source_transaction_hash: None,
+            retail_fee_assessment: None,
+            retail_fee_assessment_marker_pending: false,
+            retail_fee_observed_payments: Vec::new(),
+            retail_fee_pending_credits: Vec::new(),
+            retail_fee_pending_transcripts: Vec::new(),
+            retail_fee_exempt_payments: Vec::new(),
             external_event_sink: &mut fields.external_event_buf,
             dataspace_catalog_sink: &mut fields.dataspace_catalog,
             external_event_buf: Vec::new(),
@@ -6323,8 +6347,42 @@ impl WorldBlock<'_> {
 /// not copy every store's checkpoint onto each caller's stack. Dropping the box
 /// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
+    /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
+    pub(crate) execution_deferral:
+        std::cell::RefCell<Option<crate::execution_attempt::ExecutionDeferred>>,
     /// Rollback-local observation for incomplete typed quantity capture.
     pub(crate) quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation,
+    /// Consensus block clock for lazy calendar accounting.
+    pub(crate) retail_fee_now_ms: u64,
+    /// Consensus block height retaining immutable collection receipts.
+    pub(crate) retail_fee_height: u64,
+    /// Signed transaction whose successful execution earned a payment receipt.
+    pub(crate) retail_fee_source_transaction_hash: Option<[u8; 32]>,
+    /// Customer-signed reviewed assessment for this disposable execution overlay.
+    pub(crate) retail_fee_assessment:
+        Option<iroha_data_model::validation_fee::RetailFeeAssessmentV1>,
+    /// The single authenticated deferred assessment marker must execute exactly once.
+    pub(crate) retail_fee_assessment_marker_pending: bool,
+    /// Actual user-authorized payment legs; rolled back with failed execution.
+    pub(crate) retail_fee_observed_payments: Vec<(
+        AssetId,
+        iroha_data_model::validation_fee::RetailFeePaymentLegV1,
+    )>,
+    /// Exact transfers authorized by a verified native conversion operation.
+    pub(crate) retail_fee_exempt_payments:
+        Vec<(AssetId, AccountId, iroha_primitives::numeric::Quantity)>,
+    /// Exact intrinsic deductions awaiting source-bound FastPQ capture in mutation order.
+    pub(crate) retail_fee_pending_transcripts: Vec<(
+        AccountId,
+        iroha_crypto::Hash,
+        iroha_data_model::fastpq::TransferDeltaTranscript,
+    )>,
+    /// Authenticated collections awaiting the reward-credit hook at atomic completion.
+    pub(crate) retail_fee_pending_credits: Vec<(
+        iroha_data_model::validation_fee::ValidationFeePolicyV1,
+        u64,
+        u64,
+    )>,
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Publish the transaction's derived catalog only when its World changes are applied.
@@ -6428,7 +6486,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) account_recovery_requests:
         StorageTransaction<'block, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
-    pub(crate) asset_definitions: StorageTransaction<'block, AssetDefinitionId, AssetDefinition>,
+    pub(crate) asset_definitions: fastpq_quantity_storage::QuantityStorageTransaction<
+        'block,
+        AssetDefinitionId,
+        AssetDefinition,
+    >,
     /// Index mapping asset alias literals to canonical asset definition ids.
     pub(crate) asset_definition_aliases:
         StorageTransaction<'block, AssetDefinitionAlias, AssetDefinitionId>,
@@ -6462,7 +6524,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_definition_nonzero_holders:
         StorageTransaction<'block, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
-    pub(crate) assets: StorageTransaction<'block, AssetId, AssetValue>,
+    pub(crate) assets:
+        fastpq_quantity_storage::QuantityStorageTransaction<'block, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
     pub(crate) asset_metadata: StorageTransaction<'block, AssetId, Metadata>,
     /// Registered NFTs.
@@ -7906,7 +7969,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.assets.get(asset_id).is_some() {
             self.quantity_mutation_observation.changed();
         }
-        let removed = self.assets.remove(asset_id.clone());
+        let removed = self.remove_quantity_balance(asset_id);
         self.asset_metadata.remove(asset_id.clone());
         if removed.is_some() {
             self.refresh_nonzero_asset_holder(asset_id);
@@ -12561,6 +12624,8 @@ pub struct StateBlockFields<'state> {
     fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,
     /// Sealed validator-owned inventory or its latched construction error.
     fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,
+    /// Original quota journals joined to the finalized inventory, with sticky refusal.
+    fastpq_source_quota_seal: Option<fastpq_source_inventory::SourceQuotaInventorySeal>,
     /// Local-only context for background FASTPQ batch construction.
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
@@ -13949,8 +14014,6 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) execution_fee_meter: Option<crate::executor::ExecutionFeeMeter>,
     /// Single actual signed-root instruction budget, including any sticky refusal.
     pub(crate) execution_effects: crate::executor::ExecutionEffects,
-    /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
-    pub(crate) execution_deferral: Option<crate::execution_attempt::ExecutionDeferred>,
     /// Bridge proof hashes recorded by this transaction and still available for one receipt.
     pub(crate) bridge_receipt_proofs_available_in_tx: BTreeSet<[u8; 32]>,
     /// Block-level gas limit, captured at the beginning of this block.
@@ -24589,11 +24652,26 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Apply the heap-owned transaction journal to its original World block.
     #[allow(clippy::too_many_lines)]
     pub fn apply(mut self: Box<Self>) {
+        // A locally incomplete World journal must remain disposable even when a
+        // caller invokes its raw apply facade instead of StateTransaction::apply.
+        if self.execution_deferral.borrow().is_some() {
+            return;
+        }
         // Keep exhaustive field coverage without moving the complete journal
         // off its heap allocation before applying the individual fields.
         let Self {
+            execution_deferral: _,
             dataspace_catalog: _,
             quantity_mutation_observation: _,
+            retail_fee_now_ms: _,
+            retail_fee_height: _,
+            retail_fee_source_transaction_hash: _,
+            retail_fee_assessment: _,
+            retail_fee_assessment_marker_pending: _,
+            retail_fee_observed_payments: _,
+            retail_fee_pending_credits: _,
+            retail_fee_pending_transcripts: _,
+            retail_fee_exempt_payments: _,
             dataspace_catalog_sink: _,
             parameters: _,
             peers: _,
@@ -25421,6 +25499,7 @@ impl<'block> WorldTransaction<'block, '_> {
     /// - There is no account with such name.
     /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
@@ -25479,40 +25558,8 @@ impl<'block> WorldTransaction<'block, '_> {
         definition_id: &AssetDefinitionId,
         increment: &Quantity,
     ) -> Result<(), Error> {
-        let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(increment, spec)?;
-        // Update the aggregate based on the stored value rather than recomputing
-        // from the current storage view (which would already include the change)
-        // to avoid double-counting.
-        // Compute and persist the new total first, then emit events.
-        let new_total = {
-            let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(&def.total_quantity, spec)?;
-            let new_total = def
-                .total_quantity
-                .checked_add(increment)
-                .map_err(|_| MathError::Overflow)?;
-            ensure_asset_quantity_value(&new_total, spec)?;
-            new_total
-        };
-        self.quantity_mutation_observation.changed();
-        self.asset_definitions
-            .get_mut(definition_id)
-            .expect("definition retained through total preparation")
-            .total_quantity = new_total.clone();
-        debug!(
-            target: "iroha::state::asset_totals",
-            "increased total quantity for {} by {} -> {}",
-            definition_id,
-            increment,
-            new_total
-        );
-        self.emit_asset_definition_event(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        ));
+        let new_total = self.precheck_asset_total_amount_change(definition_id, increment, true)?;
+        self.apply_prechecked_asset_total_amount_change(definition_id, increment, new_total, true);
         Ok(())
     }
     /// Decrease [`AssetDefinition::total_quantity`] by `decrement`.
@@ -25530,43 +25577,62 @@ impl<'block> WorldTransaction<'block, '_> {
         definition_id: &AssetDefinitionId,
         decrement: &Quantity,
     ) -> Result<(), Error> {
+        let new_total = self.precheck_asset_total_amount_change(definition_id, decrement, false)?;
+        self.apply_prechecked_asset_total_amount_change(definition_id, decrement, new_total, false);
+        Ok(())
+    }
+
+    /// Compute the original checked aggregate replacement without writing it.
+    /// The supply owner retains this result until its balance mutation has completed.
+    pub(crate) fn precheck_asset_total_amount_change(
+        &self,
+        definition_id: &AssetDefinitionId,
+        amount: &Quantity,
+        mint: bool,
+    ) -> Result<Quantity, Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(decrement, spec)?;
-        // Update the aggregate directly to avoid double-counting when storage
-        // has already been mutated by the caller.
-        // Compute and persist the new total first, then emit events.
-        let new_total = {
-            let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(&def.total_quantity, spec)?;
-            if &def.total_quantity < decrement {
+        ensure_asset_quantity_value(amount, spec)?;
+        let definition = self.asset_definition(definition_id)?;
+        ensure_asset_quantity_value(&definition.total_quantity, spec)?;
+        let new_total = if mint {
+            definition
+                .total_quantity
+                .checked_add(amount)
+                .map_err(|_| MathError::Overflow)?
+        } else {
+            if &definition.total_quantity < amount {
                 return Err(MathError::NotEnoughQuantity.into());
             }
-            let new_total = def
+            definition
                 .total_quantity
-                .checked_sub(decrement)
-                .map_err(|_| MathError::NotEnoughQuantity)?;
-            ensure_asset_quantity_value(&new_total, spec)?;
-            new_total
+                .checked_sub(amount)
+                .map_err(|_| MathError::NotEnoughQuantity)?
         };
+        ensure_asset_quantity_value(&new_total, spec)?;
+        Ok(new_total)
+    }
+
+    /// Apply the original aggregate calculation after the corresponding exact balance write.
+    pub(crate) fn apply_prechecked_asset_total_amount_change(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        amount: &Quantity,
+        new_total: Quantity,
+        mint: bool,
+    ) {
         self.quantity_mutation_observation.changed();
-        self.asset_definitions
-            .get_mut(definition_id)
-            .expect("definition retained through total preparation")
-            .total_quantity = new_total.clone();
-        debug!(
-            target: "iroha::state::asset_totals",
-            "decreased total quantity for {} by {} -> {}",
-            definition_id,
-            decrement,
-            new_total
-        );
+        self.assign_quantity_supply(definition_id, new_total.clone());
+        if mint {
+            debug!(target: "iroha::state::asset_totals", "increased total quantity for {} by {} -> {}", definition_id, amount, new_total);
+        } else {
+            debug!(target: "iroha::state::asset_totals", "decreased total quantity for {} by {} -> {}", definition_id, amount, new_total);
+        }
         self.emit_asset_definition_event(AssetDefinitionEvent::TotalQuantityChanged(
             AssetDefinitionTotalQuantityChanged {
                 asset_definition: definition_id.clone(),
                 total_amount: new_total,
             },
         ));
-        Ok(())
     }
     /// Get mutable reference to [`Nft`]
     ///
@@ -29360,7 +29426,12 @@ impl State {
                 .expect("closed public decision matches its frozen policy");
             wtx.governance_referenda.insert(rid, record);
         }
+        // Classify this original block-start child before its existing publication.
+        // Raw quantity leases remain a refusal; only successful apply advances lineage.
+        let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();
+        quantity_candidate.observe(&wtx);
         wtx.apply();
+        sb.fastpq_quantity_candidate.apply(quantity_candidate);
         Ok(())
     }
 
@@ -29517,7 +29588,12 @@ impl State {
                 )
             },
         );
+        // Classify this original block-start child before its existing publication.
+        // Raw quantity leases remain a refusal; only successful apply advances lineage.
+        let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();
+        quantity_candidate.observe(&wtx);
         wtx.apply();
+        sb.fastpq_quantity_candidate.apply(quantity_candidate);
         Ok(())
     }
 
@@ -36865,18 +36941,19 @@ impl<'state> StateBlock<'state> {
     /// Rejects absent, failed, stale or mutated source ownership before ordinary witness
     /// work, or mismatched ordinary transcript contents and unexpected prepared batches.
     /// Content failures remain latched and invalidate every cached witness-derived output.
-    pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+    pub fn capture_exec_witness_attempt(&mut self) -> Result<(), WitnessCaptureError> {
+        self.observe_quantity_block_journals();
         self.verify_sumeragi_lane_state_seal()?;
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
             Ok(inventory) => inventory,
             Err(error) => {
                 self.clear_cached_exec_witness();
-                return Err(error);
+                return Err(error.into());
             }
         };
         if self.exec_witness.is_none() {
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
-            let result = (|| {
+            let result = (|| -> Result<(), WitnessCaptureError> {
                 let state = &mut *capture.state;
                 // Authority loss is a terminal local capture failure. Latch it without
                 // draining a recorder that may now belong to another execution.
@@ -36886,7 +36963,7 @@ impl<'state> StateBlock<'state> {
                         source_inventory.verify_finalized_transcript_map(transcripts)
                     }) {
                         Ok(witness) => witness,
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                 let receiver_height = state._curr_block.height().get();
                 // Commit the complete protected validation-fee registry selection
@@ -36903,6 +36980,8 @@ impl<'state> StateBlock<'state> {
                 let validation_fee_commitment =
                     iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
                         receiver_height,
+                        u64::try_from(state._curr_block.creation_time().as_millis())
+                            .map_err(|_| "block timestamp exceeds u64")?,
                         validation_fee_custom,
                     );
                 let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
@@ -36954,6 +37033,7 @@ impl<'state> StateBlock<'state> {
                     witness.writes.push(sccp_write);
                 }
                 state.capture_sumeragi_lane_state(&mut witness)?;
+                crate::validation_fee_rewards::capture_fee_evidence(state, &mut witness)?;
                 witness
                     .writes
                     .sort_by(|left, right| left.key.cmp(&right.key));
@@ -36993,20 +37073,43 @@ impl<'state> StateBlock<'state> {
             })();
             match result {
                 Ok(()) => capture.finish(),
-                Err(error) => return Err(capture.reject(error)),
+                Err(WitnessCaptureError::Rejected(error)) => {
+                    return Err(capture.reject(error).into());
+                }
+                Err(WitnessCaptureError::Deferred(reason)) => {
+                    return Err(WitnessCaptureError::Deferred(capture.defer(reason)));
+                }
+                Err(WitnessCaptureError::StorageAdmission(error)) => {
+                    capture.abandon();
+                    return Err(WitnessCaptureError::StorageAdmission(error));
+                }
             }
         } else {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
                 // This capture call still owns the exclusive block recorder guard. Clear any
                 // rejected recorder state, preserving the earlier cached-content failure.
                 let _ = crate::exec_witness::finish_cached_exec_witness_capture();
-                return Err(self.reject_fastpq_witness_content(error));
+                return Err(self.reject_fastpq_witness_content(error).into());
             }
             if let Err(error) = crate::exec_witness::finish_cached_exec_witness_capture() {
-                return Err(self.reject_fastpq_witness_content(error));
+                return Err(self.reject_fastpq_witness_content(error).into());
             }
         }
         Ok(())
+    }
+    /// Completed-rejection assertion surface for deterministic component tests.
+    /// A genuine local retry cannot be represented by this helper's String.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+    pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+        self.capture_exec_witness_attempt().map_err(|error| match error {
+            WitnessCaptureError::Rejected(error) => error,
+            WitnessCaptureError::Deferred(reason) => {
+                panic!("completed witness control encountered an original local refusal: {reason}")
+            }
+            WitnessCaptureError::StorageAdmission(error) => {
+                panic!("completed witness control encountered original storage admission refusal: {error}")
+            }
+        })
     }
     /// Check the exact ordinary recorder surface retained with the owned source inventory.
     ///
@@ -37046,6 +37149,7 @@ impl<'state> StateBlock<'state> {
     }
     /// Reject stale output extraction even when capture has not been called again.
     fn guard_captured_exec_witness(&mut self) -> bool {
+        self.observe_quantity_block_journals();
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
             Ok(inventory) => inventory,
             Err(_) => {
@@ -37281,6 +37385,9 @@ impl<'state> StateBlock<'state> {
             }
         };
         world.dataspace_catalog = fields.nexus.dataspace_catalog.clone();
+        world.retail_fee_now_ms =
+            u64::try_from(fields._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+        world.retail_fee_height = fields._curr_block.height().get();
         let executor_fuel_remaining = world.parameters.get().executor().fuel.get();
         let zk = fields.zk.clone();
         let privacy_budget_after_block = fields.privacy_budget_in_block;
@@ -37394,7 +37501,6 @@ impl<'state> StateBlock<'state> {
             last_tx_gas_used: 0,
             execution_fee_meter: None,
             execution_effects: crate::executor::ExecutionEffects::default(),
-            execution_deferral: None,
             bridge_receipt_proofs_available_in_tx: BTreeSet::new(),
             gas_limit_per_block: fields.gas_limit_per_block,
             gas_used_in_block_so_far: fields.gas_used_in_block,
@@ -38073,7 +38179,7 @@ impl<'state> StateBlock<'state> {
     fn prepare_owned_time_phase(
         &mut self,
         block_header: &BlockHeader,
-    ) -> Result<(TimeEvent, usize), crate::execution_attempt::ExecutionAttemptError<String>> {
+    ) -> Result<(TimeEvent, usize), ExecutionOutputAttemptError> {
         // Refuse a pristine/probe scope before events, maintenance or matching.
         let max_time_trigger_invocations = self.time_trigger_invocation_limit()?;
         if *block_header != self._curr_block
@@ -38088,7 +38194,7 @@ impl<'state> StateBlock<'state> {
         self.world.external_event_buf.push(time_event.into());
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
-            let mut maintenance_tx = self.try_transaction().map_err(|error| error.to_string())?;
+            let mut maintenance_tx = self.try_transaction()?;
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
             let removed_asset_aliases = maintenance_tx
                 .world
@@ -38112,16 +38218,17 @@ impl<'state> StateBlock<'state> {
         if let Err(error) = crate::sns::process_alias_auto_renewals(self, &native_scope) {
             return Err(match error {
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                    ExecutionOutputAttemptError::Deferred(reason)
                 }
                 crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                     if self.local_storage_refusal.is_none() {
                         self.local_storage_refusal = Some(error.clone());
                     }
-                    crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+                    ExecutionOutputAttemptError::Storage(error)
                 }
             });
         }
+        crate::validation_fee_rewards::publish_conversion_offers(self)?;
         Ok((time_event, max_time_trigger_invocations))
     }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
@@ -41195,6 +41302,7 @@ impl StateTransaction<'_, '_> {
         batch_hash: iroha_crypto::Hash,
         deltas: Vec<TransferDeltaTranscript>,
     ) -> Result<(), Error> {
+        self.flush_retail_fee_transfer_transcripts()?;
         self.stage_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
     }
     /// Exercise native transcript capture in state tests without exposing a
@@ -41344,7 +41452,7 @@ impl StateTransaction<'_, '_> {
             )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
-            || self.execution_deferral.is_some()
+            || self.world.execution_deferral.borrow().is_some()
             || self.canonical_runtime.touched_value().is_some()
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
@@ -41366,7 +41474,7 @@ impl StateTransaction<'_, '_> {
         } = self;
         block_pending_public_lane_slash_observability
             .append(&mut pending_public_lane_slash_observability);
-        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
+        pending_fastpq_quantity_candidate.observe(&world);
         world.apply();
         block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
     }
@@ -41378,7 +41486,12 @@ impl StateTransaction<'_, '_> {
     /// Validate the final transaction boundary while rollback owners remain armed.
     /// A refusal poisons the enclosing carrier before any State field is applied.
     fn prepare_apply(&mut self) -> Result<(), &'static str> {
-        let error = if self.local_storage_refusal.is_some() {
+        // Stage native fee deductions queued after the last principal occurrence so
+        // the source-quota and execution-effect checks below cover them.
+        let fee_transcripts = self.flush_retail_fee_transfer_transcripts();
+        let error = if fee_transcripts.is_err() {
+            Some("transaction native fee transcript preparation was refused")
+        } else if self.local_storage_refusal.is_some() {
             Some("transaction local State storage admission was refused")
         } else if matches!(
             self.block_execution_output_plan,
@@ -41396,7 +41509,7 @@ impl StateTransaction<'_, '_> {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
             Some("transaction execution-effect owner does not authorize application")
-        } else if self.execution_deferral.is_some() {
+        } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
         } else if self
             .pending_kagemusha_registry_transition_authorization
@@ -41471,7 +41584,6 @@ impl StateTransaction<'_, '_> {
                 last_tx_gas_used: _,
             execution_fee_meter: _,
             execution_effects: _,
-            execution_deferral: _,
             pending_nexus_fee_event,
             pending_nexus_fee_receipt: _,
             block_pending_public_lane_slash_observability,
@@ -41611,7 +41723,7 @@ impl StateTransaction<'_, '_> {
         prev_committed_topology.apply();
         committed_topology.apply();
         block_hashes.apply();
-        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
+        pending_fastpq_quantity_candidate.observe(&world);
         world.apply();
         block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
         public_lane_staking_status_overlay.commit();

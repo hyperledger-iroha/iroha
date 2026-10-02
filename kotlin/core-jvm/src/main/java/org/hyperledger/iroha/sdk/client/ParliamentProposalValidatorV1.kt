@@ -199,80 +199,67 @@ internal object ParliamentProposalValidatorV1 {
     private fun validationFeePolicyProposal(value: Map<String, Any?>) {
         exact(
             value,
-            setOf("proposal_operator", "policy", "payout_lifecycle_proposal_id"),
+            setOf("proposal_operator", "policy"),
             "ValidationFeePolicy",
         )
         account(value["proposal_operator"], "proposal_operator")
         val policy = objectValue(value["policy"], "policy")
         validationFeePolicy(policy)
-        val lifecycle = value["payout_lifecycle_proposal_id"]?.let {
-            bytes(it, 32, "payout_lifecycle_proposal_id", true)
-        }
-        require((policy["treasury_payout_binding"] == null) == (lifecycle == null)) {
-            "payout lifecycle id must be present exactly when the policy has a payout binding"
-        }
+
     }
 
     private fun validationFeePolicy(value: Map<String, Any?>) {
-        exact(
-            value,
-            setOf(
-                "schema_version", "network_id", "policy_version", "previous_policy_hash",
-                "ds_asset_id", "ds_scale", "fee", "treasury_account_id", "charging_mode",
-                "effective_from_height", "expires_after_height", "exemption_classes",
-                "treasury_payout_binding",
-            ),
-            "validation fee policy",
-        )
+        exact(value, setOf(
+            "schema_version", "network_id", "policy_version", "previous_policy_hash",
+            "ds_asset_id", "ds_scale", "retail_schedule", "effective_from_ms", "notice_published_at_ms",
+            "fee", "treasury_account_id", "charging_mode",
+            "exemption_classes", "reward_custody",
+        ), "validation fee policy")
         require(uint(value["schema_version"], "policy.schema_version") == BigInteger.ONE)
         NetworkId.parse(text(value["network_id"], "policy.network_id"))
         val version = u64String(value["policy_version"], "policy.policy_version", true)
-        val previousHash = value["previous_policy_hash"]?.let {
-            bytes(it, 32, "policy.previous_policy_hash", false)
-        }
-        require((version == BigInteger.ONE) == (previousHash == null)) {
-            "policy.previous_policy_hash does not match policy_version"
-        }
+        val previous = value["previous_policy_hash"]?.let { nonzeroFeeHash(it, "policy.previous_policy_hash") }
+        require((version == BigInteger.ONE) == (previous == null))
         asset(value["ds_asset_id"], "policy.ds_asset_id")
         require(uint(value["ds_scale"], "policy.ds_scale") == BigInteger.valueOf(2))
         val fee = quantity(value["fee"], "policy.fee")
+        require(fee != "0" && fee.substringAfter('.', "").length <= 2) { "Institutional fee must be positive exact minor units" }
         account(value["treasury_account_id"], "policy.treasury_account_id")
-        val mode = chargingMode(objectValue(value["charging_mode"], "policy.charging_mode"))
-        val effective = u64String(value["effective_from_height"], "policy.effective_from_height", false)
-        value["expires_after_height"]?.let {
-            require(u64String(it, "policy.expires_after_height", false) > effective) {
-                "policy.expires_after_height must exceed effective_from_height"
-            }
+        val mode = objectValue(value["charging_mode"], "policy.charging_mode")
+        exact(mode, setOf("charging_mode", "value"), "charging_mode")
+        require(mode["charging_mode"] == "RETAIL_MONTHLY_ALLOWANCE" && mode["value"] == null)
+        val effective = uint(value["effective_from_ms"], "policy.effective_from_ms").longValueExact()
+        val notice = uint(value["notice_published_at_ms"], "policy.notice_published_at_ms").longValueExact()
+        val boundary = java.time.Instant.ofEpochMilli(effective).atOffset(java.time.ZoneOffset.ofHours(11))
+        require(boundary.dayOfMonth == 1 && boundary.toLocalTime() == java.time.LocalTime.MIDNIGHT && effective - notice >= 30L * 86_400_000)
+        val schedule = objectValue(value["retail_schedule"], "policy.retail_schedule")
+        exact(schedule, setOf("included_payments", "overage_minor", "maintenance_tiers"), "retail_schedule")
+        require(uint(schedule["included_payments"], "included_payments") in BigInteger.ONE..BigInteger("4294967295"))
+        require(uint(schedule["overage_minor"], "overage_minor") > BigInteger.ZERO)
+        val tiers = list(schedule["maintenance_tiers"], "maintenance_tiers")
+        require(tiers.size in 1..32)
+        var previousMinimum = BigInteger.valueOf(-1)
+        var previousFee = BigInteger.ZERO
+        tiers.forEachIndexed { index, item ->
+            val tier = objectValue(item, "maintenance_tiers[$index]")
+            exact(tier, setOf("minimum_average_balance_minor", "monthly_fee_minor"), "maintenance tier")
+            val minimum = uint(tier["minimum_average_balance_minor"], "minimum_average_balance_minor")
+            require(minimum > previousMinimum && (index != 0 || minimum == BigInteger.ZERO))
+            val monthlyFee = uint(tier["monthly_fee_minor"], "monthly_fee_minor")
+            require(monthlyFee > BigInteger.ZERO && monthlyFee >= previousFee)
+            previousMinimum = minimum
+            previousFee = monthlyFee
         }
-        val exemptions = list(value["exemption_classes"], "policy.exemption_classes").mapIndexed { index, item ->
-            text(item, "policy.exemption_classes[$index]")
-        }
-        require(exemptions.distinct().size == exemptions.size && exemptions.all { it == "TREASURY_PAYOUT" }) {
-            "policy.exemption_classes contains an unsupported or duplicate class"
-        }
-        val binding = value["treasury_payout_binding"]?.let {
-            payoutBinding(objectValue(it, "policy.treasury_payout_binding"))
-        }
-        require((binding == null) == ("TREASURY_PAYOUT" !in exemptions)) {
-            "policy payout binding does not match exemption classes"
-        }
-        if (mode == "DISABLED") {
-            require(fee == "0" && exemptions.isEmpty() && binding == null) {
-                "disabled validation fees require zero fee and no payout exemption"
-            }
-        } else {
-            require(fee == "0.1") { "enabled V1 validation fee must equal 0.1" }
-        }
-    }
-
-    private fun chargingMode(value: Map<String, Any?>): String {
-        exact(value, setOf("charging_mode", "value"), "charging_mode")
-        val mode = text(value["charging_mode"], "charging_mode.charging_mode")
-        require(mode in setOf("DISABLED", "PER_QUALIFYING_TRANSFER_INSTRUCTION")) {
-            "charging_mode is unsupported"
-        }
-        require(value["value"] == null) { "charging_mode.value must be null" }
-        return mode
+        val exemptions = list(value["exemption_classes"], "exemption_classes")
+        require(exemptions == listOf("TREASURY_PAYOUT"))
+        val custody=objectValue(value["reward_custody"],"reward_custody")
+        exact(custody,setOf("contract_address","treasury_account_id","ds_asset_id","xor_asset_id","reward_pool_account_id","validator_lane_id"),"reward_custody")
+        requireCanonicalV1ContractAddress(text(custody["contract_address"],"reward contract"))
+        require(account(custody["treasury_account_id"],"custody treasury")==account(value["treasury_account_id"],"policy treasury"))
+        require(asset(custody["ds_asset_id"],"custody asset")==asset(value["ds_asset_id"],"policy asset"))
+        require(asset(custody["xor_asset_id"],"custody XOR")!=custody["ds_asset_id"])
+        require(account(custody["reward_pool_account_id"],"reward pool")!=custody["treasury_account_id"])
+        require(uint(custody["validator_lane_id"],"validator lane")<=BigInteger("4294967295"))
     }
 
     private fun validationFeePayoutLifecycle(value: Map<String, Any?>) {
@@ -281,38 +268,36 @@ internal object ParliamentProposalValidatorV1 {
         payoutBinding(objectValue(value["payout_binding"], "payout_binding"))
     }
 
-    private fun payoutBinding(value: Map<String, Any?>): Unit {
-        exact(
-            value,
-            setOf(
-                "contract_address", "code_hash", "entrypoint", "treasury_account_id",
-                "ds_asset_id", "xor_asset_id", "pool_vault_account_id", "batch_ds",
-                "min_xor_out", "max_xor_out", "recipients",
-            ),
-            "payout_binding",
-        )
-        requireCanonicalV1ContractAddress(text(value["contract_address"], "payout_binding.contract_address"))
-        bytes(value["code_hash"], 32, "payout_binding.code_hash", true)
-        require(text(value["entrypoint"], "payout_binding.entrypoint") == "autonomous_validation_fee_tick")
-        val treasury = account(value["treasury_account_id"], "payout_binding.treasury_account_id")
-        val vault = account(value["pool_vault_account_id"], "payout_binding.pool_vault_account_id")
-        require(treasury != vault) { "treasury and pool vault accounts must differ" }
-        val ds = asset(value["ds_asset_id"], "payout_binding.ds_asset_id")
-        val xor = asset(value["xor_asset_id"], "payout_binding.xor_asset_id")
-        require(ds != xor) { "DS and XOR assets must differ" }
-        require(quantity(value["batch_ds"], "payout_binding.batch_ds") == "10")
-        require(quantity(value["min_xor_out"], "payout_binding.min_xor_out") == "4")
-        require(quantity(value["max_xor_out"], "payout_binding.max_xor_out") == "100")
-        val recipients = list(value["recipients"], "payout_binding.recipients").mapIndexed { index, item ->
-            val recipient = objectValue(item, "payout_binding.recipients[$index]")
-            exact(recipient, setOf("account_id", "share"), "payout_binding.recipients[$index]")
-            require(quantity(recipient["share"], "payout_binding.recipients[$index].share") == "0.25")
-            account(recipient["account_id"], "payout_binding.recipients[$index].account_id")
+    private fun payoutBinding(value: Map<String, Any?>) {
+        exact(value, setOf(
+            "contract_address", "code_hash", "entrypoint", "treasury_account_id", "ds_asset_id", "xor_asset_id",
+            "pool_contract_address", "pool_code_hash", "pool_vault_account_id", "reward_pool_account_id",
+            "reference_feed_id", "reference_feed_config_version", "reference_provider_accounts",
+            "max_sbd_per_attempt_minor", "max_sbd_per_day_minor", "min_interval_ms", "max_source_age_ms",
+            "max_slippage_bps", "validator_lane_id", "min_reward_claim_xor_minor",
+        ), "payout_binding")
+        for (field in listOf("contract_address", "pool_contract_address")) requireCanonicalV1ContractAddress(text(value[field], field))
+        for (field in listOf("code_hash", "pool_code_hash")) nonzeroFeeHash(value[field], field)
+        require(text(value["entrypoint"], "entrypoint") == "autonomous_validation_fee_tick")
+        val accounts = listOf("treasury_account_id", "pool_vault_account_id", "reward_pool_account_id").map { account(value[it], it) }
+        require(accounts.distinct().size == 3)
+        require(asset(value["ds_asset_id"], "ds_asset_id") != asset(value["xor_asset_id"], "xor_asset_id"))
+        text(stringTuple(value["reference_feed_id"], "reference_feed_id"), "reference_feed_id")
+        require(uint(value["reference_feed_config_version"], "reference_feed_config_version") in BigInteger.ONE..BigInteger("4294967295"))
+        val providers = list(value["reference_provider_accounts"], "reference_provider_accounts").map { account(it, "reference provider") }
+        require(providers.size == 5 && providers.distinct().size == 5)
+        val attempt = uint(value["max_sbd_per_attempt_minor"], "max_sbd_per_attempt_minor")
+        require(attempt > BigInteger.ZERO && uint(value["max_sbd_per_day_minor"], "max_sbd_per_day_minor") >= attempt)
+        for (field in listOf("min_interval_ms", "max_source_age_ms", "min_reward_claim_xor_minor")) require(uint(value[field], field) > BigInteger.ZERO)
+        require(uint(value["max_slippage_bps"], "max_slippage_bps") < BigInteger.valueOf(10000))
+        require(uint(value["validator_lane_id"], "validator_lane_id") <= BigInteger("4294967295"))
+    }
+
+    private fun nonzeroFeeHash(value: Any?, label: String): String {
+        require(value is String && Regex("[0-9A-F]{64}").matches(value) && value != "0".repeat(64)) {
+            "$label must be nonzero canonical uppercase 32-byte hexadecimal"
         }
-        require(
-            recipients.size == 4 && recipients.distinct().size == 4 &&
-                treasury !in recipients && vault !in recipients,
-        ) { "payout recipients must contain four unique non-pool accounts" }
+        return value
     }
 
     private fun musubiAction(value: Map<String, Any?>) {

@@ -1631,7 +1631,6 @@ mod tests {
                 .is_err()
         );
     }
-    #[cfg(feature = "kagemusha-production-prover")]
     #[test]
     fn ordinary_bootstrap_platform_receipt_binds_credential_and_survives_replay() {
         for apple in [false, true] {

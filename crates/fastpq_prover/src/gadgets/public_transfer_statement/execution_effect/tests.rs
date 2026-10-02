@@ -470,7 +470,9 @@ fn genuine_core_capture_preserves_all_effects_and_refuses_substitution() {
     );
     assert_eq!(effects.context.source.height, 2);
     assert_eq!(effects.effects.len(), 4);
-    assert_eq!(inputs.slot, 2_000_000);
+    // The authenticated genesis has three batches at 0, 1 and 2 ms. Its block
+    // is at 3 ms; the genuine Core successor is two milliseconds later.
+    assert_eq!(inputs.slot, 5_000_000);
     assert_eq!(inputs.old_root, [0; 32]);
     assert_eq!(inputs.new_root, [0; 32]);
     let [first, mint, burn, last] = effects.effects.as_slice() else {

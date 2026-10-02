@@ -80,10 +80,10 @@ class ParticipantEnrollmentHttpCodecV1Test {
         for (i in h.indices) {
             assertFails { decode(v, h.filterIndexed { index, _ -> index != i }) }
             assertFails { decode(v, h + h[i]) }
-            assertFails { decode(v, h + ParticipantEnrollmentHttpCodecV1.Header(h[i].name.toUpperCase(Locale.ROOT), h[i].originalValue())) }
+            assertFails { decode(v, h + ParticipantEnrollmentHttpCodecV1.Header(h[i].name.uppercase(Locale.ROOT), h[i].originalValue())) }
         }
         // HTTP names are case insensitive; a single known spelling remains the same field.
-        decode(v, h.map { ParticipantEnrollmentHttpCodecV1.Header(it.name.toUpperCase(Locale.ROOT), it.originalValue()) })
+        decode(v, h.map { ParticipantEnrollmentHttpCodecV1.Header(it.name.uppercase(Locale.ROOT), it.originalValue()) })
         assertFails { decode(v, h + ParticipantEnrollmentHttpCodecV1.Header("X-Iroha-Enrollment-Unknown", byteArrayOf(49))) }
         decode(v, h + ParticipantEnrollmentHttpCodecV1.Header("X-Dataspace-Id", "is2".toByteArray(UTF_8)))
     }
@@ -122,7 +122,7 @@ class ParticipantEnrollmentHttpCodecV1Test {
             assertFails { decode(v, replace(v, 5, bad.toByteArray(UTF_8))) }
         for (bad in listOf("AB".repeat(32), "12".repeat(31), "0x" + field("nonce")))
             assertFails { decode(v, replace(v, 6, bad.toByteArray(UTF_8))) }
-        for (bad in listOf(text(v, "signature_hex").toUpperCase(Locale.ROOT), "AA==", "00".repeat(64)))
+        for (bad in listOf(text(v, "signature_hex").uppercase(Locale.ROOT), "AA==", "00".repeat(64)))
             assertFails { decode(v, replace(v, 7, bad.toByteArray(UTF_8))) }
         assertFails { decode(v, replace(v, 1, field("signatory_canonical_hex").toByteArray(UTF_8))) }
     }

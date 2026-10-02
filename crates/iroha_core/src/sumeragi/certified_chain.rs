@@ -378,6 +378,30 @@ fn read_frame_with_validation(
     height: u64,
     validation: &mut EpochValidationScope,
 ) -> Result<CommittedBlock, ChainReadError> {
+    read_frame_with_validation_attempt(block, height, validation).map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            ChainReadError::Malformed {
+                height,
+                reason: reason.to_string(),
+            }
+        }
+    })
+}
+
+/// Structural interpretation preserving the exact local attempt refusal.
+pub(crate) fn read_frame_attempt(
+    block: Arc<SignedBlock>,
+    height: u64,
+) -> Result<CommittedBlock, crate::execution_attempt::ExecutionAttemptError<ChainReadError>> {
+    read_frame_with_validation_attempt(block, height, &mut EpochValidationScope::new())
+}
+
+fn read_frame_with_validation_attempt(
+    block: Arc<SignedBlock>,
+    height: u64,
+    validation: &mut EpochValidationScope,
+) -> Result<CommittedBlock, crate::execution_attempt::ExecutionAttemptError<ChainReadError>> {
     #[cfg(test)]
     relation_counts::frame(height);
     let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -392,14 +416,16 @@ fn read_frame_with_validation(
             || !certificate.commit_qc().is_empty()
             || !certificate.availability().is_empty()
         {
-            return Err(malformed(
-                "genesis carries a result-only certificate".into(),
-            ));
+            return Err(malformed("genesis carries a result-only certificate".into()).into());
         }
         (None, core_hash_of(&block))
     } else {
         let header: BlockHeader = norito::decode_canonical(certificate.consensus_header())
-            .map_err(|error| malformed(error.to_string()))?;
+            .map_err(|error| {
+                crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+                    malformed(error.to_string())
+                })
+            })?;
         let payload_len = block
             .resultless_proposal_wire_len()
             .map_err(|error| malformed(error.to_string()))?;
@@ -416,7 +442,7 @@ fn read_frame_with_validation(
             || u32::try_from(payload_len).ok() != Some(header.payload_len)
             || Hash32(*payload_hash.as_ref()) != header.payload_hash
         {
-            return Err(ChainReadError::HeaderMismatch { height });
+            return Err(ChainReadError::HeaderMismatch { height }.into());
         }
         let core_hash = header.hash(&hasher);
         (Some(header), core_hash)
@@ -426,7 +452,16 @@ fn read_frame_with_validation(
         certificate.result_preimage(),
         validation,
     )
-    .map_err(|error| malformed(error.to_string()))?;
+    .map_err(|error| match error {
+        iroha_data_model::sumeragi_finality::CommitmentError::Resource(resource) => {
+            crate::execution_attempt::norito_decode_attempt_error(resource.into(), |error| {
+                malformed(error.to_string())
+            })
+        }
+        error => {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(malformed(error.to_string()))
+        }
+    })?;
     if let Some(header) = &header {
         super::epoch_beacon::control::verify_result(
             &header.control_witness,
@@ -440,13 +475,13 @@ fn read_frame_with_validation(
                 || pulse.context.parent_consensus_hash != header.parent_hash.0
                 || pulse.context.parent_result != header.parent_result.0
         }) {
-            return Err(ChainReadError::HeaderMismatch { height });
+            return Err(ChainReadError::HeaderMismatch { height }.into());
         }
         let epoch = validation
             .core_epoch(&commitment.schedule.current)
             .map_err(|error| malformed(error.to_string()))?;
         if header.epoch != epoch.id || (commitment.schedule.boundary.is_some() && !header.attest) {
-            return Err(ChainReadError::HeaderMismatch { height });
+            return Err(ChainReadError::HeaderMismatch { height }.into());
         }
     }
     let (wire_len, wire_hash) = block
@@ -457,14 +492,12 @@ fn read_frame_with_validation(
         || commitment.execution.executed_block_wire_len != wire_len
         || commitment.execution.executed_block_wire_hash != wire_hash
     {
-        return Err(ChainReadError::ExecutionMismatch { height });
+        return Err(ChainReadError::ExecutionMismatch { height }.into());
     }
     if commitment.beacon.as_ref().is_some_and(|pulse| {
         Some(pulse.finalized_chain_anchor.block_hash) != block.header().prev_block_hash()
     }) {
-        return Err(malformed(
-            "beacon pulse names another committed parent".into(),
-        ));
+        return Err(malformed("beacon pulse names another committed parent".into()).into());
     }
     Ok(CommittedBlock {
         height,
@@ -668,7 +701,7 @@ impl PrefixVerifierContext<'_> {
             .height_config_with_validation(&mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
         let certified = self.verify_certificate(committed, &authority, Some(&config), artifacts)?;
-        verify_boundary_source(&certified, &prefix.tip, &authority)?;
+        verify_boundary_source(&certified.committed, &prefix.tip, &authority)?;
         let schedule = prefix
             .schedule
             .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
@@ -705,6 +738,62 @@ impl PrefixVerifierContext<'_> {
         })
     }
 
+    /// Authenticate an offered original against this independently executed block.
+    /// All local-certificate and consensus-carried parent participation paths use
+    /// this same complete relation; availability remains independently verified
+    /// by the full certificate readers and the original Native execution tip.
+    fn verify_commit_qc_original(
+        &self,
+        committed: &CommittedBlock,
+        authority: &VerifiedAuthority,
+        commit_qc: &Qc,
+    ) -> Result<(), ChainReadError> {
+        let height = committed.height;
+        let header = committed
+            .header
+            .as_ref()
+            .ok_or_else(|| ChainReadError::Malformed {
+                height,
+                reason: "genesis alone has no parent service CommitQC".into(),
+            })?;
+        if header.epoch != authority.epoch
+            || commit_qc.epoch != authority.epoch
+            || height < authority.material.authorization.first_height
+            || height > authority.material.authorization.last_height
+            || (authority.material.mode == ConsensusMode::Npos
+                && height == authority.material.authorization.last_height
+                && !header.attest)
+            || commit_qc.kind != VoteKind::Commit
+            || commit_qc.height != height
+            || commit_qc.block_hash != committed.core_hash
+            || commit_qc.attest != header.attest
+        {
+            return Err(ChainReadError::HeaderMismatch { height });
+        }
+        if commit_qc.result != committed.result {
+            return Err(ChainReadError::ResultMismatch { height });
+        }
+        if header.instance != self.instance || commit_qc.instance != self.instance {
+            return Err(ChainReadError::WrongInstance { height });
+        }
+        let native = OriginalResultVerifier {
+            source: committed,
+            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
+        };
+        let verifier = self.attestations.unwrap_or(&native);
+        #[cfg(test)]
+        relation_counts::qc(height);
+        let checked = iroha_sumeragi::crypto::Verifier::new(
+            &authority.crypto,
+            &self.instance,
+            &authority.epoch,
+            &authority.committee,
+        )
+        .verify_qc(verifier, commit_qc);
+        checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        Ok(())
+    }
+
     fn verify_certificate_with_scratch_admission(
         &self,
         committed: CommittedBlock,
@@ -737,41 +826,7 @@ impl PrefixVerifierContext<'_> {
                 .map_err(|error| verification_codec_error(height, error))?;
             (qc, None)
         };
-        if header.epoch != authority.epoch
-            || commit_qc.epoch != authority.epoch
-            || height < authority.material.authorization.first_height
-            || height > authority.material.authorization.last_height
-            || (authority.material.mode == ConsensusMode::Npos
-                && height == authority.material.authorization.last_height
-                && !header.attest)
-            || commit_qc.kind != VoteKind::Commit
-            || commit_qc.height != height
-            || commit_qc.block_hash != committed.core_hash
-            || commit_qc.attest != header.attest
-        {
-            return Err(ChainReadError::HeaderMismatch { height }.into());
-        }
-        if commit_qc.result != committed.result {
-            return Err(ChainReadError::ResultMismatch { height }.into());
-        }
-        if header.instance != self.instance || commit_qc.instance != self.instance {
-            return Err(ChainReadError::WrongInstance { height }.into());
-        }
-        let native = OriginalResultVerifier {
-            source: &committed,
-            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
-        };
-        let verifier = self.attestations.unwrap_or(&native);
-        #[cfg(test)]
-        relation_counts::qc(height);
-        let checked = iroha_sumeragi::crypto::Verifier::new(
-            &authority.crypto,
-            &self.instance,
-            &authority.epoch,
-            &authority.committee,
-        )
-        .verify_qc(verifier, &commit_qc);
-        checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        self.verify_commit_qc_original(&committed, authority, &commit_qc)?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
         let config = config.ok_or_else(|| {
@@ -839,7 +894,7 @@ impl AttestationVerifier for OriginalResultVerifier<'_> {
 }
 
 fn verify_boundary_source(
-    certified: &CertifiedBlock,
+    certified: &CommittedBlock,
     parent: &CommittedBlock,
     authority: &VerifiedAuthority,
 ) -> Result<(), ChainReadError> {
@@ -1613,6 +1668,7 @@ pub use execution_read::{
     AuthenticatedExecutionBlock, NativeExecutionRead, NativeExecutionReadError,
     NativeExecutionReadLimits, NativeExecutionReadResource, read_authenticated_execution,
 };
+pub(crate) use state_certificate::{ParentServiceError, VerifiedParentService};
 
 #[cfg(test)]
 pub(crate) mod relation_counts;

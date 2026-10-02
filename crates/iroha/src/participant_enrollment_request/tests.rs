@@ -394,7 +394,7 @@ fn actual_owner_rejects_another_network_schema_peer_config_and_retained_certifie
 }
 
 pub(crate) struct NativeCustodyFixture(Fixture);
-#[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(unix)]
 impl NativeCustodyFixture {
     pub(crate) fn new() -> Self {
         Self(Fixture::new())

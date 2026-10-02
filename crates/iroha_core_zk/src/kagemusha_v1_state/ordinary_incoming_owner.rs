@@ -27,6 +27,7 @@ pub(super) struct IncomingIntentOriginals {
 pub(super) struct PendingIncoming {
     pub(super) intent: IncomingIntentOriginals,
     pub(super) approval: Option<super::incoming_preparation::PendingIncomingApproval>,
+    pub(super) terminal: Option<super::incoming_terminal::IncomingTerminalPending>,
 }
 
 impl IncomingIntentOriginals {
@@ -106,7 +107,7 @@ impl IncomingIntentOriginals {
 }
 
 impl KagemushaNativeOrdinaryCashOwnerV1 {
-    fn incoming_current_head(&self) -> KagemushaOrdinaryFinancialHeadV1 {
+    pub(super) fn incoming_current_head(&self) -> KagemushaOrdinaryFinancialHeadV1 {
         KagemushaOrdinaryFinancialHeadV1 {
             state_commitment: self.state.state_commitment,
             logical_sequence: self.state.logical_sequence,
@@ -258,6 +259,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             || self.pending_receiver_request.is_some()
             || self.pending_mint.is_some() != mint
             || self.prepared_commit.is_some()
+            || self.prepared_incoming_commit.is_some()
             || self.terminal.as_ref().is_none_or(|t| t.has_pending())
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
@@ -276,6 +278,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.pending_incoming = Some(PendingIncoming {
             intent,
             approval: None,
+            terminal: None,
         });
         self.require_current_financial_control()?;
         Ok(digest)
@@ -302,6 +305,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             || self.pending.is_some()
             || self.pending_receiver_request.is_some()
             || self.prepared_commit.is_some()
+            || self.prepared_incoming_commit.is_some()
             || self.pending_mint.is_some() != matches!(intent.source, SourceLocator::Mint)
             || self.anchor_request_sha256.is_none()
             || self.terminal.as_ref().is_none_or(|t| t.has_pending())
@@ -313,6 +317,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.pending_incoming = Some(PendingIncoming {
             intent,
             approval: None,
+            terminal: None,
         });
         Ok(())
     }

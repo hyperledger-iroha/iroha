@@ -42,8 +42,6 @@ pub mod kagemusha_ordinary_mint_debit_v1;
 pub mod kagemusha_ordinary_mint_finality_v1;
 
 pub use self::{
-    kagemusha_ordinary_mint_finality_v1::*,
-    kagemusha_ordinary_mint_debit_v1::*,
     kagemusha_app_enrollment_possession_v1::*, kagemusha_app_enrollment_v1::*,
     kagemusha_app_operation_approval_v1::*, kagemusha_device_response_v1::*,
     kagemusha_device_v1::*, kagemusha_enrolled_open_selector_v1::*,
@@ -53,7 +51,8 @@ pub use self::{
     kagemusha_ordinary_current_control_v1::*, kagemusha_ordinary_current_issuer_state_v1::*,
     kagemusha_ordinary_enrollment_http_v1::*, kagemusha_ordinary_enrollment_issuer_policy_v1::*,
     kagemusha_ordinary_incoming_v1::*, kagemusha_ordinary_issuer_circuit_admission_v1::*,
-    kagemusha_ordinary_lineage_v1::*, kagemusha_ordinary_mint_v1::*,
+    kagemusha_ordinary_lineage_v1::*, kagemusha_ordinary_mint_debit_v1::*,
+    kagemusha_ordinary_mint_finality_v1::*, kagemusha_ordinary_mint_v1::*,
     kagemusha_ordinary_retail_enrollment_v1::*, kagemusha_ordinary_retail_identity_policy_v1::*,
     kagemusha_platform_attestation_original_v1::*, kagemusha_play_integrity_provider_policy_v1::*,
     kagemusha_play_integrity_refresh_v1::*, kagemusha_raw_app_attestation_admission_v1::*,
@@ -70,3 +69,10 @@ pub const KAGEMUSHA_V1_REJECTION_REASON_PREFIX: &str = "kagemusha_v1_reason::";
 /// Distinct nonmonetary first-device hardware evidence family.
 pub mod kagemusha_hardware_evidence_bootstrap_v1;
 pub use kagemusha_hardware_evidence_bootstrap_v1::*;
+
+mod kagemusha_ordinary_node_mint_v1;
+pub use kagemusha_ordinary_node_mint_v1::*;
+
+/// Purpose-bound nonmonetary ordinary application installed-context originals.
+pub mod kagemusha_ordinary_installed_context_v1;
+pub use kagemusha_ordinary_installed_context_v1::*;

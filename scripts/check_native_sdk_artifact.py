@@ -110,6 +110,8 @@ APPROVED_KAGEMUSHA_C_EXPORTS = (
     "connect_norito_kagemusha_testnet_value_credit_v1",
     "connect_norito_kagemusha_testnet_native_startup_contract_v1",
     "connect_norito_kagemusha_testnet_native_startup_activate_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -152,8 +154,15 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
         *APPROVED_KAGEMUSHA_C_EXPORTS,
-        "connect_norito_validation_fee_hijiri_quote_request_v1",
-        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+        "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion",
+        "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1",
+        "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1",
+        "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeDecodeAssessmentV1",
+        "connect_norito_retail_fee_intent_hash_v1",
+        "connect_norito_retail_fee_assessment_marker_v1",
+        "connect_norito_retail_fee_assessment_decode_v1",
+        "connect_norito_validation_fee_current_policy_proof_request_v1",
+        "connect_norito_validation_fee_current_policy_proof_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
@@ -213,8 +222,11 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
                 "connect_norito_kagemusha_testnet_native_startup_activate_v1",
             }
         ),
-        "connect_norito_validation_fee_hijiri_quote_request_v1",
-        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+        "connect_norito_retail_fee_intent_hash_v1",
+        "connect_norito_retail_fee_assessment_marker_v1",
+        "connect_norito_retail_fee_assessment_decode_v1",
+        "connect_norito_validation_fee_current_policy_proof_request_v1",
+        "connect_norito_validation_fee_current_policy_proof_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
@@ -228,8 +240,8 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
         "privateSettlementVerifyCommitteeProofResponseV1",
         "sorafsValidateAppealFinanceCancelAssetLockJson",
-        "validationFeeHijiriQuoteRequestV1",
-        "validationFeeVerifyHijiriQuoteResponseV1",
+        "validationFeeCurrentPolicyProofRequestV1",
+        "validationFeeVerifyCurrentPolicyProofV1",
         "verifySorafsOrderbookSubmissionReceiptV1",
     ),
     "python": (
@@ -239,14 +251,14 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "private_settlement_verify_auditor_capsule_response_with_request_v1",
         "private_settlement_verify_committee_proof_response_v1",
         "sorafs_validate_appeal_finance_cancel_asset_lock_json",
-        "validation_fee_hijiri_quote_request_v1",
-        "validation_fee_verify_hijiri_quote_response_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ),
 }
 
 RETIRED_PROTOCOL_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_kagemusha_device_response_authenticator_v1_verify",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
@@ -254,11 +266,21 @@ RETIRED_PROTOCOL_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
     ),
     "csharp": (
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_kagemusha_device_response_authenticator_v1_verify",
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     ),
-    "node": ("privateSettlementVerifyAuditorCapsuleResponseV1",),
-    "python": ("private_settlement_verify_auditor_capsule_response_v1",),
+    "node": (
+        "privateSettlementVerifyAuditorCapsuleResponseV1",
+        "validationFeeHijiriQuoteRequestV1",
+        "validationFeeVerifyHijiriQuoteResponseV1",
+    ),
+    "python": (
+        "private_settlement_verify_auditor_capsule_response_v1",
+        "validation_fee_hijiri_quote_request_v1",
+        "validation_fee_verify_hijiri_quote_response_v1",
+    ),
 }
 
 

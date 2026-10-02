@@ -1,16 +1,18 @@
-//! Private canonical fetch and original CALL/RETURN/STORE producer ownership.
+//! Private canonical fetch and original CALL/RETURN/STORE/scalar/branch producer ownership.
 //!
 //! One original packet array owns architectural control, operand reads, both
 //! lifecycle roles and protected return-PC state. The same references feed the
 //! lifecycle bank and the private sorted history; no event digest substitutes
 //! for these columns. All fetch choices and instruction activity are private.
 // TODO: Compose descriptor/typed-word/initialization/copyback/store effects and
-// their dynamic gas and native1024 call-depth bound between these fixed slots, then initialize and terminate
+// their dynamic gas between these fixed slots, then initialize and terminate
 // the entire invocation in one masked STARK. This partial dispatcher has no
 // production adapter, verifier registration or complete-State authority.
 
+mod scalar;
+
 use super::{F, bit, frame_lifecycle, packet, wide};
-use ivm::PreparedContract;
+use ivm::{PreparedContract, limits::MAX_CONTRACT_CALL_DEPTH};
 use packet::{
     AFTER, AFTER_TAG, BEFORE, BEFORE_TAG, CLOCK, ENABLED, GENERATION, INDEX, KEY, SPACE, Space, VM,
     WRITE,
@@ -27,16 +29,24 @@ const PARENT_LIVE: usize = RETURN_INVERSE + 1;
 const PARENT_INVERSE: usize = PARENT_LIVE + 1;
 const HALT: usize = PARENT_INVERSE + 1;
 const HALT_INVERSE: usize = HALT + 1;
-const RETURN_DELTA: usize = HALT_INVERSE + 1;
+// The canonical native bound is a power of two: ten low bits and one exact
+// maximum bit encode 0..=1024. A changed bound requires the same AIR review.
+const DEPTH_BITS_PER_VALUE: usize = 11;
+const _: () = assert!(MAX_CONTRACT_CALL_DEPTH == 1 << (DEPTH_BITS_PER_VALUE - 1));
+const DEPTH_BITS: usize = HALT_INVERSE + 1;
+const RETURN_DELTA: usize = DEPTH_BITS + 2 * DEPTH_BITS_PER_VALUE;
 /// One private fetch/control workspace shared by every original port.
-pub(super) const WIDTH: usize = RETURN_DELTA + 2;
+const SCALAR: usize = RETURN_DELTA + 2;
+/// Private source bits, ALU, comparison and shift cells follow control.
+pub(super) const WIDTH: usize = SCALAR + scalar::WIDTH;
 /// Exhaustive original producers owned by this dispatcher, in native order.
-pub(super) const PORTS: usize = 17;
+pub(super) const PORTS: usize = 21;
 /// Architectural control owner indexes; frame indexes 0..21 stay disjoint.
 const PC_OWNER: u32 = 32;
 const GAS_OWNER: u32 = 33;
 const CYCLE_OWNER: u32 = 34;
 const RUNNING_OWNER: u32 = 35;
+const CALL_DEPTH_OWNER: u32 = 36;
 const RETURN_PC_OWNER: u32 = 12;
 const PC_READ: usize = 0;
 const GAS_DEBIT: usize = 1;
@@ -52,9 +62,16 @@ const RETURN_ACTIVE: usize = 10;
 const RETURN_PARENT: usize = 11;
 const CHILD_PROTECTED_PC: usize = 12;
 const LINK_WRITE: usize = 13;
-const PC_WRITE: usize = 14;
-const CYCLE_WRITE: usize = 15;
-const RUNNING_WRITE: usize = 16;
+// Both native pushes and pops commit after successful frame effects. The same
+// original depth cell also accompanies STORE so later invocation composition
+// cannot supply a different private depth to each instruction.
+const CALL_DEPTH: usize = 14;
+const SCALAR_LEFT: usize = 15;
+const SCALAR_RIGHT: usize = 16;
+const SCALAR_DESTINATION: usize = 17;
+const PC_WRITE: usize = 18;
+const CYCLE_WRITE: usize = 19;
+const RUNNING_WRITE: usize = 20;
 
 /// Canonical artifact-owned fixed code; executed addresses remain witness data.
 pub(super) struct Program {
@@ -191,6 +208,7 @@ pub(super) struct Decoded<'a> {
     pub(super) child_active: &'a [F; packet::WIDTH],
     pub(super) return_active: &'a [F; packet::WIDTH],
     pub(super) return_parent: &'a [F; packet::WIDTH],
+    pub(super) call_depth: &'a [F; packet::WIDTH],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -198,6 +216,8 @@ enum Role {
     Child,
     Return,
     Store,
+    Scalar,
+    Branch,
 }
 fn role(instruction: u32) -> Option<Role> {
     match wide::opcode(instruction) {
@@ -211,6 +231,8 @@ fn role(instruction: u32) -> Option<Role> {
             Some(Role::Return)
         }
         wide::memory::STORE64 => Some(Role::Store),
+        _ if scalar::is_branch(instruction) => Some(Role::Branch),
+        _ if scalar::is_supported(instruction) => Some(Role::Scalar),
         _ => None,
     }
 }
@@ -281,12 +303,13 @@ fn header(
 }
 
 /// Constrain canonical private fetch, native base debit and one-cycle commit,
-/// exact source registers, CALL fresh-parent state and protected RETURN target.
+/// exact source registers, CALL fresh-parent state, protected RETURN target and
+/// the native bounded return-stack depth transition.
 ///
 /// Successful-only rows force OOG/cycle/encoding guards to accept; no witness
 /// fault selector may erase an effect. Descriptor/typed-word/STORE semantics
 /// are required consumers of Decoded and remain explicitly unimplemented here.
-pub(super) fn append_residues<'a>(
+fn append_control_residues<'a>(
     out: &mut Vec<F>,
     program: &Program,
     schedule: Schedule,
@@ -318,6 +341,9 @@ pub(super) fn append_residues<'a>(
     let child = select(&|_, w| role(w) == Some(Role::Child));
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
+    let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
+    let rotating = select(&|_, w| scalar::is_rotate(w));
+    let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
         out.push(bit(row[FETCH + i]));
@@ -327,11 +353,18 @@ pub(super) fn append_residues<'a>(
         }
     }
     out.push(fetched.sub(active));
-    out.push(child.add(returning).add(store).sub(active));
+    out.push(
+        child
+            .add(returning)
+            .add(store)
+            .add(scalar)
+            .add(branching)
+            .sub(active),
+    );
     for value in &row[WORDS..CHILD_INVERSE] {
         out.push(bit(*value));
     }
-    for value in &row[RETURN_DELTA..WIDTH] {
+    for value in &row[RETURN_DELTA..SCALAR] {
         out.push(bit(*value));
     }
     // The private PC must be one actual instruction address in the original image.
@@ -411,14 +444,22 @@ pub(super) fn append_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native cost is2 for calls/returns and3 for STORE64; exact no-underflow.
+        // Native base cost: two for CALL/RETURN, three for STORE64, one
+        // for scalar arithmetic and conditional branches, plus one for rotates.
+        // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
         } else {
             row[CARRIES + i - 1]
         };
         let cost = if i == 0 {
-            child.add(returning).mul(F(2)).add(store.mul(F(3)))
+            child
+                .add(returning)
+                .mul(F(2))
+                .add(store.mul(F(3)))
+                .add(scalar)
+                .add(rotating)
+                .add(branching)
         } else {
             F::ZERO
         };
@@ -600,6 +641,49 @@ pub(super) fn append_residues<'a>(
     out.push(parent.mul(returning.sub(row[PARENT_LIVE])));
     out.push(F::ONE.sub(row[PARENT_LIVE]).mul(row[PARENT_INVERSE]));
     let root_return = returning.sub(row[PARENT_LIVE]);
+    // The root has a separate outer sentinel, so only a non-root return pops
+    // the protected stack. Bounds on both states make a full-stack push and an
+    // empty non-root pop impossible as integer equations, not modular aliases.
+    header(
+        out,
+        schedule,
+        packets,
+        CALL_DEPTH,
+        Space::Owner,
+        active.mul(F(u64::from(CALL_DEPTH_OWNER))),
+        F::ZERO,
+        active,
+        child.add(returning),
+    );
+    for (side, offset) in [BEFORE, AFTER].into_iter().enumerate() {
+        let bits = &row[DEPTH_BITS + side * DEPTH_BITS_PER_VALUE
+            ..DEPTH_BITS + (side + 1) * DEPTH_BITS_PER_VALUE];
+        out.extend(bits.iter().copied().map(bit));
+        let low = bits[..DEPTH_BITS_PER_VALUE - 1]
+            .iter()
+            .copied()
+            .enumerate()
+            .fold(F::ZERO, |sum, (index, value)| {
+                sum.add(value.mul(F(1_u64 << index)))
+            });
+        let maximum = bits[DEPTH_BITS_PER_VALUE - 1];
+        out.push(maximum.mul(low));
+        out.push(
+            p[CALL_DEPTH][offset]
+                .sub(low)
+                .sub(maximum.mul(F(MAX_CONTRACT_CALL_DEPTH as u64))),
+        );
+        for limb in 1..4 {
+            out.push(p[CALL_DEPTH][offset + limb]);
+        }
+    }
+    out.push(
+        p[CALL_DEPTH][AFTER]
+            .sub(p[CALL_DEPTH][BEFORE])
+            .sub(child)
+            .add(row[PARENT_LIVE]),
+    );
+    out.push(root_return.mul(p[CALL_DEPTH][BEFORE]));
     let call_return = |i| {
         weighted(&|n, w| {
             if role(w) == Some(Role::Child) {
@@ -661,7 +745,16 @@ pub(super) fn append_residues<'a>(
                     };
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
-                Some(Role::Store) => constant_limb(pc + 4, i),
+                Some(Role::Store | Role::Scalar) => constant_limb(pc + 4, i),
+                Some(Role::Branch) => {
+                    // PreparedContract has already checked both successors
+                    // against its instruction boundaries. Native branches do
+                    // not halt, even when their predicate is true.
+                    let fallthrough = constant_limb(pc + 4, i);
+                    let target =
+                        constant_limb(pc.wrapping_add_signed(i64::from(wide::imm8(w)) * 4), i);
+                    fallthrough.add(scalar::branch_taken(row).mul(target.sub(fallthrough)))
+                }
                 _ => F::ZERO,
             }
         });
@@ -693,7 +786,23 @@ pub(super) fn append_residues<'a>(
         child_active: &p[CHILD_ACTIVE],
         return_active: &p[RETURN_ACTIVE],
         return_parent: &p[RETURN_PARENT],
+        call_depth: &p[CALL_DEPTH],
     }
+}
+
+/// Join the same canonical private fetch/control and scalar/branch register equations.
+/// Every original producer, including all three scalar ports, belongs to the
+/// exhaustive private-history join. No public operand statement is introduced.
+pub(super) fn append_residues<'a>(
+    out: &mut Vec<F>,
+    program: &Program,
+    schedule: Schedule,
+    row: &[F; WIDTH],
+    packets: &'a OriginalPackets,
+) -> Decoded<'a> {
+    let decoded = append_control_residues(out, program, schedule, row, packets);
+    scalar::append_residues(out, program, schedule, row, packets);
+    decoded
 }
 
 #[cfg(test)]

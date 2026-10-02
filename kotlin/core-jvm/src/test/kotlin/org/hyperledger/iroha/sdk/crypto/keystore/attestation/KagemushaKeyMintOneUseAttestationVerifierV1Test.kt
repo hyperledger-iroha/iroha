@@ -177,6 +177,52 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
     }
 
     @Test
+    fun ordinaryPreparationAcceptsOnlyUncommittedSendOrRedeemInTheSelectedLane() {
+        for (operation in listOf(2, 4)) {
+            val preparation = FRAME.copyOf().also { it[331] = operation.toByte() }
+            KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(preparation, LANE, BEFORE, AFTER)
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireExact(preparation, LANE, BEFORE, AFTER)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireAppAttestSubject(preparation)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(preparation, LANE)
+            }
+            val selected = preparation.copyOf().also { it[364] = 0x41; it[396] = 0x42 }
+            KagemushaSelectionFrameV1.requireExact(selected, LANE, BEFORE, AFTER)
+            KagemushaSelectionFrameV1.requireAppAttestSubject(selected)
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(selected, LANE, BEFORE, AFTER)
+            }
+            for (offset in listOf(364, 396)) {
+                val partiallyCommitted = preparation.copyOf().also { it[offset] = 1 }
+                assertThrows(IllegalArgumentException::class.java) {
+                    KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(partiallyCommitted, LANE, BEFORE, AFTER)
+                }
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(preparation, ByteArray(32) { 0x22 }, BEFORE, AFTER)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(preparation, LANE,
+                    ByteArray(16).also { it[0] = 1 }, ByteArray(16).also { it[0] = 2 })
+            }
+        }
+        for (operation in listOf(0, 1, 3, 5, 6)) {
+            val invalid = FRAME.copyOf().also {
+                it[331] = operation.toByte()
+                if (operation == 0) it.fill(0, 428, 460)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(invalid, LANE,
+                    invalid.copyOfRange(428, 444), invalid.copyOfRange(444, 460))
+            }
+        }
+    }
+
+    @Test
     fun longLivedVerifierRejectsStaleSnapshotAndTrustedTimeRollback() {
         val fixture = fixture()
         var now = EVALUATION_TIME

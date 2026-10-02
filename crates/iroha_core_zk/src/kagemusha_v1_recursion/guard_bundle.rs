@@ -18,7 +18,6 @@
 //! rejected. The Guard transport column has 44 fields: normalized digest, both audits, both exact
 //! credential statement digests, and history. Guard and descendant keys must be regenerated.
 
-#[cfg(feature = "zk-halo2-ipa")]
 use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -27,7 +26,6 @@ use halo2_base::{
         circuit::{BaseConfig, builder::BaseCircuitBuilder},
     },
 };
-#[cfg(feature = "zk-halo2-ipa")]
 use halo2_proofs::halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_proofs::poly::ipa::commitment::ParamsIPA;
@@ -48,31 +46,21 @@ use sha2::{Digest as _, Sha256};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::KagemushaPastaParityV1;
 use super::{DigestV1, KagemushaNormalizedGuardStatementV1, KagemushaOperationV1};
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::{
     KagemushaEpAccumulatorV1, KagemushaEpFoldProofV1, KagemushaEqAccumulatorV1,
     KagemushaEqFoldProofV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 use super::{
     KagemushaProviderRootCircuitParamsV1, provider_policy_root::ProviderPolicyRootConfigV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 use crate::pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1};
 use crate::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128},
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
 };
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_base::utils::{BigPrimeField, CurveAffineExt};
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use snark_verifier::{
     loader::native::NativeLoader,
@@ -80,16 +68,8 @@ use snark_verifier::{
     verifier::plonk::PlonkProtocol,
 };
 
-#[cfg(feature = "zk-halo2-ipa")]
 use super::deferred_parent::accumulator_limb_count;
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::deferred_parent::{DeferredAccumulator, ordinary_ipa_proof_profile_v1};
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::deferred_parent::{
     KagemushaDeferredParentOutputV1, KagemushaNativeDeferredBatchV1, bind_accumulator_limbs,
@@ -101,7 +81,6 @@ use super::deferred_parent::{
     verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
 };
 
-#[cfg(feature = "zk-halo2-ipa")]
 use super::{
     carrier_binding::{
         KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1, carrier_binding_values_v1,
@@ -130,7 +109,6 @@ pub(crate) const KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1: usize = 64;
 ///
 /// Every slot, including canonical zero padding, is loaded as a circuit constant so setup and
 /// proving retain identical topology. `selector` controls whether membership is required.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) fn constrain_enabled_hardware_profile_membership_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -581,14 +559,8 @@ fn validate_successor_credential_binding(
 
 /// Public PlatformCredential layout: statement, mutually authenticated audits, then the complete
 /// claim history which a monetary consumer must carry and ultimately decide.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod platform_credential_public_instance {
     pub(crate) const CREDENTIAL_LO: usize = 0;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const APP_BINDING_LO: usize = 2;
     #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
@@ -609,18 +581,14 @@ pub(crate) mod platform_credential_public_instance {
 }
 
 /// Exact PlatformCredential public width for one parity.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1: usize =
     platform_credential_public_instance::HISTORY_START + accumulator_limb_count();
 
 /// Complete semantic/history plus carrier-binding column of the exact hybrid credential proof.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1: usize =
     KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 14;
 /// Complete source-major carrier capacity, retaining the original four-lane 2016-source envelope.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1: usize = 4 * 2016 + 98;
-#[cfg(feature = "zk-halo2-ipa")]
 const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {
         domain: u64::from_le_bytes(*b"kgpcrlc1"),
@@ -628,10 +596,8 @@ const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
         capacity: KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
         semantic_prefix: KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
     };
-#[cfg(feature = "zk-halo2-ipa")]
 type CredentialCarrierRlcMachineV1<F> = KagemushaCarrierRlcMachineV1<F, 8162, 1, 103>;
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 enum KagemushaPlatformCredentialDenseJobsV1 {
@@ -644,7 +610,6 @@ enum KagemushaPlatformCredentialDenseJobsV1 {
 /// Construction is intentionally restricted to the paired hash-claim builders below. A semantic
 /// credential witness alone no longer creates a circuit, because that would silently reintroduce
 /// either the infeasible k=16 SHA machine or an unauthenticated host digest.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub struct KagemushaPlatformCredentialRelationCircuitV1<F: KagemushaPoseidonFieldV1> {
@@ -654,7 +619,6 @@ pub struct KagemushaPlatformCredentialRelationCircuitV1<F: KagemushaPoseidonFiel
     provider_policy_root: DigestV1,
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl<F> KagemushaPlatformCredentialRelationCircuitV1<F>
 where
@@ -692,7 +656,6 @@ where
 }
 
 /// Base and reciprocal dense-MSM configuration. SHA compression lives only in k=12 shard proofs.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub struct KagemushaPlatformCredentialCircuitConfigV1<F: KagemushaPoseidonFieldV1> {
@@ -701,7 +664,6 @@ pub struct KagemushaPlatformCredentialCircuitConfigV1<F: KagemushaPoseidonFieldV
     carrier_rlc: [KagemushaCarrierRlcConfigV1; 2],
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 macro_rules! impl_platform_credential_circuit {
     ($field:ty, $opposite:ty, $variant:ident, $label:literal) => {
@@ -804,10 +766,8 @@ macro_rules! impl_platform_credential_circuit {
     };
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl_platform_credential_circuit!(Fp, EpAffine, Eq, "Kagemusha Eq PlatformCredential");
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl_platform_credential_circuit!(Fq, EqAffine, Ep, "Kagemusha Ep PlatformCredential");
 
@@ -1125,7 +1085,6 @@ where
 /// The helper deliberately invokes `credential_builder` instead of duplicating its host
 /// encodings. The returned bytes are only a private shard/claim proof plan; the paired producer
 /// below separately constrains the same assigned queue against the completed recursive claim.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) fn platform_credential_sha_messages_v1<F>(
     witness: &KagemushaPlatformCredentialRelationWitnessV1,
 ) -> Result<Vec<Vec<u8>>, String>
@@ -1141,7 +1100,6 @@ where
 }
 
 /// One parity's terminal ordered-hash claim consumed by a PlatformCredential proof.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) struct KagemushaPlatformCredentialHashClaimParityWitnessV1<'a, C>
@@ -1157,7 +1115,6 @@ where
 }
 
 /// Complete paired claim material required to create one provider credential proof pair.
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) struct KagemushaPlatformCredentialHashClaimPairWitnessV1<'a> {
     pub(crate) relation: KagemushaPlatformCredentialRelationWitnessV1,
@@ -1170,7 +1127,6 @@ pub(crate) struct KagemushaPlatformCredentialHashClaimPairWitnessV1<'a> {
 }
 
 /// Detached reciprocal plans discovered without retaining either PlatformCredential Base graph.
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) struct KagemushaPlatformCredentialAuditDiscoveryV1 {
     eq_output: KagemushaNativeDeferredBatchV1<EqAffine>,
@@ -1182,7 +1138,6 @@ pub(crate) struct KagemushaPlatformCredentialAuditDiscoveryV1 {
     ep_digest: DigestV1,
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl KagemushaPlatformCredentialAuditDiscoveryV1 {
     #[must_use]
@@ -1196,24 +1151,19 @@ impl KagemushaPlatformCredentialAuditDiscoveryV1 {
     }
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_HASH_CLAIM_EQUATION_TAG_V1: u32 = 13;
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1: usize =
     2 + 2 + 2 + 8 + 2 * accumulator_limb_count();
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1: usize =
     PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1
         + super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1;
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1: usize =
     PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1 + 2;
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_platform_credential_claim_pair_v1(
     witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
@@ -1289,7 +1239,6 @@ fn validate_platform_credential_claim_pair_v1(
     Ok(())
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn assign_platform_credential_history_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -1313,7 +1262,6 @@ fn assign_platform_credential_history_v1<F: KagemushaPoseidonFieldV1>(
     Ok(limbs)
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn constant_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -1322,7 +1270,6 @@ fn constant_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
     crate::kagemusha_v1_poseidon::digest_limbs::<F>(digest).map(|limb| ctx.load_constant(limb))
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn assigned_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
     limbs: &[AssignedValue<F>; 2],
@@ -1341,7 +1288,6 @@ fn assigned_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
     Ok(digest)
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn platform_credential_audit_cells_v1<F: KagemushaPoseidonFieldV1>(
     builder: &BaseCircuitBuilder<F>,
@@ -1359,7 +1305,6 @@ fn platform_credential_audit_cells_v1<F: KagemushaPoseidonFieldV1>(
         .map_err(|_| "Kagemusha PlatformCredential audit cells have wrong shape".to_owned())
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 struct KagemushaPlatformCredentialScalarHalfV1<C>
 where
@@ -1372,7 +1317,6 @@ where
     pair_binding: Vec<AssignedValue<C::ScalarExt>>,
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn bind_credential_provider_policy_root_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
@@ -1399,7 +1343,6 @@ fn bind_credential_provider_policy_root_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn build_platform_credential_scalar_half_v1<C>(
@@ -1690,7 +1633,6 @@ where
     })
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_platform_credential_carrier_len_v1<C>(
     output: &KagemushaNativeDeferredBatchV1<C>,
@@ -1720,7 +1662,6 @@ where
     Ok(())
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn padded_platform_credential_carrier_v1<C>(
     output: &KagemushaNativeDeferredBatchV1<C>,
@@ -1743,7 +1684,6 @@ where
     Ok(values)
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn attach_platform_credential_carriers_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
@@ -1817,7 +1757,6 @@ fn attach_platform_credential_carriers_v1<F: KagemushaPoseidonFieldV1>(
 }
 
 /// Decode only the exact hybrid topology and its canonical common tail; this is not proof verification.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) fn canonical_platform_credential_carrier_binding_tail_v1<F: KagemushaPoseidonFieldV1>(
     instances: &[Vec<F>],
 ) -> Result<[u128; 14], String> {
@@ -1845,18 +1784,6 @@ pub(super) fn canonical_platform_credential_carrier_binding_tail_v1<F: Kagemusha
 }
 
 /// Discover the paired PlatformCredential claim audits while retaining no complete Base graph.
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    )),
-    expect(
-        dead_code,
-        reason = "Paired credential audit discovery is consumed by the guarded proof qualification harness"
-    )
-)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) fn discover_kagemusha_platform_credential_audits_v1(
     eq_params: &ParamsIPA<EqAffine>,
@@ -1939,18 +1866,6 @@ pub(crate) fn discover_kagemusha_platform_credential_audits_v1(
 }
 
 /// Build the exact Eq PlatformCredential producer from detached reciprocal audit material.
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    )),
-    expect(
-        dead_code,
-        reason = "Credential circuit construction is consumed by the guarded proof qualification harness"
-    )
-)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) fn build_kagemusha_platform_credential_eq_v1(
     eq_params: &ParamsIPA<EqAffine>,
@@ -2041,18 +1956,6 @@ pub(crate) fn build_kagemusha_platform_credential_eq_v1(
 }
 
 /// Build the exact Ep PlatformCredential producer from detached reciprocal audit material.
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    )),
-    expect(
-        dead_code,
-        reason = "Credential circuit construction is consumed by the guarded proof qualification harness"
-    )
-)]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) fn build_kagemusha_platform_credential_ep_v1(
     ep_params: &ParamsIPA<EpAffine>,
@@ -2149,11 +2052,6 @@ pub(crate) fn build_kagemusha_platform_credential_ep_v1(
     })
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Assigned semantic outputs consumed by the aggregate recursion circuit.
 pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     /// Canonical normalized statement digest.
@@ -2216,17 +2114,7 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
 
 #[derive(Clone)]
 pub(super) struct AssignedCredentialV1<F: KagemushaPoseidonFieldV1> {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(super) version: AssignedUint<F>,
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(super) protocol_version: AssignedUint<F>,
     pub(super) suite_id: [PastaSha256ByteV1<F>; 32],
     pub(super) release_id: [PastaSha256ByteV1<F>; 32],
@@ -2246,20 +2134,10 @@ pub(super) struct AssignedCredentialV1<F: KagemushaPoseidonFieldV1> {
     pub(super) device_authority_commitment: [PastaSha256ByteV1<F>; 32],
     pub(super) credential_issuance_digest: [PastaSha256ByteV1<F>; 32],
     pub(super) app_policy_binding_digest: [PastaSha256ByteV1<F>; 32],
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     pub(super) empty_effect: [PastaSha256ByteV1<F>; 32],
     pub(super) digest: [PastaSha256ByteV1<F>; 32],
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Constrain the complete field-neutral GuardBundle statement and credential bindings.
 ///
 /// The enclosing paired recursive circuit must additionally verify the two credential ordinary
@@ -2274,6 +2152,24 @@ pub(super) fn constrain_guard_bundle_semantics_v1<F>(
 where
     F: KagemushaPoseidonFieldV1,
 {
+    constrain_guard_bundle_semantics_with_family_v1(builder, jobs, witness, false)
+}
+
+/// Ordinary family only: incoming terminal claims additionally require the full Model body
+/// relation in the enclosing ordinary Guard. Generic/OEM consumers retain their original gate.
+pub(super) fn constrain_ordinary_guard_bundle_semantics_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    witness: &KagemushaGuardBundleRelationWitnessV1,
+) -> Result<KagemushaAssignedGuardBundleV1<F>, String> {
+    constrain_guard_bundle_semantics_with_family_v1(builder, jobs, witness, true)
+}
+fn constrain_guard_bundle_semantics_with_family_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    witness: &KagemushaGuardBundleRelationWitnessV1,
+    ordinary_family: bool,
+) -> Result<KagemushaAssignedGuardBundleV1<F>, String> {
     witness.validate()?;
     let range = builder.range_chip();
     let ctx = builder.main(0);
@@ -2468,8 +2364,9 @@ where
     assert_if_digest_nonzero(ctx, &range, uses_outbox, &prepared_transition);
     let no_outbox = gate.not(ctx, uses_outbox);
     assert_if_digest_zero(ctx, &range, no_outbox, &prepared_transition);
-    let not_outbound = gate.not(ctx, outbound);
-    assert_if_digest_zero(ctx, &range, not_outbound, &terminal_commit);
+    let terminal_allowed = if ordinary_family { monetary } else { outbound };
+    let no_terminal = gate.not(ctx, terminal_allowed);
+    assert_if_digest_zero(ctx, &range, no_terminal, &terminal_commit);
     let not_send = gate.not(ctx, selectors[2]);
     assert_if_digest_zero(ctx, &range, not_send, &sender_authorization);
     let terminal_limbs = digest_limbs_assigned(ctx, &terminal_commit);
@@ -2909,17 +2806,7 @@ pub(super) fn assign_credential_statement_v1<F: KagemushaPoseidonFieldV1>(
         .concat(),
     )?;
     Ok(AssignedCredentialV1 {
-        #[cfg(any(
-            test,
-            feature = "kagemusha-real-proof-harness",
-            feature = "kagemusha-production-prover"
-        ))]
         version,
-        #[cfg(any(
-            test,
-            feature = "kagemusha-real-proof-harness",
-            feature = "kagemusha-production-prover"
-        ))]
         protocol_version,
         suite_id,
         release_id,
@@ -2939,57 +2826,23 @@ pub(super) fn assign_credential_statement_v1<F: KagemushaPoseidonFieldV1>(
         device_authority_commitment,
         credential_issuance_digest: issuance,
         app_policy_binding_digest: app_binding,
-        #[cfg(any(
-            test,
-            feature = "kagemusha-real-proof-harness",
-            feature = "kagemusha-production-prover"
-        ))]
         empty_effect,
         digest,
     })
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const GUARD_CREDENTIAL_EQUATION_TAG_V1: u32 = 3;
-#[cfg(feature = "zk-halo2-ipa")]
 const GUARD_PUBLIC_INSTANCE_COUNT_V1: usize = 10;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_PREDECESSOR_CREDENTIAL_OFFSET_V1: usize = 6;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_SUCCESSOR_CREDENTIAL_OFFSET_V1: usize = 8;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_HISTORY_OFFSET_V1: usize = GUARD_PUBLIC_INSTANCE_COUNT_V1;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize =
     GUARD_HISTORY_OFFSET_V1 + accumulator_limb_count();
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_EQ_AUDIT_OFFSET_V1: usize = 2;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) const GUARD_EP_AUDIT_OFFSET_V1: usize = 4;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Complete paired credential-proof material for one GuardBundle proof pair.
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) struct KagemushaGuardBundleRecursiveWitnessV1<'a> {
     /// Complete normalized guard and device-authority witness.
@@ -3032,23 +2885,11 @@ pub(crate) struct KagemushaGuardBundleRecursiveWitnessV1<'a> {
     pub ep_credential_audit: DigestV1,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Eq/Ep, predecessor/successor, then the complete credential public column.
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 type GuardCredentialColumnsV1 =
     [[[u128; KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1]; 2]; 2];
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn guard_credential_column_v1<F: KagemushaPoseidonFieldV1>(
     column: &[F],
@@ -3091,12 +2932,6 @@ fn guard_credential_column_v1<F: KagemushaPoseidonFieldV1>(
     Ok(values)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn guard_credential_columns_v1(
     digests: [DigestV1; 2],
@@ -3139,7 +2974,6 @@ fn guard_credential_columns_v1(
 }
 
 /// Base, Table16, and reciprocal dense-MSM configuration for a GuardBundle parity.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaGuardBundleCircuitConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
@@ -3149,7 +2983,6 @@ pub(crate) struct KagemushaGuardBundleCircuitConfigV1<F: halo2_base::utils::Scal
 }
 
 /// Eq/Fp half of the hardware-authoritative GuardBundle relation.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 pub(crate) struct KagemushaGuardBundleEqCircuitV1 {
     builder: BaseCircuitBuilder<Fp>,
@@ -3160,7 +2993,6 @@ pub(crate) struct KagemushaGuardBundleEqCircuitV1 {
 }
 
 /// Ep/Fq half of the hardware-authoritative GuardBundle relation.
-#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 pub(crate) struct KagemushaGuardBundleEpCircuitV1 {
     builder: BaseCircuitBuilder<Fq>,
@@ -3170,7 +3002,6 @@ pub(crate) struct KagemushaGuardBundleEpCircuitV1 {
     provider_policy_cells: [AssignedValue<Fq>; 2],
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 macro_rules! impl_guard_bundle_circuit {
     ($circuit:ty, $field:ty, $opposite:ty, $label:literal) => {
         impl Circuit<$field> for $circuit {
@@ -3262,14 +3093,12 @@ macro_rules! impl_guard_bundle_circuit {
     };
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 impl_guard_bundle_circuit!(
     KagemushaGuardBundleEqCircuitV1,
     Fp,
     EpAffine,
     "Kagemusha Eq GuardBundle"
 );
-#[cfg(feature = "zk-halo2-ipa")]
 impl_guard_bundle_circuit!(
     KagemushaGuardBundleEpCircuitV1,
     Fq,
@@ -3277,13 +3106,7 @@ impl_guard_bundle_circuit!(
     "Kagemusha Ep GuardBundle"
 );
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Build the two mutually audited GuardBundle circuits.
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) fn build_kagemusha_guard_bundle_pair_v1(
     eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
@@ -3443,12 +3266,6 @@ pub(crate) fn build_kagemusha_guard_bundle_pair_v1(
     ))
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn assign_guard_credential_columns_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
@@ -3495,12 +3312,6 @@ fn assign_guard_credential_columns_v1<F: KagemushaPoseidonFieldV1>(
     pair_binding
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn build_guard_scalar_half_v1<C>(
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -3697,12 +3508,6 @@ where
     Ok((builder, sha_jobs, output, pair_binding, policy_cells))
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn guard_audit_cells<F: KagemushaPoseidonFieldV1>(
     builder: &BaseCircuitBuilder<F>,
@@ -3891,11 +3696,6 @@ pub(super) fn assert_bytes_nonzero<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &any, &F::ONE);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_equal_value<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     left: AssignedValue<F>,
@@ -3904,11 +3704,6 @@ fn assert_equal_value<F: KagemushaPoseidonFieldV1>(
     ctx.constrain_equal(&left, &right);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_equal_value<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -3921,11 +3716,6 @@ fn assert_if_equal_value<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &selected, &F::ZERO);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_zero<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -3936,11 +3726,6 @@ fn assert_if_zero<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &selected, &F::ZERO);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_nonzero<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -3952,11 +3737,6 @@ fn assert_if_nonzero<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &invalid, &F::ZERO);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_increment<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -3968,11 +3748,6 @@ fn assert_if_increment<F: KagemushaPoseidonFieldV1>(
     assert_if_equal_value(ctx, range, selector, incremented, after);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_digest_zero<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -3984,11 +3759,6 @@ fn assert_if_digest_zero<F: KagemushaPoseidonFieldV1>(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_digest_nonzero<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -4003,11 +3773,6 @@ fn assert_if_digest_nonzero<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &invalid, &F::ZERO);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_digest_equal<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -4023,11 +3788,6 @@ fn assert_if_digest_equal<F: KagemushaPoseidonFieldV1>(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assert_if_digest_different<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -4493,7 +4253,6 @@ mod tests {
         assert!(KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness).is_err());
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn app_policy_binding_changes_both_parity_statement_hash_claims() {
         let witness = credential_witness();
@@ -4514,7 +4273,6 @@ mod tests {
         assert_ne!(original_eq.last(), changed_eq.last());
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn platform_credential_projection_retains_original_cells_without_new_assignments() {
         fn check<F: KagemushaPoseidonFieldV1>() {
@@ -4576,7 +4334,6 @@ mod tests {
         check::<Fq>();
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn platform_credential_sha_queue_has_exact_job_and_block_profile() {
         let witness = credential_witness();
@@ -4636,7 +4393,6 @@ mod tests {
         assert_eq!((ep.len(), blocks(&ep)), (20, 50));
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn platform_credential_pair_audit_binding_covers_the_claim_carrier_tail() {
         let credential_app_and_release_digests = 2 + 2 + 2;
@@ -4684,7 +4440,6 @@ mod tests {
         assert_eq!(KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, 42);
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_test_column<F: KagemushaPoseidonFieldV1>(
         statement: DigestV1,
         app_binding: DigestV1,
@@ -4704,7 +4459,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_columns_reject_statement_history_and_width_substitution() {
         fn check<F: KagemushaPoseidonFieldV1>() {
             let digest = [0x61; 32];
@@ -4752,7 +4506,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_pair_requires_both_exact_statements_and_shared_audits() {
         let digests = [[0x41; 32], [0x42; 32]];
         let app_bindings = [[0x51; 32], [0x52; 32]];
@@ -4827,7 +4580,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_pair_binding_constrains_statement_and_shared_audits_in_circuit() {
         fn verify<F: KagemushaPoseidonFieldV1>(columns: GuardCredentialColumnsV1) -> bool {
             let mut builder = BaseCircuitBuilder::new(false)

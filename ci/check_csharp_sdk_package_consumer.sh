@@ -213,28 +213,32 @@ if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 25u
     throw new InvalidOperationException("Packed ABI-25 SoraFS native bridge is unavailable");
 }
 
-var hijiriRequest = new ValidationFeeHijiriQuoteRequestV1(
-    "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-    2);
-var hijiriRequestNorito = ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest);
-if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 25u
-    || hijiriRequestNorito.Length == 0
-    || hijiriRequestNorito.Length > ValidationFeeHijiriQuoteRequestV1.MaximumRequestBytes)
-{
-    throw new InvalidOperationException("Packed ABI-25 Hijiri quote encoder is unavailable");
-}
-var malformedHijiriResponseRejected = false;
+// Probe the actual library resolved from the installed, manifest-verified package.
+// Codec export availability is DATA surface evidence, not authenticated money admission.
+var feeBridge = System.Runtime.InteropServices.NativeLibrary.Load(
+    "connect_norito_bridge", typeof(SoraFsReferenceValidators).Assembly, null);
 try
 {
-    ValidationFeeHijiriQuoteNative.VerifyResponseV1(new byte[] { 0 }, hijiriRequestNorito);
+    foreach (var symbol in new[] {
+        "connect_norito_retail_fee_intent_hash_v1",
+        "connect_norito_retail_fee_assessment_marker_v1",
+        "connect_norito_retail_fee_assessment_decode_v1" })
+    {
+        _ = System.Runtime.InteropServices.NativeLibrary.GetExport(feeBridge, symbol);
+    }
+    foreach (var retired in new[] {
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1" })
+    {
+        if (System.Runtime.InteropServices.NativeLibrary.TryGetExport(feeBridge, retired, out _))
+        {
+            throw new InvalidOperationException("Packed Native artifact retains a retired quote protocol");
+        }
+    }
 }
-catch (InvalidDataException)
+finally
 {
-    malformedHijiriResponseRejected = true;
-}
-if (!malformedHijiriResponseRejected)
-{
-    throw new InvalidOperationException("Packed ABI-25 Hijiri quote verifier did not fail closed");
+    System.Runtime.InteropServices.NativeLibrary.Free(feeBridge);
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

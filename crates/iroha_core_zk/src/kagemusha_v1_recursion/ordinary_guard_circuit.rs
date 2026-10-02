@@ -26,7 +26,8 @@ use halo2_proofs::{
 
 pub(super) const ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1: usize = 44;
 const UNUSABLE: usize = 9;
-const MODE: u64 = 0x4f_41_47_01;
+// First-release full incoming purpose1 body graph. Old graph keys are incompatible.
+const MODE: u64 = 0x4f_41_47_02;
 
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaOrdinaryGuardCircuitParamsV1 {
@@ -190,25 +191,10 @@ macro_rules! ordinary_circuit {
 ordinary_circuit!(KagemushaOrdinaryAppGuardEqCircuitV1, Fp);
 ordinary_circuit!(KagemushaOrdinaryAppGuardEpCircuitV1, Fq);
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-production-prover",
-    feature = "kagemusha-real-proof-harness"
-))]
 #[path = "ordinary_guard_composition.rs"]
 mod composition;
-#[cfg(any(
-    test,
-    feature = "kagemusha-production-prover",
-    feature = "kagemusha-real-proof-harness"
-))]
 pub(crate) use composition::{
     OrdinaryGuardWitnessV1, build_ordinary_app_guard_ep_v1, build_ordinary_app_guard_eq_v1,
     build_ordinary_app_guard_pair_v1,
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-production-prover",
-    feature = "kagemusha-real-proof-harness"
-))]
 pub(crate) use composition::{bind_credential, bind_subject};

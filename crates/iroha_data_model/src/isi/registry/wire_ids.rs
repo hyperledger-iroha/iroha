@@ -93,6 +93,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
     built_in_wire_id!(kagemusha_v1::TopUpKagemushaV1 => "iroha.kagemusha.v1.top_up", register),
+    built_in_wire_id!(kagemusha_v1::TopUpKagemushaOrdinaryV1 => "iroha.kagemusha.v1.ordinary_top_up", register),
     built_in_wire_id!(kagemusha_v1::RedeemKagemushaV1 => "iroha.kagemusha.v1.redeem", register),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneCandidate => "iroha.staking.register_public_lane_candidate"),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator"),

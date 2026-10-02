@@ -38,6 +38,10 @@ pub struct KagemushaHardwareEvidenceCompiledBindingOriginalV1 {
 impl KagemushaHardwareEvidenceCompiledBindingOriginalV1 {
     /// Require the sole complete canonical authority original and nonzero semantic bindings.
     /// This performs shape validation; it does not independently approve a build input.
+    ///
+    /// # Errors
+    /// Rejects a version other than one, zero ABI or source bindings, or an empty, oversized,
+    /// malformed, noncanonical or structurally invalid authority-policy original.
     pub fn validate(&self) -> Result<KagemushaReleaseAuthorityPolicyV1, String> {
         if self.version != 1
             || self.native_abi == 0
@@ -127,6 +131,9 @@ pub struct KagemushaHardwareEvidenceBootstrapManifestV1 {
 }
 impl KagemushaHardwareEvidenceBootstrapManifestV1 {
     /// Reject incomplete, relabeled or substituted evidence-purpose fields.
+    ///
+    /// # Errors
+    /// Rejects invalid purpose, identities, key, policy, origins, selectors or validity bounds.
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1
             || self.purpose != 1
@@ -212,11 +219,17 @@ impl KagemushaHardwareEvidenceBootstrapManifestV1 {
         Ok(())
     }
     /// Return the sole complete canonical purpose-bound original identity.
+    ///
+    /// # Errors
+    /// Rejects a malformed manifest or an unencodable or oversized canonical original.
     pub fn digest(&self) -> Result<[u8; 32], String> {
         self.validate()?;
         digest(b"iroha:kagemusha:v1:hardware-bootstrap-manifest\0", self)
     }
     /// Return the sole complete purpose-specific issuer/platform signing message.
+    ///
+    /// # Errors
+    /// Rejects a malformed manifest or an unencodable or oversized canonical original.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
         message(b"iroha:kagemusha:v1:hardware-bootstrap-release\0", self)
@@ -243,6 +256,10 @@ pub struct KagemushaSignedHardwareBootstrapReleaseV1 {
 }
 impl KagemushaSignedHardwareBootstrapReleaseV1 {
     /// Authentication under independently selected release authorities, not installation.
+    ///
+    /// # Errors
+    /// Rejects invalid authority or manifest data, policy substitution, threshold, signer or signature,
+    /// or a canonical encoding or complete-frame bound failure.
     pub fn authenticate(
         &self,
         authority: &KagemushaReleaseAuthorityPolicyV1,
@@ -312,6 +329,10 @@ impl KagemushaHardwareEvidenceReservationV1 {
         format!("kagemusha-hardware-v1-{}", hex::encode(h.finalize()))
     }
     /// Reject incomplete, relabeled or substituted evidence-purpose fields.
+    ///
+    /// # Errors
+    /// Rejects a version other than one, zero selectors, an operation ID equal to the client nonce,
+    /// an invalid interval or a substituted persistent alias.
     pub fn validate(&self) -> Result<(), String> {
         for d in [self.manifest_digest, self.operation_id, self.client_nonce] {
             nonzero(d)?;
@@ -329,6 +350,9 @@ impl KagemushaHardwareEvidenceReservationV1 {
         Ok(())
     }
     /// Return the sole complete canonical purpose-bound original identity.
+    ///
+    /// # Errors
+    /// Rejects malformed reservation data or an unencodable or oversized canonical original.
     pub fn digest(&self) -> Result<[u8; 32], String> {
         self.validate()?;
         digest(b"iroha:kagemusha:v1:hardware-bootstrap-reservation\0", self)
@@ -364,6 +388,10 @@ pub struct KagemushaHardwareEvidenceChallengeV1 {
 }
 impl KagemushaHardwareEvidenceChallengeV1 {
     /// Return the sole complete purpose-specific issuer/platform signing message.
+    ///
+    /// # Errors
+    /// Rejects zero selectors, equal client/server nonces, invalid validity bounds,
+    /// or a canonical encoding or complete-frame bound failure.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
         for d in [
             self.reservation_digest,
@@ -401,6 +429,9 @@ pub struct KagemushaSignedHardwareEvidenceChallengeV1 {
 impl KagemushaSignedHardwareEvidenceChallengeV1 {
     /// Sole attestation nonce and C-original join: SHA256 of the complete canonical signed C.
     /// No second digest of unsigned C or alternate encoder is accepted for this purpose.
+    ///
+    /// # Errors
+    /// Rejects malformed challenge data or an unencodable or oversized canonical signed original.
     pub fn original_digest(&self) -> Result<[u8; 32], String> {
         self.challenge.signing_bytes()?;
         Ok(Sha256::digest(hardware_bootstrap_encode_v1(self)?).into())
@@ -431,6 +462,10 @@ pub struct KagemushaHardwareEvidenceRawAdmissionV1 {
 }
 impl KagemushaHardwareEvidenceRawAdmissionV1 {
     /// Return the sole complete purpose-specific issuer/platform signing message.
+    ///
+    /// # Errors
+    /// Rejects zero selectors, an invalid public key, zero check time, an Apple security level,
+    /// or a canonical encoding or complete-frame bound failure.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
         for d in [
             self.challenge_digest,
@@ -491,6 +526,9 @@ pub struct KagemushaHardwareEvidencePossessionV1 {
 }
 impl KagemushaHardwareEvidencePossessionV1 {
     /// Return the sole complete purpose-specific issuer/platform signing message.
+    ///
+    /// # Errors
+    /// Rejects an invalid public point, selector, key identity, interval or fixed possession-body width.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
         KagemushaDevicePublicKeyV1::from_sec1_bytes(&self.app_public_key)
             .map_err(|_| "hardware E point rejected")?;
@@ -563,6 +601,10 @@ pub struct KagemushaHardwareEvidenceReceiptV1 {
 }
 impl KagemushaHardwareEvidenceReceiptV1 {
     /// Return the sole complete purpose-specific issuer/platform signing message.
+    ///
+    /// # Errors
+    /// Rejects zero selectors, an invalid receipt interval,
+    /// or a canonical encoding or complete-frame bound failure.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
         for d in [
             self.manifest_digest,
@@ -611,6 +653,9 @@ pub fn kagemusha_hardware_evidence_integrity_request_hash_v1(
     h.finalize().into()
 }
 /// Encode or project the complete bounded hardware evidence original; this operation grants no authority.
+///
+/// # Errors
+/// Rejects canonical encoding failure and an empty or oversized complete frame.
 pub fn hardware_bootstrap_encode_v1<T: norito::NoritoSerialize>(v: &T) -> Result<Vec<u8>, String> {
     let b = norito::encode_canonical(v).map_err(|_| "hardware original encode rejected")?;
     if b.is_empty() || b.len() > KAGEMUSHA_HARDWARE_BOOTSTRAP_MAX_ORIGINAL_V1 {
@@ -619,6 +664,10 @@ pub fn hardware_bootstrap_encode_v1<T: norito::NoritoSerialize>(v: &T) -> Result
     Ok(b)
 }
 /// Encode or project the complete bounded hardware evidence original; this operation grants no authority.
+///
+/// # Errors
+/// Rejects an empty, oversized, malformed or noncanonical complete frame,
+/// or a canonical re-encoding or complete-frame bound failure.
 pub fn hardware_bootstrap_decode_v1<
     T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
 >(
@@ -654,6 +703,9 @@ fn digest<T: norito::NoritoSerialize>(domain: &[u8], v: &T) -> Result<[u8; 32], 
 
 /// Core calls this only after real Google original verification and exact configured issuer/audience.
 /// Public deterministic naming alone is not login/session/Native authority.
+///
+/// # Errors
+/// Rejects an inert manifest digest or empty, oversized or control-bearing identity strings.
 pub fn kagemusha_hardware_evidence_google_owner_binding_v1(
     manifest_digest: [u8; 32],
     verified_issuer: &str,
@@ -665,7 +717,7 @@ pub fn kagemusha_hardware_evidence_google_owner_binding_v1(
     h.update(b"iroha:kagemusha:v1:hardware-evidence-google-owner\0");
     h.update(manifest_digest);
     for value in [verified_issuer, verified_audience, verified_sub] {
-        if value.is_empty() || value.len() > 512 || value.chars().any(|c| c.is_control()) {
+        if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
             return Err("hardware Google binding rejected".into());
         }
         h.update((value.len() as u64).to_le_bytes());

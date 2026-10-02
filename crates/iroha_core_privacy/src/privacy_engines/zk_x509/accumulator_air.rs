@@ -4,8 +4,8 @@
 //! trust-anchor tree.  A private witness contains the exact 91-byte root SPKI,
 //! a twelve-bit sorted-leaf index, and twelve siblings.  Row zero owns the
 //! occupied-leaf SHA call; rows one through twelve own the height-bound node
-//! calls; rows 13 through 103 serialize the exact root SPKI; the remaining 8,088 rows
-//! are canonical zero padding for a log-thirteen native trace.
+//! calls; rows 13 through 103 serialize the exact root SPKI; the remaining 3,992 rows
+//! are canonical zero padding for a log-twelve native trace.
 //!
 //! Signed-CRL non-revocation is deliberately absent from this module.  The RFC
 //! adapter parses the complete signed CRL and proves the leaf serial differs
@@ -29,8 +29,8 @@ use super::{
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
-/// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log thirteen for the shared FRI masking margin.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1: usize = 8_192;
+/// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log twelve with the complete cross-proof mask closure.
+pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1: usize = 4_096;
 /// One leaf call followed by twelve compact-tree node calls.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1: usize =
     1 + ZK_X509_CA_COMPACT_TREE_DEPTH_V1;
@@ -758,7 +758,7 @@ mod tests {
         let (statement, witness) = fixture();
         let trace = build_ca_accumulator_trace_v1(statement, witness).expect("trace");
         trace.validate().expect("valid");
-        assert_eq!(trace.rows(), 8_192);
+        assert_eq!(trace.rows(), 4_096);
         assert_eq!(trace.hash_witnesses.len(), 13);
         assert_eq!(trace.hash_witnesses[0].role, ZkX509ShaCallRoleV1::CaLeaf);
         assert_eq!(trace.hash_witnesses[0].message.len(), 156);

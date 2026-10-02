@@ -1,7 +1,7 @@
 // Synthetic pure scheduling tests; no runtime authority or Native/Android device is installed.
 package org.hyperledger.iroha.sdk.offline
-import org.junit.Assert.*
-import org.junit.Test
+import kotlin.test.*
+import org.junit.jupiter.api.Test
 import java.util.concurrent.Executor
 
 class KagemushaFirstDeviceHardwareOriginalStartupV1Test {

@@ -864,7 +864,6 @@ fn plan_dense_jobs_with_lanes(
     }
     Ok(assignments)
 }
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Check one k=16 reciprocal audit against the exact four-lane scheduler without assigning
 /// any Base cells. Consumers can reject an impossible source namespace before building the
 /// reciprocal circuit; successful scheduling does not authenticate the audit or its sources.

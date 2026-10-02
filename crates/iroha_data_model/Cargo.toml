@@ -143,6 +143,11 @@ path = "src/bin/kagemusha_raw_app_attestation_encoder_v1.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "kagemusha_ordinary_installed_context_codec_v1"
+path = "src/bin/kagemusha_ordinary_installed_context_codec_v1.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "kagemusha_ordinary_preparation_encoder_v1"
 path = "src/bin/kagemusha_ordinary_preparation_encoder_v1.rs"
 required-features = ["dev-tools"]

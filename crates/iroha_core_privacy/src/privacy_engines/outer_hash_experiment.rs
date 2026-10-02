@@ -544,6 +544,7 @@ fn production_frames_and_cached_digest_agree() {
     for nonce in [0, 1, 4095, u64::MAX] {
         let full = PrivacyOuterFrameV1::new(
             crate::privacy_engines::privacy_outer_hash::PrivacyOuterDomainV1 {
+                proof_scope: None,
                 index: nonce,
                 ..frame_domain
             },

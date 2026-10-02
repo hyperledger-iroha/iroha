@@ -85,6 +85,12 @@ internal class KagemushaFirstDeviceHardwareEvidenceNativeV1 private constructor(
     override fun originalReceipt(): ByteArray? { requireOriginalCustody(); val f=invoke(16); check(f.size<=1); return f.firstOrNull()?.copyOf() }
     override fun requestCancel() = acknowledged(17)
     override fun disposeTerminal() = acknowledged(18)
+    /** Release only this unpublished JNI view; Native retains its original owner and WAL. */
+    fun releaseView() {
+        check(KagemushaFirstDeviceHardwareEvidenceJniV1.close(handle) == 0) {
+            "Original Native hardware-evidence view could not be released"
+        }
+    }
     companion object {
         fun openInstalled(context: android.content.Context, storage: String): KagemushaFirstDeviceHardwareEvidenceNativeV1? {
             check(KagemushaFirstDeviceHardwareEvidenceJniV1.contract().contentEquals(intArrayOf(1,1,18,7,192*1024))) {

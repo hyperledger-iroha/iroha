@@ -70,11 +70,11 @@ PROTECTED_FUNCTION_SHA256 = {
 PROTECTED_INITIAL_FUNCTION_SHA256 = {
     'state_with_initial_soracloud_permission': '5fc77a55a18d1b9b5beb86f03105f1a5d44e6fe77880f23810a41f806c778963',
     'initial_soracloud_header': '16fe1749ae84ccd93c527fcf764e560a6a4c2ba70470a70d232456a16d8c6852',
-    'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission': 'e3347a08d70dd328e38447e22d32e87cdf968373f23564116a40bff05cb5c6d2',
+    'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission': 'd78d626f69ece18ef60b03ede046394250bfef1c489bf3ef6957351f21b65a05',
 }
 
 FIXTURE_CORRIDORS = (
-    ('permissioned fixture macros', 'macro_rules! permissioned_soracloud_state {', 'macro_rules! full_bootstrap_execution_case {', '7937e8283b65208350ab755441c88b5baf337833389241634e54a5477f2a2cfe'),
+    ('permissioned fixture macros', 'macro_rules! permissioned_soracloud_state {', 'macro_rules! full_bootstrap_execution_case {', 'b3f628ac622d829424dfd010fbfff0496190821aefe31e47ef53082096112bbe'),
     ('training fixture', 'struct TrainingStartFixture {', '#[test]\nfn training_start_rejects_signed_model_and_job_text_aliases_before_mutation', 'e74c18caad6aaa28e88dc601a5dde96d0fb3eef21ddf62f54250968f6e99af08'),
 )
 
@@ -655,6 +655,44 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
         ):
             original = _function(initial_fixture, name)
             self.assertEqual(original.count(old), occurrences)
+            mutated = initial_fixture.replace(original, original.replace(old, new, 1), 1)
+            self.assertNotEqual(mutated, initial_fixture)
+            with self.subTest(target=old), self.assertRaisesRegex(GuardError, "original genesis fixture ownership"):
+                validate_source(source, mutated)
+
+
+    def test_initial_transaction_keeps_owned_mutable_root_scope_and_original_genesis(self) -> None:
+        source = SOURCE.read_text()
+        initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
+        start = "macro_rules! initial_permissioned_soracloud_state {"
+        end = "macro_rules! full_bootstrap_execution_case {"
+        region = source[source.index(start):source.index(end, source.index(start))]
+        for old, new in (
+            ("execution_root_scope(&mut $stx).is_ok()", "execution_root_scope(&$stx).is_ok()"),
+            ("execution_root_scope(&mut $stx).is_ok()", "execution_root_scope(&mut $stx).is_err()"),
+            ("state_with_initial_soracloud_permission(&$kura)?", "state_with_soracloud_permission(&$kura)?"),
+            ("initial_soracloud_header(&$state, $height)", "initial_soracloud_header(&$state, 1)"),
+        ):
+            self.assertEqual(region.count(old), 1)
+            mutated = source.replace(region, region.replace(old, new, 1), 1)
+            self.assertNotEqual(mutated, source)
+            with self.subTest(target=old), self.assertRaisesRegex(GuardError, "permissioned fixture macros"):
+                validate_source(mutated, initial_fixture)
+
+
+    def test_initial_owner_preserves_native_success_and_component_refusal(self) -> None:
+        source = SOURCE.read_text()
+        initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
+        name = "initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission"
+        original = _function(initial_fixture, name)
+        self.assertEqual(original.count("let mut transaction = block.transaction();"), 2)
+        for old, new in (
+            ("execution_root_scope(&mut transaction).is_ok()", "execution_root_scope(&mut transaction).is_err()"),
+            ("execution_root_scope(&mut transaction).is_err()", "execution_root_scope(&mut transaction).is_ok()"),
+            ("execution_root_scope(&mut transaction).is_ok()", "execution_root_scope(&transaction).is_ok()"),
+            ("execution_root_scope(&mut transaction).is_err()", "execution_root_scope(&transaction).is_err()"),
+        ):
+            self.assertEqual(original.count(old), 1)
             mutated = initial_fixture.replace(original, original.replace(old, new, 1), 1)
             self.assertNotEqual(mutated, initial_fixture)
             with self.subTest(target=old), self.assertRaisesRegex(GuardError, "original genesis fixture ownership"):

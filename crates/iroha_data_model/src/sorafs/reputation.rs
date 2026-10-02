@@ -593,7 +593,7 @@ impl ReputationJournalAuthorityPolicyV1 {
 /// Exact original native source of a governed recorder-policy activation.
 ///
 /// Values remain claims. Core authenticates genuine genesis custody or a sole direct ordinary
-/// SetPolicy input, and finalized readers verify that exact signed execution and successful output.
+/// `SetPolicy` input, and finalized readers verify that exact signed execution and successful output.
 #[derive(
     Clone,
     Debug,
@@ -618,7 +618,7 @@ impl ReputationJournalAuthorityPolicyV1 {
 pub enum ReputationJournalPolicyOriginV1 {
     /// An exact original instruction in the authenticated signed genesis input at height one.
     Genesis(crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1),
-    /// A sole direct SetPolicy in an ordinary signed external transaction after genesis.
+    /// A sole direct `SetPolicy` in an ordinary signed external transaction after genesis.
     Network(crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1),
 }
 impl ReputationJournalPolicyOriginV1 {

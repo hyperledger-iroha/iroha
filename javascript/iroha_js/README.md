@@ -3331,24 +3331,6 @@ do {
 console.log("verified Parliament policy:", page.projection.current_policy);
 ```
 
-To price the active policy with the execution account's current Hijiri risk,
-request an authenticated live quote. `quoteValidationFeeHijiri` sends and
-accepts only bounded, unencoded, exact `application/x-norito`, rejects
-cacheable responses, and uses the
-ABI 25 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
-account/count, and `evaluatedStateHeight + 1` before returning an immutable
-projection. Its assurance label is intentionally evaluated-only; admission
-still rejects a quote made stale by an intervening policy or risk update.
-
-```js
-const hijiriQuote = await torii.quoteValidationFeeHijiri(
-  AUTHORITY_ACCOUNT_ID,
-  2,
-  { canonicalAuth },
-);
-console.log(hijiriQuote.aggregateAdjustedFeeMinorUnits);
-```
-
 Each projected Parliament authorization is the exact certificate-backed V1
 record: `proposal_kind`, `proposal_operator`, `proposal_id`, `payload_hash`,
 `governance_certificate_id`, `governance_certificate`,

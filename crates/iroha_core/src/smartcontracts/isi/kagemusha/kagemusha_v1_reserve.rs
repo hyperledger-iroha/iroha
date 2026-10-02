@@ -10,6 +10,10 @@
 
 use std::collections::BTreeMap;
 
+#[path = "ordinary_top_up.rs"]
+pub(super) mod ordinary_top_up;
+pub use ordinary_top_up::{KagemushaOrdinaryTopUpRecordV1, read_finalized_ordinary_top_up_v1};
+
 #[cfg(test)]
 use iroha_data_model::isi::{KagemushaFinalityTrustAnchorV1, KagemushaTopUpResultV1};
 use iroha_data_model::{
@@ -631,6 +635,8 @@ impl KagemushaRedemptionRecordV1 {
 pub enum KagemushaReserveOperationRecordV1 {
     /// Applied top-up, optionally carrying its terminal mint result.
     TopUp(KagemushaTopUpRecordV1),
+    /// Applied ordinary app Mint debit; its proof and World purpose are a distinct family.
+    OrdinaryTopUp(Box<KagemushaOrdinaryTopUpRecordV1>),
     /// Applied full or partial redemption.
     Redemption(KagemushaRedemptionRecordV1),
 }
@@ -641,6 +647,7 @@ impl KagemushaReserveOperationRecordV1 {
     pub fn operation_id(&self) -> [u8; 32] {
         match self {
             Self::TopUp(record) => record.operation_id,
+            Self::OrdinaryTopUp(record) => record.operation_id,
             Self::Redemption(record) => record.operation_id,
         }
     }
@@ -650,6 +657,7 @@ impl KagemushaReserveOperationRecordV1 {
     pub fn pool(&self) -> &KagemushaReservePoolKeyV1 {
         match self {
             Self::TopUp(record) => &record.pool,
+            Self::OrdinaryTopUp(record) => &record.pool,
             Self::Redemption(record) => &record.pool,
         }
     }
@@ -659,6 +667,7 @@ impl KagemushaReserveOperationRecordV1 {
     pub fn amount(&self) -> u128 {
         match self {
             Self::TopUp(record) => record.amount,
+            Self::OrdinaryTopUp(record) => record.amount,
             Self::Redemption(record) => record.amount,
         }
     }
@@ -668,13 +677,14 @@ impl KagemushaReserveOperationRecordV1 {
     pub fn reserve_receipt(&self) -> &KagemushaReserveReceiptV1 {
         match self {
             Self::TopUp(record) => &record.reserve_receipt,
+            Self::OrdinaryTopUp(record) => &record.reserve_receipt,
             Self::Redemption(record) => &record.reserve_receipt,
         }
     }
 
     fn kind(&self) -> KagemushaOperationKindV1 {
         match self {
-            Self::TopUp(_) => KagemushaOperationKindV1::TopUp,
+            Self::TopUp(_) | Self::OrdinaryTopUp(_) => KagemushaOperationKindV1::TopUp,
             Self::Redemption(_) => KagemushaOperationKindV1::Redemption,
         }
     }
@@ -682,6 +692,7 @@ impl KagemushaReserveOperationRecordV1 {
     fn request_digest(&self) -> [u8; 32] {
         match self {
             Self::TopUp(record) => record.issuance_intent.request_digest,
+            Self::OrdinaryTopUp(record) => record.intent_original_digest,
             Self::Redemption(record) => record.request_digest,
         }
     }
@@ -689,6 +700,7 @@ impl KagemushaReserveOperationRecordV1 {
     fn scale(&self) -> u32 {
         match self {
             Self::TopUp(record) => record.scale,
+            Self::OrdinaryTopUp(record) => record.scale,
             Self::Redemption(record) => record.scale,
         }
     }
@@ -696,6 +708,7 @@ impl KagemushaReserveOperationRecordV1 {
     fn validate_basic(&self) -> Result<(), KagemushaReserveErrorV1> {
         match self {
             Self::TopUp(record) => record.validate_basic(),
+            Self::OrdinaryTopUp(record) => record.validate_basic(),
             Self::Redemption(record) => record.validate_basic(),
         }
     }
@@ -1238,6 +1251,15 @@ impl KagemushaReserveBookV1 {
                 KagemushaReserveOperationRecordV1::TopUp(record) => {
                     self.ensure_top_up_indexes(record)?;
                 }
+                KagemushaReserveOperationRecordV1::OrdinaryTopUp(record) => {
+                    if self.mint_credit_operations.get(&record.credit_id)
+                        != Some(&record.operation_id)
+                        || self.issuance_operations.get(&record.issuance_commitment)
+                            != Some(&record.operation_id)
+                    {
+                        return Err(state_invariant("ordinary_top_up_reverse_index_mismatch"));
+                    }
+                }
                 KagemushaReserveOperationRecordV1::Redemption(record) => {
                     self.ensure_redemption_indexes(record)?;
                 }
@@ -1262,6 +1284,9 @@ impl KagemushaReserveBookV1 {
                     .map_err(map_chain_value_error)?;
                 projected = match record {
                     KagemushaReserveOperationRecordV1::TopUp(record) => {
+                        next_top_up_pool(&projected, record.amount)?
+                    }
+                    KagemushaReserveOperationRecordV1::OrdinaryTopUp(record) => {
                         next_top_up_pool(&projected, record.amount)?
                     }
                     KagemushaReserveOperationRecordV1::Redemption(record) => {
@@ -1327,12 +1352,16 @@ impl KagemushaReserveBookV1 {
             match self.operations.get(operation_id) {
                 Some(KagemushaReserveOperationRecordV1::TopUp(record))
                     if &record.credit_id == credit_id => {}
+                Some(KagemushaReserveOperationRecordV1::OrdinaryTopUp(record))
+                    if &record.credit_id == credit_id => {}
                 _ => return Err(state_invariant("extra_or_invalid_mint_credit_index")),
             }
         }
         for (issuance_commitment, operation_id) in &self.issuance_operations {
             match self.operations.get(operation_id) {
                 Some(KagemushaReserveOperationRecordV1::TopUp(record))
+                    if &record.issuance_commitment == issuance_commitment => {}
+                Some(KagemushaReserveOperationRecordV1::OrdinaryTopUp(record))
                     if &record.issuance_commitment == issuance_commitment => {}
                 _ => return Err(state_invariant("extra_or_invalid_issuance_index")),
             }

@@ -7,8 +7,8 @@
 //! producer cannot authorize State publication.
 
 use super::{
-    ExecutionOutputPlanState, OwnedExecutionSource, OwnedExecutionSources, StateBlock,
-    StateTransaction,
+    ExecutionOutputAttemptError, ExecutionOutputPlanState, OwnedExecutionSource,
+    OwnedExecutionSources, StateBlock, StateTransaction,
 };
 use crate::execution_attempt::ExecutionAttemptError;
 use crate::state::callback_journal::DrainedCallbacks;
@@ -106,7 +106,7 @@ impl StateBlock<'_> {
         &mut self,
         source: &SignedBlock,
         genesis: Option<&crate::block::AuthenticatedGenesisOutputSource>,
-    ) -> Result<(), ExecutionAttemptError<String>> {
+    ) -> Result<(), ExecutionOutputAttemptError> {
         self.produce_ordinary_execution_outputs(source, |producer| {
             producer.execute_network_sources(genesis)?;
             producer.execute_pipeline_outputs()?;
@@ -170,11 +170,13 @@ impl StateBlock<'_> {
         source: &SignedBlock,
         execute: impl FnOnce(
             &mut ExecutionOutputProducer<'_, '_, '_>,
-        ) -> Result<(), ExecutionAttemptError<String>>,
-    ) -> Result<(), ExecutionAttemptError<String>> {
+        ) -> Result<(), ExecutionOutputAttemptError>,
+    ) -> Result<(), ExecutionOutputAttemptError> {
         let mut producer = ExecutionOutputProducer::new(self, ExecutionSource(source))?;
         execute(&mut producer)?;
-        producer.finish().map_err(ExecutionAttemptError::Rejected)
+        producer
+            .finish()
+            .map_err(ExecutionOutputAttemptError::Owner)
     }
 }
 

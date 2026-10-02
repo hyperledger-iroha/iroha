@@ -41,6 +41,12 @@ pub enum PayloadError {
     /// Original parent-state staking preparation failed.
     #[error("staking effect preparation failed: {0}")]
     Staking(String),
+    /// Original parent participation preparation failed; no local QC is execution input.
+    #[error("parent service preparation failed: {0}")]
+    ParentService(String),
+    /// Original authentication was refused by local resources.
+    #[error("parent service preparation deferred: {0}")]
+    ParentServiceDeferred(crate::execution_attempt::ExecutionDeferred),
     /// The versioned decoder stopped at a local resource ceiling or allocation refusal.
     /// Its public error preserves the category but does not carry the nested limit fields.
     #[error("payload decoding was refused by local resources")]
@@ -171,7 +177,7 @@ fn build_at(
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
     let mut proposal = builder.into_unsigned_proposal();
-    let effects = if npos {
+    let mut effects = if npos {
         let header = proposal.header();
         Some(
             super::penalties::PenaltyApplier::new(state, None)
@@ -181,6 +187,27 @@ fn build_at(
     } else {
         None
     };
+    if height > 2 {
+        let view = state.view();
+        let reader = super::certified_chain::CertifiedChain::new_for_parent_service(&view)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::ParentServiceDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        let original = reader
+            .parent_service_proposal_original(assembly.parent)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::ParentServiceDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        effects
+            .get_or_insert_with(Default::default)
+            .parent_service_commit_qc = Some(original);
+    }
     proposal.set_npos_consensus_effects(effects);
     Ok(proposal)
 }

@@ -9,141 +9,129 @@
 
 mod accumulation;
 mod artifacts;
-#[cfg(feature = "zk-halo2-ipa")]
 mod base_packing;
-#[cfg(feature = "zk-halo2-ipa")]
 mod canonical_preimage;
-#[cfg(feature = "zk-halo2-ipa")]
 mod carrier_binding;
-#[cfg(feature = "zk-halo2-ipa")]
 mod carrier_rlc;
-#[cfg(feature = "zk-halo2-ipa")]
 mod composite;
-#[cfg(feature = "zk-halo2-ipa")]
 mod deferred_parent;
 mod generation;
 mod guard_bundle;
-#[cfg(feature = "zk-halo2-ipa")]
 mod guard_verifier;
-#[cfg(feature = "zk-halo2-ipa")]
 mod hardware_transactions;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_authority;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_authorization;
 mod mint_finality;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_hash_claim_fold;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_hash_shard;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_helper;
-#[cfg(feature = "zk-halo2-ipa")]
 mod mint_transport_decider;
 mod native_backend;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_app_guard_binding;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_cash_candidate_verifier;
+#[cfg(unix)]
+mod ordinary_incoming_candidate_verifier;
+#[cfg(unix)]
+pub(crate) use ordinary_incoming_candidate_verifier::{
+    KagemushaAuthenticatedOrdinaryIncomingCandidateV1, verify_ordinary_incoming_candidate_v1,
+};
+
+#[cfg(unix)]
+pub(crate) use ordinary_guard_verifier::{
+    KagemushaAuthenticatedOrdinaryIncomingTerminalGuardV1,
+    verify_ordinary_incoming_terminal_guard_v1,
+};
+
 // Lineage admission reconstructs the full Wrapper audit in every supported verifier build.
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_cash_commit_originals;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_cash_commit_wrapper;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
-))]
 mod ordinary_cash_terminal_circuit;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_cash_terminal_verifier;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub(crate) use ordinary_cash_commit_originals::{
     GeneratedOrdinaryCashCommitOriginalsV1, readmit_ordinary_cash_commit_v1,
 };
 
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub(crate) use ordinary_cash_terminal_verifier::{
     KagemushaAuthenticatedOrdinaryCashTerminalV1, verify_ordinary_cash_terminal_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_circuit;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 mod ordinary_incoming_preparation_binding;
-#[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_incoming_terminal_binding;
 mod ordinary_mint_circuit;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    )
-))]
 mod ordinary_mint_full_canonical_consumer;
-#[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_mint_public;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_mint_request_budget;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_mint_verifier;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+mod ordinary_parent_canonical_stream;
 mod ordinary_state_mint_consumer;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_state_receive_consumer;
+#[cfg(unix)]
 pub(crate) use ordinary_cash_candidate_verifier::{
     KagemushaAuthenticatedOrdinaryCashCandidateV1, verify_ordinary_cash_candidate_v1,
 };
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub use ordinary_mint_request_budget::{
     KagemushaOrdinaryMintRequestByteBudgetV1, ordinary_mint_request_byte_budget_v1,
 };
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub use ordinary_mint_verifier::{
     KagemushaVerifiedOrdinaryMintAuthorizationV1, verify_ordinary_mint_authorization_v1,
 };
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod ordinary_cash_carrier_budget;
-#[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_verifier;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_lineage_service_carrier;
+pub use ordinary_lineage_service_carrier::{
+    KAGEMUSHA_ORDINARY_LINEAGE_SERVICE_ORIGINAL_MAX_BYTES_V1,
+    KagemushaOrdinaryLineageServiceOriginalV1,
+};
+mod ordinary_lineage_state_original;
+pub use ordinary_lineage_state_original::{
+    KagemushaOrdinaryLineageStateOriginalV1, KagemushaOrdinaryLineageStateProjectionV1,
+};
+#[cfg(unix)]
 mod ordinary_lineage_proof_admission;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub use ordinary_cash_carrier_budget::{
     KagemushaOrdinaryCashCarrierBudgetV1, ordinary_cash_carrier_budget_v1,
 };
 
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub use ordinary_lineage_proof_admission::{
-    KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
-    KagemushaOrdinaryLineageOutgoingOriginalsV1, KagemushaOrdinaryLineageStateOriginalV1,
-    KagemushaOrdinaryLineageStateProjectionV1, KagemushaOrdinaryLineageStateProofBundleV1,
+    KAGEMUSHA_ORDINARY_INCOMING_COMMIT_BUNDLE_MAX_BYTES_V1,
+    KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1,
+    KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryIncomingCommitProofBundleV1,
+    KagemushaOrdinaryIncomingReservationProofBundleV1, KagemushaOrdinaryLineageCommitProofBundleV1,
+    KagemushaOrdinaryLineageOutgoingOriginalsV1, KagemushaOrdinaryLineageStateProofBundleV1,
     KagemushaOrdinaryLineageStatementOriginalV1, KagemushaOrdinaryLineageStatementV1,
+    KagemushaVerifiedOrdinaryIncomingCommitProofV1,
+    KagemushaVerifiedOrdinaryIncomingReservationProofV1,
     KagemushaVerifiedOrdinaryLineageAnchorProofV1, KagemushaVerifiedOrdinaryLineageCommitProofV1,
     KagemushaVerifiedOrdinaryLineageReservationProofV1,
-    KagemushaVerifiedOrdinaryLineageStateProofV1, verify_ordinary_lineage_anchor_v1,
+    KagemushaVerifiedOrdinaryLineageStateProofV1,
+    KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1,
+    ordinary_incoming_commit_carrier_max_bytes_v1, verify_ordinary_incoming_commit_v1,
+    verify_ordinary_incoming_reservation_v1, verify_ordinary_lineage_anchor_v1,
     verify_ordinary_lineage_commit_v1, verify_ordinary_lineage_reservation_v1,
-    verify_ordinary_lineage_state_proof_v1,
+    verify_ordinary_lineage_state_proof_v1, verify_service_ordinary_received_cash_output_v1,
+};
+
+#[cfg(unix)]
+pub(crate) use ordinary_lineage_proof_admission::{
+    GeneratedOrdinaryIncomingCommitOriginalsV1, assemble_ordinary_incoming_commit_v1,
+    assemble_ordinary_incoming_reservation_v1, readmit_ordinary_incoming_commit_v1,
 };
 
 mod ordinary_issuer_config;
-#[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_state_reserved;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
@@ -153,178 +141,42 @@ pub(crate) use ordinary_guard_verifier::{
     verify_ordinary_bootstrap_guard_v1, verify_ordinary_incoming_preparation_guard_v1,
     verify_ordinary_preparation_guard_v1, verify_ordinary_terminal_guard_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
-pub use ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
+pub use ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1;
 mod ordinary_approval_proof_binding;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_cash_opening;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_credential_union;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_guard_data_binding;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_guard_recursive_consumer;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_prepared_intent;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
-))]
 mod ordinary_receiver_request_opening;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
-))]
 mod ordinary_redeem_output_opening;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
-))]
 mod ordinary_send_output_opening;
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_integrity_binding;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_integrity_stream;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_integrity_union;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_issuer_equation;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_platform_equation;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_platform_union;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_terminal_subject_binding;
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
 // live Claim/Terminal fold before any partial-MSM shard can authorize value.
 mod partial_msm_shard;
-#[cfg(feature = "zk-halo2-ipa")]
 mod provider_policy_root;
 mod relation;
-#[cfg(feature = "zk-halo2-ipa")]
 mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
-#[cfg(all(
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    ),
-    feature = "zk-halo2-ipa"
-))]
 mod terminal_body_commitment;
-#[cfg(all(
-    any(test, feature = "kagemusha-production-prover"),
-    feature = "zk-halo2-ipa"
-))]
 mod terminal_durable_commitments;
-#[cfg(feature = "zk-halo2-ipa")]
 mod testnet_observation;
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 mod testnet_value_ledger;
 mod transport_decider;
-#[cfg(feature = "zk-halo2-ipa")]
 mod typed_sha_consumer;
 
-#[cfg(all(
-    any(test, feature = "kagemusha-real-proof-harness"),
-    feature = "zk-halo2-ipa"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 #[cfg_attr(
     not(test),
     allow(
@@ -334,7 +186,7 @@ mod typed_sha_consumer;
     )
 )]
 mod real_handoff_qualification_tests;
-#[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
+#[cfg(all(test, unix))]
 pub(crate) use real_handoff_qualification_tests::DiagnosticMintStageProofV1;
 #[cfg(test)]
 mod ordinary_state_artifact_tests;
@@ -358,10 +210,7 @@ pub use artifacts::{
     KagemushaArtifactKindV1, KagemushaAuthenticatedArtifactSetV1, KagemushaCircuitFamilyV1,
     KagemushaDirectoryArtifactResolverV1, KagemushaMemoryArtifactResolverV1,
 };
-#[cfg(all(
-    any(test, feature = "kagemusha-real-proof-harness"),
-    feature = "zk-halo2-ipa"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) use generation::generate_kagemusha_mint_hash_artifacts_for_guarded_test_v1;
 
 /// Run the one real mint-authority proof qualification under the external process memory guard.
@@ -369,19 +218,27 @@ pub(crate) use generation::generate_kagemusha_mint_hash_artifacts_for_guarded_te
 /// This deliberately narrow entrypoint is present only for the non-shipping dedicated harness
 /// feature. It keeps the proof out of Core's monolithic unit-test executable, whose unrelated test
 /// code previously dominated compile-time memory.
-#[cfg(all(feature = "kagemusha-real-proof-harness", feature = "zk-halo2-ipa"))]
+#[cfg(feature = "kagemusha-real-proof-harness")]
 #[doc(hidden)]
 pub fn run_guarded_real_mint_authority_proof_v1() {
     real_handoff_qualification_tests::run_guarded_real_mint_authority_proof_v1();
 }
-#[cfg(feature = "kagemusha-production-prover")]
 pub use generation::KagemushaAppAttestRecursiveSelectionWitnessV1;
 pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
-#[cfg(feature = "kagemusha-production-prover")]
 pub(crate) use generation::production_prover::GeneratedOrdinaryCashReservationOriginalsV1;
-#[cfg(feature = "kagemusha-production-prover")]
+#[cfg(unix)]
+pub(crate) use generation::production_prover::{
+    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaRetainedOrdinaryOutgoingAuxiliariesV1,
+    KagemushaOrdinaryOutgoingAuxiliaryConsumerV1, KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
+    generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
+};
+#[cfg(unix)]
+pub(crate) use generation::production_prover::{
+    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
+    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
+};
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
@@ -390,7 +247,6 @@ pub use generation::production_prover::{
     KagemushaProductionTerminalProofV1, KagemushaRetainedOrdinaryBootstrapAuxiliariesV1,
     register_kagemusha_native_outgoing_witness_source_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(test)]
 pub use generation::{
     KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
@@ -414,7 +270,7 @@ pub use generation::{
     prove_kagemusha_terminal_authorization_hash_claim_v1,
     prove_kagemusha_terminal_authorization_v1,
 };
-#[cfg(all(feature = "kagemusha-production-prover", not(test)))]
+#[cfg(not(test))]
 pub use generation::{
     KagemushaCommitEvidenceOpeningGenerationV1, KagemushaGeneratedPaymentProofV1,
     KagemushaGeneratedRedemptionProofV1, KagemushaTerminalAuthorizationEpGenerationWitnessV1,
@@ -425,7 +281,6 @@ pub use generation::{
     KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
     KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use generation::{
     KagemushaGeneratedMintAuthorityArtifactsV1, KagemushaGeneratedMintAuthorityProofV1,
     KagemushaGeneratedMintAuthorizationArtifactsV1, KagemushaGeneratedMintAuthorizationProofV1,
@@ -445,7 +300,6 @@ pub use generation::{
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_platform_credential_hash_claim_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::{
     KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaLoadedEpRecursiveStateArtifactsV1,
@@ -454,49 +308,38 @@ pub use generation::{
     generate_kagemusha_recursive_state_artifacts_v1, prove_kagemusha_recursive_state_hash_claim_v1,
     prove_kagemusha_recursive_state_v1,
 };
-#[cfg(feature = "kagemusha-production-prover")]
 pub use generation::{
-    KagemushaOrdinaryAppRecursiveSelectionWitnessV1, KagemushaOrdinaryRecursivePreparedOpeningV1,
+    KagemushaOrdinaryAppRecursiveSelectionWitnessV1,
+    KagemushaOrdinaryRecursiveOuterParentWitnessV1, KagemushaOrdinaryRecursivePreparedOpeningV1,
+    KagemushaOrdinaryRecursiveReceiveIncomingOpeningV1,
 };
-#[cfg(all(
-    feature = "kagemusha-production-prover",
-    not(any(test, feature = "kagemusha-real-proof-harness"))
-))]
+#[cfg(not(any(test, feature = "kagemusha-real-proof-harness")))]
 pub use generation::{
     KagemushaRecursiveIncomingEpGenerationWitnessV1,
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 #[doc(hidden)]
 pub use generation::{
     prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
     prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
 };
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-real-proof-harness")
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use guard_bundle::KagemushaPlatformCredentialRelationCircuitV1;
 pub(crate) use guard_bundle::device_authority_commitment_v1;
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
     KagemushaPlatformCredentialRelationWitnessV1, KagemushaPlatformCredentialStatementV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use guard_verifier::KagemushaAuthenticatedGuardBundleVerifierV1;
-#[cfg(feature = "zk-halo2-ipa")]
 pub use guard_verifier::{
     KagemushaGuardProofDiagnosticVerifierV1, KagemushaGuardVerificationErrorV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use hardware_transactions::{
     KAGEMUSHA_HARDWARE_TRANSACTION_MAX_BYTES_V1, KagemushaHardwareCheckpointTransportV1,
     KagemushaHardwareTransactionCertificateV1, KagemushaHardwareTransactionSubjectV1,
     KagemushaHardwareTransactionV1, KagemushaHardwareTransactionVerifierV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use mint_authority::KagemushaMintAuthorityCheckpointV1;
-#[cfg(feature = "zk-halo2-ipa")]
 pub use mint_authorization::KagemushaMintAuthorizationRelationWitnessV1;
 pub use mint_finality::{
     KagemushaMintFinalityErrorV1, KagemushaMintFinalityLocalAuthorityV1,
@@ -510,30 +353,25 @@ pub use mint_finality::{
     verify_kagemusha_mint_finality_seat_readiness_v1,
     verify_kagemusha_mint_finality_validator_seal_v1, verify_kagemusha_top_up_membership_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use mint_helper::{KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitnessV1};
 pub use native_backend::{
     KagemushaAuthenticatedRecursiveVerifierV1, KagemushaMintAuthorizationFamilyV1,
     KagemushaRecursiveVerifierProfileV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use provider_policy_root::KagemushaProviderRootCircuitParamsV1;
 #[cfg(test)]
 pub use relation::KagemushaOperationRelationCircuitV1;
 #[cfg(test)]
 pub use relation::KagemushaOperationRelationConfigV1;
 pub use relation::KagemushaOperationRelationWitnessV1;
-#[cfg(feature = "zk-halo2-ipa")]
 pub use state_checkpoint::{KagemushaRecursiveStateCheckpointV1, KagemushaStateCheckpointErrorV1};
 pub use state_relation::{
     KagemushaPreparedIntentCommitmentsV1, KagemushaReceiveFoldCreditV1,
     KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
     public_instance as kagemusha_state_public_instance_v1,
 };
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use terminal_authorization::{
     KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpWitnessV1,
     KagemushaTerminalAuthorizationEqWitnessV1, KagemushaTerminalAuthorizationWitnessV1,
@@ -542,15 +380,10 @@ pub(crate) use terminal_authorization::{
     derive_kagemusha_commit_wrapper_deferred_audits_v1,
     derive_kagemusha_terminal_authorization_deferred_audits_v1,
 };
-#[cfg(all(
-    any(test, feature = "kagemusha-production-prover"),
-    feature = "zk-halo2-ipa"
-))]
 pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationEpCircuitV1, KagemushaTerminalAuthorizationEqCircuitV1,
     TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
 };
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationPrivateTransitionV1,
     TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
@@ -559,19 +392,17 @@ pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationPublicInputsV1, canonical_prepared_transition_binding_digest_v1,
     canonical_terminal_send_output_binding_v1, kagemusha_candidate_envelope_digest_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 #[cfg(test)]
 pub use testnet_observation::{
     KagemushaTestnetExperimentalMintAdmissionV1, KagemushaTestnetExperimentalMintTrialV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
 pub use testnet_observation::{
     KagemushaTestnetFinalizedMintObservationV1, KagemushaTestnetLineageTrialV1,
     KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
     KagemushaTestnetStateProofObservationV1, KagemushaTestnetValueAdmissionV1,
     KagemushaVerifiedFinalityChainV1, observe_kagemusha_testnet_state_proof_v1,
 };
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub use testnet_value_ledger::{
     KagemushaTestnetMintCreditLedgerV1, KagemushaTestnetMintLedgerCreditV1,
 };
@@ -1324,7 +1155,14 @@ impl KagemushaNormalizedGuardStatementV1 {
                 && (self.predecessor_suite_id != self.successor_suite_id
                     || self.predecessor_vk_digest != self.successor_vk_digest))
             || uses_outbox != (self.prepared_transition_binding_digest != [0; 32])
-            || (is_terminal && !uses_outbox)
+            || (is_terminal
+                && !matches!(
+                    self.operation,
+                    KagemushaOperationV1::MintFold
+                        | KagemushaOperationV1::ReceiveFold
+                        | KagemushaOperationV1::SendSplit
+                        | KagemushaOperationV1::RedeemSplit
+                ))
             || has_sender_authorization
                 != (is_terminal && self.operation == KagemushaOperationV1::SendSplit)
         {
@@ -2847,6 +2685,7 @@ const _: () = {
     assert!(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1 == 6_528);
 };
 
+#[cfg(unix)]
 pub(crate) use ordinary_lineage_proof_admission::{
     KagemushaVerifiedOrdinaryReceivedCashOutputV1, ordinary_incoming_artifacts_v1,
     readmit_historical_ordinary_received_cash_output_v1, require_ordinary_incoming_predecessor_v1,

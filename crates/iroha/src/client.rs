@@ -1,14 +1,14 @@
 //! End-point querying logic, including custom public and authenticated routes.
 mod authority_originals;
-#[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(unix)]
 mod ordinary_native;
-#[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(unix)]
 pub use ordinary_native::{
     KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeAccountCustodyV1,
     KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1,
     KagemushaNativeCurrentWalletReadV1, KagemushaNativeEnrollmentRequestContextV1,
-    KagemushaNativeInstalledRuntimeAuthorityV1, KagemushaNativePreparedEnrollmentRequestV1,
-    KagemushaNativeSignedEnrollmentHttpOriginalV1,
+    KagemushaNativeInstalledRuntimeAuthorityV1, KagemushaNativeOrdinaryInstalledContextV1,
+    KagemushaNativePreparedEnrollmentRequestV1, KagemushaNativeSignedEnrollmentHttpOriginalV1,
     KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeCurrentWalletOriginalV1,
     KagemushaOrdinaryNativeInventoryV1, KagemushaOrdinaryNativeNodeTargetV1,
     KagemushaOrdinaryNativeOriginalDescriptorV1,
@@ -232,13 +232,11 @@ pub use iroha_torii_shared::sumeragi_evidence_api::{
     SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
 };
 pub use iroha_torii_shared::validation_fee_api::{
-    VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
-    VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
-    VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+    RetailFeeCurrentHeadResponseV1, RetailFeeQuoteResponseV1, RetailFeeReceiptsResponseV1,
+    RetailFeeStatementRequestV1, RetailFeeStatementResponseV1, RetailFeeStatusResponseV1,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
-    ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
     ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
     ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
@@ -2802,44 +2800,21 @@ fn canonical_validation_fee_draft_instruction(
     }
     let proposal_kind = request.proposal.proposal_kind(&request.proposal_operator);
     let instruction = match &request.proposal {
-        ValidationFeeProposalDraftPayloadV1::Policy {
-            policy,
-            payout_lifecycle_proposal_id,
-        } => {
+        ValidationFeeProposalDraftPayloadV1::Policy { policy } => {
             if let Some(reason) = policy.policy_invariant_error() {
                 return Err(eyre!("invalid validation-fee policy: {reason}"));
-            }
-            match (
-                policy.treasury_payout_binding.as_ref(),
-                payout_lifecycle_proposal_id,
-            ) {
-                (None, None) => {}
-                (Some(_), Some(id)) if *id != [0; 32] => {}
-                (Some(_), _) => {
-                    return Err(eyre!(
-                        "payout-enabled policy requires a non-zero lifecycle proposal id"
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(eyre!(
-                        "policy without a payout binding cannot select a lifecycle proposal"
-                    ));
-                }
             }
             let kind = ProposalKind::ValidationFeePolicy(
                 iroha_data_model::governance::types::ValidationFeePolicyProposal {
                     proposal_operator: request.proposal_operator.clone(),
                     policy: policy.clone(),
-                    payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
                 },
             );
             debug_assert_eq!(kind, proposal_kind);
-            let instruction: InstructionBox = ProposeValidationFeePolicy {
+            ProposeValidationFeePolicy {
                 policy: policy.clone(),
-                payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
             }
-            .into();
-            instruction
+            .into()
         }
         ValidationFeeProposalDraftPayloadV1::PayoutLifecycle { payout_binding } => {
             if let Some(reason) = payout_binding.invariant_error() {
@@ -3536,23 +3511,11 @@ pub struct MultisigProposeRequest {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
-    /// Optional validation-fee policy version forwarded to transaction metadata.
+    /// Complete reviewed native fee assessment bound once by the signed proposal marker.
     #[norito(default)]
-    pub validation_fee_policy_version: Option<String>,
-    /// Optional validation-fee policy hash forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_policy_hash: Option<String>,
-    /// Optional composite Hijiri fee-quote hash forwarded to metadata and the signed marker.
-    #[norito(default)]
-    pub validation_fee_hijiri_fee_quote_hash: Option<String>,
+    pub validation_fee_assessment: Option<iroha_data_model::validation_fee::RetailFeeAssessmentV1>,
     /// Instruction batch to wrap inside the multisig proposal.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
-    /// Optional validation-fee instruction index forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_instruction_index: Option<String>,
-    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_transfer_entry_index: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
@@ -8018,6 +7981,58 @@ impl Client {
             "{CONTEXT}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
         ))
     }
+    /// Read original multisig execution records from the current certified native World cut.
+    /// This bounded data response grants no authority. Independently authenticate its complete
+    /// snapshot against a verified native block and bind both stored Vec originals to the
+    /// exact successful approval entrypoint before treating its inner effects as executed.
+    /// # Errors
+    /// Transport, capacity, noncanonical data or response selector substitution.
+    pub fn get_unverified_multisig_execution_evidence_v1(
+        &self,
+        account: &AccountId,
+        entrypoint_hash: HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
+        instructions_hash: HashOf<Vec<InstructionBox>>,
+    ) -> Result<iroha_torii_shared::multisig_execution_evidence::MultisigExecutionEvidenceV1> {
+        use iroha_torii_shared::multisig_execution_evidence::{
+            MULTISIG_EXECUTION_EVIDENCE_MAX_BYTES_V1,
+            decode_unverified_multisig_execution_evidence_v1,
+        };
+        let path = format!(
+            "/v1/multisig/execution-evidence/{}/{}/{}",
+            account,
+            entrypoint_hash.to_string().to_ascii_lowercase(),
+            instructions_hash.to_string().to_ascii_lowercase()
+        );
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, join_torii_url(&self.torii_url, &path))
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(MULTISIG_EXECUTION_EVIDENCE_MAX_BYTES_V1),
+        )?;
+        if response.status() != StatusCode::OK
+            || response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(';').next())
+                .map(str::trim)
+                != Some(APPLICATION_NORITO)
+        {
+            return Err(eyre!(
+                "native multisig execution evidence requires a successful canonical Norito response"
+            ));
+        }
+        let evidence = decode_unverified_multisig_execution_evidence_v1(response.body())
+            .map_err(|e| eyre!("invalid native multisig execution evidence: {e}"))?;
+        if &evidence.multisig_account_id != account
+            || evidence.entrypoint_hash != *entrypoint_hash.as_ref()
+            || evidence.instructions_hash != instructions_hash
+        {
+            return Err(eyre!(
+                "native multisig execution evidence substituted its exact request selectors"
+            ));
+        }
+        Ok(evidence)
+    }
     /// Discover the universally compiled KAGEMUSHA-handoff capability.
     ///
     /// The capability is independent of backend configuration, asset catalogs,
@@ -9812,6 +9827,19 @@ mod evidence_http_tests {
         assert_eq!(body["proposal_id"].as_str(), Some(proposal_id.as_str()));
         assert!(body["instructions_hash"].is_null());
     }
+    fn retail_assessment_fixture(
+        account_id: AccountId,
+    ) -> iroha_data_model::validation_fee::RetailFeeAssessmentV1 {
+        let fixture: norito::json::Value = norito::json::from_slice(include_bytes!(
+            "../../../javascript/iroha_js/test/fixtures/retail_fee_codec_v1.json"
+        ))
+        .expect("retail codec fixture");
+        let mut assessment: iroha_data_model::validation_fee::RetailFeeAssessmentV1 =
+            norito::json::from_value(fixture["assessment"].clone())
+                .expect("canonical retail assessment");
+        assessment.account_id = account_id;
+        assessment
+    }
     #[test]
     fn post_multisig_propose_encodes_instruction_boxes_as_native_norito_json() {
         use base64::Engine as _;
@@ -9831,13 +9859,25 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: Some("invoice 42".to_owned()),
-            validation_fee_policy_version: Some("7".to_owned()),
-            validation_fee_policy_hash: Some("ab".repeat(32)),
-            validation_fee_hijiri_fee_quote_hash: Some("cd".repeat(32)),
+            validation_fee_assessment: Some(retail_assessment_fixture(multisig_account_id.clone())),
             instructions: vec![instruction.clone()],
-            validation_fee_instruction_index: Some("1".to_owned()),
-            validation_fee_transfer_entry_index: Some("2".to_owned()),
         };
+        let multisig_validation::ProposalIntent {
+            instructions: proposal_instructions,
+            metadata: outer_metadata,
+            ..
+        } = multisig_validation::canonical_propose_intent(&request).unwrap();
+        assert_eq!(
+            proposal_instructions.len(),
+            2,
+            "one payment instruction and one reviewed marker"
+        );
+        assert_eq!(
+            outer_metadata.iter().len(),
+            1,
+            "only the memo belongs in outer proposal metadata"
+        );
+        assert!(outer_metadata.get("validation_fee_assessment").is_none());
         let response_payload =
             prepared_multisig_response(&client, multisig_account_id.clone(), &request);
         let response = json_response(
@@ -9868,22 +9908,10 @@ mod evidence_http_tests {
             "http://mock.local/v1/multisig/propose"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        let expected_policy_hash = "ab".repeat(32);
-        let expected_hijiri_fee_quote_hash = "cd".repeat(32);
         assert_eq!(body["memo"].as_str(), Some("invoice 42"));
-        assert_eq!(body["validation_fee_policy_version"].as_str(), Some("7"));
         assert_eq!(
-            body["validation_fee_policy_hash"].as_str(),
-            Some(expected_policy_hash.as_str())
-        );
-        assert_eq!(
-            body["validation_fee_hijiri_fee_quote_hash"].as_str(),
-            Some(expected_hijiri_fee_quote_hash.as_str())
-        );
-        assert_eq!(body["validation_fee_instruction_index"].as_str(), Some("1"));
-        assert_eq!(
-            body["validation_fee_transfer_entry_index"].as_str(),
-            Some("2")
+            body["validation_fee_assessment"],
+            norito::json::to_value(request.validation_fee_assessment.as_ref().unwrap()).unwrap()
         );
         let encoded_instruction = body["instructions"][0]
             .as_str()
@@ -9925,12 +9953,8 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
-            validation_fee_policy_version: None,
-            validation_fee_policy_hash: None,
-            validation_fee_hijiri_fee_quote_hash: None,
+            validation_fee_assessment: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()],
-            validation_fee_instruction_index: None,
-            validation_fee_transfer_entry_index: None,
         };
         (multisig_account_id, request)
     }
@@ -10259,10 +10283,9 @@ mod evidence_http_tests {
     ) {
         let mut metadata_request = request.clone();
         metadata_request.memo = Some("bound memo".to_owned());
-        metadata_request.validation_fee_policy_version = Some("7".to_owned());
-        metadata_request.validation_fee_policy_hash = Some("ab".repeat(32));
-        metadata_request.validation_fee_hijiri_fee_quote_hash = Some("cd".repeat(32));
-        metadata_request.validation_fee_instruction_index = Some("0".to_owned());
+        metadata_request.validation_fee_assessment = Some(retail_assessment_fixture(
+            response_payload.resolved_multisig_account_id.clone(),
+        ));
         let mut changed_metadata = prepared_multisig_response(
             client,
             response_payload.resolved_multisig_account_id.clone(),
@@ -10297,6 +10320,51 @@ mod evidence_http_tests {
         assert!(
             message.contains("exact requested executable and metadata"),
             "unexpected error: {message}"
+        );
+
+        let mut duplicate_outer = prepared_multisig_response(
+            client,
+            response_payload.resolved_multisig_account_id.clone(),
+            &metadata_request,
+        );
+        let payload = base64::engine::general_purpose::STANDARD
+            .decode(
+                duplicate_outer
+                    .transaction_payload_b64
+                    .as_deref()
+                    .expect("prepared transaction payload"),
+            )
+            .expect("decode prepared transaction payload");
+        let builder = TransactionBuilder::decode_payload(&payload)
+            .expect("decode prepared transaction builder");
+        let mut duplicate_metadata = builder.payload().metadata.clone();
+        duplicate_metadata.insert(
+            iroha_data_model::validation_fee::RETAIL_FEE_ASSESSMENT_METADATA_KEY
+                .parse()
+                .expect("static retail assessment metadata key"),
+            iroha_primitives::json::Json::new(
+                metadata_request.validation_fee_assessment.clone().unwrap(),
+            ),
+        );
+        replace_prepared_multisig_payload(
+            &mut duplicate_outer,
+            &builder.with_metadata(duplicate_metadata),
+        );
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&duplicate_outer)
+                .expect("encode duplicated assessment response"),
+        );
+        let err = with_mock_http(respond_with(snapshots, response), |mock_transport| {
+            client
+                .clone()
+                .with_test_http_transport(mock_transport.clone())
+                .post_multisig_propose(&metadata_request)
+                .expect_err("outer assessment duplicate must fail")
+        });
+        assert!(
+            format!("{err:#}").contains("exact requested executable and metadata"),
+            "unexpected error: {err:#}"
         );
     }
 
@@ -10406,6 +10474,32 @@ mod evidence_http_tests {
         assert!(
             message.contains("transaction authority"),
             "unexpected error: {message}"
+        );
+
+        let mut wrong_assessment_request = request.clone();
+        wrong_assessment_request.validation_fee_assessment = Some(retail_assessment_fixture(
+            AccountId::new(checked_random_keypair().public_key().clone()),
+        ));
+        let wrong_assessment_response = prepared_multisig_response(
+            &client,
+            response_payload.resolved_multisig_account_id.clone(),
+            &wrong_assessment_request,
+        );
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&wrong_assessment_response)
+                .expect("encode mismatched assessment response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            client
+                .clone()
+                .with_test_http_transport(mock_transport.clone())
+                .post_multisig_propose(&wrong_assessment_request)
+                .expect_err("assessment account substitution must fail")
+        });
+        assert!(
+            format!("{err:#}").contains("assessment account does not match"),
+            "unexpected error: {err:#}"
         );
     }
     fn assert_contract_call_metadata_and_ttl_binding(
@@ -15409,6 +15503,231 @@ impl AccountClient {
         Client::decode_fee_quote_response(payload, &response)
     }
 
+    /// Read one wallet's evaluated monthly status through the immutable signing context.
+    ///
+    /// Torii permits the wallet, its current multisig signatory, or its protected
+    /// domain issuer. This evaluated response is not an independent finality proof.
+    ///
+    /// # Errors
+    /// Fails on non-direct signing, rejected scope, malformed/oversized responses,
+    /// transport failure, or a response naming a different wallet.
+    pub async fn retail_fee_status(
+        &self,
+        account: &AccountId,
+    ) -> Result<RetailFeeStatusResponseV1> {
+        let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
+        url.path_segments_mut()
+            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .pop_if_empty()
+            .push(&account.to_string())
+            .push("status");
+        let response: RetailFeeStatusResponseV1 = self
+            .retail_fee_json(HttpMethod::GET, url, Vec::new(), 524_288)
+            .await?;
+        if response
+            .account_state
+            .as_ref()
+            .is_some_and(|state| &state.account_id != account)
+        {
+            return Err(eyre!("retail fee status belongs to a different account"));
+        }
+        response
+            .retail_schedule
+            .validate()
+            .map_err(|error| eyre!(error))?;
+        Ok(response)
+    }
+
+    /// Quote the exact ordered payment intent using canonical account authentication.
+    ///
+    /// The caller must compare the returned policy and height with its independently
+    /// verified policy before review; consensus revalidates the signed assessment.
+    ///
+    /// # Errors
+    /// Fails for empty/oversized requests, non-direct signing, rejected scope,
+    /// transport/JSON errors, or an assessment that changes the requested intent.
+    pub async fn retail_fee_quote(
+        &self,
+        request: &iroha_data_model::validation_fee::RetailFeeQuoteRequestV1,
+    ) -> Result<RetailFeeQuoteResponseV1> {
+        if request.transfers.is_empty()
+            || request.transfers.len() > 128
+            || request
+                .transfers
+                .iter()
+                .any(|leg| leg.amount_minor_units == 0)
+        {
+            return Err(eyre!("retail quote requires 1..=128 positive payment legs"));
+        }
+        let url = join_torii_url(&self.client().torii_url, "v1/validation-fee/quote");
+        let response: RetailFeeQuoteResponseV1 = self
+            .retail_fee_json(
+                HttpMethod::POST,
+                url,
+                norito::json::to_vec(request)?,
+                524_288,
+            )
+            .await?;
+        if &response.request != request
+            || response.assessment.account_id != request.account_id
+            || response.assessment.qualifying_payments != request.qualifying_payments()
+            || response.assessment.intent_hash
+                != request.intent_hash().map_err(|error| eyre!(error))?
+        {
+            return Err(eyre!(
+                "retail fee assessment differs from the exact requested payment intent"
+            ));
+        }
+        Ok(response)
+    }
+
+    /// Read a bounded page of immutable fee receipts with native membership evidence.
+    ///
+    /// Evidence is returned for independent checkpoint verification. This call does
+    /// not treat a finality context supplied by the same server as a trust anchor.
+    ///
+    /// # Errors
+    /// Fails on invalid page bounds/cursor, non-direct signing, rejected scope,
+    /// transport/JSON errors, or receipts belonging to another wallet.
+    pub async fn retail_fee_receipts(
+        &self,
+        account: &AccountId,
+        after_receipt_id: Option<&str>,
+        limit: u32,
+    ) -> Result<RetailFeeReceiptsResponseV1> {
+        if !(1..=100).contains(&limit)
+            || after_receipt_id.is_some_and(|id| {
+                id.len() != 64
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+        {
+            return Err(eyre!("invalid retail receipt page bounds or cursor"));
+        }
+        let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
+        url.path_segments_mut()
+            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .pop_if_empty()
+            .push(&account.to_string())
+            .push("receipts");
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        if let Some(cursor) = after_receipt_id {
+            url.query_pairs_mut()
+                .append_pair("after_receipt_id", cursor);
+        }
+        let response: RetailFeeReceiptsResponseV1 = self
+            .retail_fee_json(HttpMethod::GET, url, Vec::new(), 8 * 1024 * 1024)
+            .await?;
+        if response.receipts.len() > limit as usize
+            || response.receipts.len() != response.receipt_proofs.len()
+            || response
+                .receipts
+                .iter()
+                .any(|receipt| &receipt.account_id != account)
+        {
+            return Err(eyre!(
+                "retail receipt page does not match the requested wallet and bound"
+            ));
+        }
+        Ok(response)
+    }
+
+    /// Read the current committed wallet receipt head through the bound signer.
+    ///
+    /// The caller must verify the returned finality against an independently
+    /// authenticated checkpoint before using this head as a statement cursor.
+    /// # Errors
+    /// Returns authentication, transport, malformed response, or account-scope errors.
+    pub async fn retail_fee_statement_head(
+        &self,
+        account: &AccountId,
+    ) -> Result<RetailFeeCurrentHeadResponseV1> {
+        let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
+        url.path_segments_mut()
+            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .pop_if_empty()
+            .push(&account.to_string())
+            .push("statement")
+            .push("head");
+        let response: RetailFeeCurrentHeadResponseV1 = self
+            .retail_fee_json(HttpMethod::GET, url, Vec::new(), 8 * 1024 * 1024)
+            .await?;
+        if &response.proof.head.current_account_id != account {
+            return Err(eyre!(
+                "retail statement head belongs to a different current account"
+            ));
+        }
+        Ok(response)
+    }
+
+    /// Read a complete contiguous receipt page from a previously authenticated cursor.
+    ///
+    /// The SDK recomputes the next cursor with the native receipt-chain verifier.
+    /// The initial cursor must come from an independently verified current head.
+    /// # Errors
+    /// Returns page bounds, authentication, transport, response or chain-verification errors.
+    pub async fn retail_fee_statement_page(
+        &self,
+        account: &AccountId,
+        request: &RetailFeeStatementRequestV1,
+    ) -> Result<RetailFeeStatementResponseV1> {
+        if !(1..=100).contains(&request.limit) {
+            return Err(eyre!("retail statement page limit must be 1..=100"));
+        }
+        let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
+        url.path_segments_mut()
+            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .pop_if_empty()
+            .push(&account.to_string())
+            .push("statement");
+        let response: RetailFeeStatementResponseV1 = self
+            .retail_fee_json(
+                HttpMethod::POST,
+                url,
+                norito::json::to_vec(request)?,
+                8 * 1024 * 1024,
+            )
+            .await?;
+        if response.cursor != request.cursor
+            || response.page.receipts.len() > request.limit as usize
+        {
+            return Err(eyre!(
+                "retail statement page differs from requested cursor or limit"
+            ));
+        }
+        let next = response
+            .page
+            .verify(&request.cursor)
+            .map_err(|error| eyre!(error))?;
+        if next != response.next_cursor {
+            return Err(eyre!(
+                "retail statement returned an unverified successor cursor"
+            ));
+        }
+        Ok(response)
+    }
+
+    async fn retail_fee_json<T: norito::json::JsonDeserialize>(
+        &self,
+        method: HttpMethod,
+        url: Url,
+        body: Vec<u8>,
+        max_response_bytes: usize,
+    ) -> Result<T> {
+        self.ensure_direct_signing_capability()?;
+        let client = self.client();
+        let builder = client
+            .account_signed_request(method, url, body)?
+            .header("Accept", APPLICATION_JSON)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Cache-Control", "no-store")
+            .max_response_bytes(max_response_bytes);
+        let response = client.dispatch_request(builder.build()?).await?;
+        Client::decode_json_ok(response, "Native retail fee read failed")
+    }
+
     /// Register one `SoraFS` pin manifest through the bound account authority.
     ///
     /// # Errors
@@ -19814,61 +20133,6 @@ impl Client {
             .map_err(|error| eyre!("validation-fee policy proof verification failed: {error}"))?;
         Ok((proof, promoted_checkpoint))
     }
-    /// Request one bounded current-state Hijiri validation-fee quote.
-    ///
-    /// The request and response use canonical Norito. The response is accepted only when its
-    /// account, transfer count, arithmetic, policy/Hijiri bindings, and live next-height semantics
-    /// are coherent with the exact request. Torii authorizes either the authenticated client
-    /// account itself or a live multisig controller for which that account is a direct signatory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid request, transport or HTTP failure, non-Norito response,
-    /// malformed quote, or a quote that is not coherent with the request.
-    pub fn post_validation_fee_hijiri_quote(
-        &self,
-        request: &ValidationFeeHijiriQuoteRequestV1,
-    ) -> Result<ValidationFeeHijiriQuoteResponseV1> {
-        request
-            .validate()
-            .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
-        let body = to_bytes(request)
-            .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
-        let url = join_torii_url(
-            &self.torii_url,
-            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH,
-        );
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_NORITO)
-                .header("Accept", APPLICATION_NORITO)
-                .max_response_bytes(VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1),
-        )?;
-        Self::ensure_response_status(
-            &response,
-            StatusCode::OK,
-            "Failed to fetch Hijiri validation-fee quote",
-            " ",
-        )?;
-        if response.headers().contains_key("x-iroha-reject-code") {
-            return Err(eyre!(
-                "successful Hijiri validation-fee quote carried a rejection code"
-            ));
-        }
-        let content_type = exact_single_response_header(&response, "content-type")
-            .wrap_err("Hijiri validation-fee quote response content type is invalid")?;
-        if !Self::is_norito_content_type(content_type) {
-            return Err(eyre!(
-                "Hijiri validation-fee quote response has invalid content type {content_type}"
-            ));
-        }
-        let quote: ValidationFeeHijiriQuoteResponseV1 = decode_from_bytes(response.body())
-            .wrap_err("failed to decode Hijiri validation-fee quote response")?;
-        quote.validate_for_request(request).map_err(|error| {
-            eyre!("Hijiri validation-fee quote response validation failed: {error}")
-        })?;
-        Ok(quote)
-    }
     /// Repeatedly verify bounded validation-fee proof pages until Torii's observed tip.
     ///
     /// Applications that persist checkpoints should call the page method
@@ -24201,6 +24465,7 @@ mod tests {
     }
     include!("client/musubi_tests.rs");
     include!("client/zk_attachment_auth_tests.rs");
+    include!("client/retail_fee_read_tests.rs");
     #[test]
     fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {
         assert_eq!(
@@ -24219,252 +24484,6 @@ mod tests {
             !numeric_order.windows(2).any(|pair| pair[0] > pair[1]),
             "proposal height ordering must be numeric rather than lexicographic",
         );
-    }
-    fn validation_fee_hijiri_quote_fixture(
-        request: &ValidationFeeHijiriQuoteRequestV1,
-    ) -> ValidationFeeHijiriQuoteResponseV1 {
-        use iroha_data_model::{
-            hijiri::{FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16},
-            validation_fee::VALIDATION_FEE_DS_SCALE,
-        };
-        use iroha_torii_shared::validation_fee_api::{
-            VALIDATION_FEE_BASE_MINOR_UNITS_V1, ValidationFeeHijiriQuoteBaseV1,
-            evaluate_hijiri_quote_v1,
-        };
-
-        let fee_policy = HijiriFeePolicy::new(
-            vec![
-                FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
-                    .expect("valid one-band Hijiri test policy"),
-            ],
-            Q16::ONE,
-        )
-        .expect("valid Hijiri test policy");
-        let parameters = HijiriParametersV1::try_new(1, None, fee_policy, Q16::ZERO)
-            .expect("valid Hijiri test parameters");
-        let fee_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
-            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
-            0xcd, 0x2f,
-        ])
-        .expect("valid validation-fee test asset");
-        let base = ValidationFeeHijiriQuoteBaseV1::try_new(
-            42,
-            43,
-            1,
-            [0x03; 32],
-            fee_asset_definition_id.to_string(),
-            request.account_id.to_string(),
-            VALIDATION_FEE_DS_SCALE,
-            VALIDATION_FEE_BASE_MINOR_UNITS_V1,
-        )
-        .expect("valid Hijiri quote base");
-        evaluate_hijiri_quote_v1(
-            base,
-            &request.account_id,
-            &parameters,
-            None,
-            request.qualifying_transfer_count,
-        )
-        .expect("valid Hijiri quote fixture")
-    }
-    #[test]
-    fn validation_fee_hijiri_quote_posts_signed_norito_and_roundtrips() {
-        let client = client_with_base_url(base_url());
-        let request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: client.account.clone(),
-            qualifying_transfer_count: 2,
-        };
-        let expected = validation_fee_hijiri_quote_fixture(&request);
-        let response = mk_response(
-            StatusCode::OK,
-            to_bytes(&expected).expect("encode Hijiri quote fixture"),
-            Some(APPLICATION_NORITO),
-        );
-        let (actual, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-
-            client.post_validation_fee_hijiri_quote(&request)
-        });
-        assert_eq!(actual.expect("valid Hijiri quote response"), expected);
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH
-        );
-        assert_eq!(snapshot.url.query(), None);
-        assert_eq!(
-            snapshot.max_response_bytes,
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-        );
-        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
-        assert_eq!(
-            snapshot
-                .headers
-                .iter()
-                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str())
-                .collect::<Vec<_>>(),
-            vec![APPLICATION_NORITO]
-        );
-        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
-            decode_from_bytes(&snapshot.body).expect("decode exact Hijiri quote request");
-        assert_eq!(decoded_request, request);
-        assert_canonical_account_signed_request(&client, &snapshot);
-    }
-    #[test]
-    fn validation_fee_hijiri_quote_rejects_invalid_request_before_http() {
-        let client = client_with_base_url(base_url());
-        let zero_count = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: client.account.clone(),
-            qualifying_transfer_count: 0,
-        };
-        let error = with_mock_http(
-            |_| panic!("invalid Hijiri quote request reached HTTP transport"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.post_validation_fee_hijiri_quote(&zero_count)
-            },
-        )
-        .expect_err("zero-count Hijiri quote request must fail locally");
-        assert!(
-            error.to_string().contains("qualifying_transfer_count"),
-            "unexpected invalid-request error: {error:#}"
-        );
-    }
-
-    #[test]
-    fn validation_fee_hijiri_quote_leaves_cross_account_authorization_to_server() {
-        let client = client_with_base_url(base_url());
-        let (other_account, _) = gen_account_in("other");
-        let other_account_request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: other_account,
-            qualifying_transfer_count: 1,
-        };
-        let response = mk_response(
-            StatusCode::FORBIDDEN,
-            br#"{"error":"authenticated caller is not a direct multisig member"}"#.to_vec(),
-            Some(APPLICATION_JSON),
-        );
-        let (result, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-
-            client.post_validation_fee_hijiri_quote(&other_account_request)
-        });
-        let error = result.expect_err("server authorization rejection must surface");
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to fetch Hijiri validation-fee quote"),
-            "unexpected server-authorization error: {error:#}"
-        );
-        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
-            decode_from_bytes(&snapshot.body).expect("decode cross-account Hijiri quote request");
-        assert_eq!(decoded_request, other_account_request);
-        assert_canonical_account_signed_request(&client, &snapshot);
-    }
-    #[test]
-    fn validation_fee_hijiri_quote_rejects_malformed_or_unbound_responses() {
-        let client = client_with_base_url(base_url());
-        let request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: client.account.clone(),
-            qualifying_transfer_count: 2,
-        };
-        let valid = validation_fee_hijiri_quote_fixture(&request);
-        let valid_body = to_bytes(&valid).expect("encode Hijiri quote fixture");
-        let mut other_request = request.clone();
-        other_request.qualifying_transfer_count = 1;
-        let unbound_body = to_bytes(&validation_fee_hijiri_quote_fixture(&other_request))
-            .expect("encode unbound Hijiri quote fixture");
-        let mut duplicate_content_type =
-            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
-        duplicate_content_type.headers_mut().append(
-            "content-type",
-            ::http::HeaderValue::from_static(APPLICATION_JSON),
-        );
-        let mut success_with_reject_code =
-            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
-        success_with_reject_code.headers_mut().insert(
-            "x-iroha-reject-code",
-            ::http::HeaderValue::from_static("validation_fee_state_inconsistent"),
-        );
-        let cases = [
-            (
-                "status",
-                mk_response(
-                    StatusCode::CONFLICT,
-                    valid_body.clone(),
-                    Some(APPLICATION_NORITO),
-                ),
-                "Failed to fetch Hijiri validation-fee quote",
-            ),
-            (
-                "content type",
-                mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_JSON)),
-                "invalid content type",
-            ),
-            (
-                "content type prefix confusion",
-                mk_response(
-                    StatusCode::OK,
-                    valid_body.clone(),
-                    Some("application/x-norito-evil"),
-                ),
-                "invalid content type",
-            ),
-            (
-                "duplicate content type",
-                duplicate_content_type,
-                "duplicated `content-type`",
-            ),
-            (
-                "success rejection code",
-                success_with_reject_code,
-                "carried a rejection code",
-            ),
-            (
-                "Norito",
-                mk_response(
-                    StatusCode::OK,
-                    b"not-norito".to_vec(),
-                    Some(APPLICATION_NORITO),
-                ),
-                "failed to decode",
-            ),
-            (
-                "request binding",
-                mk_response(StatusCode::OK, unbound_body, Some(APPLICATION_NORITO)),
-                "does not echo",
-            ),
-        ];
-        for (case, response, expected_error) in cases {
-            let (result, snapshot) = capture_request(response, |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.post_validation_fee_hijiri_quote(&request)
-            });
-            let error = result.expect_err("hostile Hijiri quote response must fail");
-            let error_chain = format!("{error:#}");
-            assert!(
-                error_chain.contains(expected_error),
-                "unexpected {case} error: {error:#}"
-            );
-            assert_eq!(
-                snapshot.max_response_bytes,
-                VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-            );
-        }
     }
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     #[norito(deny_unknown_fields)]

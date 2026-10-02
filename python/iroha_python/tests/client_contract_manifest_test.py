@@ -43,6 +43,7 @@ _QUERY_VIEW_LAYOUTS = {
             "description",
             "owned_by",
             "total_quantity",
+            "numeric_scale",
             "metadata",
         ],
         [
@@ -51,6 +52,7 @@ _QUERY_VIEW_LAYOUTS = {
             ("Option", "String"),
             "AccountId",
             "Quantity",
+            ("Option", "Int"),
             "Json",
         ],
     ),
@@ -410,6 +412,26 @@ def test_entrypoint_reserved_struct_name_does_not_bypass_exact_shape_validation(
 
     with pytest.raises(TypeError, match="forged reserved"):
         EntrypointValueTypeV1.from_payload(forged)
+
+
+def test_asset_definition_precision_requires_optional_integer() -> None:
+    valid = _query_view_nodes("AssetDefinitionView")
+    schema = EntrypointValueTypeV1.from_payload({"nodes": valid})
+    assert schema.word_count == 7
+    assert len(schema.nodes) == 10
+    retired = deepcopy(valid)
+    del retired[0]["value"]["fields"][5]
+    del retired[7:9]
+    required = deepcopy(valid)
+    del required[7]
+    decimal = deepcopy(valid)
+    decimal[8] = _leaf_node("Decimal")
+    for nodes in (retired, required, decimal):
+        page = _query_page_payload("AssetDefinitionView")
+        page["nodes"] = page["nodes"][:2] + nodes + page["nodes"][-2:]
+        for payload in ({"nodes": nodes}, page):
+            with pytest.raises(TypeError, match="forged reserved"):
+                EntrypointValueTypeV1.from_payload(payload)
 
 
 def test_entrypoint_ordinary_struct_keeps_its_nominal_struct_prefix() -> None:

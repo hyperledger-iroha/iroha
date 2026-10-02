@@ -191,7 +191,7 @@ impl Transcript {
             range: start..self.0.bytes.len(),
         });
     }
-    fn embedded(&mut self, prefix: &'static str, value: KagemushaOrdinaryCashTranscriptV1) {
+    fn embedded(&mut self, prefix: &'static str, value: &KagemushaOrdinaryCashTranscriptV1) {
         // Embedded records carry their fixed payload, not a second domain or length prefix.
         let start = self.0.bytes.len();
         self.0.bytes.extend_from_slice(&value.bytes);
@@ -205,7 +205,7 @@ impl Transcript {
     }
 }
 fn nonzero(fields: &[[u8; 32]]) -> Result<(), String> {
-    if fields.iter().any(|field| *field == [0; 32]) {
+    if fields.contains(&[0; 32]) {
         return Err("ordinary cash selector absent".into());
     }
     Ok(())
@@ -235,7 +235,7 @@ fn stream_bounds(lengths: [u64; 2], digests: [[u8; 32]; 2]) -> Result<(), String
         KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
         KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
     ]) {
-        if length == 0 || length > max as u64 {
+        if length == 0 || length > u64::from(max) {
             return Err("ordinary sealed stream length differs".into());
         }
     }
@@ -417,7 +417,7 @@ pub fn kagemusha_ordinary_output_binding_digest_v1(
     hash.update(record);
     Ok(hash.finalize().into())
 }
-/// Data-only first-release ordinary CashClockContext record.
+/// Data-only first-release ordinary `CashClockContext` record.
 #[derive(
     Debug,
     Clone,
@@ -438,14 +438,14 @@ pub struct KagemushaOrdinaryCashClockContextV1 {
     pub version: u16,
     /// Exact nonce independently reserved before the four signed validator observations.
     pub request_nonce: [u8; 32],
-    /// SHA256(domain iroha:kagemusha:v1:ordinary-native-clock-signed-observations\0, nonce32, certified_context_id32, then four installed-order LE32(original_len) + full canonical signed attestation originals). Excludes mutable WAL ceilings and interval bounds.
+    /// SHA256(domain iroha:kagemusha:v1:ordinary-native-clock-signed-observations\0, nonce32, `certified_context_id32`, then four installed-order `LE32(original_len)` + full canonical signed attestation originals). Excludes mutable WAL ceilings and interval bounds.
     pub signed_observations_original_digest: [u8; 32],
     /// Conservative inclusive lower Unix-ms bound retained by the actual Native clock owner.
     pub lower_at_ms: u64,
     /// Conservative inclusive upper Unix-ms bound retained by the same Native clock owner.
     pub upper_at_ms: u64,
 }
-/// Data-only first-release ordinary PaymentRequestBody record.
+/// Data-only first-release ordinary `PaymentRequestBody` record.
 #[derive(
     Debug,
     Clone,
@@ -495,7 +495,7 @@ pub struct KagemushaOrdinaryPaymentRequestBodyV1 {
     /// Exclusive original request expiry; never renewed by decoding or signing.
     pub expires_at_ms: u64,
 }
-/// Data-only first-release ordinary PaymentOutput record.
+/// Data-only first-release ordinary `PaymentOutput` record.
 #[derive(
     Debug,
     Clone,
@@ -535,7 +535,7 @@ pub struct KagemushaOrdinaryPaymentOutputV1 {
     /// Conservative preparation upper bound; this is not a terminal commit time.
     pub prepared_at_ms: u64,
 }
-/// Data-only first-release ordinary PreparedTransition record.
+/// Data-only first-release ordinary `PreparedTransition` record.
 #[derive(
     Debug,
     Clone,
@@ -554,11 +554,11 @@ pub struct KagemushaOrdinaryPaymentOutputV1 {
 pub struct KagemushaOrdinaryPreparedTransitionV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// SendSplit2 or RedeemSplit4.
+    /// `SendSplit2` or `RedeemSplit4`.
     pub operation: u8,
     /// Actual canonical lifecycle context digest.
     pub lifecycle_digest: [u8; 32],
-    /// Exact ordinary request original digest for SendSplit; zero for RedeemSplit.
+    /// Exact ordinary request original digest for `SendSplit`; zero for `RedeemSplit`.
     pub request_digest: [u8; 32],
     /// Actual predecessor State head for either operation.
     pub predecessor_state: [u8; 32],
@@ -571,7 +571,7 @@ pub struct KagemushaOrdinaryPreparedTransitionV1 {
     /// Actual purpose2 Native operation ID reserved before W; never SHA(W).
     pub native_preparation_operation_id: [u8; 32],
 }
-/// Data-only first-release ordinary PreparedOutgoing record.
+/// Data-only first-release ordinary `PreparedOutgoing` record.
 #[derive(
     Debug,
     Clone,
@@ -590,7 +590,7 @@ pub struct KagemushaOrdinaryPreparedTransitionV1 {
 pub struct KagemushaOrdinaryPreparedOutgoingV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// SendSplit2 or RedeemSplit4.
+    /// `SendSplit2` or `RedeemSplit4`.
     pub operation: u8,
     /// Actual predecessor State head.
     pub predecessor_state: [u8; 32],
@@ -604,9 +604,9 @@ pub struct KagemushaOrdinaryPreparedOutgoingV1 {
     pub projection_semantic_digest: [u8; 32],
     /// Actual canonical lifecycle digest.
     pub lifecycle_binding_digest: [u8; 32],
-    /// Exact ordinary request digest for SendSplit; zero for RedeemSplit.
+    /// Exact ordinary request digest for `SendSplit`; zero for `RedeemSplit`.
     pub request_digest: [u8; 32],
-    /// Actual release artifact manifest for RedeemSplit; zero for SendSplit.
+    /// Actual release artifact manifest for `RedeemSplit`; zero for `SendSplit`.
     pub artifact_manifest_digest: [u8; 32],
     /// Exact normalized genuine purpose2 Guard digest.
     pub preparation_guard_digest: [u8; 32],
@@ -621,7 +621,7 @@ pub struct KagemushaOrdinaryPreparedOutgoingV1 {
     #[norito(json = "crate::json_helpers::fixed_pair")]
     pub stream_digests: [[u8; 32]; 2],
 }
-/// Data-only first-release ordinary CashTerminalIntent record.
+/// Data-only first-release ordinary `CashTerminalIntent` record.
 #[derive(
     Debug,
     Clone,
@@ -640,7 +640,7 @@ pub struct KagemushaOrdinaryPreparedOutgoingV1 {
 pub struct KagemushaOrdinaryCashTerminalIntentV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// SendSplit2 or RedeemSplit4.
+    /// `SendSplit2` or `RedeemSplit4`.
     pub operation: u8,
     /// Actual purpose1 Native operation ID, independently reserved before W1.
     pub native_operation_id: [u8; 32],
@@ -662,7 +662,7 @@ pub struct KagemushaOrdinaryCashTerminalIntentV1 {
     pub secure_index_before: u128,
     /// Actual next financial State secure index.
     pub secure_index_after: u128,
-    /// Actual held software financial journal revision; distinct from State.logical_sequence:u128.
+    /// Actual held software financial journal revision; distinct from `State.logical_sequence:u128`.
     pub logical_journal_sequence_before: u64,
     /// Actual next software financial journal revision, with no financial sequence cast.
     pub logical_journal_sequence_after: u64,
@@ -671,7 +671,7 @@ pub struct KagemushaOrdinaryCashTerminalIntentV1 {
     /// Original exclusive purpose1 approval expiry; at most 120 seconds later.
     pub expires_at_ms: u64,
 }
-/// Data-only first-release ordinary CashTerminalBody record.
+/// Data-only first-release ordinary `CashTerminalBody` record.
 #[derive(
     Debug,
     Clone,
@@ -690,7 +690,7 @@ pub struct KagemushaOrdinaryCashTerminalIntentV1 {
 pub struct KagemushaOrdinaryCashTerminalBodyV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// SendSplit2 or RedeemSplit4.
+    /// `SendSplit2` or `RedeemSplit4`.
     pub operation: u8,
     /// Actual positive amount joined to the genuine State candidate.
     pub amount: u128,
@@ -704,15 +704,15 @@ pub struct KagemushaOrdinaryCashTerminalBodyV1 {
     pub prepared_projection_semantic_digest: [u8; 32],
     /// Same canonical lifecycle context.
     pub lifecycle_digest: [u8; 32],
-    /// Exact full ordinary receiver request original for SendSplit; zero for RedeemSplit.
+    /// Exact full ordinary receiver request original for `SendSplit`; zero for `RedeemSplit`.
     pub request_digest: [u8; 32],
-    /// Exact ordinary receiver credential original for SendSplit; zero for RedeemSplit.
+    /// Exact ordinary receiver credential original for `SendSplit`; zero for `RedeemSplit`.
     pub recipient_credential_digest: [u8; 32],
-    /// Actual raw pre-candidate ordinary send output digest; zero for RedeemSplit.
+    /// Actual raw pre-candidate ordinary send output digest; zero for `RedeemSplit`.
     pub send_output_digest: [u8; 32],
-    /// Complete actual encrypted-credit digest for SendSplit; zero for RedeemSplit.
+    /// Complete actual encrypted-credit digest for `SendSplit`; zero for `RedeemSplit`.
     pub encrypted_credit_digest: [u8; 32],
-    /// Actual release artifact manifest for RedeemSplit; zero for SendSplit.
+    /// Actual release artifact manifest for `RedeemSplit`; zero for `SendSplit`.
     pub artifact_manifest_digest: [u8; 32],
     /// Same retained pre-candidate financial reservation.
     pub reservation_digest: [u8; 32],
@@ -734,12 +734,12 @@ pub struct KagemushaOrdinaryCashTerminalBodyV1 {
     pub secure_index_before: u128,
     /// Actual successor financial State secure index.
     pub secure_index_after: u128,
-    /// Actual predecessor software journal revision; distinct from secure index and State.logical_sequence:u128.
+    /// Actual predecessor software journal revision; distinct from secure index and `State.logical_sequence:u128`.
     pub logical_journal_sequence_before: u64,
     /// Actual successor software journal revision, not the financial State logical sequence.
     pub logical_journal_sequence_after: u64,
 }
-/// Data-only first-release ordinary CashTerminalRecord record.
+/// Data-only first-release ordinary `CashTerminalRecord` record.
 #[derive(
     Debug,
     Clone,
@@ -876,7 +876,7 @@ impl KagemushaOrdinaryCashClockContextV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field("request_nonce", &self.request_nonce, |changed, index| {
             changed.request_nonce[index] ^= 1
@@ -889,12 +889,12 @@ impl KagemushaOrdinaryCashClockContextV1 {
         layout.field(
             "lower_at_ms",
             &self.lower_at_ms.to_le_bytes(),
-            |changed, index| changed.lower_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "upper_at_ms",
             &self.upper_at_ms.to_le_bytes(),
-            |changed, index| changed.upper_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -994,7 +994,7 @@ impl KagemushaOrdinaryPaymentRequestBodyV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field("release_id", &self.release_id, |changed, index| {
             changed.release_id[index] ^= 1
@@ -1013,7 +1013,7 @@ impl KagemushaOrdinaryPaymentRequestBodyV1 {
             |changed, index| changed.asset_incarnation[index] ^= 1,
         )?;
         layout.field("scale", &self.scale.to_le_bytes(), |changed, index| {
-            changed.scale ^= (1 as u32) << (8 * index)
+            changed.scale ^= 1_u32 << (8 * index)
         })?;
         layout.field(
             "reserve_pool_id",
@@ -1026,7 +1026,7 @@ impl KagemushaOrdinaryPaymentRequestBodyV1 {
             |changed, index| changed.recipient_account_binding[index] ^= 1,
         )?;
         layout.field("amount", &self.amount.to_le_bytes(), |changed, index| {
-            changed.amount ^= (1 as u128) << (8 * index)
+            changed.amount ^= 1_u128 << (8 * index)
         })?;
         layout.field(
             "recipient_encryption_key",
@@ -1049,7 +1049,7 @@ impl KagemushaOrdinaryPaymentRequestBodyV1 {
         layout.field(
             "clock_context.version",
             &self.clock_context.version.to_le_bytes(),
-            |changed, index| changed.clock_context.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.clock_context.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "clock_context.request_nonce",
@@ -1064,22 +1064,22 @@ impl KagemushaOrdinaryPaymentRequestBodyV1 {
         layout.field(
             "clock_context.lower_at_ms",
             &self.clock_context.lower_at_ms.to_le_bytes(),
-            |changed, index| changed.clock_context.lower_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.clock_context.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "clock_context.upper_at_ms",
             &self.clock_context.upper_at_ms.to_le_bytes(),
-            |changed, index| changed.clock_context.upper_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.clock_context.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "issued_at_ms",
             &self.issued_at_ms.to_le_bytes(),
-            |changed, index| changed.issued_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.issued_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "expires_at_ms",
             &self.expires_at_ms.to_le_bytes(),
-            |changed, index| changed.expires_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.expires_at_ms ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -1167,13 +1167,13 @@ impl KagemushaOrdinaryPaymentOutputV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field("request_digest", &self.request_digest, |changed, index| {
             changed.request_digest[index] ^= 1
         })?;
         layout.field("amount", &self.amount.to_le_bytes(), |changed, index| {
-            changed.amount ^= (1 as u128) << (8 * index)
+            changed.amount ^= 1_u128 << (8 * index)
         })?;
         layout.field(
             "sender_before_commitment",
@@ -1211,7 +1211,7 @@ impl KagemushaOrdinaryPaymentOutputV1 {
         layout.field(
             "prepared_at_ms",
             &self.prepared_at_ms.to_le_bytes(),
-            |changed, index| changed.prepared_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.prepared_at_ms ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -1381,12 +1381,12 @@ impl KagemushaOrdinaryPreparedTransitionV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field(
             "operation",
             &self.operation.to_le_bytes(),
-            |changed, index| changed.operation ^= (1 as u8) << (8 * index),
+            |changed, index| changed.operation ^= 1_u8 << (8 * index),
         )?;
         layout.field(
             "lifecycle_digest",
@@ -1407,7 +1407,7 @@ impl KagemushaOrdinaryPreparedTransitionV1 {
             |changed, index| changed.successor_state[index] ^= 1,
         )?;
         layout.field("amount", &self.amount.to_le_bytes(), |changed, index| {
-            changed.amount ^= (1 as u128) << (8 * index)
+            changed.amount ^= 1_u128 << (8 * index)
         })?;
         layout.field(
             "reservation_digest",
@@ -1534,12 +1534,12 @@ impl KagemushaOrdinaryPreparedOutgoingV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field(
             "operation",
             &self.operation.to_le_bytes(),
-            |changed, index| changed.operation ^= (1 as u8) << (8 * index),
+            |changed, index| changed.operation ^= 1_u8 << (8 * index),
         )?;
         layout.field(
             "predecessor_state",
@@ -1717,12 +1717,12 @@ impl KagemushaOrdinaryCashTerminalIntentV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field(
             "operation",
             &self.operation.to_le_bytes(),
-            |changed, index| changed.operation ^= (1 as u8) << (8 * index),
+            |changed, index| changed.operation ^= 1_u8 << (8 * index),
         )?;
         layout.field(
             "native_operation_id",
@@ -1763,32 +1763,32 @@ impl KagemushaOrdinaryCashTerminalIntentV1 {
         layout.field(
             "secure_index_before",
             &self.secure_index_before.to_le_bytes(),
-            |changed, index| changed.secure_index_before ^= (1 as u128) << (8 * index),
+            |changed, index| changed.secure_index_before ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "secure_index_after",
             &self.secure_index_after.to_le_bytes(),
-            |changed, index| changed.secure_index_after ^= (1 as u128) << (8 * index),
+            |changed, index| changed.secure_index_after ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "logical_journal_sequence_before",
             &self.logical_journal_sequence_before.to_le_bytes(),
-            |changed, index| changed.logical_journal_sequence_before ^= (1 as u64) << (8 * index),
+            |changed, index| changed.logical_journal_sequence_before ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "logical_journal_sequence_after",
             &self.logical_journal_sequence_after.to_le_bytes(),
-            |changed, index| changed.logical_journal_sequence_after ^= (1 as u64) << (8 * index),
+            |changed, index| changed.logical_journal_sequence_after ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "issued_at_ms",
             &self.issued_at_ms.to_le_bytes(),
-            |changed, index| changed.issued_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.issued_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "expires_at_ms",
             &self.expires_at_ms.to_le_bytes(),
-            |changed, index| changed.expires_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.expires_at_ms ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -1842,7 +1842,7 @@ impl KagemushaOrdinaryCashTerminalBodyV1 {
                 &self.stream_digests[index],
             );
         }
-        t.embedded("clock_context", self.clock_context.payload_transcript());
+        t.embedded("clock_context", &self.clock_context.payload_transcript());
         t.raw(
             "secure_index_before",
             &self.secure_index_before.to_le_bytes(),
@@ -1923,15 +1923,15 @@ impl KagemushaOrdinaryCashTerminalBodyV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field(
             "operation",
             &self.operation.to_le_bytes(),
-            |changed, index| changed.operation ^= (1 as u8) << (8 * index),
+            |changed, index| changed.operation ^= 1_u8 << (8 * index),
         )?;
         layout.field("amount", &self.amount.to_le_bytes(), |changed, index| {
-            changed.amount ^= (1 as u128) << (8 * index)
+            changed.amount ^= 1_u128 << (8 * index)
         })?;
         layout.field(
             "state_statement_digest",
@@ -2022,7 +2022,7 @@ impl KagemushaOrdinaryCashTerminalBodyV1 {
         layout.field(
             "clock_context.version",
             &self.clock_context.version.to_le_bytes(),
-            |changed, index| changed.clock_context.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.clock_context.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "clock_context.request_nonce",
@@ -2037,32 +2037,32 @@ impl KagemushaOrdinaryCashTerminalBodyV1 {
         layout.field(
             "clock_context.lower_at_ms",
             &self.clock_context.lower_at_ms.to_le_bytes(),
-            |changed, index| changed.clock_context.lower_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.clock_context.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "clock_context.upper_at_ms",
             &self.clock_context.upper_at_ms.to_le_bytes(),
-            |changed, index| changed.clock_context.upper_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.clock_context.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "secure_index_before",
             &self.secure_index_before.to_le_bytes(),
-            |changed, index| changed.secure_index_before ^= (1 as u128) << (8 * index),
+            |changed, index| changed.secure_index_before ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "secure_index_after",
             &self.secure_index_after.to_le_bytes(),
-            |changed, index| changed.secure_index_after ^= (1 as u128) << (8 * index),
+            |changed, index| changed.secure_index_after ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "logical_journal_sequence_before",
             &self.logical_journal_sequence_before.to_le_bytes(),
-            |changed, index| changed.logical_journal_sequence_before ^= (1 as u64) << (8 * index),
+            |changed, index| changed.logical_journal_sequence_before ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "logical_journal_sequence_after",
             &self.logical_journal_sequence_after.to_le_bytes(),
-            |changed, index| changed.logical_journal_sequence_after ^= (1 as u64) << (8 * index),
+            |changed, index| changed.logical_journal_sequence_after ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -2073,7 +2073,7 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
     fn payload_transcript(&self) -> KagemushaOrdinaryCashTranscriptV1 {
         let mut t = Transcript::new(&[]);
         t.raw("version", &self.version.to_le_bytes());
-        t.embedded("body", self.body.payload_transcript());
+        t.embedded("body", &self.body.payload_transcript());
         t.raw("sender_credential_digest", &self.sender_credential_digest);
         t.raw(
             "preparation_authorization_digest",
@@ -2086,7 +2086,7 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         t.raw("terminal_subject_digest", &self.terminal_subject_digest);
         t.embedded(
             "admission_clock_context",
-            self.admission_clock_context.payload_transcript(),
+            &self.admission_clock_context.payload_transcript(),
         );
         t.raw(
             "approval_issued_at_ms",
@@ -2163,22 +2163,22 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         self.validate_shape()?;
         let mut layout = OriginalBuilder::new(self, KAGEMUSHA_ORDINARY_CASH_RECORD_MAX_BYTES_V1)?;
         layout.field("version", &self.version.to_le_bytes(), |changed, index| {
-            changed.version ^= (1 as u16) << (8 * index)
+            changed.version ^= 1_u16 << (8 * index)
         })?;
         layout.field(
             "body.version",
             &self.body.version.to_le_bytes(),
-            |changed, index| changed.body.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.body.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "body.operation",
             &self.body.operation.to_le_bytes(),
-            |changed, index| changed.body.operation ^= (1 as u8) << (8 * index),
+            |changed, index| changed.body.operation ^= 1_u8 << (8 * index),
         )?;
         layout.field(
             "body.amount",
             &self.body.amount.to_le_bytes(),
-            |changed, index| changed.body.amount ^= (1 as u128) << (8 * index),
+            |changed, index| changed.body.amount ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "body.state_statement_digest",
@@ -2273,7 +2273,7 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         layout.field(
             "body.clock_context.version",
             &self.body.clock_context.version.to_le_bytes(),
-            |changed, index| changed.body.clock_context.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.body.clock_context.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "body.clock_context.request_nonce",
@@ -2293,36 +2293,32 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         layout.field(
             "body.clock_context.lower_at_ms",
             &self.body.clock_context.lower_at_ms.to_le_bytes(),
-            |changed, index| changed.body.clock_context.lower_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.clock_context.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "body.clock_context.upper_at_ms",
             &self.body.clock_context.upper_at_ms.to_le_bytes(),
-            |changed, index| changed.body.clock_context.upper_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.clock_context.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "body.secure_index_before",
             &self.body.secure_index_before.to_le_bytes(),
-            |changed, index| changed.body.secure_index_before ^= (1 as u128) << (8 * index),
+            |changed, index| changed.body.secure_index_before ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "body.secure_index_after",
             &self.body.secure_index_after.to_le_bytes(),
-            |changed, index| changed.body.secure_index_after ^= (1 as u128) << (8 * index),
+            |changed, index| changed.body.secure_index_after ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "body.logical_journal_sequence_before",
             &self.body.logical_journal_sequence_before.to_le_bytes(),
-            |changed, index| {
-                changed.body.logical_journal_sequence_before ^= (1 as u64) << (8 * index)
-            },
+            |changed, index| changed.body.logical_journal_sequence_before ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "body.logical_journal_sequence_after",
             &self.body.logical_journal_sequence_after.to_le_bytes(),
-            |changed, index| {
-                changed.body.logical_journal_sequence_after ^= (1 as u64) << (8 * index)
-            },
+            |changed, index| changed.body.logical_journal_sequence_after ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "sender_credential_digest",
@@ -2347,7 +2343,7 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         layout.field(
             "admission_clock_context.version",
             &self.admission_clock_context.version.to_le_bytes(),
-            |changed, index| changed.admission_clock_context.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.admission_clock_context.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "admission_clock_context.request_nonce",
@@ -2368,26 +2364,22 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         layout.field(
             "admission_clock_context.lower_at_ms",
             &self.admission_clock_context.lower_at_ms.to_le_bytes(),
-            |changed, index| {
-                changed.admission_clock_context.lower_at_ms ^= (1 as u64) << (8 * index)
-            },
+            |changed, index| changed.admission_clock_context.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "admission_clock_context.upper_at_ms",
             &self.admission_clock_context.upper_at_ms.to_le_bytes(),
-            |changed, index| {
-                changed.admission_clock_context.upper_at_ms ^= (1 as u64) << (8 * index)
-            },
+            |changed, index| changed.admission_clock_context.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "approval_issued_at_ms",
             &self.approval_issued_at_ms.to_le_bytes(),
-            |changed, index| changed.approval_issued_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.approval_issued_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "approval_expires_at_ms",
             &self.approval_expires_at_ms.to_le_bytes(),
-            |changed, index| changed.approval_expires_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.approval_expires_at_ms ^= 1_u64 << (8 * index),
         )?;
         Ok(layout.finish())
     }
@@ -2563,6 +2555,8 @@ impl KagemushaOrdinaryPreparedOutgoingV1 {
     /// No approval signature, recursive proof or Native money capability is authenticated here.
     /// # Errors
     /// Rejects substituted operation, heads, lifecycle, request, reservation or pre-approval SHA.
+    // The prepared lifecycle binding must equal the original transition lifecycle digest.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_transition(
         &self,
         transition: &KagemushaOrdinaryPreparedTransitionV1,
@@ -2758,6 +2752,8 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
     /// This validates data only. Native separately verifies authentic W1 purpose1 and original nonce.
     /// # Errors
     /// Rejects different original credentials, prepared authorization or approval interval.
+    // The approved interval must exactly match the original intent issue and expiry times.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_originals(
         &self,
         intent: &KagemushaOrdinaryCashTerminalIntentV1,
@@ -2845,10 +2841,7 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         match (c.platform_class, independent_apple_counter_floor) {
             (KagemushaHardwarePlatformClassV1::AndroidKeyMint, None) => (),
             (KagemushaHardwarePlatformClassV1::AppleAppAttest, Some(floor))
-                if floor >= c.app_attest_counter_floor =>
-            {
-                ()
-            }
+                if floor >= c.app_attest_counter_floor => {}
             _ => return Err("ordinary receiver request original counter floor differs".into()),
         }
         self.evidence.authenticate_signature(
@@ -2882,7 +2875,7 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         layout.field(
             "version",
             &self.body.version.to_le_bytes(),
-            |changed, index| changed.body.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.body.version ^= 1_u16 << (8 * index),
         )?;
         layout.field("release_id", &self.body.release_id, |changed, index| {
             changed.body.release_id[index] ^= 1
@@ -2901,7 +2894,7 @@ impl KagemushaOrdinaryPaymentRequestV1 {
             |changed, index| changed.body.asset_incarnation[index] ^= 1,
         )?;
         layout.field("scale", &self.body.scale.to_le_bytes(), |changed, index| {
-            changed.body.scale ^= (1 as u32) << (8 * index)
+            changed.body.scale ^= 1_u32 << (8 * index)
         })?;
         layout.field(
             "reserve_pool_id",
@@ -2916,7 +2909,7 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         layout.field(
             "amount",
             &self.body.amount.to_le_bytes(),
-            |changed, index| changed.body.amount ^= (1 as u128) << (8 * index),
+            |changed, index| changed.body.amount ^= 1_u128 << (8 * index),
         )?;
         layout.field(
             "recipient_encryption_key",
@@ -2939,7 +2932,7 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         layout.field(
             "clock_context.version",
             &self.body.clock_context.version.to_le_bytes(),
-            |changed, index| changed.body.clock_context.version ^= (1 as u16) << (8 * index),
+            |changed, index| changed.body.clock_context.version ^= 1_u16 << (8 * index),
         )?;
         layout.field(
             "clock_context.request_nonce",
@@ -2959,22 +2952,22 @@ impl KagemushaOrdinaryPaymentRequestV1 {
         layout.field(
             "clock_context.lower_at_ms",
             &self.body.clock_context.lower_at_ms.to_le_bytes(),
-            |changed, index| changed.body.clock_context.lower_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.clock_context.lower_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "clock_context.upper_at_ms",
             &self.body.clock_context.upper_at_ms.to_le_bytes(),
-            |changed, index| changed.body.clock_context.upper_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.clock_context.upper_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "issued_at_ms",
             &self.body.issued_at_ms.to_le_bytes(),
-            |changed, index| changed.body.issued_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.issued_at_ms ^= 1_u64 << (8 * index),
         )?;
         layout.field(
             "expires_at_ms",
             &self.body.expires_at_ms.to_le_bytes(),
-            |changed, index| changed.body.expires_at_ms ^= (1 as u64) << (8 * index),
+            |changed, index| changed.body.expires_at_ms ^= 1_u64 << (8 * index),
         )?;
         match &self.evidence {
             KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {

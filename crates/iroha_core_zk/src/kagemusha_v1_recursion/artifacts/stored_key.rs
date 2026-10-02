@@ -187,14 +187,12 @@ fn indexed_key_error(role: KagemushaArtifactRoleV1, reason: &str) -> KagemushaAr
 
 /// Hash canonical preprocessing directly into the authenticated length bound. This never
 /// allocates a second key-sized buffer, and every nested writer propagates its sink errors.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(in crate::kagemusha_v1_recursion) struct CanonicalArtifactDigestWriterV1 {
     digest: Sha256,
     pub(in crate::kagemusha_v1_recursion) written: u64,
     maximum: u64,
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 impl CanonicalArtifactDigestWriterV1 {
     pub(in crate::kagemusha_v1_recursion) fn new(maximum: u64) -> Self {
         Self {
@@ -213,7 +211,6 @@ impl CanonicalArtifactDigestWriterV1 {
     }
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 impl io::Write for CanonicalArtifactDigestWriterV1 {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let count = u64::try_from(bytes.len())

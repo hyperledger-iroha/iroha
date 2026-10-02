@@ -175,7 +175,7 @@ fn ordinary_incoming_mathematical_preview_conserves_balance_full_indices_and_rep
         fresh.normalized.transition_intent_digest,
         preview.normalized.transition_intent_digest
     );
-    tree.insert_with_witness(&replay).unwrap();
+    tree.insert_with_witness(key, envelope, &replay).unwrap();
     let mut retry = reservation.clone();
     retry.selection.operation_id[0] ^= 1;
     retry.selection.financial_control_original_sha256[0] ^= 1;

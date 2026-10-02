@@ -52,7 +52,9 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         .expect("release DER complete native trace");
     let der_terminals =
         zk_x509_der_stark_terminal_claims_v1(&der_trace).expect("DER terminal claims");
-    let claims = provider.terminal_claims_v1();
+    let claims = provider
+        .terminal_claims_v1()
+        .expect("valid RFC fixture private products");
     let private_der_fields = [der_terminals.input_byte, der_terminals.node].concat();
 
     // The first twelve sections constrain base/fixed rows independently of
@@ -256,6 +258,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
             der_challenges_v1(),
             challenges_v1(),
             column,
+            &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
         .expect("complete profile lookup includes the CRL-number INTEGER"),
         zeroize_fields_v1,
@@ -279,6 +282,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
             der_challenges_v1(),
             challenges_v1(),
             column,
+            &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
     });
     assert_eq!(
@@ -286,16 +290,58 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         Err(ZkX509Rfc5280StarkErrorV1::Semantic),
         "the old prefix-only producer flag cannot match the verifier's exact-end table"
     );
-    // This standalone profile-column builder owns only the failed native column.
-    // Private SHA centers belong to the separately bound provider/union owner.
-    let ownership_sizes = erased.iter().map(|entry| entry.cells).collect::<Vec<_>>();
-    assert_eq!(ownership_sizes, [ZK_X509_RFC5280_STARK_TRACE_SIZE_V1]);
+    // The bounded batch clears every per-row context and all fixed column
+    // states. On refusal its output guard clears the failed column, then the
+    // outer owned table clears that already-zero backing a second time.
+    let mut ownership_census = std::collections::BTreeMap::new();
+    for entry in &erased {
+        let counts = ownership_census.entry(entry.cells).or_insert((0, 0));
+        counts.0 += 1;
+        counts.1 += usize::from(entry.nonzero_before > 0);
+        assert_eq!(entry.nonzero_after, 0);
+    }
+    let rows = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
+    let mut expected_clears = [
+        (
+            2,
+            crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+        ),
+        (16, 1),
+        (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, rows),
+        (ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, rows),
+        (rows, 2),
+    ];
+    expected_clears.sort_unstable();
+    assert_eq!(
+        ownership_census
+            .iter()
+            .map(|(&cells, &(count, _))| (cells, count))
+            .collect::<Vec<_>>(),
+        expected_clears,
+        "every stack context, column state and failed output owner must clear"
+    );
+    assert_eq!(ownership_census[&rows].1, 1, "failed output is dirty once");
+    assert_eq!(
+        ownership_census[&2].1, 1,
+        "only the requested state is active"
+    );
+    assert!(ownership_census[&ZK_X509_RFC5280_STARK_BASE_WIDTH_V1].1 > 0);
+    assert!(ownership_census[&ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1].1 > 0);
     assert_eq!(
         erased.iter().map(|entry| entry.cells).sum::<usize>(),
-        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1
+        2 * rows
+            + 16
+            + rows * (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 + ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1)
+            + 2 * crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
     );
-    assert!(erased.iter().any(|entry| entry.nonzero_before > 0));
-    assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+    assert_eq!(
+        erased
+            .iter()
+            .find(|entry| entry.cells == 16)
+            .unwrap()
+            .nonzero_before,
+        16
+    );
 }
 
 #[test]

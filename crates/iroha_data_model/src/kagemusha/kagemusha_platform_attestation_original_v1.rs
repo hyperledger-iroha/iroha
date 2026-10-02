@@ -1,7 +1,7 @@
 //! Sole bounded original platform-attestation container for ordinary identity.
 //!
 //! This data codec preserves ordered Android DERs and original Apple enrollment CBOR.
-//! It performs no PKIX, KeyDescription, App Attest, Play, challenge/key or issuer verification.
+//! It performs no PKIX, `KeyDescription`, App Attest, Play, challenge/key or issuer verification.
 //! Those original checks must run under independently held policy before raw314 admission.
 
 use super::KagemushaHardwarePlatformClassV1;

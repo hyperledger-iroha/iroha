@@ -47,6 +47,22 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
+        "CanAuthorizeKagemushaOrdinaryMint" => {
+            let token =
+                executor_permission::kagemusha::CanAuthorizeKagemushaOrdinaryMint::try_from(
+                    permission,
+                )
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            token
+                .validate_scope()
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "ordinary Mint permission requires the complete exact issuer policy and release",
+                ));
+            }
+        }
         "CanManageSmartContractCode"
         | "CanGrantSmartContractCodeManagement"
         | "CanManageSoracloud"
@@ -182,9 +198,13 @@ fn validate_initial_permission_payload_constraints(
     }
     Ok(())
 }
-fn sns_permission_attempt_error(error: crate::sns::SnsError) -> crate::execution_attempt::ExecutionAttemptError<ValidationFail> {
+fn sns_permission_attempt_error(
+    error: crate::sns::SnsError,
+) -> crate::execution_attempt::ExecutionAttemptError<ValidationFail> {
     if cfg!(all(test, sumeragi_core_mutation = "HC35")) {
-        return crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::InternalError(error.to_string()));
+        return crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ValidationFail::InternalError(error.to_string()),
+        );
     }
     error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()))
 }
@@ -475,6 +495,22 @@ fn initial_permission_capability_root_authority(
                 authority,
                 &token.asset_definition,
             )?
+        }
+        "CanAuthorizeKagemushaOrdinaryMint" => {
+            let token = decode!(executor_permission::kagemusha::CanAuthorizeKagemushaOrdinaryMint);
+            let runtime = &token.issuer_policy.runtime;
+            runtime.network_id == *state_transaction.network_id()
+                && state_transaction
+                    .world
+                    .axt_asset_incarnations
+                    .get(&runtime.asset)
+                    .copied()
+                    == Some(runtime.asset_incarnation)
+                && authority_owns_asset_definition(
+                    &state_transaction.world,
+                    authority,
+                    &runtime.asset,
+                )?
         }
         "CanMintAssetWithDefinition" => {
             let token = decode!(executor_permission::asset::CanMintAssetWithDefinition);
@@ -795,6 +831,7 @@ fn initial_permission_delegation_allowed(
             permission.name().as_ref(),
             "CanManageSmartContractCode"
                 | "CanReadAccountData"
+                | "CanAuthorizeKagemushaOrdinaryMint"
                 | "CanResolveAccountAlias"
                 | "CanIssueSoranetVpnQuote"
                 | "CanExecuteSettlement"
@@ -894,7 +931,8 @@ fn validate_initial_permission_or_role_mutation(
             Err(ValidationFail::NotPermitted(format!(
                 "authority cannot grant or revoke permission `{}`",
                 permission.name()
-            )).into())
+            ))
+            .into())
         }
         PermissionOrRoleMutation::AccountRole {
             role: role_id,
@@ -903,7 +941,8 @@ fn validate_initial_permission_or_role_mutation(
             if !is_genesis && !authority_has_role(&state_transaction.world, authority, role_id) {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot grant or revoke a role it does not hold".to_owned(),
-                ).into());
+                )
+                .into());
             }
             let role = state_transaction
                 .world
@@ -952,7 +991,8 @@ fn validate_initial_permission_or_role_mutation(
             if !authority_has_role(&state_transaction.world, authority, role) {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot modify a role it does not hold".to_owned(),
-                ).into());
+                )
+                .into());
             }
             let allowed = if is_revoke {
                 initial_permission_revocation_allowed(state_transaction, authority, &normalized)?
@@ -963,7 +1003,8 @@ fn validate_initial_permission_or_role_mutation(
                 return Err(ValidationFail::NotPermitted(format!(
                     "authority cannot grant or revoke role permission `{}`",
                     normalized.name()
-                )).into());
+                ))
+                .into());
             }
             Ok(())
         }
@@ -1822,6 +1863,7 @@ fn validate_initial_native_instruction_authority(
             RegisterBox::Account(register) => {
                 if [
                     iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                    iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
                     iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
                 ]
                 .into_iter()
@@ -1957,7 +1999,11 @@ fn validate_initial_native_instruction_authority(
                 ) {
                     return deny("native multisig metadata keys cannot be changed directly");
                 }
-                is_genesis
+                // Native enrollment validates the issuer's exact registration domain and
+                // protected wallet identity. Ordinary metadata ownership cannot grant it.
+                set.key().as_ref()
+                    == iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY
+                    || is_genesis
                     || can_modify_account_metadata(
                         &state_transaction.world,
                         authority,
@@ -2090,7 +2136,8 @@ fn validate_initial_native_instruction_authority(
     ) {
         return Err(ValidationFail::NotPermitted(
             crate::smartcontracts::isi::INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON.to_owned(),
-        ).into());
+        )
+        .into());
     }
     if !initial_native_instruction_is_explicitly_admitted(instruction)
         && !(is_genesis && initial_genesis_instruction_is_explicitly_admitted(instruction))
@@ -2098,7 +2145,8 @@ fn validate_initial_native_instruction_authority(
         return Err(ValidationFail::NotPermitted(format!(
             "Initial executor does not admit unclassified native instruction `{}`",
             instruction.id()
-        )).into());
+        ))
+        .into());
     }
     Ok(())
 }
@@ -2733,6 +2781,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageConfidentialParams",
     "CanProposeSccpRouteGovernance",
     "CanManageKagemushaReserve",
+    "CanAuthorizeKagemushaOrdinaryMint",
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanManageSmartContractCode",

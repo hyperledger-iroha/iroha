@@ -1,11 +1,11 @@
 //! Separate hardware-evidence frame grammar. No financial coordinator method is admitted.
 pub(super) const VERSION: i32 = 1;
 pub(super) const PURPOSE: i32 = 1;
-pub(super) const MAX_FIELD: usize = 192 * 1024;
-pub(super) const MAX_FIELDS: usize = 7;
-pub(super) const CONTRACT: [i32; 5] = [VERSION, PURPOSE, 18, MAX_FIELDS as i32, MAX_FIELD as i32];
+pub(crate) const MAX_FIELD: usize = 192 * 1024;
+pub(crate) const MAX_FIELDS: usize = 7;
+pub(crate) const CONTRACT: [i32; 5] = [VERSION, PURPOSE, 18, MAX_FIELDS as i32, MAX_FIELD as i32];
 /// Validate all shape and byte bounds before acquiring or mutating an owner.
-pub(super) fn valid_request(method: i32, fields: &[Vec<u8>]) -> bool {
+pub(crate) fn valid_request(method: i32, fields: &[Vec<u8>]) -> bool {
     let count = match method {
         1 | 5 | 6 | 8 | 10 | 12 | 14 | 16 | 17 | 18 => 0,
         2 | 3 | 4 | 9 | 11 | 13 | 15 => 1,

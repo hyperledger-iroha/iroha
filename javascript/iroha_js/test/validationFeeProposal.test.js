@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
@@ -63,7 +64,7 @@ test("validation-fee proposal public facades preserve exact argument counts", ()
       null,
       {},
     ),
-    /exactly two or three arguments/u,
+    /exactly two arguments/u,
   );
   assert.throws(
     () => computeValidationFeePayoutLifecycleProposalFingerprintV1(
@@ -75,22 +76,20 @@ test("validation-fee proposal public facades preserve exact argument counts", ()
   );
 });
 
-test("validation-fee proposal fingerprint delegates exact native policy and lifecycle bytes", () => {
+test("validation-fee proposal fingerprint delegates exact native retail policy bytes", () => {
   const policy = Object.freeze({
     schema_version: 1,
     network_id: validationFeeNetworkId,
   });
-  const lifecycleId = "56".repeat(32);
   const fingerprint = withNativeBinding(
     {
       validationFeePolicyProposalFingerprintV1(
         nativeProposalOperator,
         policyJson,
-        lifecycleBytes,
       ) {
         assert.equal(nativeProposalOperator, proposalOperator);
         assert.deepEqual(JSON.parse(policyJson), policy);
-        assert.deepEqual(lifecycleBytes, Buffer.from(lifecycleId, "hex"));
+        assert.equal(arguments.length, 2);
         return Buffer.from("12".repeat(32), "hex");
       },
     },
@@ -98,22 +97,20 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
       compute(
         proposalOperator,
         policy,
-        lifecycleId,
       ),
   );
   assert.equal(fingerprint, "12".repeat(32));
 });
 
-test("validation-fee proposal fingerprint accepts no-payout and even-ending output", () => {
+test("validation-fee proposal fingerprint accepts an even-ending raw proposal fingerprint", () => {
   const fingerprint = withNativeBinding(
     {
       validationFeePolicyProposalFingerprintV1(
         nativeProposalOperator,
         _policyJson,
-        lifecycleBytes,
       ) {
         assert.equal(nativeProposalOperator, proposalOperator);
-        assert.equal(lifecycleBytes, null);
+        assert.equal(arguments.length, 2);
         return Buffer.from("34".repeat(32), "hex");
       },
     },
@@ -121,7 +118,6 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
       compute(
         proposalOperator,
         { schema_version: 1 },
-        null,
       ),
   );
   assert.equal(fingerprint, "34".repeat(32));
@@ -167,7 +163,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
           { schema_version: 1 },
           `0x${"56".repeat(32)}`,
         ),
-      /64 lowercase hexadecimal/u,
+      /exactly two arguments/u,
     );
     assert.throws(
       () =>
@@ -176,7 +172,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
           { schema_version: 1 },
           "00".repeat(32),
         ),
-      /must be non-zero/u,
+      /exactly two arguments/u,
     );
   });
 });
@@ -233,7 +229,7 @@ test("validation-fee proposal fingerprints reject the retired electorate argumen
         null,
         {},
       ),
-      /exactly two or three arguments/u,
+      /exactly two arguments/u,
     );
     assert.throws(
       () => computePayout(
@@ -308,36 +304,18 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   const authority = AccountAddress.fromAccount({
     publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x11))),
   }).toI105();
-  const policy = {
-    schema_version: 1,
-    network_id: validationFeeNetworkId,
-    policy_version: "1",
-    previous_policy_hash: null,
-    ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    ds_scale: 2,
-    fee: "0.1",
-    treasury_account_id: authority,
-    charging_mode: {
-      charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
-      value: null,
-    },
-    effective_from_height: "121100",
-    expires_after_height: null,
-    exemption_classes: [],
-    treasury_payout_binding: null,
-  };
+  const policy = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_policy_v1.json", import.meta.url), "utf8"));
+  policy.network_id = validationFeeNetworkId;
   const proposalId =
     computeValidationFeePolicyProposalFingerprintV1(
       authority,
       policy,
-      null,
     );
   assert.match(proposalId, /^[0-9a-f]{64}$/u);
   assert.equal(
     computeValidationFeePolicyProposalFingerprintV1(
       authority,
       policy,
-      null,
     ),
     proposalId,
   );
@@ -345,13 +323,11 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   const instruction = {
     ProposeValidationFeePolicy: {
       policy,
-      payout_lifecycle_proposal_id: null,
     },
   };
   const encoded = noritoEncodeInstruction(instruction, 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(Object.keys(decoded.ProposeValidationFeePolicy).sort(), [
-    "payout_lifecycle_proposal_id",
     "policy",
   ]);
   assert.deepEqual(

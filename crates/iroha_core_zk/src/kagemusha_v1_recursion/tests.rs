@@ -969,7 +969,7 @@ pub(super) fn state_verification_fixture()
     let network_id = network();
     let asset = asset();
     let asset_incarnation = incarnation();
-    let successor = KagemushaStateV1 {
+    let mut successor = KagemushaStateV1 {
         version: KAGEMUSHA_STATE_VERSION_V1,
         protocol_version: KAGEMUSHA_STATE_VERSION_V1,
         suite_id: digest(0x91),
@@ -1003,6 +1003,61 @@ pub(super) fn state_verification_fixture()
         state_commitment_components: pasta_pair(0x9B),
         state_commitment: digest(0x9D),
     };
+    // This fixture supplies public identity and projection data only. Its Bootstrap state
+    // must still use the actual mathematical empty roots and both native commitments.
+    use crate::kagemusha_v1_poseidon::{
+        KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, digest_limbs, empty_replay_root,
+        encode, from_u128, hash, paired_commitment,
+    };
+    fn commitment<F: KagemushaPoseidonFieldV1>(state: &KagemushaStateV1) -> F {
+        let mut inputs = vec![
+            F::from(u64::from(state.version)),
+            F::from(u64::from(state.protocol_version)),
+        ];
+        for digest in [
+            state.suite_id,
+            state.vk_digest,
+            state.release_id,
+            *state.asset_incarnation.as_bytes(),
+            state.liability_pool_id,
+            state.hardware_profile_id,
+        ] {
+            inputs.extend(digest_limbs::<F>(digest));
+        }
+        inputs.push(F::from(state.policy_epoch));
+        inputs.extend(digest_limbs::<F>(state.lane.normalized_network_id()));
+        inputs.extend(digest_limbs::<F>(state.lane.normalized_asset_id().unwrap()));
+        inputs.push(F::from(u64::from(state.lane.scale)));
+        inputs.extend(digest_limbs::<F>(state.lane.device_lane_id));
+        inputs.extend([
+            from_u128::<F>(state.balance),
+            from_u128::<F>(state.logical_sequence),
+            from_u128::<F>(state.secure_index),
+            from_u128::<F>(state.hardware_epoch.generation),
+        ]);
+        for digest in [
+            state.hardware_epoch.epoch_id,
+            state.device_policy_binding.device_key_reference,
+            state.device_policy_binding.hardware_policy_id,
+            state.next_one_use_key_reference,
+            state.state_nonce_commitment,
+        ] {
+            inputs.extend(digest_limbs::<F>(digest));
+        }
+        inputs.push(empty_replay_root::<F>());
+        hash(KAGEMUSHA_STATE_DOMAIN_V1, &inputs)
+    }
+    successor.consumed_credit_root = KagemushaPastaStateCommitmentV1 {
+        eq: encode(empty_replay_root::<Fp>()),
+        ep: encode(empty_replay_root::<Fq>()),
+    };
+    let (components, head) =
+        paired_commitment(commitment::<Fp>(&successor), commitment::<Fq>(&successor));
+    successor.state_commitment_components = components;
+    successor.state_commitment = head;
+    successor
+        .validate()
+        .expect("actual complete mathematical Bootstrap state fixture");
     let transport_semantic_digest = digest(0x9E);
     let guard_eq_credential_audit = eq_digest(0x31);
     let guard_ep_credential_audit = ep_digest(0x32);
@@ -1060,6 +1115,35 @@ pub(super) fn state_verification_fixture()
         ep_history: ep_history(0x36).as_bytes().to_vec(),
     };
     (public, proof)
+}
+
+#[test]
+fn state_projection_fixture_retains_actual_zero_state_commitments() {
+    let (public, _) = state_verification_fixture();
+    public
+        .successor
+        .validate()
+        .expect("complete canonical state fixture");
+    assert_eq!(
+        (
+            public.successor.balance,
+            public.successor.logical_sequence,
+            public.successor.secure_index
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        public.successor.consumed_credit_root,
+        KagemushaPastaStateCommitmentV1 {
+            eq: crate::kagemusha_v1_poseidon::encode(
+                crate::kagemusha_v1_poseidon::empty_replay_root::<Fp>()
+            ),
+            ep: crate::kagemusha_v1_poseidon::encode(
+                crate::kagemusha_v1_poseidon::empty_replay_root::<Fq>()
+            ),
+        }
+    );
+    // Original mock transcripts remain projection-only and confer no proof/Native authority.
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1608,7 +1692,6 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
     );
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn payment_public_projection_binds_sender_profile_request_and_commit_certificate() {
     let fixture = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);

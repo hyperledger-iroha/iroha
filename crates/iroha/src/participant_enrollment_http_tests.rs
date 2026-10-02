@@ -19,7 +19,9 @@ fn owner<'a>(
         target: request.target,
     }
 }
-fn borrowed<'h>(headers: &'h [(&'static str, Vec<u8>)]) -> impl Iterator<Item = (&'h str, &'h [u8])> + 'h {
+fn borrowed<'h>(
+    headers: &'h [(&'static str, Vec<u8>)],
+) -> impl Iterator<Item = (&'h str, &'h [u8])> + 'h {
     headers
         .iter()
         .map(|(name, value)| -> (&'h str, &'h [u8]) { (*name, value.as_slice()) })

@@ -1130,7 +1130,7 @@ function validateCertificate(value, expectations = {}, options = {}) {
     && attemptSequence !== expectations.attemptSequence) {
     throw new Error("certificate.governance_attempt_sequence differs from attempt.sequence");
   }
-  const riskTier = validateTaggedUnit(
+  const riskTier = validateNativeCertificateUnit(
     certificate.risk_tier,
     "tier",
     ["Routine", "Standard", "Constitutional", "Emergency"],
@@ -1483,7 +1483,7 @@ function validateBallotCertificate(value, binding, context) {
     throw new TypeError(`${context}.tally violates count conservation`);
   }
   const quorum = Math.floor((2 * normalizedTally.original_seats + 2) / 3);
-  const outcome = validateTaggedUnit(
+  const outcome = validateNativeCertificateUnit(
     ballot.outcome,
     "outcome",
     ["Approved", "Rejected", "NoQuorum", "NoResult"],
@@ -1618,6 +1618,14 @@ function canonicalBoundedStandardBase64(value, maximumBytes, context) {
     throw new RangeError(`${context} exceeds its byte bound or is not canonical base64`);
   }
   return value;
+}
+
+function validateNativeCertificateUnit(value, tagField, accepted, context) {
+  const root = exactObject(value, [tagField, "details"], context);
+  if (!accepted.includes(root[tagField]) || root.details !== null) {
+    throw new TypeError(`${context} must contain the native unit variant and null details`);
+  }
+  return root[tagField];
 }
 
 function bytes(value, length, context, nonZero = false) {

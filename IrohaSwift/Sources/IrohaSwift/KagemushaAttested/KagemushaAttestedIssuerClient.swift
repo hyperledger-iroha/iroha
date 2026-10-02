@@ -34,7 +34,7 @@ public struct KagemushaURLSessionTransport: KagemushaIssuerTransport {
 ///
 /// Bodies are JSON objects whose binary members are unpadded base64url; signed suite objects
 /// travel as their complete canonical Norito frames. Amounts and millisecond timestamps are
-/// JSON integers (always below 2^53).
+/// Unsigned JSON integers decoded without rounding or truncation.
 struct KagemushaAttestedIssuerClient: Sendable {
     static let routePrefix = "v1/kagemusha/attested/"
     static let maximumResponseBytes = 8 * 1024 * 1024
@@ -265,8 +265,7 @@ struct KagemushaAttestedIssuerClient: Sendable {
     static func integer(_ object: [String: Any], _ key: String) throws -> UInt64 {
         guard let number = object[key] as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
-              let value = UInt64(exactly: number.doubleValue) ?? UInt64(exactly: number.int64Value),
-              number.int64Value >= 0
+              let value = StrictJSONNumber.uint64(from: number)
         else { throw KagemushaError.invalidIssuerResponse(key) }
         return value
     }

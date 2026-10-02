@@ -54,6 +54,7 @@ struct Fixture {
     state: Arc<State>,
     chain: RefCell<CertifiedTestChain>,
     signer: KeyPair,
+    catalog_signer: KeyPair,
     owner: AccountId,
     collector: AccountId,
     payment_asset: AssetDefinitionId,
@@ -65,12 +66,14 @@ fn fixture() -> Fixture {
 
 fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
     let (config, signer, owner, collector, payment_asset) = fixture_config();
+    let catalog_signer = config.genesis_key.clone();
     let chain =
         CertifiedTestChain::start(config).expect("apply original paid alias signed genesis");
     let fixture = Fixture {
         state: Arc::clone(chain.state()),
         chain: RefCell::new(chain),
         signer,
+        catalog_signer,
         owner,
         collector,
         payment_asset,
@@ -182,8 +185,19 @@ fn fixture_config() -> (
         world.accounts.insert(id, account);
     }
     let mut config = TestChainConfig::new(world, 0);
-    // The same registered governance owner signs the original key-registration genesis.
-    config.genesis_key = signer.clone();
+    // The original genesis authority also owns the universal catalog transition.
+    // Grant its exact permissions before native genesis execution; the alias
+    // payer keeps its private physical route and existing permission unchanged.
+    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+    config.world.account_permissions_mut_for_testing().insert(
+        genesis_authority,
+        BTreeSet::from([
+            Permission::from(
+                iroha_executor_data_model::permission::governance::CanManageConsensusKeys,
+            ),
+            Permission::from(CanSetParameters),
+        ]),
+    );
     config.nexus = Some(nexus);
     config.genesis_instructions = validators
         .into_iter()
@@ -226,11 +240,29 @@ fn alias_registry_fixture_consensus_registration_requires_original_signer_permis
         .insert(genesis_account, BTreeSet::new());
     let failure = CertifiedTestChain::prepare(config)
         .expect_err("the actual genesis signer cannot register consensus keys without permission");
-    assert_eq!(failure.state.view().height(), 0);
+    let crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error) =
+        &failure.error
+    else {
+        panic!("unexpected original genesis rejection: {:?}", failure.error);
+    };
+    let crate::block::BlockValidationError::InvalidGenesis(
+        crate::block::InvalidGenesisError::RejectedOutput(rejection),
+    ) = error.as_ref()
+    else {
+        panic!("expected rejected genesis output: {error:?}");
+    };
     assert!(matches!(
-        failure.error,
-        crate::sumeragi::test_chain::TestChainError::Genesis(_)
+        rejection.reason.as_ref(),
+        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+            )
+        ) if message.as_ref() == "not permitted: CanManageConsensusKeys"
     ));
+    let view = failure.state.view();
+    assert_eq!(view.height(), 0);
+    assert_eq!(view.kura().blocks_count(), 0);
+    assert!(view.world().consensus_keys().iter().next().is_none());
 }
 
 fn commit_bpng_catalog(fixture: &Fixture) {
@@ -270,21 +302,65 @@ fn commit_bpng_catalog(fixture: &Fixture) {
         },
         &peers,
     );
-    let request = SetParameter::new(Parameter::Custom(
+    let request: InstructionBox = SetParameter::new(Parameter::Custom(
         payload
             .clone()
             .into_custom_parameter()
             .expect("canonical catalog transition"),
     ))
     .into();
-    let signed = chain.sign(&fixture.signer, [request], 1);
+    // The payer's ordinary application policy remains private. Parameter control
+    // uses the authenticated global source even for that same account.
+    let payer_signed = chain.sign(
+        &fixture.signer,
+        [Log::new(
+            Level::DEBUG,
+            "original private account-routed work".to_owned(),
+        )
+        .into()],
+        1,
+    );
+    let payer_control = chain.sign(&fixture.signer, [request.clone()], 1);
+    let signed = chain.sign(&fixture.catalog_signer, [request], 1);
+    {
+        let view = fixture.state.view();
+        let route = |transaction: &SignedTransaction| {
+            evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                view.nexus(),
+                transaction.payload(),
+                view.world(),
+                1,
+                2,
+            )
+            .expect("original committed policy route")
+            .coordinator_route()
+        };
+        assert_eq!(
+            route(&payer_signed),
+            RoutingDecision::new(PRIVATE_LANE, PRIVATE_DATASPACE),
+            "the alias payer retains the original private physical policy"
+        );
+        assert_eq!(
+            route(&signed),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            "the actual catalog signer belongs to the authenticated global source"
+        );
+        assert_eq!(
+            route(&payer_control),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            "the payer's parameter control also belongs to the authenticated global source"
+        );
+    }
     let accepted = chain.commit(vec![signed]);
     let committed = chain.committed(chain.height());
     assert_eq!(
         accepted,
         vec![true],
-        "native committed catalog transition: {:?}",
-        committed.block().output_error(0)
+        "native committed catalog transition: {:#?}",
+        committed
+            .block()
+            .network_output_at(0)
+            .map(|(_, output)| output)
     );
     assert_eq!(
         chain.height(),

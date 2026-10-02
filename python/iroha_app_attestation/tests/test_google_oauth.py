@@ -1,3 +1,4 @@
+from iroha_app_attestation.native_time_interval import NativeTimeInterval
 """Actual synthetic RSA signing and mocked fixed Google OAuth transport.
 
 No installed credential, Google endpoint or genuine verdict is used. An explicit
@@ -123,7 +124,7 @@ class GoogleOAuthTests(unittest.TestCase):
 
     def provider(self, **changes):
         inputs = {'public_policy_original': ORIGINAL, 'native_policy': POLICY,
-                  'credential_fd': self.fd, 'trusted_time_ms': lambda: self.now,
+                  'credential_fd': self.fd, 'trusted_time_interval': lambda: NativeTimeInterval(self.now,self.now),
                   'openssl_path': self.openssl}; inputs.update(changes)
         value = GoogleServiceAccountTokenProvider(**inputs)
         self.providers.append(value)
@@ -212,6 +213,22 @@ class GoogleOAuthTests(unittest.TestCase):
             self.assertEqual(build.return_value.open.call_count, 3)
         provider.close()
         with self.assertRaises(AttestationRejected): provider()
+
+    def test_upper_bound_expiry_refuses_cached_access_without_future_iat(self):
+        provider=self.provider()
+        with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=Response();provider()
+            original_lower=self.now
+            # Lower remains valid but the upper bound crosses the original refresh deadline.
+            provider._clock=lambda:NativeTimeInterval(original_lower,original_lower+3_540_000)
+            with self.assertRaisesRegex(AttestationRejected,'trusted time changed'):provider()
+            self.assertIsNone(provider._access)
+            self.assertEqual(build.return_value.open.call_count,2)
+            request=build.return_value.open.call_args.args[0]
+            assertion=urllib.parse.parse_qs(request.data.decode())['assertion'][0]
+            claims=assertion.split('.')[1]
+            parsed=json.loads(base64.urlsafe_b64decode(claims+'='*(-len(claims)%4)))
+            self.assertEqual(parsed['iat'],original_lower//1000)
 
     def test_actual_dependency_image_substitutions_fail_closed(self):
         # Actual code/image data with the explicit test-only Root fixture above.

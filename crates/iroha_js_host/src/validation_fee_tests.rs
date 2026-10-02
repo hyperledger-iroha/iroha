@@ -1,51 +1,53 @@
-// Validation-fee JavaScript host fixtures, wire parity, fingerprints, and rejection cases.
+// Native first-release policy/SDK wire parity. Fixtures never assert live enactment.
 fn validation_fee_account(seed: u8) -> AccountId {
-    let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-        .expect("validation-fee fixture keypair");
-    AccountId::new(keypair.public_key().clone())
-}
-fn validation_fee_proposal_operator_fixture() -> AccountId {
-    validation_fee_account(7)
+    let pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
+    AccountId::new(pair.public_key().clone())
 }
 fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
-        name.parse().expect("validation-fee fixture asset name"),
+        DomainId::try_new(domain, "universal").unwrap(),
+        name.parse().unwrap(),
     )
 }
 fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
     let contract_address: ContractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
-            .expect("validation-fee payout contract address");
+            .unwrap();
+    let pool_contract_address = ContractAddress::derive(
+        &NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x13; 32]),
+        )),
+        &validation_fee_account(2),
+        43,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
     ValidationFeeTreasuryPayoutBindingV1 {
         treasury_account_id: contract_address.subject_id(),
         contract_address,
         code_hash: [0x34; 32],
-        entrypoint: "autonomous_validation_fee_tick"
-            .parse()
-            .expect("validation-fee payout entrypoint"),
+        entrypoint: "autonomous_validation_fee_tick".parse().unwrap(),
         ds_asset_id: validation_fee_asset("cbsi", "ds"),
         xor_asset_id: validation_fee_asset("xor", "xor"),
-        pool_vault_account_id: validation_fee_account(2),
-        batch_ds: validation_fee_payout_batch_ds(),
-        min_xor_out: validation_fee_payout_min_xor(),
-        max_xor_out: validation_fee_payout_max_xor(),
-        recipients: (3..=6)
-            .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                account_id: validation_fee_account(seed),
-                share: validation_fee_payout_recipient_share(),
-            })
-            .collect(),
+        pool_vault_account_id: pool_contract_address.subject_id(),
+        pool_contract_address,
+        pool_code_hash: [0x36; 32],
+        reward_pool_account_id: validation_fee_account(3),
+        reference_feed_id: "xor_per_sbd".parse().unwrap(),
+        reference_feed_config_version: 1,
+        reference_provider_accounts: (20..25).map(validation_fee_account).collect(),
+        max_sbd_per_attempt_minor: 1000,
+        max_sbd_per_day_minor: 100000,
+        min_interval_ms: 60000,
+        max_source_age_ms: 300000,
+        max_slippage_bps: 100,
+        validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+        min_reward_claim_xor_minor: 1,
     }
 }
-fn validation_fee_policy_fixture(
-    payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
-) -> ValidationFeePolicyV1 {
-    let treasury_account_id = payout_binding.as_ref().map_or_else(
-        || validation_fee_account(1),
-        |binding| binding.treasury_account_id.clone(),
-    );
+fn validation_fee_policy_fixture() -> ValidationFeePolicyV1 {
+    let binding = validation_fee_payout_binding_fixture();
     ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -53,30 +55,21 @@ fn validation_fee_policy_fixture(
         )),
         policy_version: 1,
         previous_policy_hash: None,
-        ds_asset_id: validation_fee_asset("cbsi", "ds"),
+        ds_asset_id: binding.ds_asset_id.clone(),
         ds_scale: VALIDATION_FEE_DS_SCALE,
+        retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+        effective_from_ms: 1793451600000,
+        notice_published_at_ms: 1790859600000,
         fee: initial_validation_fee_amount(),
-        treasury_account_id,
-        charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-        effective_from_height: 121_100,
-        expires_after_height: None,
-        exemption_classes: payout_binding
-            .as_ref()
-            .map(|_| vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()])
-            .unwrap_or_default(),
-        treasury_payout_binding: payout_binding,
+        treasury_account_id: binding.treasury_account_id.clone(),
+        charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+        exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
+        reward_custody: binding.custody(),
     }
 }
-fn assert_validation_fee_policy_instruction_roundtrip(
-    policy: ValidationFeePolicyV1,
-    payout_lifecycle_proposal_id: Option<[u8; 32]>,
-) {
+fn assert_validation_fee_policy_instruction_roundtrip(policy: ValidationFeePolicyV1) {
     const WIRE_ID: &str = "iroha.instruction.v1::governance::ProposeValidationFeePolicy";
-    let instruction: InstructionBox = ProposeValidationFeePolicy {
-        policy,
-        payout_lifecycle_proposal_id,
-    }
-    .into();
+    let instruction: InstructionBox = ProposeValidationFeePolicy { policy }.into();
     let original_dyn_bytes = InstructionTrait::dyn_encode(&*instruction);
     assert_eq!(
         iroha_data_model::isi::instruction_wire_id(&instruction),
@@ -92,8 +85,8 @@ fn assert_validation_fee_policy_instruction_roundtrip(
     let typed = iroha_data_model::isi::decode_instruction_from_pair(WIRE_ID, &framed)
         .expect("decode registered concrete validation-fee instruction");
     assert_eq!(InstructionTrait::dyn_encode(&*typed), original_dyn_bytes);
-    let public_frame = norito::encode_canonical(&instruction)
-        .expect("frame public validation-fee InstructionBox");
+    let public_frame =
+        norito::encode_canonical(&instruction).expect("frame public validation-fee InstructionBox");
     let decoded = decode_instruction_aligned(&public_frame)
         .expect("decode public validation-fee InstructionBox");
     assert_eq!(
@@ -155,215 +148,99 @@ fn assert_validation_fee_policy_instruction_roundtrip(
         "buildTransactionPayload path must preserve exact native instruction bytes"
     );
 }
+
 #[test]
-fn validation_fee_policy_instruction_roundtrips_without_payout() {
-    assert_validation_fee_policy_instruction_roundtrip(validation_fee_policy_fixture(None), None);
+fn monthly_policy_instruction_preserves_native_bytes_and_transaction_payload() {
+    let policy = validation_fee_policy_fixture();
+    assert_validation_fee_policy_instruction_roundtrip(policy);
 }
 #[test]
-fn validation_fee_policy_instruction_roundtrips_with_payout_and_even_hashes() {
-    assert_validation_fee_policy_instruction_roundtrip(
-        validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
-        Some([0x56; 32]),
-    );
-}
-#[test]
-fn validation_fee_policy_instruction_json_rejects_unknown_and_legacy_fields() {
-    let instruction: InstructionBox = ProposeValidationFeePolicy {
-        policy: validation_fee_policy_fixture(None),
-        payout_lifecycle_proposal_id: None,
-    }
-    .into();
-    let mut value =
-        instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
-    value
-        .get_mut("ProposeValidationFeePolicy")
-        .and_then(json::Value::as_object_mut)
-        .expect("validation-fee instruction fields")
-        .insert("window".to_owned(), json::Value::Null);
-    let error = value_to_instruction(value).expect_err("legacy window alias must be rejected");
-    assert!(error.reason.contains("must contain exactly"));
-    let mut value =
-        instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
-    let policy = value
-        .get_mut("ProposeValidationFeePolicy")
-        .and_then(|value| value.get_mut("policy"))
-        .and_then(json::Value::as_object_mut)
-        .expect("validation-fee policy fields");
-    policy.remove("network_id");
-    policy.insert(
-        "chain_id".to_owned(),
-        json::Value::String("legacy".to_owned()),
-    );
-    policy.insert(
-        "genesis_hash".to_owned(),
-        json::Value::String("13".repeat(32)),
-    );
-    let error =
-        value_to_instruction(value).expect_err("legacy dual identity fields must be rejected");
-    assert!(error.reason.contains("must contain exactly"));
-}
-#[test]
-fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
-    for (policy, payout_lifecycle_proposal_id) in [
-        (validation_fee_policy_fixture(None), None),
-        (
-            validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
-            Some([0x56; 32]),
-        ),
-    ] {
-        let proposal_operator = validation_fee_proposal_operator_fixture();
-        let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-            proposal_operator: proposal_operator.clone(),
-            policy: policy.clone(),
-            payout_lifecycle_proposal_id,
-        })
-        .fingerprint();
-        let policy_json = json::to_json(&policy).expect("validation-fee policy JSON");
-        let actual = validation_fee_policy_proposal_fingerprint_v1(
-            proposal_operator.to_string(),
-            policy_json,
-            payout_lifecycle_proposal_id.map(|id| Uint8Array::from(id.to_vec())),
-        )
-        .expect("validation-fee policy fingerprint");
-        assert_eq!(actual.as_ref(), expected);
-    }
-}
-#[test]
-fn validation_fee_policy_proposal_fingerprint_binds_the_exact_operator() {
-    let policy_json =
-        json::to_json(&validation_fee_policy_fixture(None)).expect("validation-fee policy JSON");
-    let first = validation_fee_policy_proposal_fingerprint_v1(
-        validation_fee_account(7).to_string(),
-        policy_json.clone(),
-        None,
+fn policy_fingerprint_binds_native_schedule_and_operator() {
+    let policy = validation_fee_policy_fixture();
+    let operator = validation_fee_account(7);
+    let fingerprint = validation_fee_policy_proposal_fingerprint_v1(
+        operator.to_string(),
+        json::to_json(&policy).unwrap(),
     )
-    .expect("first operator fingerprint");
-    let second = validation_fee_policy_proposal_fingerprint_v1(
+    .unwrap();
+    let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: operator,
+        policy: policy.clone(),
+    })
+    .fingerprint();
+    assert_eq!(fingerprint.as_ref(), expected);
+    let other = validation_fee_policy_proposal_fingerprint_v1(
         validation_fee_account(8).to_string(),
-        policy_json,
-        None,
+        json::to_json(&policy).unwrap(),
     )
-    .expect("second operator fingerprint");
-    assert_ne!(first.as_ref(), second.as_ref());
+    .unwrap();
+    assert_ne!(fingerprint.as_ref(), other.as_ref());
+    let mut updated = policy;
+    updated.retail_schedule.included_payments = 60;
+    let changed = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_account(7).to_string(),
+        json::to_json(&updated).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(fingerprint.as_ref(), changed.as_ref());
 }
 #[test]
-fn validation_fee_payout_lifecycle_proposal_fingerprint_matches_native_kind() {
-    let payout_binding = validation_fee_payout_binding_fixture();
-    let proposal_operator = validation_fee_proposal_operator_fixture();
+fn conversion_lifecycle_fingerprint_matches_native_kind() {
+    let binding = validation_fee_payout_binding_fixture();
+    let operator = validation_fee_account(7);
     let expected =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-            proposal_operator: proposal_operator.clone(),
-            payout_binding: payout_binding.clone(),
+            proposal_operator: operator.clone(),
+            payout_binding: binding.clone(),
         })
         .fingerprint();
     let actual = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-        proposal_operator.to_string(),
-        json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
+        operator.to_string(),
+        json::to_json(&binding).unwrap(),
     )
-    .expect("validation-fee payout lifecycle fingerprint");
+    .unwrap();
     assert_eq!(actual.as_ref(), expected);
 }
 #[test]
-fn validation_fee_proposal_fingerprints_match_native_release_preimages() {
-    let proposal_operator = validation_fee_proposal_operator_fixture();
-    let policy = validation_fee_policy_fixture(None);
-    let policy_fingerprint = validation_fee_policy_proposal_fingerprint_v1(
-        proposal_operator.to_string(),
-        json::to_json(&policy).expect("validation-fee policy JSON"),
-        None,
-    )
-    .expect("validation-fee policy fingerprint");
-    assert_eq!(
-        policy_fingerprint.as_ref(),
-        ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-            proposal_operator: proposal_operator.clone(),
-            policy,
-            payout_lifecycle_proposal_id: None,
-        })
-        .fingerprint()
-    );
-    let payout_binding = validation_fee_payout_binding_fixture();
-    let payout_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-        proposal_operator.to_string(),
-        json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
-    )
-    .expect("validation-fee payout lifecycle fingerprint");
-    assert_eq!(
-        payout_fingerprint.as_ref(),
-        ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-            proposal_operator,
-            payout_binding,
-        })
-        .fingerprint()
-    );
-}
-#[test]
-fn validation_fee_policy_proposal_fingerprint_rejects_unknown_policy_fields() {
-    let policy = validation_fee_policy_fixture(None);
-    let mut value = json::to_value(&policy).expect("validation-fee policy JSON");
-    value
+fn sdk_rejects_removed_fields_missing_custody_and_hidden_exemptions() {
+    for field in ["fee_asset_id", "enabled", "recipients"] {
+        let mut value = json::to_value(&validation_fee_policy_fixture()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), json::Value::Bool(true));
+        assert!(validation_fee_policy_from_json_value(value).is_err());
+    }
+    let mut missing = json::to_value(&validation_fee_policy_fixture()).unwrap();
+    missing
         .as_object_mut()
-        .expect("validation-fee policy fields")
-        .insert(
-            "fee_asset_id".to_owned(),
-            json::Value::String("legacy".to_owned()),
+        .unwrap()
+        .insert("reward_custody".to_owned(), json::Value::Null);
+    assert!(validation_fee_policy_from_json_value(missing).is_err());
+    let mut binding = json::to_value(&validation_fee_payout_binding_fixture()).unwrap();
+    binding
+        .as_object_mut()
+        .unwrap()
+        .insert("recipients".to_owned(), json::Value::Array(vec![]));
+    assert!(validation_fee_payout_binding_from_json_value(binding, "binding").is_err());
+}
+#[test]
+fn sdk_rejects_invalid_policy_notice_and_custody() {
+    for kind in 0..3 {
+        let mut policy = validation_fee_policy_fixture();
+        match kind {
+            0 => policy.notice_published_at_ms += 1,
+            1 => policy.treasury_account_id = validation_fee_account(9),
+            _ => policy.retail_schedule.overage_minor = 0,
+        }
+        assert!(
+            validation_fee_policy_proposal_fingerprint_v1(
+                validation_fee_account(7).to_string(),
+                json::to_json(&policy).unwrap(),
+            )
+            .is_err()
         );
-    let result = validation_fee_policy_proposal_fingerprint_v1(
-        validation_fee_proposal_operator_fixture().to_string(),
-        json::to_json(&value).expect("legacy validation-fee policy JSON"),
-        None,
-    );
-    assert_napi_error_contains!(
-        result,
-        "legacy policy alias must be rejected",
-        "must contain exactly"
-    );
-}
-#[test]
-fn validation_fee_payout_lifecycle_rejects_retired_sbd_field_names() {
-    let payout_binding = validation_fee_payout_binding_fixture();
-    let mut value = json::to_value(&payout_binding).expect("payout binding JSON");
-    let fields = value.as_object_mut().expect("payout binding JSON fields");
-    let ds_asset_id = fields.remove("ds_asset_id").expect("DS asset field");
-    fields.insert("sbd_asset_id".to_owned(), ds_asset_id);
-    let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-        validation_fee_proposal_operator_fixture().to_string(),
-        json::to_json(&value).expect("retired payout binding JSON"),
-    );
-    assert_napi_error_contains!(
-        result,
-        "retired payout binding field must be rejected",
-        "must contain exactly"
-    );
-}
-#[test]
-fn validation_fee_policy_proposal_fingerprint_rejects_wrong_contract_subject() {
-    let mut policy = validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture()));
-    policy.treasury_account_id = validation_fee_account(9);
-    let result = validation_fee_policy_proposal_fingerprint_v1(
-        validation_fee_proposal_operator_fixture().to_string(),
-        json::to_json(&policy).expect("mismatched validation-fee policy JSON"),
-        Some(Uint8Array::from(vec![0x56; 32])),
-    );
-    assert_napi_error_contains!(
-        result,
-        "mismatched payout contract subject must be rejected",
-        "contract subject must equal the policy treasury"
-    );
-}
-#[test]
-fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
-    let mut payout_binding = validation_fee_payout_binding_fixture();
-    payout_binding.code_hash = [0; 32];
-    let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-        validation_fee_proposal_operator_fixture().to_string(),
-        json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
-    );
-    assert_napi_error_contains!(
-        result,
-        "invalid payout binding must fail closed",
-        "code hash must be non-zero"
-    );
+    }
 }
 
 #[test]

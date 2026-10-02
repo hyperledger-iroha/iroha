@@ -1,0 +1,78 @@
+// Generated conversion wrapper. Pricing, reference feed guards and validator
+// allocation are Parliament-governed native consensus policy.
+seiyaku AutonomousValidationFeePayout {
+    error enum AutonomousPayoutError {
+        InvalidInvocationAuthority = 1, InvalidContractSubject = 2, XorOutputBelowBound = 3,
+    }
+
+    // Read-only native projections. Generic contract state writes to these
+    // leaves are rejected by Iroha. Zero means no conversion is currently safe.
+    state StateMap<int, quantity> ValidationFeeConversion;
+    trigger validation_fee_autonomous_payout -> autonomous_validation_fee_tick {
+        on time pre_commit;
+        repeats indefinitely;
+        authority "@@PAYOUT_VAULT_ACCOUNT_ID@@";
+        metadata {
+            "tag": "cbsi-validation-fee";
+            "module": "validation_fee.autonomous_payout";
+            "schema_version": 1;
+        }
+    }
+
+    fn payout_vault() -> AccountId {
+        return AccountId::parse("@@PAYOUT_VAULT_ACCOUNT_ID@@");
+    }
+
+    fn reward_pool() -> AccountId {
+        return AccountId::parse(
+            // Immutable custody identity from the reviewed binding.
+            "@@REWARD_POOL_ACCOUNT_ID@@",
+        );
+    }
+
+    fn pool_contract() -> bytes {
+        return b"@@POOL_CONTRACT_ADDRESS@@";
+    }
+
+    fn xor_asset() -> AssetDefinitionId {
+        return AssetDefinitionId::parse("6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    }
+
+    kotoage fn autonomous_validation_fee_tick() -> quantity authorize("CanInvokeContractEntrypoint") {
+        let vault = payout_vault();
+        require(context::authority() == vault, AutonomousPayoutError::InvalidInvocationAuthority);
+        require(context::seiyaku_subject() == vault, AutonomousPayoutError::InvalidContractSubject);
+        let quantity zero = 0;
+        let amount_in = ValidationFeeConversion.get(0).unwrap_or(zero);
+        let minimum_out = ValidationFeeConversion.get(1).unwrap_or(zero);
+        if amount_in <= zero {
+            return zero;
+        }
+        if minimum_out <= zero {
+            return zero;
+        }
+        let xor = xor_asset();
+        // CoreHost queues transfer effects until native validation and atomic
+        // application. Snapshot balance queries cannot observe those effects;
+        // an absent asset is also the normal representation of zero balance.
+        // Native consensus requires the exact SBD-to-pool, XOR-to-treasury,
+        // XOR-to-reward-pool plan, checks its real output against minimum_out,
+        // and reserves/collects funding only in the same successful overlay.
+        let amount_out = contract::invoke(
+            contract: pool_contract(),
+            entrypoint: "swap_exact_in_quote_public",
+            returns: "quantity",
+            amount_in: amount_in,
+            min_out: minimum_out,
+        );
+        require(amount_out >= minimum_out, AutonomousPayoutError::XorOutputBelowBound);
+        ledger::asset::transfer(
+            source: vault,
+            destination: reward_pool(),
+            asset_definition: xor,
+            amount: amount_out,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        return amount_out;
+    }
+}

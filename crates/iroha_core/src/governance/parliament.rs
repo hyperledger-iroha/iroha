@@ -2853,9 +2853,7 @@ pub(crate) mod tests {
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             ValidationFeeChargingMode, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-            ValidationFeeTreasuryPayoutRecipientV1, initial_validation_fee_amount,
-            validation_fee_payout_batch_ds, validation_fee_payout_max_xor,
-            validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
+            initial_validation_fee_amount,
         },
     };
     use iroha_model_base::domain::DomainId;

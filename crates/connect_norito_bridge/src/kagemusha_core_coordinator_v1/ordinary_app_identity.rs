@@ -3,6 +3,10 @@
 //! Monetary methods stay unavailable until a separate genuine constrained financial owner exists.
 #[path = "ordinary_current_control.rs"]
 mod current_control;
+#[path = "ordinary_incoming_driver.rs"]
+mod incoming_driver;
+#[path = "ordinary_outgoing_driver.rs"]
+mod outgoing_driver;
 use super::{
     KagemushaCoreCoordinatorBackendErrorV1 as Error, KagemushaCoreCoordinatorBackendV1,
     KagemushaCoreCoordinatorMethodV1 as Method, install_kagemusha_core_coordinator_backend_v1,
@@ -15,6 +19,14 @@ pub use current_control::{
     KagemushaOrdinaryNativeCurrentControlRequestV1,
     KagemushaOrdinaryNativeCurrentControlResponseV1,
     invoke_kagemusha_native_ordinary_current_control_v1,
+};
+pub use incoming_driver::{
+    KagemushaOrdinaryNativeIncomingRequestV1, KagemushaOrdinaryNativeIncomingResponseV1,
+    invoke_kagemusha_native_ordinary_incoming_v1,
+};
+pub use outgoing_driver::{
+    KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
+    KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
 };
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_core_zk::kagemusha_v1_recursion::{

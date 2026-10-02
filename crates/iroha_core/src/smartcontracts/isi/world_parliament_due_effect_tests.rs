@@ -851,101 +851,121 @@ fn parliament_musubi_action_authorization_enacts_at_the_exact_due_height() {
 #[test]
 fn parliament_validation_fee_policy_enacts_at_the_exact_due_height() {
     use iroha_data_model::validation_fee::{
-        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-        VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode, ValidationFeePolicyV1,
+        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+        VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
+        ValidationFeePolicyV1,
     };
-
-    let state = blank_test_state();
-    let block = new_dummy_block_at_height(
-        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+    let ds_asset_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "paynet").unwrap(),
+        "fee_token".parse().unwrap(),
     );
-    let mut state_block = state.block(block.as_ref().header());
-    let (fixture, policy) = {
-        let mut seed = state_block.transaction();
-        bootstrap_alice_account(&mut seed);
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("validation-fee", "universal")
-                .expect("validation-fee fixture domain"),
-            "exact_due_ds"
-                .parse()
-                .expect("validation-fee fixture asset name"),
-        );
-        Register::asset_definition(AssetDefinition::new(
-            asset_definition_id.clone(),
-            "exact-due validation fee DS".to_owned(),
-            NumericSpec::fractional(u32::from(VALIDATION_FEE_DS_SCALE)),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&ALICE_ID, &mut seed)
-        .expect("register exact-scale validation-fee asset");
-        let policy = ValidationFeePolicyV1 {
-            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: seed.network_id.clone(),
-            policy_version: 1,
-            previous_policy_hash: None,
-            ds_asset_id: asset_definition_id,
-            ds_scale: VALIDATION_FEE_DS_SCALE,
-            fee: Quantity::zero(),
-            treasury_account_id: ALICE_ID.clone(),
-            charging_mode: ValidationFeeChargingMode::Disabled,
-            effective_from_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT
-                + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
-        };
-        validate_validation_fee_policy_proposal(&policy, &seed)
-            .expect("valid exact-due validation-fee policy preflight");
-        let fixture = seed_due_parliament_certificate(
-            &mut seed,
-            ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-                proposal_operator: ALICE_ID.clone(),
-                policy: policy.clone(),
-                payout_lifecycle_proposal_id: None,
-            }),
-        );
-        seed.apply();
-        (fixture, policy)
-    };
-
-    let mut execution = state_block.transaction();
-    execution.world.internal_event_buf.clear();
-    assert_eq!(
-        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
-            .expect("execute exact-due validation-fee policy certificate"),
-        DueParliamentCertificateExecutionV1::Applied
-    );
-    let registry = validation_fee_policy_registry(&execution)
-        .expect("read validation-fee registry")
-        .expect("automatic enactment installs validation-fee registry");
-    assert_eq!(registry.registered_policies.len(), 1);
-    let entry = registry
-        .head()
-        .expect("validation-fee registry has its enacted head");
-    assert_eq!(entry.policy, policy);
-    assert_eq!(entry.payout_lifecycle, None);
-    let proposal = execution
-        .world
-        .governance_proposals
-        .get(&fixture.proposal_id)
-        .expect("retained validation-fee policy proposal");
-    let authorization = validation_fee_parliament_authorization(
-        fixture.proposal_id,
-        proposal,
-        &fixture.certificate,
+    crate::validation_fee::tests::with_validation_fee_payout_state_at_time(
         PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
-    )
-    .expect("derive exact typed validation-fee authorization");
-    assert_eq!(entry.parliament_authorization, authorization);
-    assert_eq!(&authorization.proposal_operator, &*ALICE_ID);
-    assert_eq!(authorization.proposal_fingerprint, fixture.proposal_id);
-    assert_eq!(
-        authorization.governance_certificate_id,
-        GovernanceCertificateId::derive_v1(&fixture.certificate)
+        1_790_859_600_000,
+        |execution, deployer, code, code_hash| {
+            let mut wrapper = crate::validation_fee::tests::activate_bound_payout_runtime(
+                execution,
+                deployer,
+                code,
+                code_hash,
+                0,
+                ds_asset_id.clone(),
+                "exact_due_policy_wrapper",
+            );
+            let pool = crate::validation_fee::tests::activate_bound_payout_runtime(
+                execution,
+                deployer,
+                code,
+                code_hash,
+                1,
+                ds_asset_id.clone(),
+                "exact_due_policy_pool",
+            );
+            wrapper.binding.pool_vault_account_id = pool.binding.treasury_account_id;
+            wrapper.binding.pool_contract_address = pool.binding.contract_address;
+            wrapper.binding.pool_code_hash = pool.binding.code_hash;
+            let binding = wrapper.binding;
+            let payout_fixture = seed_due_parliament_certificate(
+                execution,
+                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    proposal_operator: ALICE_ID.clone(),
+                    payout_binding: binding.clone(),
+                }),
+            );
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    payout_fixture.governance_attempt_id,
+                    execution,
+                )
+                .unwrap(),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let policy = ValidationFeePolicyV1 {
+                retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+                effective_from_ms: 1_793_451_600_000,
+                notice_published_at_ms: 1_790_859_600_000,
+                schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+                network_id: execution.network_id,
+                policy_version: 1,
+                previous_policy_hash: None,
+                ds_asset_id,
+                ds_scale: VALIDATION_FEE_DS_SCALE,
+                fee: "0.10".parse().unwrap(),
+                treasury_account_id: binding.treasury_account_id.clone(),
+                charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
+                exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.into()],
+                reward_custody: binding.custody(),
+            };
+            validate_validation_fee_policy_proposal(&policy, execution).unwrap();
+            let fixture = seed_due_parliament_certificate(
+                execution,
+                ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    proposal_operator: ALICE_ID.clone(),
+                    policy: policy.clone(),
+                }),
+            );
+            execution.world.internal_event_buf.clear();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(fixture.governance_attempt_id, execution,)
+                    .unwrap(),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let registry = validation_fee_policy_registry(execution)
+                .expect("read validation-fee registry")
+                .expect("automatic enactment installs validation-fee registry");
+            assert_eq!(registry.registered_policies.len(), 1);
+            let entry = registry
+                .head()
+                .expect("validation-fee registry has its enacted head");
+            assert_eq!(entry.policy, policy);
+            assert_eq!(
+                registry.payout_policies.head().unwrap().lifecycle_seal,
+                binding.lifecycle_seal().unwrap()
+            );
+            let proposal = execution
+                .world
+                .governance_proposals
+                .get(&fixture.proposal_id)
+                .expect("retained validation-fee policy proposal");
+            let authorization = validation_fee_parliament_authorization(
+                fixture.proposal_id,
+                proposal,
+                &fixture.certificate,
+                PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
+            )
+            .expect("derive exact typed validation-fee authorization");
+            assert_eq!(entry.parliament_authorization, authorization);
+            assert_eq!(&authorization.proposal_operator, &*ALICE_ID);
+            assert_eq!(authorization.proposal_fingerprint, fixture.proposal_id);
+            assert_eq!(
+                authorization.governance_certificate_id,
+                GovernanceCertificateId::derive_v1(&fixture.certificate)
+            );
+            assert_eq!(authorization.invariant_error(), None);
+            assert_exact_due_parliament_effect_enacted(execution, &fixture);
+        },
     );
-    assert_eq!(authorization.invariant_error(), None);
-    assert_exact_due_parliament_effect_enacted(&execution, &fixture);
 }
 
 #[test]
@@ -956,7 +976,7 @@ fn parliament_validation_fee_payout_lifecycle_enacts_at_the_exact_due_height() {
     );
     crate::validation_fee::tests::with_original_validation_fee_payout_state_at_height(
         PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
-        original_world_state,
+        original_world_config,
         |execution, deployer, code, code_hash| {
             let mut wrapper = crate::validation_fee::tests::activate_bound_payout_runtime(
                 execution,
@@ -977,6 +997,8 @@ fn parliament_validation_fee_payout_lifecycle_enacts_at_the_exact_due_height() {
                 "exact_due_validation_fee_pool",
             );
             wrapper.binding.pool_vault_account_id = pool.binding.treasury_account_id.clone();
+            wrapper.binding.pool_contract_address = pool.binding.contract_address.clone();
+            wrapper.binding.pool_code_hash = pool.binding.code_hash;
             let binding = wrapper.binding;
             assert_eq!(binding.invariant_error(), None);
             validate_validation_fee_payout_lifecycle_runtime_before_effect_install(

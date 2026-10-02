@@ -5,11 +5,11 @@
 //! rebuilds every State input from that owner and requires actual paired proofs and whole histories.
 
 use super::{
-    DigestV1, KagemushaOperationV1, KagemushaPairedProofV1, KagemushaPastaParityV1,
-    KagemushaPreparedIntentCommitmentsV1, KagemushaRecursionArtifactsV1,
-    KagemushaStateRelationPublicInputsV1,
+    DigestV1, KagemushaAuthenticatedRecursiveVerifierV1, KagemushaOperationV1,
+    KagemushaPairedProofV1, KagemushaPastaParityV1, KagemushaPreparedIntentCommitmentsV1,
+    KagemushaRecursionArtifactsV1, KagemushaStateRelationPublicInputsV1,
     ordinary_guard_verifier::KagemushaAuthenticatedOrdinaryPreparationGuardV1,
-    ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1,
+    ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
     terminal_authorization::kagemusha_candidate_envelope_digest_v1,
     verify_kagemusha_state_proof_v1,
 };
@@ -37,6 +37,22 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     state_sha256: DigestV1,
     public_inputs: KagemushaStateRelationPublicInputsV1,
     proof: KagemushaPairedProofV1,
+    private_checkpoint_original: Vec<u8>,
+}
+impl Drop for KagemushaAuthenticatedOrdinaryCashCandidateV1 {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.private_checkpoint_original.zeroize();
+        if let Some(before) = self.public_inputs.predecessor.as_mut() {
+            before.balance.zeroize();
+            before.state_nonce_commitment.zeroize();
+        }
+        self.public_inputs.successor.balance.zeroize();
+        self.public_inputs
+            .successor
+            .state_nonce_commitment
+            .zeroize();
+    }
 }
 impl KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     pub(crate) fn prepared_record(&self) -> &KagemushaOrdinaryPreparedOutgoingV1 {
@@ -62,6 +78,28 @@ impl KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     }
     pub(crate) fn public_inputs(&self) -> &KagemushaStateRelationPublicInputsV1 {
         &self.public_inputs
+    }
+    pub(crate) fn private_checkpoint_original(&self) -> &[u8] {
+        &self.private_checkpoint_original
+    }
+    pub(crate) fn with_retained_checkpoint(
+        &self,
+        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+        consume: &mut dyn for<'a> FnMut(
+            &'a super::KagemushaGeneratedRecursiveStateProofV1,
+        ) -> core::result::Result<(), KagemushaStateErrorV1>,
+    ) -> Result<()> {
+        let restored = super::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
+            &self.private_checkpoint_original,
+            verifier,
+        )
+        .map_err(material)?
+        .restore(verifier, &self.public_inputs)
+        .map_err(material)?;
+        if restored.proof != self.proof {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        consume(&restored)
     }
     pub(crate) fn proof(&self) -> &KagemushaPairedProofV1 {
         &self.proof
@@ -106,11 +144,35 @@ impl KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     }
 }
 
+/// Capture actual generated private State for the same outgoing preparation and expected state.
+/// Data alone grants no candidate, W1, global Commit or StateAdvance authority.
+pub(crate) fn capture_ordinary_cash_state_checkpoint_v1(
+    selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
+    guard: &KagemushaAuthenticatedOrdinaryPreparationGuardV1,
+    prepared: &KagemushaOrdinaryPreparedOutgoingV1,
+    generated: &super::KagemushaGeneratedRecursiveStateProofV1,
+) -> Result<Vec<u8>> {
+    selection.recheck_selected_originals_and_current_custody()?;
+    guard.recheck_preparation_selection(selection)?;
+    let expected = reconstruct_public_inputs(selection, guard, prepared, &generated.proof)?;
+    let original = super::KagemushaRecursiveStateCheckpointV1::capture(
+        generated,
+        selection.recursive_verifier(),
+        &expected,
+    )
+    .map_err(material)?
+    .encode_canonical(selection.recursive_verifier())
+    .map_err(material)?;
+    selection.recheck_selected_originals_and_current_custody()?;
+    Ok(original)
+}
+
 pub(crate) fn verify_ordinary_cash_candidate_v1(
     selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
     guard: &KagemushaAuthenticatedOrdinaryPreparationGuardV1,
     prepared: KagemushaOrdinaryPreparedOutgoingV1,
     proof: KagemushaPairedProofV1,
+    private_checkpoint_original: &[u8],
 ) -> Result<KagemushaAuthenticatedOrdinaryCashCandidateV1> {
     selection.recheck_selected_originals_and_current_custody()?;
     guard.recheck_preparation_selection(selection)?;
@@ -123,6 +185,16 @@ pub(crate) fn verify_ordinary_cash_candidate_v1(
         &proof,
     )
     .map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
+    let restored = super::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
+        private_checkpoint_original,
+        selection.recursive_verifier(),
+    )
+    .map_err(material)?
+    .restore(selection.recursive_verifier(), &public_inputs)
+    .map_err(material)?;
+    if restored.proof != proof {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
     let candidate_digest =
         kagemusha_candidate_envelope_digest_v1(&public_inputs).map_err(material)?;
     selection.recheck_selected_originals_and_current_custody()?;
@@ -137,6 +209,7 @@ pub(crate) fn verify_ordinary_cash_candidate_v1(
         state_sha256: selection.transition_statement().digest()?,
         public_inputs,
         proof,
+        private_checkpoint_original: private_checkpoint_original.to_vec(),
     })
 }
 
@@ -199,7 +272,8 @@ fn reconstruct_public_inputs(
     {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
-    let (eq_reserved, ep_reserved) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+    let (eq_reserved, ep_reserved) =
+        kagemusha_ordinary_state_outer_protocol_positions_v1(selection.recursive_verifier());
     if proof.guard_eq_credential_audit != eq_reserved
         || proof.guard_ep_credential_audit != ep_reserved
     {

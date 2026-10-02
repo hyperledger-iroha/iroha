@@ -7,18 +7,19 @@
 //! These are data and equations, never a decoder-to-Native funding or State effect capability.
 use super::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KAGEMUSHA_ASSET_SCALE_MAX_V1,
-    KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-    KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
-    KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KagemushaAppAttestReleaseMeasurementV1,
-    KagemushaAppOperationApprovalEvidenceV1, KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1,
-    KagemushaEncryptedCreditAadV1, KagemushaEncryptedCreditEnvelopeV1,
-    KagemushaEncryptedCreditPurposeV1, KagemushaHardwarePlatformClassV1,
-    KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1, KagemushaOperationKindV1,
-    KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryFinancialHeadV1,
-    KagemushaOrdinaryFinancialLineageV1, KagemushaVerifiedOrdinaryAppCredentialV1,
-    kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
-    kagemusha_mint_credit_opening_commitment_v1, kagemusha_ordinary_app_account_binding_v1,
-    kagemusha_ordinary_financial_epoch_id_v1, kagemusha_recipient_credential_commitment_v1,
+    KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1,
+    KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1,
+    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
+    KagemushaAppAttestReleaseMeasurementV1, KagemushaAppOperationApprovalEvidenceV1,
+    KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1, KagemushaEncryptedCreditAadV1,
+    KagemushaEncryptedCreditEnvelopeV1, KagemushaEncryptedCreditPurposeV1,
+    KagemushaHardwarePlatformClassV1, KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1,
+    KagemushaOperationKindV1, KagemushaOrdinaryCashClockContextV1,
+    KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryFinancialLineageV1,
+    KagemushaVerifiedOrdinaryAppCredentialV1, kagemusha_ciphertext_digest_v1,
+    kagemusha_liability_pool_id_v1, kagemusha_mint_credit_opening_commitment_v1,
+    kagemusha_ordinary_app_account_binding_v1, kagemusha_ordinary_financial_epoch_id_v1,
+    kagemusha_recipient_credential_commitment_v1,
 };
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
@@ -308,7 +309,7 @@ pub struct KagemushaOrdinaryMintAuthorizationStatementV1 {
     pub issuance_commitment: [u8; 32],
     /// Derived output credit ID fixed before encryption and proof.
     pub credit_id: [u8; 32],
-    /// Sole digest of the complete384-byte actual encrypted credit original.
+    /// Sole digest of the complete canonical actual encrypted credit original.
     pub ciphertext_digest: [u8; 32],
 }
 impl KagemushaOrdinaryMintAuthorizationStatementV1 {
@@ -352,7 +353,9 @@ impl KagemushaOrdinaryMintAuthorizationStatementV1 {
             self.context.recipient_one_time_key,
         )
         .map_err(|e| e.to_string())?;
-        if raw.len() != 384 || kagemusha_ciphertext_digest_v1(raw) != self.ciphertext_digest {
+        if raw.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+            || kagemusha_ciphertext_digest_v1(raw) != self.ciphertext_digest
+        {
             return Err("ordinary mint ciphertext original differs".into());
         }
         Ok(())
@@ -435,6 +438,8 @@ impl KagemushaOrdinaryMintApprovalChallengeV1 {
     /// Bind exact pre-debit scope, without granting State/debit/Native authority.
     /// # Errors
     /// Refuses substituted statement, C, original FI decision or clock interval.
+    // The funding approval credential is the mint context recipient app credential.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_statement(
         &self,
         statement: &KagemushaOrdinaryMintAuthorizationStatementV1,
@@ -530,10 +535,7 @@ impl KagemushaOrdinaryMintApprovalV1 {
         match (s.platform_class, independent_apple_counter_floor) {
             (KagemushaHardwarePlatformClassV1::AndroidKeyMint, None) => (),
             (KagemushaHardwarePlatformClassV1::AppleAppAttest, Some(floor))
-                if floor >= s.app_attest_counter_floor =>
-            {
-                ()
-            }
+                if floor >= s.app_attest_counter_floor => {}
             _ => return Err("ordinary mint original counter floor differs".into()),
         }
         self.evidence.authenticate_signature(
@@ -690,7 +692,7 @@ impl KagemushaOrdinaryMintAuthorizationV1 {
         )
     }
     /// Reconstruct the neutral finalized Mint statement data from actual finalized debit time.
-    /// Calling this data helper supplies no ledger finality or MintAuthority proof.
+    /// Calling this data helper supplies no ledger finality or `MintAuthority` proof.
     /// # Errors
     /// Refuses malformed authorization or finalized neutral lifecycle statement shape.
     pub fn finalized_credit_statement(
@@ -729,7 +731,7 @@ pub struct KagemushaOrdinaryTopUpRequestV1 {
     pub version: u16,
     /// Complete dedicated ordinary authorization, not OEM credential/key-handle data.
     pub authorization: KagemushaOrdinaryMintAuthorizationV1,
-    /// Complete384-byte actual AEAD original, fixed before app approval/proof.
+    /// Complete canonical actual AEAD original, fixed before app approval/proof.
     pub encrypted_credit: Vec<u8>,
 }
 impl KagemushaOrdinaryTopUpRequestV1 {
@@ -938,7 +940,7 @@ mod tests {
         let raw = envelope
             .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
             .unwrap();
-        assert_eq!(raw.len(), 384);
+        assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
         let s = KagemushaOrdinaryMintAuthorizationStatementV1 {
             version: 1,
             issuance_commitment: context.issuance_commitment().unwrap(),
@@ -1180,7 +1182,7 @@ mod tests {
         trailing.push(0);
         assert!(KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(&trailing).is_err());
         let mut changed = request;
-        changed.encrypted_credit[383] ^= 1;
+        *changed.encrypted_credit.last_mut().unwrap() ^= 1;
         assert!(changed.canonical_bytes().is_err());
     }
     #[test]
@@ -1201,6 +1203,40 @@ mod tests {
         let mut substituted = request;
         substituted.authorization.proof.eq_proof[0] ^= 1;
         assert!(substituted.verify_account_signature(&signature).is_err());
+    }
+    #[test]
+    fn ordinary_mint_ciphertext_uses_exact_canonical_envelope_not_transport_capacity() {
+        let (_, context, _) = make_context(false);
+        let (statement, raw) = make_statement(context);
+        assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
+        assert_eq!(super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 384);
+        assert!(raw.len() < super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1);
+        statement.validate_encrypted_credit(&raw).unwrap();
+        let envelope =
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &raw,
+                statement.context.recipient_one_time_key,
+            )
+            .unwrap();
+        assert_eq!(
+            envelope
+                .canonical_bytes_against_recipient_key(statement.context.recipient_one_time_key)
+                .unwrap(),
+            raw,
+        );
+        // Padding to the unchanged transport cap is not a canonical original.
+        let mut padded = raw.clone();
+        padded.resize(super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
+        assert!(statement.validate_encrypted_credit(&padded).is_err());
+        for end in 0..raw.len() {
+            assert!(statement.validate_encrypted_credit(&raw[..end]).is_err());
+        }
+        let mut suffix = raw.clone();
+        suffix.push(0);
+        assert!(statement.validate_encrypted_credit(&suffix).is_err());
+        let mut changed_digest = statement.clone();
+        changed_digest.ciphertext_digest[0] ^= 1;
+        assert!(changed_digest.validate_encrypted_credit(&raw).is_err());
     }
 }
 

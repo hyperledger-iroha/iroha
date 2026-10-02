@@ -16,6 +16,7 @@ import {
   noritoDecodeInstructionBoxArchive,
   noritoEncodeInstructionBoxArchive,
   noritoEncodeMultisigProposeRequest,
+  encodeRetailFeeAssessmentV1,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
   validateNoritoFrame,
@@ -1708,18 +1709,16 @@ baseTest("native multisig proposal DTO embeds canonical instructions with compac
     multisig_account_alias: "cbdc@hbl.sbp",
     signer_account_id: MULTISIG_SIGNER_ID,
     fee_payment: authorityFeePayment(),
-    validation_fee_policy_version: "7",
-    validation_fee_policy_hash: "ab".repeat(32),
-    validation_fee_hijiri_fee_quote_hash: "CD".repeat(32),
-    validation_fee_instruction_index: "1",
-    validation_fee_transfer_entry_index: "2",
+    validation_fee_assessment: JSON.parse(fs.readFileSync(
+      new URL("./fixtures/retail_fee_codec_v1.json", import.meta.url), "utf8",
+    )).assessment,
     instructions: [instruction],
   };
   const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request, 753));
   const body = Buffer.from(boundNoritoEncodeMultisigProposeRequest(request, 753));
   assert.deepEqual(body, nativeBody);
 
-  const outer = noritoFramePayload(body, "MultisigProposeDto");
+  const outer = noritoFramePayload(body, "MultisigProposeDtoV1");
   const outerUsesCompactLengths = (outer.flags & 0x02) !== 0;
   assert.equal(outerUsesCompactLengths, true);
   let offset = 0;
@@ -1732,49 +1731,41 @@ baseTest("native multisig proposal DTO embeds canonical instructions with compac
     "creation_time_ms",
     "fee_payment",
     "memo",
-    "validation_fee_policy_version",
-    "validation_fee_policy_hash",
   ]) {
     offset = readNoritoFieldPayload(
       outer.payload,
       offset,
-      `MultisigProposeDto.${fieldName}`,
+      `MultisigProposeDtoV1.${fieldName}`,
       outerUsesCompactLengths,
     ).offset;
   }
-  const hijiriFeeQuoteHash = readNoritoFieldPayload(
-    outer.payload,
-    offset,
-    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+  const assessment = readNoritoFieldPayload(
+    outer.payload, offset, "MultisigProposeDtoV1.validation_fee_assessment",
     outerUsesCompactLengths,
   );
-  assert.equal(hijiriFeeQuoteHash.payload[0], 1);
-  const hijiriFeeQuoteHashValue = readNoritoFieldPayload(
-    hijiriFeeQuoteHash.payload,
-    1,
-    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash.value",
+  assert.equal(assessment.payload[0], 1, "the typed assessment option is present");
+  const assessmentValue = readNoritoFieldPayload(
+    assessment.payload, 1, "MultisigProposeDtoV1.validation_fee_assessment.value",
     outerUsesCompactLengths,
   );
-  const hijiriFeeQuoteHashString = readNoritoFieldPayload(
-    hijiriFeeQuoteHashValue.payload,
-    0,
-    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash.value.string",
-    outerUsesCompactLengths,
+  const expectedAssessment = noritoFramePayload(
+    encodeRetailFeeAssessmentV1(request.validation_fee_assessment), "RetailFeeAssessmentV1",
   );
-  assert.equal(hijiriFeeQuoteHashString.payload.toString("utf8"), "cd".repeat(32));
-  offset = hijiriFeeQuoteHash.offset;
+  assert.deepEqual(assessmentValue.payload, expectedAssessment.payload,
+    "the exact typed assessment archive is retained, without retired fee metadata");
+  offset = assessment.offset;
   const instructions = readNoritoFieldPayload(
     outer.payload,
     offset,
-    "MultisigProposeDto.instructions",
+    "MultisigProposeDtoV1.instructions",
     outerUsesCompactLengths,
   );
-  const count = readU64Length(instructions.payload, 0, "MultisigProposeDto.instructions.count");
+  const count = readU64Length(instructions.payload, 0, "MultisigProposeDtoV1.instructions.count");
   assert.equal(count.length, 1);
   const firstInstruction = readNoritoFieldPayload(
     instructions.payload,
     count.bytes,
-    "MultisigProposeDto.instructions[0]",
+    "MultisigProposeDtoV1.instructions[0]",
     outerUsesCompactLengths,
   );
   assert.deepEqual(
@@ -1785,78 +1776,53 @@ baseTest("native multisig proposal DTO embeds canonical instructions with compac
   const wireId = readNoritoFieldPayload(
     firstInstruction.payload,
     0,
-    "MultisigProposeDto.instructions[0].wire_id",
+    "MultisigProposeDtoV1.instructions[0].wire_id",
     outerUsesCompactLengths,
   );
   const wireIdValue = readNoritoFieldPayload(
     wireId.payload,
     0,
-    "MultisigProposeDto.instructions[0].wire_id.value",
+    "MultisigProposeDtoV1.instructions[0].wire_id.value",
     outerUsesCompactLengths,
   );
   assert.equal(wireIdValue.payload.toString("utf8"), "iroha.transfer");
   const embeddedFrameField = readNoritoFieldPayload(
     firstInstruction.payload,
     wireId.offset,
-    "MultisigProposeDto.instructions[0].payload",
+    "MultisigProposeDtoV1.instructions[0].payload",
     outerUsesCompactLengths,
   );
   const embeddedFrame = readNoritoFieldPayload(
     embeddedFrameField.payload,
     0,
-    "MultisigProposeDto.instructions[0].payload.frame",
+    "MultisigProposeDtoV1.instructions[0].payload.frame",
     false,
   );
   const inner = noritoFramePayload(
     embeddedFrame.payload,
-    "MultisigProposeDto.instructions[0].payload.frame",
+    "MultisigProposeDtoV1.instructions[0].payload.frame",
   );
   assert.equal((inner.flags & 0x02) !== 0, true);
-  const feeInstructionIndex = readNoritoFieldPayload(
-    outer.payload,
-    instructions.offset,
-    "MultisigProposeDto.validation_fee_instruction_index",
-    outerUsesCompactLengths,
-  );
-  assert.equal(feeInstructionIndex.payload[0], 1);
-  const feeInstructionIndexValue = readNoritoFieldPayload(
-    feeInstructionIndex.payload,
-    1,
-    "MultisigProposeDto.validation_fee_instruction_index.value",
-    outerUsesCompactLengths,
-  );
-  const feeInstructionIndexString = readNoritoFieldPayload(
-    feeInstructionIndexValue.payload,
-    0,
-    "MultisigProposeDto.validation_fee_instruction_index.value.string",
-    outerUsesCompactLengths,
-  );
-  assert.equal(feeInstructionIndexString.payload.toString("utf8"), "1");
-  assert.equal(feeInstructionIndexString.offset, feeInstructionIndexValue.payload.length);
-  assert.equal(feeInstructionIndexValue.offset, feeInstructionIndex.payload.length);
-  const feeTransferEntryIndex = readNoritoFieldPayload(
-    outer.payload,
-    feeInstructionIndex.offset,
-    "MultisigProposeDto.validation_fee_transfer_entry_index",
-    outerUsesCompactLengths,
-  );
-  assert.equal(feeTransferEntryIndex.offset, outer.payload.length);
-  assert.equal(feeTransferEntryIndex.payload[0], 1);
-  const feeTransferEntryIndexValue = readNoritoFieldPayload(
-    feeTransferEntryIndex.payload,
-    1,
-    "MultisigProposeDto.validation_fee_transfer_entry_index.value",
-    outerUsesCompactLengths,
-  );
-  const feeTransferEntryIndexString = readNoritoFieldPayload(
-    feeTransferEntryIndexValue.payload,
-    0,
-    "MultisigProposeDto.validation_fee_transfer_entry_index.value.string",
-    outerUsesCompactLengths,
-  );
-  assert.equal(feeTransferEntryIndexString.payload.toString("utf8"), "2");
-  assert.equal(feeTransferEntryIndexString.offset, feeTransferEntryIndexValue.payload.length);
-  assert.equal(feeTransferEntryIndexValue.offset, feeTransferEntryIndex.payload.length);
+  assert.equal(instructions.offset, outer.payload.length, "V1 instructions are the final field");
+
+  // An absent option is codec DATA and does not establish ledger fee admission.
+  const absent = noritoFramePayload(Buffer.from(boundNoritoEncodeMultisigProposeRequest(
+    { ...request, validation_fee_assessment: null }, 753)), "MultisigProposeDtoV1");
+  let absentOffset = 0;
+  for (const fieldName of ["multisig_account_id", "multisig_account_alias", "signer_account_id",
+    "public_key_hex", "signature_b64", "creation_time_ms", "fee_payment", "memo"]) {
+    absentOffset = readNoritoFieldPayload(absent.payload, absentOffset,
+      `MultisigProposeDtoV1.${fieldName}`, outerUsesCompactLengths).offset;
+  }
+  const absentAssessment = readNoritoFieldPayload(absent.payload, absentOffset,
+    "MultisigProposeDtoV1.validation_fee_assessment", outerUsesCompactLengths);
+  assert.deepEqual(absentAssessment.payload, Buffer.of(0));
+  const absentInstructions = readNoritoFieldPayload(absent.payload, absentAssessment.offset,
+    "MultisigProposeDtoV1.instructions", outerUsesCompactLengths);
+  assert.deepEqual(absentInstructions.payload, instructions.payload,
+    "optional assessment shape does not change canonical embedded instructions");
+  assert.equal(absentInstructions.offset, absent.payload.length);
+
 });
 
 test("native multisig DTO encoders reject inline private-key fields", () => {
@@ -1926,124 +1892,7 @@ baseTest("contract-call approve Norito encoder requires the exact object payload
   }
 });
 
-test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
-  const request = {
-    multisig_account_alias: "cbdc@hbl.sbp",
-    signer_account_id: MULTISIG_SIGNER_ID,
-    fee_payment: authorityFeePayment(),
-    instructions: [
-      {
-        Transfer: {
-          Asset: {
-            source: loadAssetIdFromFixture("mint_asset_quantity.json"),
-            object: "7",
-            destination: ACCOUNT_ID,
-          },
-        },
-      },
-    ],
-  };
 
-  for (const [fieldName, value] of Object.entries({
-    validationFeePolicyVersion: "7",
-    validationFeePolicyHash: "ab".repeat(32),
-    validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
-    validationFeeInstructionIndex: "1",
-    validationFeeTransferEntryIndex: "2",
-  })) {
-    assert.throws(
-      () =>
-        noritoEncodeMultisigProposeRequest({
-          ...request,
-          [fieldName]: value,
-        }, 753),
-      /unsupported camelCase validation fee field/,
-    );
-  }
-
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
-      }, 753),
-    /requires validation fee policy metadata/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_instruction_index: "1",
-      }, 753),
-    /requires validation fee policy metadata/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-        validation_fee_policy_hash: "ab".repeat(32),
-        validation_fee_hijiri_fee_quote_hash: "not-a-hash",
-      }, 753),
-    /32-byte hex string/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_transfer_entry_index: "2",
-      }, 753),
-    /requires validation fee policy metadata/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-      }, 753),
-    /must be provided together/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-        validation_fee_policy_hash: "ab",
-      }, 753),
-    /32-byte hex string/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-        validation_fee_policy_hash: "ab".repeat(32),
-        validation_fee_transfer_entry_index: "2",
-      }, 753),
-    /requires validation_fee_instruction_index/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-        validation_fee_policy_hash: "ab".repeat(32),
-        validation_fee_instruction_index: "-1",
-      }, 753),
-    /must be a bigint, integer number, or decimal string/,
-  );
-  assert.throws(
-    () =>
-      noritoEncodeMultisigProposeRequest({
-        ...request,
-        validation_fee_policy_version: "7",
-        validation_fee_policy_hash: "ab".repeat(32),
-        validation_fee_instruction_index: "1",
-        validation_fee_transfer_entry_index: "-2",
-      }, 753),
-    /must be a bigint, integer number, or decimal string/,
-  );
-});
 
 test("native multisig proposal DTO preserves native instruction frames without JS schema entries", () => {
   const request = {
@@ -2271,4 +2120,24 @@ baseTest("noritoEncodeInstruction propagates native schema rejection exactly", (
     (error) => error === nativeError,
   );
   assert.equal(calls, 1);
+});
+
+baseTest("native multisig proposal V1 DTO rejects retired fee fields and assessment aliases", () => {
+  const request = { instructions: [] };
+  for (const fieldName of [
+    "validationFeeAssessment",
+    "validationFeePolicyVersion", "validationFeePolicyHash", "validationFeeHijiriFeeQuoteHash",
+    "validationFeeInstructionIndex", "validationFeeTransferEntryIndex",
+    "validation_fee_policy_version", "validation_fee_policy_hash", "validation_fee_hijiri_fee_quote_hash",
+    "validation_fee_instruction_index", "validation_fee_transfer_entry_index",
+  ]) {
+    assert.throws(() => noritoEncodeMultisigProposeRequest({ ...request, [fieldName]: "1" }, 753),
+      /unsupported fee field/);
+  }
+  assert.throws(() => noritoEncodeMultisigProposeRequest({
+    ...request, validation_fee_assessment: null, validationFeeAssessment: null,
+  }, 753), /unsupported fee field/);
+  assert.throws(() => noritoEncodeMultisigProposeRequest({
+    ...request, validation_fee_assessment: undefined,
+  }, 753), /typed assessment or null/);
 });

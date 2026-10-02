@@ -19,6 +19,7 @@ export {
   normalizeValidationFeeCheckpointV1, normalizeValidationFeeLedgerBindingV1,
 } from "./validationFeeTrust.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import { normalizeValidationFeePayoutBinding, normalizeValidationFeeRewardCustody } from "./governanceProposalV1.js";
 
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
   "iroha.validation_fee.verified_policy_projection.v1";
@@ -30,6 +31,7 @@ export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 25;
 const VERIFIED_PAGE_KEYS = Object.freeze(["projectionJson", "promotedCheckpointNorito"]);
 const PROJECTION_KEYS = Object.freeze([
   "current_policy",
+  "conversion_policy",
   "evaluated_block_hash",
   "evaluated_block_height",
   "evaluated_context_id",
@@ -50,17 +52,14 @@ const CURRENT_POLICY_KEYS = Object.freeze([
   "activePolicyVersion",
   "chargingMode",
   "effectiveFromHeight",
-  "expiresAfterHeight",
+  "effective_from_ms",
+  "notice_published_at_ms",
+  "retail_schedule",
   "feeAssetDefinitionId",
   "feeMinorUnits",
   "feeScale",
   "parliament",
-  "payout",
-]);
-const PARLIAMENT_KEYS = Object.freeze([
-  "payoutLifecycle",
-  "payoutLifecycleSealHash",
-  "validationFeePolicy",
+  "reward_custody",
 ]);
 const PARLIAMENT_PROPOSAL_KEYS = Object.freeze([
   "certified_at_height",
@@ -72,30 +71,9 @@ const PARLIAMENT_PROPOSAL_KEYS = Object.freeze([
   "proposal_kind",
   "proposal_operator",
 ]);
-const PAYOUT_KEYS = Object.freeze([
-  "batchDsMinorUnits",
-  "codeHash",
-  "contractAddress",
-  "dsAssetDefinitionId",
-  "dsScale",
-  "entrypoint",
-  "recipients",
-  "treasuryAccountId",
-  "vaultAccountId",
-  "xorAssetDefinitionId",
-  "xorOutputMax",
-  "xorOutputMin",
-]);
-const PAYOUT_RECIPIENT_KEYS = Object.freeze([
-  "account_id",
-  "share_basis_points",
-]);
 const CANONICAL_UNSIGNED_DECIMAL = /^(?:0|[1-9][0-9]*)$/u;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
-const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS = 120_960n;
-const VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT = 4;
-const VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS = 2_500;
 
 function positiveU64(value, label) {
   let parsed;
@@ -219,99 +197,21 @@ function validateParliamentProposal(value, expectedKind, label) {
   return { certificate, enactedAtHeight, proposalId, proposalOperator };
 }
 
-function validateParliament(value, label) {
-  const parliament = record(value, label);
-  exactKeys(parliament, PARLIAMENT_KEYS, label);
-  const policy = validateParliamentProposal(
-    parliament.validationFeePolicy,
-    "ValidationFeePolicyV1",
-    `${label}.validationFeePolicy`,
-  );
-  const payout = validateParliamentProposal(
-    parliament.payoutLifecycle,
-    "ValidationFeePayoutLifecycleV1",
-    `${label}.payoutLifecycle`,
-  );
-  irohaHash32(
-    parliament.payoutLifecycleSealHash,
-    `${label}.payoutLifecycleSealHash`,
-  );
-  if (policy.proposalId === payout.proposalId) {
-    throw new TypeError(`${label} must bind distinct Parliament proposals`);
-  }
-  return { payout, policy };
-}
-
-function validatePayout(value, label) {
-  const payout = record(value, label);
-  exactKeys(payout, PAYOUT_KEYS, label);
-  canonicalText(payout.contractAddress, `${label}.contractAddress`);
-  lowerHex32(payout.codeHash, `${label}.codeHash`);
-  if (payout.entrypoint !== "autonomous_validation_fee_tick") {
-    throw new TypeError(
-      `${label}.entrypoint must be autonomous_validation_fee_tick`,
-    );
-  }
-  canonicalText(payout.dsAssetDefinitionId, `${label}.dsAssetDefinitionId`);
-  canonicalText(payout.xorAssetDefinitionId, `${label}.xorAssetDefinitionId`);
-  canonicalText(payout.treasuryAccountId, `${label}.treasuryAccountId`);
-  canonicalText(payout.vaultAccountId, `${label}.vaultAccountId`);
-  const batchDsMinorUnits = u128String(
-    payout.batchDsMinorUnits,
-    `${label}.batchDsMinorUnits`,
-    true,
-  );
-  const dsScale = unsignedInteger(payout.dsScale, 255, `${label}.dsScale`);
-  const xorOutputMin = u128String(
-    payout.xorOutputMin,
-    `${label}.xorOutputMin`,
-    true,
-  );
-  const xorOutputMax = u128String(
-    payout.xorOutputMax,
-    `${label}.xorOutputMax`,
-    true,
-  );
-  if (
-    payout.dsAssetDefinitionId === payout.xorAssetDefinitionId ||
-    payout.treasuryAccountId === payout.vaultAccountId ||
-    batchDsMinorUnits !== 1_000n ||
-    dsScale !== 2 ||
-    xorOutputMin !== 4n ||
-    xorOutputMax !== 100n
-  ) {
-    throw new TypeError(`${label} violates the immutable first-release payout binding`);
-  }
-  if (
-    !Array.isArray(payout.recipients) ||
-    payout.recipients.length !== VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT
-  ) {
-    throw new TypeError(
-      `${label}.recipients must contain exactly ${VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT} entries`,
-    );
-  }
-  const recipients = new Set();
-  for (const [index, recipientValue] of payout.recipients.entries()) {
-    const recipientLabel = `${label}.recipients[${index}]`;
-    const recipient = record(recipientValue, recipientLabel);
-    exactKeys(recipient, PAYOUT_RECIPIENT_KEYS, recipientLabel);
-    const account = canonicalText(recipient.account_id, `${recipientLabel}.account_id`);
-    const share = unsignedInteger(
-      recipient.share_basis_points,
-      0xffff,
-      `${recipientLabel}.share_basis_points`,
-    );
-    if (
-      share !== VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS ||
-      account === payout.treasuryAccountId ||
-      account === payout.vaultAccountId ||
-      recipients.has(account)
-    ) {
-      throw new TypeError(`${recipientLabel} violates the exact payout recipient plan`);
+function validateConversionPolicy(value, currentPolicy, height, label) {
+  if (value === null) return;
+  const conversion = record(value, label);
+  exactKeys(conversion, ["revision", "binding", "authority", "lifecycle_seal_hash"], label);
+  positiveU64(conversion.revision, `${label}.revision`);
+  const binding = normalizeValidationFeePayoutBinding(conversion.binding, `${label}.binding`);
+  const authority = validateParliamentProposal(conversion.authority, "ValidationFeePayoutLifecycleV1", `${label}.authority`);
+  irohaHash32(conversion.lifecycle_seal_hash, `${label}.lifecycle_seal_hash`);
+  if (authority.enactedAtHeight >= height) throw new TypeError(`${label} is not available at the finalized height`);
+  if (currentPolicy !== null) {
+    if (authority.proposalId === currentPolicy.parliament.proposal_id) throw new TypeError(`${label} requires a distinct Parliament enactment`);
+    for (const [field, value] of Object.entries(currentPolicy.reward_custody)) {
+      if (String(binding[field]) !== String(value)) throw new TypeError(`${label} differs from immutable reward custody`);
     }
-    recipients.add(account);
   }
-  return { dsScale };
 }
 
 function validateCurrentPolicy(value, label) {
@@ -329,8 +229,8 @@ function validateCurrentPolicy(value, label) {
   );
   if (
     feeScale !== 2 ||
-    feeMinorUnits !== 10n ||
-    policy.chargingMode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
+    feeMinorUnits === 0n ||
+    policy.chargingMode !== "RETAIL_MONTHLY_ALLOWANCE"
   ) {
     throw new TypeError(`${label} is not an enabled first-release policy`);
   }
@@ -339,26 +239,26 @@ function validateCurrentPolicy(value, label) {
     `${label}.effectiveFromHeight`,
     true,
   );
-  if (policy.expiresAfterHeight !== null) {
-    const expiresAfterHeight = u64String(
-      policy.expiresAfterHeight,
-      `${label}.expiresAfterHeight`,
-      true,
-    );
-    if (expiresAfterHeight <= effectiveFromHeight) {
-      throw new TypeError(`${label}.expiresAfterHeight must follow activation`);
-    }
+  const effectiveMs = positiveU64(policy.effective_from_ms, `${label}.effective_from_ms`);
+  const noticeMs = positiveU64(policy.notice_published_at_ms, `${label}.notice_published_at_ms`);
+  const local = new Date(Number(effectiveMs + 39_600_000n));
+  if (effectiveMs - noticeMs < 2_592_000_000n || !Number.isFinite(local.getTime()) || local.getUTCDate()!==1 || local.getUTCHours()!==0 || local.getUTCMinutes()!==0 || local.getUTCSeconds()!==0 || local.getUTCMilliseconds()!==0) throw new TypeError(`${label} requires 30 days notice and Honiara month activation`);
+  const schedule=record(policy.retail_schedule,`${label}.retail_schedule`);
+  exactKeys(schedule,["included_payments","overage_minor","maintenance_tiers"],`${label}.retail_schedule`);
+  if (unsignedInteger(schedule.included_payments,0xffff_ffff,`${label}.included_payments`)===0) throw new TypeError("monthly payment inclusion must be positive");
+  positiveU64(schedule.overage_minor,`${label}.overage_minor`);
+  if (!Array.isArray(schedule.maintenance_tiers)||schedule.maintenance_tiers.length===0||schedule.maintenance_tiers.length>32) throw new TypeError("invalid maintenance tiers");
+  let previous=-1n,previousFee=0n;
+  for(const [index,tier] of schedule.maintenance_tiers.entries()) {
+    exactKeys(record(tier,"maintenance tier"),["minimum_average_balance_minor","monthly_fee_minor"],"maintenance tier");
+    const threshold=u64String(String(tier.minimum_average_balance_minor),"maintenance threshold");const fee=positiveU64(tier.monthly_fee_minor,"maintenance fee");
+    if ((index===0&&threshold!==0n)||threshold<=previous||fee<previousFee) throw new TypeError("invalid maintenance tier order");
+    previous=threshold;previousFee=fee;
   }
-  const parliament = validateParliament(policy.parliament, `${label}.parliament`);
-  const payout = validatePayout(policy.payout, `${label}.payout`);
-  if (
-    policy.feeAssetDefinitionId !== policy.payout.dsAssetDefinitionId ||
-    feeScale !== payout.dsScale ||
-    parliament.policy.enactedAtHeight +
-      VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS !==
-      effectiveFromHeight
-  ) {
-    throw new TypeError(`${label} differs from its Parliament or payout binding`);
+  const parliament = validateParliamentProposal(policy.parliament, "ValidationFeePolicyV1", `${label}.parliament`);
+  const custody = normalizeValidationFeeRewardCustody(policy.reward_custody, `${label}.reward_custody`);
+  if (policy.feeAssetDefinitionId !== custody.ds_asset_id || parliament.enactedAtHeight + 1n !== effectiveFromHeight) {
+    throw new TypeError(`${label} differs from its Parliament authority or immutable reward custody`);
   }
 }
 
@@ -512,6 +412,12 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
   validateCurrentPolicy(
     normalized.current_policy,
     "validation-fee projection.current_policy",
+  );
+  validateConversionPolicy(
+    normalized.conversion_policy,
+    normalized.current_policy,
+    normalized.evaluated_block_height,
+    "validation-fee projection.conversion_policy",
   );
   if (
     normalized.evaluated_block_height < normalized.trusted_checkpoint_height ||

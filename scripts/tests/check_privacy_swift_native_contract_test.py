@@ -145,7 +145,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             'source "$CARGO_GRAPH_OWNER"',
             '"$PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256"',
             'Privacy production builds require an explicit external canonical graph snapshot',
-            '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
+            '--manifest-path "$ROOT_DIR/Cargo.toml"',
         ):
             self.assertIn(marker, source)
         # This name is a release-corridor sentinel for the local-integration
@@ -162,10 +162,17 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertNotIn(release_lock_name, lock_selection)
         fixture = read("scripts/tests/mobile_sdk_build_source_seal_test.sh")
         self.assertIn('"$root/ci/privacy_sdk_cargo_lockfile.sh"', fixture)
-        self.assertIn("External Cargo.lock must match the canonical reviewed graph", fixture)
+        self.assertIn("external Cargo lock does not match the canonical reviewed graph", fixture)
         readme = read("IrohaSwift/README.md")
         self.assertNotIn('--lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled', readme)
         self.assertIn("/absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock", readme)
+        self.assertNotIn("export RUSTC_BOOTSTRAP=", readme)
+        self.assertNotIn("build\nan opt-in Apple artifact", readme)
+        self.assertIn("Every bridge build includes mandatory privacy and KAGEMUSHA support", readme)
+        self.assertIn("stock Rust 1.93.1", readme)
+        self.assertIn("unset RUSTC_BOOTSTRAP", readme)
+        self.assertIn('bridge_local="$PWD/target/norito-bridge-local"', readme)
+        self.assertIn('--lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source', readme)
 
     def test_privacy_builder_rejects_root_selection_with_equal_graph_digest(self) -> None:
         source = read("scripts/build_norito_xcframework.sh")
@@ -174,12 +181,22 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             root = Path(directory).resolve()
             owner = root / "owner.sh"
             owner.write_text('readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256="' + ("a" * 64) + '"\n')
-            for privacy, selected, success in (("1", str(root / "Cargo.lock"), False), ("1", str(root.parent / "snapshot/Cargo.lock"), True), ("0", str(root / "Cargo.lock"), True)):
-                environment = dict(os.environ, ROOT_DIR=str(root), CARGO_GRAPH_OWNER=str(owner), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION="0", CARGO_LOCKFILE=selected, CARGO_LOCK_SHA256_START="a" * 64)
-                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], env=environment, text=True, capture_output=True)
-                self.assertEqual(result.returncode == 0, success, result.stderr)
-                if not success:
-                    self.assertIn("explicit external canonical graph snapshot", result.stderr)
+            # Privacy is mandatory. Only the explicit local integration corridor
+            # admits the source-root lock; a retired feature value cannot do so.
+            for privacy, local, selected, digest, error in (
+                ("1", "0", root / "Cargo.lock", "a" * 64, "explicit external canonical graph snapshot"),
+                ("1", "0", root.parent / "snapshot/Cargo.lock", "a" * 64, None),
+                ("0", "0", root / "Cargo.lock", "a" * 64, "explicit external canonical graph snapshot"),
+                ("1", "1", root / "Cargo.lock", "a" * 64, None),
+                ("0", "1", root / "Cargo.lock", "a" * 64, None),
+                ("1", "0", root.parent / "snapshot/Cargo.lock", "b" * 64, "External Cargo.lock must match the canonical reviewed graph"),
+            ):
+                with self.subTest(privacy=privacy, local=local, selected=selected, digest=digest):
+                    environment = dict(os.environ, ROOT_DIR=str(root), CARGO_GRAPH_OWNER=str(owner), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION=local, CARGO_LOCKFILE=str(selected), CARGO_LOCK_SHA256_START=digest)
+                    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], env=environment, text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, error is None, result.stderr)
+                    if error is not None:
+                        self.assertIn(error, result.stderr)
 
     def test_privacy_shell_lock_reader_requires_readonly_equal_bytes(self) -> None:
         source = read("scripts/build_norito_xcframework.sh")
@@ -191,7 +208,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             (root / "ci").mkdir(parents=True)
             lock_bytes = (REPO_ROOT / "Cargo.lock").read_bytes()
             digest = hashlib.sha256(lock_bytes).hexdigest()
-            (root / "Cargo.lock").write_bytes(lock_bytes)
+            root_lock = root / "Cargo.lock"
+            root_lock.write_bytes(lock_bytes)
             (root / "ci/privacy_sdk_cargo_lockfile.sh").write_text(
                 'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n'
                 f'"{digest}"\n',
@@ -199,16 +217,42 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             )
             selected = fixture / "Cargo.lock"
             selected.write_bytes(lock_bytes)
-            for privacy, mode, valid in (("1", 0o600, False), ("0", 0o600, True), ("1", 0o400, True)):
-                selected.chmod(mode)
-                environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(selected), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION="0", ROOT_DIR=str(root))
-                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], env=environment, text=True, capture_output=True)
-                self.assertEqual(result.returncode == 0, valid, result.stderr)
-                if valid:
-                    self.assertEqual(result.stdout.strip(), digest)
-                else:
-                    self.assertIn("must be read-only", result.stderr)
+            for privacy, local, path, mode, error in (
+                ("1", "0", selected, 0o600, "must be read-only"),
+                ("0", "0", selected, 0o600, "must be read-only"),
+                ("1", "0", selected, 0o400, None),
+                ("0", "0", selected, 0o400, None),
+                ("1", "1", root_lock, 0o600, None),
+                ("0", "1", root_lock, 0o600, None),
+                ("1", "1", root_lock, 0o400, None),
+                ("1", "1", selected, 0o400, "local integration requires the explicitly selected root Cargo.lock"),
+            ):
+                with self.subTest(privacy=privacy, local=local, path=path, mode=oct(mode)):
+                    path.chmod(mode)
+                    environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(path), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION=local, ROOT_DIR=str(root))
+                    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], env=environment, text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, error is None, result.stderr)
+                    if error is None:
+                        self.assertEqual(result.stdout.strip(), digest)
+                    else:
+                        self.assertIn(error, result.stderr)
+            for mutated, error in (
+                (selected, "external Cargo lock does not match the canonical reviewed graph"),
+                (root_lock, "root source Cargo lock does not match the canonical reviewed graph"),
+            ):
+                with self.subTest(mutated=mutated):
+                    mutated.chmod(0o600)
+                    mutated.write_bytes(lock_bytes + b"\n# unreviewed graph\n")
+                    mutated.chmod(0o400)
+                    environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(selected), LOCAL_INTEGRATION="0", ROOT_DIR=str(root))
+                    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], env=environment, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(error, result.stderr)
+                    mutated.chmod(0o600)
+                    mutated.write_bytes(lock_bytes)
+                    mutated.chmod(0o400)
             self.assertEqual(selected.read_bytes(), lock_bytes)
+            self.assertEqual(root_lock.read_bytes(), lock_bytes)
 
     def test_builder_requires_one_explicit_lock_argument_without_environment_alias(self) -> None:
         source = read("scripts/build_norito_xcframework.sh")
@@ -636,7 +680,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"1.93.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
-            'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
+            'cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"',
+            'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"',
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",

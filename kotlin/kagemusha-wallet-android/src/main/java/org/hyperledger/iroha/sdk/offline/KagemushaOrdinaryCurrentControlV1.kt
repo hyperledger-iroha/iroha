@@ -197,6 +197,20 @@ class KagemushaOrdinaryCurrentControlV1 private constructor(
  * opens or reconstructs an account/runtime; missing Native startup remains a failure.
  */
 object KagemushaOrdinaryRuntimeLifecycleV1 {
+    /** Deny only the retained pending/published original, without loading JNI or reading sources.
+     * Native authenticates its held JNI/VM/loader owner; absence of account composition burns no
+     * future first wallet. This notification does not close Core or revoke a registry selection.
+     */
+    @JvmStatic
+    fun retireOriginal() {
+        val retired = try {
+            KagemushaOrdinaryRuntimeJniV1.retireOriginal()
+        } catch (error: LinkageError) {
+            throw IllegalStateException("Actual Native original retirement is unavailable", error)
+        }
+        check(retired) { "Actual Native original retirement was rejected" }
+    }
+
     @JvmStatic
     fun revokeSelection(): Unit = revokeOrdinaryRuntimeSelectionV1(KagemushaOrdinaryRuntimeJniV1)
 }
@@ -216,11 +230,18 @@ internal fun revokeOrdinaryRuntimeSelectionV1(endpoint: KagemushaOrdinaryNativeS
 }
 
 /** Sole existing exact shared Native entry names. No managed clock/signing/FI verifier. */
-internal object KagemushaOrdinaryRuntimeJniV1 : KagemushaOrdinaryRuntimeCurrentControlEndpointV1 {
+internal object KagemushaOrdinaryRuntimeJniV1 : KagemushaOrdinaryRuntimeCurrentControlEndpointV1, KagemushaOrdinaryNativeOutgoingEndpointV1 {
+    fun bindApplication(application: android.app.Application): Boolean = nativeBindApplicationV1(application)
+    fun retireOriginal(): Boolean = nativeRetireOriginalV1()
     override fun startup(phase: Int, readId: Long, original: ByteArray): Array<ByteArray>? =
         nativeStartupV1(phase, readId, original)
     override fun invoke(phase: Int, coreHandle: Long, signedOriginal: ByteArray, authorityOriginal: ByteArray): Array<ByteArray>? =
         nativeCurrentControlV1(phase, coreHandle, signedOriginal, authorityOriginal)
+    override fun outgoing(phase: Int, coreHandle: Long, originals: Array<ByteArray>): Array<ByteArray>? =
+        nativeOutgoingV1(phase, coreHandle, originals)
+    @JvmStatic private external fun nativeOutgoingV1(phase: Int, handle: Long, originals: Array<ByteArray>): Array<ByteArray>?
     @JvmStatic private external fun nativeStartupV1(phase: Int, id: Long, original: ByteArray): Array<ByteArray>?
     @JvmStatic private external fun nativeCurrentControlV1(phase: Int, handle: Long, signed: ByteArray, authority: ByteArray): Array<ByteArray>?
+    @JvmStatic private external fun nativeBindApplicationV1(application: android.app.Application): Boolean
+    @JvmStatic private external fun nativeRetireOriginalV1(): Boolean
 }

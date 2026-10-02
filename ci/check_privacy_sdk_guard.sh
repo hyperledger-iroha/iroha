@@ -872,8 +872,9 @@ def _check_cargo_workflow(
             "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
             "aarch64-apple-darwin x86_64-apple-darwin",
-            "RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked "
-            '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
+            'cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"',
+            'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked '
+            '--manifest-path "$GITHUB_WORKSPACE/Cargo.toml"',
         )
     )
     additional_cargo_policies = {
@@ -928,7 +929,7 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "9f21b1c3414e662110e381aad729623e28757ed88960c328361315d3e9ff0d8c",
+        "privacy_swift_sdk_parse": "5a14e04031945fc783715bf9bcb80df71f8b7b0d100c27fb54cd0c60d8148fff",
         "privacy_jvm_sdk_tests": "c13ae0b599d0b239db3e99cb48ce6435b4fc69cde02340a577f38f1cabb5d593",
         "privacy_csharp_sdk_tests": "47e765abe385d96b004bf5cecb507e2ec10e0c9cfd7edfb11ccdcca4002f1aee",
         "privacy_javascript_sdk_tests": "dd983bb5147d763b8edecc420e7d02503b6a0095e10be32563c2a63c1381e33c",
@@ -2309,12 +2310,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
         )
     )
     require(
-        'RUSTC_BOOTSTRAP=1 \\' in lock_helper_source
-        and '"${real_cargo}" -Z unstable-options metadata --locked --format-version 1'
+        'RUSTC_BOOTSTRAP=1' not in lock_helper_source
+        and '"${real_cargo}" metadata --locked --format-version 1'
         in lock_helper_source
         and 'CARGO_HOME="${private_cargo_home}"' in lock_helper_source
         and "CARGO_NET_OFFLINE=false" in lock_helper_source
-        and '--lockfile-path "${lock_path}"' in lock_helper_source
+        and '--lockfile-path' not in lock_helper_source
+        and 'privacy_sdk_assert_stock_cargo_manifest' in lock_helper_source
         and "privacy_sdk_validate_repository_cargo_configuration"
         in lock_helper_source
         and "privacy_sdk_prepare_private_cargo_home" in lock_helper_source
@@ -2344,7 +2346,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
         errors,
     )
     require(
-        "run_real_cargo_and_verify_locks" in cargo_wrapper_source
+        'run_real_cargo_and_verify_locks "${arguments[@]}"' in cargo_wrapper_source
+        and 'run_real_cargo_and_verify_locks -Z' not in cargo_wrapper_source
+        and 'arguments+=(--lockfile-path' not in cargo_wrapper_source
+        and 'stock Cargo requires the sealed canonical root Cargo.lock' in cargo_wrapper_source
+        and 'stock Cargo requires byte-identical external lock evidence' in cargo_wrapper_source
+        and 'privacy_sdk_assert_stock_cargo_manifest' in cargo_wrapper_source
         and cargo_wrapper_source.count("assert_authenticated_cargo_lock_state")
         >= 3
         and "assert_authenticated_cargo_configuration" in cargo_wrapper_source
@@ -2435,6 +2442,8 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
     require(
         "PRIVACY_PYTHON_SDK_VENV is forbidden" in python_sdk_guard_source
+        and '"RUSTC_BOOTSTRAP",' in python_sdk_guard_source
+        and re.search(r"\bRUSTC_BOOTSTRAP\s*=", python_sdk_guard_source) is None
         and "Python/root overrides require explicit test mode"
         in python_sdk_guard_source
         and "PRIVACY_PYTHON_SDK_TEST_MODE" in python_sdk_guard_source

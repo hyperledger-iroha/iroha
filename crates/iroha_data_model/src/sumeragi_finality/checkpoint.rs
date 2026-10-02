@@ -91,6 +91,67 @@ impl SumeragiFinalityCheckpoint {
         &self.tip
     }
 
+    /// Build bounded restart DATA around independently authenticated decision witnesses.
+    ///
+    /// This is a data builder, not a trust-root authenticator. It retains this exact selected
+    /// genesis and chain, and interprets at most three consecutive complete proof originals.
+    /// Before importing its output, the actual Node must compare EVERY decoded decision to
+    /// the original consensus-visible committed execution, including the complete schedule,
+    /// result, beacon and executed-wire commitment. Offered proofs cannot provide that source.
+    /// The supplied tip may be historical; no current time or live effect is granted.
+    ///
+    /// # Errors
+    /// Refuses empty/excessive/discontinuous witnesses, foreign roots or invalid framing.
+    pub fn with_independently_authenticated_decision_data(
+        &self,
+        proofs: &[SumeragiFinalityProof],
+    ) -> Result<Self, FinalityError> {
+        self.validate_bounds()?;
+        let tip = proofs
+            .last()
+            .ok_or_else(|| FinalityError("native decision data is empty".into()))?;
+        need(
+            tip.height() >= self.height()
+                && proofs.len() == usize::try_from(tip.height().min(3)).map_err(malformed)?,
+            "native decision data omits the exact bounded parent set",
+        )?;
+        let first = tip.height().saturating_sub(2).max(1);
+        let mut decisions = Vec::with_capacity(proofs.len());
+        for (offset, proof) in proofs.iter().enumerate() {
+            need(
+                proof.height() == first + u64::try_from(offset).map_err(malformed)?,
+                "native decision data is discontinuous",
+            )?;
+            let decoded = proof.decode_checked()?;
+            if proof.height() == 1 {
+                need(
+                    decoded
+                        .block
+                        .canonical_resultless_proposal()
+                        .map_err(malformed)?
+                        .encode_wire()
+                        .map_err(malformed)?
+                        == self.genesis_wire,
+                    "native decision data replaces the selected genesis",
+                )?;
+            }
+            decisions.push(CheckpointDecision::capture(
+                proof.height(),
+                &SumeragiFinalityVerifier::decision(&decoded),
+            ));
+        }
+        let value = Self {
+            network_id: self.network_id,
+            chain_id: self.chain_id.clone(),
+            genesis_wire: self.genesis_wire.clone(),
+            genesis_committee: self.genesis_committee.clone(),
+            decisions,
+            tip: tip.clone(),
+        };
+        value.validate_bounds()?;
+        Ok(value)
+    }
+
     /// Encode this checkpoint in the sole canonical layout with finite resource bounds.
     ///
     /// # Errors

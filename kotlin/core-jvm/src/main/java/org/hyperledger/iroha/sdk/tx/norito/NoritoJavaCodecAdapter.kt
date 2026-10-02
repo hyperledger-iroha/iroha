@@ -94,8 +94,7 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
         /**
          * Returns the exact canonical inner instruction frames committed by a multisig proposal.
          *
-         * Torii appends one canonical validation-fee marker when the request selects a fee
-         * instruction. The returned list is defensive and includes that marker.
+         * Torii appends the exact canonical retail assessment marker when one is reviewed. The returned list is defensive and includes that marker.
          */
         @JvmStatic
         @Throws(NoritoException::class)
@@ -116,60 +115,18 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
                     val wire = instruction.payload as? WirePayload
                     if (wire?.wireName == LOG_WIRE_NAME) {
                         val log = TransactionPayloadAdapter.decodeCanonicalLogInstruction(encoded)
-                        require(!log.message.startsWith(VALIDATION_FEE_MULTISIG_RESERVED_PREFIX)) {
+                        require(!log.message.startsWith(RETAIL_FEE_ASSESSMENT_RESERVED_PREFIX)) {
                             "multisig propose request instructions must not contain a validation-fee marker"
                         }
                     }
                 }
 
-                request.validationFeeTransferEntryIndex?.let {
-                    require(request.validationFeeInstructionIndex != null) {
-                        "validationFeeTransferEntryIndex requires validationFeeInstructionIndex"
-                    }
-                }
-                request.validationFeeInstructionIndex?.let { instructionIndex ->
-                    require(instructionIndex >= 0L) {
-                        "validationFeeInstructionIndex must be non-negative"
-                    }
-                    val policyVersion = requireNotNull(request.validationFeePolicyVersion) {
-                        "validationFeeInstructionIndex requires validationFeePolicyVersion"
-                    }
-                    require(policyVersion > 0L) {
-                        "validationFeePolicyVersion must be positive when a marker is required"
-                    }
-                    val policyHash = canonicalLowerHex32(
-                        requireNotNull(request.validationFeePolicyHash) {
-                            "validationFeeInstructionIndex requires validationFeePolicyHash"
-                        },
-                        "validationFeePolicyHash",
-                    )
-                    val hijiriHash = request.validationFeeHijiriFeeQuoteHash?.let {
-                        canonicalLowerHex32(it, "validationFeeHijiriFeeQuoteHash")
-                    } ?: "-"
-                    val transferEntryIndex = request.validationFeeTransferEntryIndex?.let { index ->
-                        require(index >= 0L) {
-                            "validationFeeTransferEntryIndex must be non-negative"
-                        }
-                        index.toString()
-                    } ?: "-"
-                    val message = buildString {
-                        append(VALIDATION_FEE_MULTISIG_MARKER_PREFIX)
-                        append(policyVersion)
-                        append(':')
-                        append(policyHash)
-                        append(':')
-                        append(hijiriHash)
-                        append(':')
-                        append(instructionIndex)
-                        append(':')
-                        append(transferEntryIndex)
-                    }
-                    instructions.add(
-                        TransactionPayloadAdapter.encodeCanonicalLogInstruction(
-                            TRACE_LEVEL_TAG,
-                            message,
-                        ),
-                    )
+                request.validationFeeAssessment?.let { assessment ->
+                    val marker = org.hyperledger.iroha.sdk.validationfee.RetailFeeAssessmentBridge
+                        .assessmentMarkerV1(assessment.canonicalJson.toByteArray(Charsets.UTF_8))
+                    instructions.add(TransactionPayloadAdapter.encodeCanonicalLogInstruction(
+                        TRACE_LEVEL_TAG, String(marker, Charsets.UTF_8),
+                    ))
                 }
                 return Collections.unmodifiableList(instructions.map(ByteArray::copyOf))
             } catch (ex: Exception) {
@@ -358,14 +315,6 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             require(value is String && value == expected) { "$field changed" }
         }
 
-        private fun canonicalLowerHex32(value: String, field: String): String {
-            val normalized = value.trim().lowercase()
-            require(normalized.length == 64 && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
-                "$field must contain 64 hexadecimal characters"
-            }
-            return normalized
-        }
-
         private fun hasHeader(encoded: ByteArray): Boolean {
             if (encoded.size < NoritoHeader.HEADER_LENGTH) return false
             return encoded[0] == 'N'.code.toByte()
@@ -376,9 +325,8 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
 
         private const val LOG_WIRE_NAME = "iroha.log"
         private const val TRACE_LEVEL_TAG = 0L
-        private const val VALIDATION_FEE_MULTISIG_MARKER_PREFIX =
-            "iroha:validation_fee:multisig:v1:"
-        private const val VALIDATION_FEE_MULTISIG_RESERVED_PREFIX =
-            "iroha:validation_fee:multisig:"
+        private const val RETAIL_FEE_ASSESSMENT_RESERVED_PREFIX =
+            "iroha:retail_fee:assessment:"
+
     }
 }

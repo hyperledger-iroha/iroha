@@ -6250,6 +6250,7 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
                 ("description", Type::Option(Box::new(Type::String))),
                 ("owned_by", Type::AccountId),
                 ("total_quantity", Type::Quantity),
+                ("numeric_scale", Type::Option(Box::new(Type::Int))),
                 ("metadata", Type::Json),
             ],
         ),
@@ -16214,6 +16215,22 @@ mod tests {
                 ledger::trigger::unregister(trigger: Name::parse(\"wake\")); \
             }" => "parse canonical trigger operations", "analyze canonical trigger operations"; }
     include!("semantic/tests/trigger_semantics_tests.rs");
+    #[test]
+    fn typed_asset_definition_scale_drives_dynamic_quantity_rounding() {
+        let program = parse(
+            r#"seiyaku Precision {
+            view fn round(AssetDefinitionId asset, quantity amount) -> quantity {
+                return match ledger::query::asset_definition(asset) {
+                    Option::some(value) => amount.div_round(divisor: 1.0,
+                        scale: value.numeric_scale.unwrap_or(28), mode: Rounding::floor),
+                    Option::none => 0,
+                };
+            }
+        }"#,
+        )
+        .expect("parse authoritative precision read");
+        analyze(&program).expect("query Option<int> must drive numeric rounding");
+    }
     #[test]
     fn typed_core_queries_expose_declared_projection_and_page_types() {
         let program = parse(

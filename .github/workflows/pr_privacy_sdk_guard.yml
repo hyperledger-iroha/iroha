@@ -382,7 +382,8 @@ jobs:
       - name: Install Apple Rust targets and prime frozen dependencies
         run: |
           rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
-          RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+          cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"
+          env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"
       - name: Bind the external privacy Swift Cargo envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-privacy-swift-cargo"
@@ -393,7 +394,6 @@ jobs:
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
           echo "RUSTC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustc)" >> "$GITHUB_ENV"
-          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustdoc)" >> "$GITHUB_ENV"
       - name: Make reviewed privacy Swift source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"

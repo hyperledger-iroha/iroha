@@ -833,6 +833,9 @@ fn alias_auto_renew_attempt(
         }
         return AliasAutoRenewAttempt::Retry(error.to_string());
     }
+    if let Err(error) = crate::retail_fee::finalize(state_transaction) {
+        return AliasAutoRenewAttempt::Retry(error.to_string());
+    }
     let payment = native_payment_for_quote(&quote);
     match renew_resolved_name(
         state_transaction,

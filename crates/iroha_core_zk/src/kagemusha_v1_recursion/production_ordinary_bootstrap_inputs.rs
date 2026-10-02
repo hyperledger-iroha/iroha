@@ -10,7 +10,7 @@ use super::super::production_ordinary_padding::bootstrap_mint_padding;
 use super::*;
 use crate::kagemusha_v1_recursion::{
     ordinary_guard_verifier::public_column,
-    ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1,
+    ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
     terminal_authorization::TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
 };
 
@@ -236,7 +236,8 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             ep_history.as_bytes(),
         )?;
         let guard_relation = public_relation(selection)?;
-        let (eq_reserved, ep_reserved) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+        let (eq_reserved, ep_reserved) =
+            kagemusha_ordinary_state_outer_protocol_positions_v1(selection.recursive_verifier());
         let relation = KagemushaStateRelationWitnessV1 {
             operation: KagemushaOperationV1::Bootstrap,
             predecessor: None,
@@ -361,7 +362,9 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     }
 }
 
-fn inactive_column<F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>(
+pub(in super::super) fn inactive_column<
+    F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
+>(
     actual_widths: &[usize],
     expected_width: usize,
     history: &[u8; crate::kagemusha_v1_recursion::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
@@ -385,7 +388,9 @@ fn inactive_column<F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>(
 // The enclosing State circuit binds both commit-wrapper identities even when the
 // incoming credit selector is zero. These four public limbs therefore name the actual
 // release protocols in both parities; zeroing them would make Bootstrap unsatisfiable.
-fn inactive_incoming_column<F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>(
+pub(in super::super) fn inactive_incoming_column<
+    F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
+>(
     actual_widths: &[usize],
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],

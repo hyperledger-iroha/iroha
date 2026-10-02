@@ -388,8 +388,9 @@ mod tests {
             "ledger.resource_names_state",
             "ledger.authority_originals",
             "kagemusha.ordinary_wallet_current",
+            "kagemusha.ordinary_mint_issuer_purpose",
         ]);
-        assert_eq!(complete.len(), 8);
+        assert_eq!(complete.len(), 9);
         for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
             for projection in [
                 CatalogProjection::Mounted,
@@ -404,7 +405,7 @@ mod tests {
                         .map(|route| route.stable_route_id())
                         .collect::<BTreeSet<_>>(),
                     complete,
-                    "every node and authored client surface must expose all eight native KAGEMUSHA and original-carrier routes"
+                    "every node and authored client surface must expose all nine native KAGEMUSHA and original-carrier routes"
                 );
             }
         }
@@ -459,6 +460,34 @@ mod tests {
         );
         assert_eq!(
             kagemusha::ORDINARY_WALLET_CURRENT.effect(),
+            RouteEffect::ReadOnly
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.path(),
+            "/v1/kagemusha/ordinary/mint-issuer-purpose"
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.feature_gate(),
+            FeatureGate::Always
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.projections(),
+            RouteProjections::OPENAPI_AND_SDK
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.method(),
+            HttpMethod::Post
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.effect(),
             RouteEffect::ReadOnly
         );
         let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());

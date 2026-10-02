@@ -879,10 +879,9 @@ fn admit_files(
     body.core_public_key
         .validate()
         .map_err(|_| eyre!("Native Core point rejected"))?;
-    let current = Url::parse(&body.fi_current_control_endpoint)?;
-    require_https(&current)?;
+    super::endpoint::require_https_directory_base(&body.fi_current_control_endpoint)?;
     for node in &body.nodes {
-        require_https(&Url::parse(&node.endpoint)?)?;
+        super::endpoint::require_https_directory_base(&node.endpoint)?;
     }
     ensure!(
         body.checkpoint.path == "originals/finality-checkpoint.norito"
@@ -1088,20 +1087,6 @@ fn decode_lineage_policy(
         .map_err(|_| eyre!("Native CAS purpose differs from held issuer"))?;
     Ok(policy)
 }
-fn require_https(url: &Url) -> Result<()> {
-    ensure!(
-        url.scheme() == "https"
-            && url.host_str().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-            && url.path() == "/",
-        "Native inventory endpoint rejected"
-    );
-    Ok(())
-}
-
 /// Emit the exact full public clock selection from the same genuine held public release
 /// inputs as inventory assembly. The Core manifest must independently authenticate this file
 /// before it can verify carried clock samples. The emitted shape grants no selected root.
@@ -1367,6 +1352,21 @@ mod codec_tests {
             .unwrap(),
             issuer_public_key: f.issuer_policy.issuer_public_key.clone(),
             runtime: f.issuer_policy.runtime.clone(),
+            data_authority: KagemushaOrdinaryLineageDataAuthorityV1 {
+                version: 1,
+                liability_pool_id: kagemusha_liability_pool_id_v1(
+                    &f.issuer_policy.runtime.network_id,
+                    &f.issuer_policy.runtime.asset,
+                    f.issuer_policy.runtime.asset_incarnation,
+                )
+                .unwrap(),
+                service_identity_digest: [90; 32],
+                data_incarnation_digest: [33; 32],
+                dataspace: "mibank.bpng".into(),
+                tenant: "mibank-core".into(),
+                principal: "core-mibank".into(),
+                collection: "retail_enrollments".into(),
+            },
             purpose_domain_digest: KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
             enabled: true,
         };
@@ -1443,3 +1443,7 @@ mod codec_tests {
         }
     }
 }
+
+#[path = "installed_context.rs"]
+mod installed_context;
+pub use installed_context::KagemushaNativeOrdinaryInstalledContextV1;

@@ -58,6 +58,21 @@ impl KagemushaOrdinaryReceivedLineageCommitOriginalV1 {
         )?;
         Ok(())
     }
+    /// Complete signed Core result data. This getter authenticates no signature or DATA effect.
+    pub fn signed_result_original(&self) -> Result<&[u8]> {
+        self.require_data()?;
+        Ok(&self.signed_result_original)
+    }
+    /// Complete immutable DATA preimage data, never a live DATA ownership loan.
+    pub fn data_record_original(&self) -> Result<&[u8]> {
+        self.require_data()?;
+        Ok(&self.data_record_original)
+    }
+    /// Full historical finality data; independent installed prefix verification remains mandatory.
+    pub fn finality_proof_original(&self) -> Result<&[u8]> {
+        self.require_data()?;
+        Ok(&self.finality_proof_original)
+    }
     /// Sole bounded canonical envelope; bytes alone establish no signature or global effect.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         self.require_data()?;
@@ -199,7 +214,9 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         signed
             .verify_for_request(&signed.subject.request, &self.policy.issuer_public_key)
             .map_err(|_| Rejected)?;
-        if signed.subject.cas_policy_digest != self.policy.digest().map_err(|_| Rejected)?
+        if signed.subject.data_incarnation_digest
+            != self.policy.data_authority.data_incarnation_digest
+            || signed.subject.cas_policy_digest != self.policy.digest().map_err(|_| Rejected)?
             || signed.subject.release_id != self.selected.governed.release().release_id()
             || signed.subject.request.issuer_policy_digest != self.policy.issuer_policy_digest
             || signed.subject.request.operation.lineage().owner.runtime != self.policy.runtime

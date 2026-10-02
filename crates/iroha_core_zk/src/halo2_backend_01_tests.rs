@@ -1,26 +1,19 @@
 // Lexically included by `zk::tests` to preserve the existing libtest paths.
 
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
+#[cfg(feature = "halo2-dev-tests")]
 use std::sync::Arc;
 
-#[cfg(feature = "zk-halo2")]
 use super::*;
 #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 use crate::pasta_tiny::{
     VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
     vote_bool_commit_merkle8_witnesses,
 };
-#[cfg(feature = "zk-halo2")]
 use ff::PrimeField;
-#[cfg(feature = "zk-halo2")]
 use halo2_proofs::poly::{
     commitment::ParamsProver,
     ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
 };
-#[cfg(feature = "zk-halo2")]
 use halo2_proofs::transcript::TranscriptWriterBuffer;
 
 #[test]
@@ -63,14 +56,12 @@ fn constrained_pow5_vote_membership_rejects_a_forged_commitment() {
     );
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn commit_open_rejects_additive_placeholder_commitment() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     let circuit = crate::pasta_tiny::CommitOpen::default();
-    let commitment =
-        crate::pasta_tiny::constrained_pow5_pair(Scalar::from(11), Scalar::from(31));
+    let commitment = crate::pasta_tiny::constrained_pow5_pair(Scalar::from(11), Scalar::from(31));
     let prover = MockProver::run(5, &circuit, vec![vec![commitment]]).expect("mock prover");
     prover.assert_satisfied();
 
@@ -83,7 +74,6 @@ fn commit_open_rejects_additive_placeholder_commitment() {
     );
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn tiny_merkle2_rejects_additive_placeholder_root() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
@@ -103,7 +93,6 @@ fn tiny_merkle2_rejects_additive_placeholder_root() {
     );
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
@@ -154,14 +143,12 @@ fn anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
     );
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn vote_bool_merkle2_rejects_stale_merkle_shortcut() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     let circuit = crate::pasta_tiny::VoteBoolCommitMerkle2::default();
-    let commit =
-        crate::pasta_tiny::constrained_pow5_pair(Scalar::from(1), Scalar::from(12_345));
+    let commit = crate::pasta_tiny::constrained_pow5_pair(Scalar::from(1), Scalar::from(12_345));
     let first = crate::pasta_tiny::constrained_pow5_pair(commit, Scalar::from(5));
     let root = crate::pasta_tiny::constrained_pow5_pair(first, Scalar::from(7));
     let prover = MockProver::run(6, &circuit, vec![vec![commit], vec![root]]).expect("mock prover");
@@ -176,27 +163,20 @@ fn vote_bool_merkle2_rejects_stale_merkle_shortcut() {
     );
 }
 
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
+#[cfg(feature = "halo2-dev-tests")]
 #[allow(dead_code)]
 fn backend_tag_vote_bool_commit_merkle(depth: usize, use_pow5: bool) -> String {
     let algorithm = if use_pow5 { "-pow5" } else { "" };
     format!("halo2/pasta/ipa/vote-bool-commit-merkle{depth}{algorithm}")
 }
 
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
+#[cfg(feature = "halo2-dev-tests")]
 #[allow(dead_code)]
 fn backend_tag_anon_transfer_merkle(depth: usize, use_pow5: bool) -> String {
     let algorithm = if use_pow5 { "-pow5" } else { "" };
     format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algorithm}")
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
     let k = 7;
@@ -222,11 +202,7 @@ fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
     );
 }
 
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa"
-))]
+#[cfg(feature = "halo2-dev-tests")]
 #[test]
 fn packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen() {
     let params: PastaParams = pasta_params_new(5);
@@ -275,7 +251,6 @@ fn packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen() {
     );
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn zk1_envelope_pasta_ipa_verify_add_public() {
     use halo2_proofs::{
@@ -330,7 +305,6 @@ fn zk1_envelope_pasta_ipa_verify_add_public() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn kaigi_authorization_backend_accepts_valid_proof() {
     let (proof, vk) =
@@ -341,7 +315,6 @@ fn kaigi_authorization_backend_accepts_valid_proof() {
     );
 }
 
-#[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn kaigi_usage_backend_accepts_valid_proof() {
     let (proof, vk) = super::kaigi_usage_v1_tests::valid_envelope(KAIGI_USAGE_BACKEND_V1);
@@ -468,7 +441,6 @@ fn preverify_basic() {
     );
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_gate_requires_vk_and_valid_encoding() {
     let backend = "halo2/pasta/tiny-add";
@@ -483,7 +455,6 @@ fn halo2_gate_requires_vk_and_valid_encoding() {
     assert!(!super::verify_halo2(backend, &proof, Some(&vk_bad)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_end_to_end_proof_verification() {
     use halo2_proofs::{
@@ -536,7 +507,6 @@ fn halo2_end_to_end_proof_verification() {
     assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_with_instance_add_kzg() {
     use halo2_proofs::{
@@ -595,7 +565,6 @@ fn halo2_verify_with_instance_add_kzg() {
     assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_add_2rows_kzg() {
     use halo2_proofs::{
@@ -643,7 +612,6 @@ fn halo2_verify_add_2rows_kzg() {
     assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_id_public_kzg_with_and_without_inst() {
     use halo2_proofs::{
@@ -707,7 +675,6 @@ fn halo2_verify_id_public_kzg_with_and_without_inst() {
     assert!(super::verify_halo2(backend, &prf_box2, Some(&vk_box2)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_ipa_acceptance_variants() {
     use halo2_proofs::{
@@ -797,7 +764,6 @@ fn halo2_verify_ipa_acceptance_variants() {
     assert!(super::verify_halo2_ipa(b_id, &pr_id_box, Some(&vk_id_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add_2rows_ipa() {
     use halo2_proofs::{
@@ -846,7 +812,6 @@ fn halo2_verify_add_2rows_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add3_ipa() {
     use halo2_proofs::{

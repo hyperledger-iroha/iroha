@@ -567,6 +567,11 @@ fn admitted_operation_from_consensus(
                 record.issuance_intent.request_digest,
             )
         }
+        KagemushaReserveOperationRecordV1::OrdinaryTopUp(_) => {
+            return Err(kagemusha_consensus_inconsistency(
+                "ordinary top-up requires its complete distinct finalized-original endpoint",
+            ));
+        }
         KagemushaReserveOperationRecordV1::Redemption(record) => {
             record
                 .redemption_request
@@ -725,6 +730,11 @@ fn applied_status_from_consensus(
                 ));
             }
             KagemushaOperationResultV1::TopUp(result)
+        }
+        KagemushaReserveOperationRecordV1::OrdinaryTopUp(_) => {
+            return Err(kagemusha_consensus_inconsistency(
+                "ordinary top-up requires its complete distinct finalized-original endpoint",
+            ));
         }
         KagemushaReserveOperationRecordV1::Redemption(record) => {
             if admitted.binding.kind != KagemushaOperationKindV1::Redemption

@@ -145,8 +145,6 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "privacyValidateCompiledProfileCatalogV1",
   "privacyValidateExact12CapabilityManifestV1",
   "sorafsValidateAppealFinanceCancelAssetLockJson",
-  "validationFeeHijiriQuoteRequestV1",
-  "validationFeeVerifyHijiriQuoteResponseV1",
   "securePrivateFileAbiVersion",
   "securePrivateDirectoryEnsure",
   "securePrivateFileRead",

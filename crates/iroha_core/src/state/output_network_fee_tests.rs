@@ -173,25 +173,27 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let callback: TriggerId = "fee_data_callback".parse().unwrap();
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut transaction = setup.transaction_for_callback_testing();
-    Register::trigger(Trigger::new(
-        callback.clone(),
-        Action::new(
-            vec![
-                write("rolled_back_callback"),
-                Unregister::trigger("absent_in_callback".parse().unwrap()).into(),
-            ],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            DataEventFilter::Account(AccountEventFilter::new().for_account(ALICE_ID.clone())),
-        )
-        .unwrap(),
-    ))
-    .execute(&ALICE_ID, &mut transaction)
-    .unwrap();
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Register::trigger(Trigger::new(
+            callback.clone(),
+            Action::new(
+                vec![
+                    write("rolled_back_callback"),
+                    Unregister::trigger("absent_in_callback".parse().unwrap()).into(),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                DataEventFilter::Account(AccountEventFilter::new().for_account(ALICE_ID.clone())),
+            )
+            .unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
+    }
     let body = vec![write("data_callback_event")];
     let direct_gas = crate::gas::meter_instructions(&body);
     let source = carrier(&state, vec![input(&state, body, payment(&asset, 2), false)]);

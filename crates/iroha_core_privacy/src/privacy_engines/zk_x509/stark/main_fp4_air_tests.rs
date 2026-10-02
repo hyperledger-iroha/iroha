@@ -101,18 +101,28 @@ fn main_descriptors_match_enforced_join_inventory_and_alpha_order() {
             assert_eq!(descriptor.matches(inventory).count(), 1, "{inventory}");
         }
     }
-    // Count-bearing phase descriptions must follow the prover/verifier order.
+    // The consuming joint transition binds both original auxiliary roots after
+    // component history, then samples the coefficients actually used by MAIN.
+    let endpoint_alphas = main_terminal_links::LINK_COUNT_V1;
     let key_alphas = main_key_joins::BLOCKS_V1;
     let union_alphas = main_sha_union::UNION_QUOTIENTS_V1;
+    let ca_alphas = super::super::super::accumulator_stark::private_links::CA_MAIN_LINK_COUNT_V1;
+    assert_eq!(endpoint_alphas, 192);
+    assert_eq!(ca_alphas, 108);
     assert!(profile.contains(&format!(
-        "main-link-alpha-order=aux-roots+remaining-public-claims+local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+{key_alphas}-key-and-digest-join-descriptors+key-and-digest-alphas+{union_alphas}-private-sha-union-descriptors+sha-union-alphas"
+        "main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+{endpoint_alphas}-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+{key_alphas}-key-and-digest-join-descriptors+key-and-digest-alphas+{union_alphas}-private-sha-union-descriptors+sha-union-alphas+{ca_alphas}-ordered-CA-private-link-descriptors+CA-link-alphas"
     )));
     assert!(segmented.contains(&format!(
-        "all-aux-roots-and-X5M1-terminal-claims-before-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then{key_alphas}-key-and-digest-join-descriptors-and-fp4-alphas:then{union_alphas}-private-sha-union-descriptors-and-fp4-alphas"
+        "local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then{endpoint_alphas}-private-endpoint-link-descriptors-and-fp4-link-alphas:then{key_alphas}-key-and-digest-join-descriptors-and-fp4-alphas:then{union_alphas}-private-sha-union-descriptors-and-fp4-alphas:then{ca_alphas}-CA-private-link-descriptors-and-fp4-alphas"
     )));
     assert!(main.contains(&format!(
-        "aux-roots-then-remaining-public-claims-then-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-{key_alphas}-key-and-digest-join-descriptors-and-alphas-then-{union_alphas}-private-sha-union-descriptors-and-alphas"
+        "local-component-history:both-original-aux-roots-then-active-local-constraint-alphas-then-{endpoint_alphas}-ordered-private-link-descriptors-and-link-alphas-then-{key_alphas}-key-and-digest-join-descriptors-and-alphas-then-{union_alphas}-private-sha-union-descriptors-and-alphas-then-{ca_alphas}-ordered-CA-private-link-descriptors-and-alphas"
     )));
+    assert!(profile.contains("main-public-terminal-records=0|ca-public-terminal-records=0"));
+    assert!(profile.contains("joint-openings=132-canonical-Fp4-values4224"));
+    assert!(
+        profile.contains("main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10")
+    );
 }
 
 #[test]
@@ -546,11 +556,7 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
         challenges: der,
         public: ZkX509DerStarkPublicTerminalsV1,
     };
-    let rfc_context = || RfcMainFp4AirContextV1 {
-        der,
-        rfc,
-        terminals: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
-    };
+    let rfc_context = || RfcMainFp4AirContextV1 { der, rfc };
     let mut counts = [0; 2];
     for registration in AggregateProofLayoutV1::for_full_profile_v1()
         .unwrap()

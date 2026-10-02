@@ -31,10 +31,7 @@ mod preparation {
         collections::{BTreeMap, BTreeSet},
         fs::{self, File, OpenOptions},
         io::Write as _,
-        os::unix::{
-            fs::{DirBuilderExt as _, FileExt as _, MetadataExt as _, OpenOptionsExt as _},
-            io::FromRawFd as _,
-        },
+        os::unix::fs::{DirBuilderExt as _, FileExt as _, MetadataExt as _, OpenOptionsExt as _},
         path::Path,
     };
 
@@ -44,7 +41,7 @@ mod preparation {
 
     pub(super) fn main() {
         match run(&std::env::args_os().collect::<Vec<_>>()) {
-            Ok(receipt) => println!("{}", receipt),
+            Ok(receipt) => print!("{}", receipt),
             Err(code) => {
                 // Closed error codes contain no caller values, paths, signatures, or JSON payloads.
                 eprintln!(
@@ -173,8 +170,14 @@ mod preparation {
             && a.ctime_nsec() == b.ctime_nsec()
     }
     fn read_fd(fd: i32, pin: Option<&Pin>, maximum: usize) -> Result<Vec<u8>> {
-        // Borrow the inherited descriptor: no ownership transfer and no reopening a caller path.
-        let file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
+        // Duplicate only this inherited descriptor through the fixed OS descriptor directory.
+        // No original locator is accepted or reopened, and invalid descriptors fail safely.
+        // Positional reads preserve the inherited offset; the original remains owned by its
+        // process for the full duty. This uses no unsafe raw-descriptor ownership conversion.
+        if fd < 3 {
+            return Err("descriptor_rejected");
+        }
+        let file = File::open(format!("/dev/fd/{fd}")).map_err(|_| "descriptor_rejected")?;
         let before = file.metadata().map_err(|_| "descriptor_rejected")?;
         if !before.is_file()
             || before.len() == 0
@@ -213,8 +216,7 @@ mod preparation {
     fn prepare(duty: &str, originals: &BTreeMap<String, Vec<u8>>) -> Result<Preparation> {
         validate_roles(duty, originals.keys().map(String::as_str))?;
         let policy: KagemushaReleaseAuthorityPolicyV1 = if duty == "authority" {
-            norito::json::from_slice(&originals["policy_input"])
-                .map_err(|_| "policy_input_rejected")?
+            authority_input(&originals["policy_input"])?
         } else {
             KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(
                 &originals["authority_policy"],
@@ -423,6 +425,53 @@ mod preparation {
         Sha256::digest(bytes).into()
     }
 
+    fn authority_input(bytes: &[u8]) -> Result<KagemushaReleaseAuthorityPolicyV1> {
+        let value = json_original(bytes)?;
+        let m = fields(
+            &value,
+            &[
+                "version",
+                "authority_set_id",
+                "threshold",
+                "authorized_signers",
+            ],
+        )?;
+        let offered = m["authorized_signers"]
+            .as_array()
+            .ok_or("authority_signers_rejected")?;
+        if offered.is_empty() || offered.len() > 64 {
+            return Err("authority_signers_rejected");
+        }
+        let signers = offered
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .ok_or("authority_signer_rejected")?
+                    .parse::<PublicKey>()
+                    .map_err(|_| "authority_signer_rejected")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let policy = KagemushaReleaseAuthorityPolicyV1 {
+            version: number(m, "version")?
+                .try_into()
+                .map_err(|_| "authority_version_rejected")?,
+            authority_set_id: digest(m, "authority_set_id")?,
+            threshold: number(m, "threshold")?
+                .try_into()
+                .map_err(|_| "authority_threshold_rejected")?,
+            authorized_signers: signers,
+        };
+        policy.validate().map_err(|_| "authority_policy_rejected")?;
+        if policy
+            .authorized_signers
+            .iter()
+            .any(|key| key.algorithm() != Algorithm::Ed25519)
+        {
+            return Err("authority_algorithm_rejected");
+        }
+        Ok(policy)
+    }
+
     fn manifest_input(bytes: &[u8]) -> Result<KagemushaHardwareEvidenceBootstrapManifestV1> {
         let value = json_original(bytes)?;
         let m = fields(
@@ -618,6 +667,8 @@ mod preparation {
             ("outputs".into(), Value::Object(entries)),
         ]));
         let receipt = norito::json::to_string(&receipt).map_err(|_| "receipt_encoding_rejected")?;
+        // The durable receipt and stdout are the same sole canonical JSON line.
+        let receipt = format!("{receipt}\n");
         write_original(output, "receipt.json", receipt.as_bytes())?;
         held_directory
             .sync_all()
@@ -686,15 +737,56 @@ mod preparation {
           hex(&[7;32]),hex(&[8;32]),signers[0].public_key(),hex(&[9;32]),hex(&[10;32]),hex(&[11;32])).into_bytes();
             (policy, signers, input)
         }
+        fn authority_json(policy: &KagemushaReleaseAuthorityPolicyV1) -> Vec<u8> {
+            let signers = norito::json::to_vec(&policy.authorized_signers).unwrap();
+            format!(r#"{{"version":{},"authority_set_id":"{}","threshold":{},"authorized_signers":{}}}"#,
+                policy.version, hex(&policy.authority_set_id), policy.threshold,
+                std::str::from_utf8(&signers).unwrap()).into_bytes()
+        }
+        #[test]
+        fn authority_public_proposal_uses_sole_hex_original_and_exact_signer_inventory() {
+            let (policy, _, _) = synthetic_public_inputs();
+            let bytes = authority_json(&policy);
+            assert_eq!(authority_input(&bytes).unwrap(), policy);
+            // A release policy is public DATA. Parsing never manufactures a private signer.
+            let mut value = json_original(&bytes).unwrap();
+            value.as_object_mut().unwrap().insert(
+                "authority_set_id".into(),
+                Value::Array(
+                    policy
+                        .authority_set_id
+                        .iter()
+                        .map(|b| Value::Number(u64::from(*b).into()))
+                        .collect(),
+                ),
+            );
+            assert!(authority_input(&norito::json::to_vec(&value).unwrap()).is_err());
+            for (field, replacement) in [
+                ("threshold", Value::Number(0_u64.into())),
+                ("version", Value::Number(2_u64.into())),
+                ("authority_set_id", Value::String("A".repeat(64))),
+                ("authorized_signers", Value::Array(vec![])),
+            ] {
+                let mut value = json_original(&bytes).unwrap();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), replacement);
+                assert!(authority_input(&norito::json::to_vec(&value).unwrap()).is_err());
+            }
+            let mut value = json_original(&bytes).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("private_key".into(), Value::String("refused".into()));
+            assert!(authority_input(&norito::json::to_vec(&value).unwrap()).is_err());
+        }
         #[test]
         fn all_five_duties_use_exact_model_codec_and_real_threshold_signatures() {
             let (policy, signers, manifest_json) = synthetic_public_inputs();
             let p = prepare(
                 "authority",
-                &BTreeMap::from([(
-                    "policy_input".into(),
-                    norito::json::to_vec(&policy).unwrap(),
-                )]),
+                &BTreeMap::from([("policy_input".into(), authority_json(&policy))]),
             )
             .unwrap();
             let policy_bytes = p.outputs["authority-policy.norito"].clone();
@@ -830,15 +922,14 @@ mod preparation {
             let (policy, _, _) = synthetic_public_inputs();
             let prepared = prepare(
                 "authority",
-                &BTreeMap::from([(
-                    "policy_input".into(),
-                    norito::json::to_vec(&policy).unwrap(),
-                )]),
+                &BTreeMap::from([("policy_input".into(), authority_json(&policy))]),
             )
             .unwrap();
             let parent = std::env::temp_dir().canonicalize().unwrap();
             let output = parent.join(format!("hardware-codec-output-{}", std::process::id()));
             let receipt = emit(&output, "authority", prepared).unwrap();
+            assert!(receipt.ends_with('\n'));
+            assert!(!receipt.ends_with("\n\n"));
             assert_eq!(fs::metadata(&output).unwrap().mode() & 0o777, 0o700);
             for name in ["authority-policy.norito", "receipt.json"] {
                 assert_eq!(

@@ -5,7 +5,7 @@ use crate::kagemusha_v1_poseidon::{
     KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, digest_limbs, empty_replay_root, encode,
     from_u128, hash, paired_commitment,
 };
-use crate::kagemusha_v1_state::BootstrapStatementV1;
+use crate::kagemusha_v1_state::{BootstrapStatementV1, DigestV1};
 use iroha_crypto::{Algorithm, KeyPair, Signature as EdSignature};
 use iroha_data_model::kagemusha::*;
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
@@ -143,6 +143,34 @@ pub(super) fn fixture(
     suite_id: DigestV1,
     vk_digest: DigestV1,
 ) -> Fixture {
+    fixture_with_account_binding(apple, release_id, suite_id, vk_digest, [15; 32])
+}
+
+/// Same bare mathematical credential/State fixture with the sole account binding formula.
+/// This supplies no release, enrollment, FI, source finality or Native owner capability.
+pub(super) fn fixture_for_account(
+    apple: bool,
+    release_id: DigestV1,
+    suite_id: DigestV1,
+    vk_digest: DigestV1,
+    account: &iroha_data_model::account::AccountId,
+) -> Fixture {
+    fixture_with_account_binding(
+        apple,
+        release_id,
+        suite_id,
+        vk_digest,
+        kagemusha_ordinary_app_account_binding_v1(account),
+    )
+}
+
+fn fixture_with_account_binding(
+    apple: bool,
+    release_id: DigestV1,
+    suite_id: DigestV1,
+    vk_digest: DigestV1,
+    account_binding: DigestV1,
+) -> Fixture {
     use super::super::super::ordinary_issuer_config::{
         OrdinaryIssuerProfileV1, OrdinaryIssuerTableV1,
     };
@@ -173,7 +201,7 @@ pub(super) fn fixture(
         enrollment_id: [12; 32],
         client_nonce: [13; 32],
         server_nonce: [14; 32],
-        account_binding: [15; 32],
+        account_binding,
         network_id: state.lane.normalized_network_id(),
         lane_id: state.lane.device_lane_id,
         release_id,

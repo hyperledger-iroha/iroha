@@ -20,8 +20,6 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
-import org.hyperledger.iroha.sdk.address.AccountAddress
-import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
@@ -45,12 +43,6 @@ import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.validationfee.NativeValidationFeeHijiriQuoteCodec
-import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteCodec
-import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteRequestV1
-import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteV1
-import org.hyperledger.iroha.sdk.validationfee.VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
-import org.hyperledger.iroha.sdk.validationfee.VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
@@ -1096,74 +1088,6 @@ class HttpClientTransport private constructor(
         }
     }
 
-    /**
-     * Post one account-signed, native-Norito Hijiri validation-fee quote request.
-     *
-     * The authenticated account may be [request]'s account or a direct signatory of that multisig
-     * controller; Torii resolves and authorizes that live relationship. The returned projection is
-     * exposed only after native canonical decoding, exact request binding, hash validation, and
-     * Q16 aggregate-fee verification succeed.
-     */
-    fun postValidationFeeHijiriQuote(
-        request: ValidationFeeHijiriQuoteRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<ValidationFeeHijiriQuoteV1> =
-        postValidationFeeHijiriQuote(
-            request,
-            canonicalAuth,
-            NativeValidationFeeHijiriQuoteCodec,
-        )
-
-    /** Convenience overload constructing the frozen V1 request. */
-    fun postValidationFeeHijiriQuote(
-        accountId: String,
-        qualifyingTransferCount: Int,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<ValidationFeeHijiriQuoteV1> =
-        postValidationFeeHijiriQuote(
-            ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount),
-            canonicalAuth,
-        )
-
-    internal fun postValidationFeeHijiriQuote(
-        request: ValidationFeeHijiriQuoteRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        codec: ValidationFeeHijiriQuoteCodec,
-    ): CompletableFuture<ValidationFeeHijiriQuoteV1> {
-        check(config.baseUri().scheme.equals("https", ignoreCase = true)) {
-            "Hijiri validation-fee quote requests require an HTTPS Torii base URL"
-        }
-        val body = codec.encode(request).copyOf()
-        require(body.isNotEmpty() &&
-            body.size <= VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1) {
-            "Hijiri validation-fee quote request must contain 1.." +
-                "$VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 bytes"
-        }
-        val transportRequest = buildExactNoritoPostRequest(
-            "/v1/validation-fee/hijiri/quote",
-            body,
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1.toLong(),
-            canonicalAuth,
-            requestNoStore = true,
-        )
-        return fetchExactNoritoBytes(
-            transportRequest,
-            "Hijiri validation-fee quote",
-            requireIdentityEncoding = true,
-            forbidRejectCodeHeader = true,
-            allowExplicitIdentityEncoding = true,
-            requirePrivateNoStoreResponse = true,
-            requireExactResponseProvenance = true,
-        ).thenApply { response ->
-            val quote = codec.verify(response.copyOf(), body.copyOf())
-            check(quote.qualifyingTransferCount == request.qualifyingTransferCount &&
-                sameCanonicalHijiriQuoteAccount(quote.accountId, request.accountId)) {
-                "Hijiri validation-fee quote response does not bind the exact request"
-            }
-            quote
-        }
-    }
-
     private fun requireNetworkTransactionDomain(
         unsignedPayload: Map<String, Any?>,
     ): NetworkId {
@@ -1260,9 +1184,8 @@ class HttpClientTransport private constructor(
 
     override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
         val signingContext = config.requireLocalSigningContext()
-        val requestSnapshot = request.copy(
-            instructions = request.instructions.map(ByteArray::copyOf),
-        )
+        // The request owns immutable JSON and defensive instruction snapshots.
+        val requestSnapshot = request
         val requestPayload = buildMultisigProposePayload(requestSnapshot)
         requireCanonicalI105Address(
             requestPayload.getValue("signer_account_id") as String,
@@ -2184,16 +2107,6 @@ class HttpClientTransport private constructor(
         }
     }
 
-    private fun sameCanonicalHijiriQuoteAccount(left: String, right: String): Boolean =
-        try {
-            AccountAddress.parseEncoded(left, null).canonicalBytes
-                .contentEquals(
-                    AccountAddress.parseEncoded(right, null).canonicalBytes,
-                )
-        } catch (_: AccountAddressException) {
-            false
-        }
-
     private fun requireExactSignedResponseProvenance(
         request: TransportRequest,
         response: TransportResponse,
@@ -2938,14 +2851,13 @@ class HttpClientTransport private constructor(
             }
             payload["fee_payment"] = request.feePayment.toJsonMap()
             if (request.memo != null) payload["memo"] = normalizeNonBlank(request.memo, "memo")
-            putValidationFeePolicyMetadata(
-                payload,
-                request.validationFeePolicyVersion,
-                request.validationFeePolicyHash,
-                request.validationFeeHijiriFeeQuoteHash,
-                request.validationFeeInstructionIndex,
-                request.validationFeeTransferEntryIndex,
-            )
+            request.validationFeeAssessment?.let { assessment ->
+                // Native decoding rejects unknown fields and validates the exact signed marker.
+                org.hyperledger.iroha.sdk.validationfee.RetailFeeAssessmentBridge.assessmentMarkerV1(
+                    assessment.canonicalJson.toByteArray(StandardCharsets.UTF_8),
+                )
+                payload["validation_fee_assessment"] = requireNotNull(JsonParser.parse(assessment.canonicalJson))
+            }
             payload["instructions"] = request.instructions.mapIndexed { index, instruction ->
                 require(instruction.isNotEmpty()) { "instructions[$index] must not be empty" }
                 Base64.getEncoder().encodeToString(instruction)
@@ -3043,82 +2955,9 @@ class HttpClientTransport private constructor(
             (requestPayload["memo"] as? String)?.let {
                 metadata["memo"] = JsonValue.string(it)
             }
-            for (key in listOf(
-                "validation_fee_policy_version",
-                "validation_fee_instruction_index",
-                "validation_fee_transfer_entry_index",
-            )) {
-                (requestPayload[key] as? String)?.let { value ->
-                    metadata[key] = JsonValue.number(value.toLong())
-                }
-            }
-            for (key in listOf(
-                "validation_fee_policy_hash",
-                "validation_fee_hijiri_fee_quote_hash",
-            )) {
-                (requestPayload[key] as? String)?.let { value ->
-                    metadata[key] = JsonValue.string(value)
-                }
-            }
+            // The signed nested marker is the sole assessment carrier, including
+            // proposals whose first signer immediately reaches quorum.
             return metadata
-        }
-
-        @JvmStatic internal fun putValidationFeePolicyMetadata(
-            payload: MutableMap<String, Any>,
-            validationFeePolicyVersion: Long?,
-            validationFeePolicyHash: String?,
-            validationFeeHijiriFeeQuoteHash: String?,
-            validationFeeInstructionIndex: Long?,
-            validationFeeTransferEntryIndex: Long?,
-        ) {
-            val hasPolicyVersion = validationFeePolicyVersion != null
-            val hasPolicyHash = validationFeePolicyHash != null
-            val hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null
-            val hasInstructionIndex = validationFeeInstructionIndex != null
-            val hasTransferEntryIndex = validationFeeTransferEntryIndex != null
-            require(hasPolicyVersion == hasPolicyHash) {
-                "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
-            }
-            require(hasPolicyVersion || !hasHijiriFeeQuoteHash) {
-                "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash"
-            }
-            require(hasPolicyVersion || !hasInstructionIndex) {
-                "validationFeeInstructionIndex requires validation fee policy metadata"
-            }
-            require(hasPolicyVersion || !hasTransferEntryIndex) {
-                "validationFeeTransferEntryIndex requires validation fee policy metadata"
-            }
-            require(!hasTransferEntryIndex || hasInstructionIndex) {
-                "validationFeeTransferEntryIndex requires validationFeeInstructionIndex"
-            }
-            val policyVersion = validationFeePolicyVersion ?: return
-            val policyHash = requireNotNull(validationFeePolicyHash) {
-                "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
-            }
-            require(policyVersion >= 0L) { "validationFeePolicyVersion must be non-negative" }
-            val instructionIndex = validationFeeInstructionIndex
-            if (instructionIndex != null) {
-                require(instructionIndex >= 0L) { "validationFeeInstructionIndex must be non-negative" }
-            }
-            val transferEntryIndex = validationFeeTransferEntryIndex
-            if (transferEntryIndex != null) {
-                require(transferEntryIndex >= 0L) { "validationFeeTransferEntryIndex must be non-negative" }
-            }
-            payload["validation_fee_policy_version"] = policyVersion.toString()
-            payload["validation_fee_policy_hash"] = normalizeHex32(policyHash, "validationFeePolicyHash")
-            if (validationFeeHijiriFeeQuoteHash != null) {
-                payload["validation_fee_hijiri_fee_quote_hash"] =
-                    normalizeHex32(
-                        validationFeeHijiriFeeQuoteHash,
-                        "validationFeeHijiriFeeQuoteHash",
-                    )
-            }
-            if (instructionIndex != null) {
-                payload["validation_fee_instruction_index"] = instructionIndex.toString()
-            }
-            if (transferEntryIndex != null) {
-                payload["validation_fee_transfer_entry_index"] = transferEntryIndex.toString()
-            }
         }
 
         @JvmStatic internal fun buildVerifyingKeyRegisterPayload(request: VerifyingKeyRegisterRequest): Map<String, Any> {

@@ -22,6 +22,11 @@ path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "validation_fee_rewards_evidence_verify"
+path = "src/bin/validation_fee_rewards_evidence_verify.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
@@ -101,7 +106,7 @@ bench = []
 # Enable IDs-only query projections
 ids_projection = ["iroha_data_model/ids_projection"]
 # ZK verifier feature flags ship enabled by default.
-zk-halo2 = ["dep:kaigi_zk", "iroha_core_zk/zk-halo2"]
+zk-halo2 = ["dep:kaigi_zk"]
 zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]
 # Non-shipping native privacy release evidence. This is deliberately not a
 # default feature and is forwarded only by explicit release runners and
@@ -117,11 +122,11 @@ privacy-release-evidence = [
     "iroha_data_model/privacy-exact12-conformance",
 ]
 # Transparent Halo2 (IPA over Pasta). Default-on.
-zk-halo2-ipa = ["zk-ipa-native", "iroha_core_zk/zk-halo2-ipa"]
+zk-halo2-ipa = ["zk-ipa-native"]
 # Native IPA polynomial-opening verifier (no external halo2 libs). Default-on.
-zk-ipa-native = ["iroha_core_zk/zk-ipa-native"]
+zk-ipa-native = []
 # Temporary helper to match halo2's default circuit-params toggle.
-circuit-params = ["halo2_proofs/circuit-params", "iroha_core_zk/circuit-params"]
+circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
 # Ledger execution still runs the authoritative guarded cryptographic verifier.
 zk-preverify = ["iroha_core_zk/zk-preverify"]

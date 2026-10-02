@@ -215,7 +215,6 @@ jobs:
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
           echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
-          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
       - name: Prepare external Apple native artifact roots
         run: |

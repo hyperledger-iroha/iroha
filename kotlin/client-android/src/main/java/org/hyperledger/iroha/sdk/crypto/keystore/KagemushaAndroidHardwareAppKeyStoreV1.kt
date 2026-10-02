@@ -137,6 +137,10 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
                 KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL, guard)
         }.copyOf()
 
+    /** Sign only the independently selected opaque purpose1 cash W1, after its real Reserve. */
+    fun approveOrdinaryTerminal(prepared: org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryTerminalApprovalV1): ByteArray =
+        approveNativeOrdinaryTerminalOriginalV1(prepared, ::signNativeOriginal)
+
     /** Prove possession over the separate native-owned E without creating a monetary qualification. */
     fun proveEnrollmentPossession(prepared: KagemushaNativePreparedAppEnrollmentPossessionV1): ByteArray =
         prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->

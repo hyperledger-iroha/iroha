@@ -190,7 +190,8 @@ pub fn proof_managed_pool_initial_root_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::zk_x509::credential_stark::{
-        ZkX509CredentialPublicBindingV1, encode_zk_x509_credential_envelope_v1,
+        ZkX509CredentialPublicBindingV1, ZkX509ProofInstanceV1,
+        decode_zk_x509_credential_envelope_v1, encode_zk_x509_credential_envelope_v1,
     };
     fn fixture() -> (IrohaZkX509StarkP256StatementV1, [u8; 32], Vec<u8>) {
         let (mut statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
@@ -202,8 +203,17 @@ mod tests {
         let public =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis)
                 .expect("fixture public binding");
-        let proof = encode_zk_x509_credential_envelope_v1(public, b"X5M1", b"X5C1")
-            .expect("minimum canonical X5S1");
+        // This is only a container fixture: all 132 mandatory Fp4 values are
+        // canonical zero; inner proof validity is checked by separate tests.
+        let joint_openings = [0_u8; 132 * 32];
+        let proof = encode_zk_x509_credential_envelope_v1(
+            ZkX509ProofInstanceV1::new_v1([0x5a; 32]),
+            public,
+            b"X5M1",
+            b"X5C1",
+            &joint_openings,
+        )
+        .expect("minimum canonical X5S1");
         (statement, genesis, proof)
     }
     #[test]
@@ -244,7 +254,7 @@ mod tests {
             validate_zk_x509_credential_proof_container_v1(&statement, genesis, &trailing),
             Err(ZkX509CredentialProofContainerErrorV1::MalformedContainer)
         );
-        for offset in [8, 40, 75] {
+        for offset in [40, 72, 107] {
             let mut substituted_public_binding = proof.clone();
             substituted_public_binding[offset] ^= 1;
             assert_eq!(
@@ -257,17 +267,21 @@ mod tests {
                 "public header substitution at byte {offset} was accepted"
             );
         }
+        let envelope = decode_zk_x509_credential_envelope_v1(&proof).unwrap();
+        let main_start = envelope.main_aggregate.as_ptr() as usize - proof.as_ptr() as usize;
+        let ca_start = envelope.ca_subproof.as_ptr() as usize - proof.as_ptr() as usize;
+        // Locate framing after the complete mandatory original-opening record.
         for (offset, value) in [
-            (5, 2),  // version
-            (7, 0),  // record count
-            (77, 2), // MAIN kind
-            (79, 1), // MAIN instance
-            (83, 0), // MAIN length
-            (87, 2), // MAIN magic
-            (89, 1), // CA kind
-            (91, 1), // CA instance
-            (95, 0), // CA length
-            (99, 2), // CA magic
+            (5, 2),              // version
+            (7, 0),              // record count
+            (main_start - 7, 2), // MAIN kind
+            (main_start - 5, 1), // MAIN instance
+            (main_start - 1, 0), // MAIN length
+            (main_start + 3, 2), // MAIN magic
+            (ca_start - 7, 1),   // CA kind
+            (ca_start - 5, 1),   // CA instance
+            (ca_start - 1, 0),   // CA length
+            (ca_start + 3, 2),   // CA magic
         ] {
             let mut malformed_field = proof.clone();
             malformed_field[offset] = value;

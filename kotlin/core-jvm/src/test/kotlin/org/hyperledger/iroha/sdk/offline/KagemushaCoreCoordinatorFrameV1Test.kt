@@ -8,12 +8,66 @@ import java.nio.file.Paths
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class KagemushaCoreCoordinatorFrameV1Test {
+    @Test
+    fun `Bootstrap selection remains distinct from exact-next monetary selection`() {
+        var directory = Paths.get("").toAbsolutePath().normalize()
+        var selection: ByteArray? = null
+        while (directory != null) {
+            val path = directory.resolve("fixtures/offline/kagemusha_app_platform_messages_v1.tsv")
+            if (Files.isRegularFile(path)) {
+                selection = hex(Files.readAllLines(path, Charsets.UTF_8)
+                    .single { it.startsWith("s_mint_fold_9\t") }.split('\t')[1])
+                break
+            }
+            directory = directory.parent
+        }
+        val monetary = requireNotNull(selection) { "missing selection fixture" }
+        val lane = monetary.copyOfRange(219, 251)
+        val before = monetary.copyOfRange(428, 444)
+        val after = monetary.copyOfRange(444, 460)
+        KagemushaSelectionFrameV1.requireExact(monetary, lane, before, after)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(monetary, lane)
+        }
+        val bootstrap = monetary.copyOf().also {
+            it[331] = 0
+            it.fill(0, 364, 460)
+        }
+        KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(bootstrap, lane)
+        KagemushaSelectionFrameV1.requireAppAttestSubject(bootstrap)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaSelectionFrameV1.requireExact(bootstrap, lane, ByteArray(16), ByteArray(16))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(bootstrap, ByteArray(32) { 0x7f })
+        }
+        for (offset in listOf(331, 364, 396, 428, 444)) {
+            val changed = bootstrap.copyOf().also { it[offset] = 1 }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(changed, lane)
+            }
+        }
+        for (offset in listOf(59, 91, 123, 155, 187, 219, 251, 291, 332)) {
+            val changed = bootstrap.copyOf().also { it.fill(0, offset, offset + 32) }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(changed, lane)
+            }
+        }
+        for (offset in listOf(283, 323)) {
+            val changed = bootstrap.copyOf().also { it.fill(0, offset, offset + 8) }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(changed, lane)
+            }
+        }
+    }
+
     @Test
     fun `release acceptance requires its exact original frame and retires ten fields`() {
         // Public framing specimen; this is not hardware or monetary qualification.
@@ -359,10 +413,53 @@ class KagemushaCoreCoordinatorFrameV1Test {
                 KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
             }
         }
-        val otherCounter = request.map { it.copyOf() }.toMutableList()
-        otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(11)
+        for (staleCounter in listOf(11, 12)) {
+            val otherCounter = request.map { it.copyOf() }.toMutableList()
+            otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(staleCounter)
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
+            }
+        }
+        for (actual in listOf(3, 4, 12)) {
+            val changed = request.map { it.copyOf() }.toMutableList()
+            // The retained canonical map places authData at 21 and its counter at 33.
+            ByteBuffer.wrap(changed[3], 21 + 33, 4).putInt(actual)
+            if (actual <= 4) {
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+                }
+            } else {
+                val changedRequest = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+                val rehashed = response.map { it.copyOf() }.toMutableList()
+                rehashed[3] = MessageDigest.getInstance("SHA-256").digest(changed[3])
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaCoreCoordinatorFrameV1.encodeResponse(method, changedRequest, rehashed)
+                }
+                rehashed[4] = KagemushaCoreCoordinatorFrameV1.u32(actual)
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, changedRequest, rehashed)
+            }
+        }
+        val afterEnrollment = request.map { it.copyOf() }.toMutableList()
+        afterEnrollment[2][331] = 0
+        afterEnrollment[2].fill(0, 364, 460)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, afterEnrollment)
+        afterEnrollment[2][444] = 1
         assertFailsWith<IllegalArgumentException> {
-            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, afterEnrollment)
+        }
+        val maximumCounter = request.map { it.copyOf() }.toMutableList()
+        maximumCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(-2)
+        ByteBuffer.wrap(maximumCounter[3], 21 + 33, 4).putInt(-1)
+        val maximumRequest = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, maximumCounter)
+        val maximumResponse = response.map { it.copyOf() }.toMutableList()
+        maximumResponse[3] = MessageDigest.getInstance("SHA-256").digest(maximumCounter[3])
+        maximumResponse[4] = KagemushaCoreCoordinatorFrameV1.u32(-1)
+        KagemushaCoreCoordinatorFrameV1.encodeResponse(method, maximumRequest, maximumResponse)
+        val overflow = request.map { it.copyOf() }
+        overflow[2].fill(-1, 428, 444)
+        overflow[2].fill(0, 444, 460)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, overflow)
         }
         val lowerFloor = request.map { it.copyOf() }.toMutableList()
         lowerFloor[4] = KagemushaCoreCoordinatorFrameV1.u32(3)

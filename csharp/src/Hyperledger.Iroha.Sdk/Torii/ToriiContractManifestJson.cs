@@ -995,11 +995,11 @@ internal static class ToriiContractManifestJson
             case "AssetDefinitionView":
                 expectedFields = new[]
                 {
-                    "id", "name", "description", "owned_by", "total_quantity", "metadata",
+                    "id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata",
                 };
                 expectedTypes = new[]
                 {
-                    "AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Json",
+                    "AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Option<int>", "Json",
                 };
                 break;
             case "DomainView":

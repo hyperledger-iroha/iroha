@@ -74,6 +74,8 @@ impl<'a, K: Key, V: Value, Admission, M: StorageMode<K, V>>
         let Block {
             writers,
             dirty,
+            direct_write: _,
+            applied_transactions: _,
             failed: _,
             predecessor,
             next,

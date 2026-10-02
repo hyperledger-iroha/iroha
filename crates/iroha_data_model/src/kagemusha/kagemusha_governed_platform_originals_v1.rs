@@ -111,7 +111,7 @@ impl KagemushaAppleReceiptRiskPolicyV1 {
             || !bundle
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-            || !(1..=300000).contains(&self.maximum_creation_age_ms)
+            || !(1..=300_000).contains(&self.maximum_creation_age_ms)
         {
             return Err("Apple governed receipt risk policy malformed".into());
         }
@@ -296,12 +296,11 @@ impl KagemushaGovernedPlatformOriginalsV1 {
         {
             return Err("governed original selector/threshold/interval differs".into());
         }
-        if let KagemushaPlatformEvaluationOriginalsV1::AppleReceiptRisk(p) = &s.evaluation {
-            if <[u8; 32]>::from(Sha256::digest(&p.app_id_utf8))
+        if let KagemushaPlatformEvaluationOriginalsV1::AppleReceiptRisk(p) = &s.evaluation
+            && <[u8; 32]>::from(Sha256::digest(&p.app_id_utf8))
                 != selected.app_signing_identity_digest
-            {
-                return Err("Apple governed App ID differs".into());
-            }
+        {
+            return Err("Apple governed App ID differs".into());
         }
         for a in &self.approvals {
             if a.public_key.algorithm() != Algorithm::Ed25519

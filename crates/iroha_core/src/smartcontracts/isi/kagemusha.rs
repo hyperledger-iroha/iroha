@@ -3,6 +3,13 @@
 mod authority;
 mod execution_availability;
 pub(crate) mod kagemusha_v1_reserve;
+mod ordinary_mint_clock;
+/// Separate current World issuer decision for ordinary Mint funding.
+pub mod ordinary_mint_debit_admission;
+/// Independently World-admitted ordinary pre-debit issuer purpose, separate from OEM proof admission.
+pub mod ordinary_mint_permission;
+mod ordinary_mint_runtime;
+mod ordinary_mint_submission;
 #[cfg(test)]
 pub(crate) mod runtime_publication_tests;
 
@@ -262,6 +269,23 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         request: &KagemushaTopUpRequestV1,
     ) -> Result<VerifiedKagemushaTopUpAuthorizationV1, String>;
 
+    /// Verify the separate ordinary pre-debit113 family under actual installed release material.
+    /// Complete C/PI and signed preparation-clock capabilities must have been independently
+    /// authenticated by the Native caller. This result grants no account debit, current FI,
+    /// global pending reservation, hardware counter or finalized source.
+    fn verify_ordinary_top_up_authorization(
+        &self,
+        full_request_original: &[u8],
+        credential: &iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryAppCredentialV1,
+        lease: Option<&iroha_data_model::kagemusha::KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
+        clock: &iroha_core_zk::kagemusha_v1_state::KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+    ) -> Result<
+        iroha_core_zk::kagemusha_v1_recursion::KagemushaVerifiedOrdinaryMintAuthorizationV1,
+        String,
+    > {
+        let _ = (full_request_original, credential, lease, clock);
+        Err("authenticated ordinary Mint113 release resolver is unavailable".to_owned())
+    }
     /// Resolve artifacts and recursively verify an exact redemption request.
     fn verify_redemption_request(
         &self,
@@ -403,6 +427,7 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
 }
 
 struct AuthenticatedKagemushaV1ReleaseRuntime {
+    release: Arc<KagemushaAuthenticatedReleaseV1>,
     network_id: NetworkId,
     release_id: [u8; 32],
     purpose: KagemushaReleasePurposeV1,
@@ -697,17 +722,19 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
             .map_err(|error| format!("failed to load Kagemusha V1 Eq mint-hash prover: {error}"))?;
         let ep_mint_hash_prover = load_kagemusha_ep_mint_hash_artifacts_v1(&artifacts, &profile)
             .map_err(|error| format!("failed to load Kagemusha V1 Ep mint-hash prover: {error}"))?;
+        let family = profile.mint_authorization_family;
         let mut verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
             .map_err(|error| format!("failed to load Kagemusha V1 recursive verifier: {error}"))?;
-        verifier
-            .authorize_monetary_release(Arc::clone(&release))
-            .map_err(|error| {
-                format!("failed to authorize Kagemusha V1 monetary release: {error}")
-            })?;
+        ordinary_mint_runtime::authorize_selected_monetary_family(
+            &mut verifier,
+            Arc::clone(&release),
+            family,
+        )?;
         self.lifecycle.register(release_id)?;
         self.releases.insert(
             release_id,
             AuthenticatedKagemushaV1ReleaseRuntime {
+                release: Arc::clone(&release),
                 network_id: release.network_id(),
                 release_id,
                 purpose: release.purpose(),
@@ -794,6 +821,7 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
         self.releases.insert(
             release_id,
             AuthenticatedKagemushaV1ReleaseRuntime {
+                release: Arc::clone(&release),
                 network_id: release.network_id(),
                 release_id,
                 purpose: release.purpose(),
@@ -1403,6 +1431,18 @@ mod mint_authority_bootstrap_tests {
 }
 
 impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
+    fn verify_ordinary_top_up_authorization(
+        &self,
+        full_request_original: &[u8],
+        credential: &iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryAppCredentialV1,
+        lease: Option<&iroha_data_model::kagemusha::KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
+        clock: &iroha_core_zk::kagemusha_v1_state::KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+    ) -> Result<
+        iroha_core_zk::kagemusha_v1_recursion::KagemushaVerifiedOrdinaryMintAuthorizationV1,
+        String,
+    > {
+        ordinary_mint_runtime::verify(self, full_request_original, credential, lease, clock)
+    }
     fn mint_release_ids(&self) -> Vec<[u8; 32]> {
         self.releases.keys().copied().collect()
     }
@@ -2288,6 +2328,7 @@ pub mod isi {
         validate_top_up_commit_entries,
     };
     use super::*;
+    include!("kagemusha/ordinary_top_up_execution.rs");
 
     /// Return whether `authority` has the exact Kagemusha V1 reserve-management permission.
     ///
@@ -2781,6 +2822,36 @@ pub mod isi {
         crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)
             .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
         Ok(())
+    }
+
+    impl Execute for iroha_data_model::isi::TopUpKagemushaOrdinaryV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            // Exact historical World readback has no new monetary effect and does not renew
+            // expired FI/clock/policy originals or require another proof invocation.
+            if recover_applied_ordinary_kagemusha_top_up_v1(
+                &self.request,
+                authority,
+                state_transaction,
+            )? {
+                return Ok(());
+            }
+            require_execution_runtime(
+                state_transaction,
+                self.request
+                    .selected_release_id()
+                    .map_err(|e| kagemusha_v1_error("ordinary_top_up_invalid", e))?,
+                execution_availability::Operation::TopUp,
+            )?;
+            let (proof, decision) =
+                super::ordinary_mint_submission::admit(state_transaction, authority, &self.request)
+                    .map_err(|e| kagemusha_v1_error("ordinary_top_up_admission_failed", e))?;
+            settle_ordinary_kagemusha_top_up_v1(proof, decision, authority, state_transaction)
+                .map(|_| ())
+        }
     }
 
     impl Execute for TopUpKagemushaV1 {

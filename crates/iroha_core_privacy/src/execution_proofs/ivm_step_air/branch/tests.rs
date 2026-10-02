@@ -291,3 +291,38 @@ fn native_stark_proves_branch_comparison_and_rejects_changed_statement_or_row() 
     forged_columns[NOTE_COPY_WIDTH_V1 + BORROW_OFFSET + 3][0] = F::ONE;
     assert!(prove_proof_managed_note_stark_v1(&adapter, &forged_columns).is_err());
 }
+
+#[test]
+fn append_bank_preserves_the_original_residual_owner_and_exact_constraint_count() {
+    for (selector, opcode) in [
+        wide::control::BEQ,
+        wide::control::BNE,
+        wide::control::BLT,
+        wide::control::BGE,
+        wide::control::BLTU,
+        wide::control::BGEU,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (left, right) in [(0, 0), (u64::MAX, 1), (i64::MIN as u64, i64::MAX as u64)] {
+            let source_bits = word::witness(left, right);
+            let source = Sources::new(&source_bits);
+            let bank = bank_witness(opcode, left, right);
+            let limbs = core::array::from_fn(|operand| {
+                core::array::from_fn(|limb| source.limb(operand, limb))
+            });
+            let signs = [source.sign(0), source.sign(1)];
+            let selectors = core::array::from_fn(|i| F(u64::from(i == selector)));
+            let mut out = Vec::with_capacity(BANK_CONSTRAINTS + 2);
+            out.extend([F(17), F(23)]);
+            let original = out.as_ptr();
+            append_bank_residues(&mut out, &bank, limbs, signs, selectors);
+            assert_eq!(out.as_ptr(), original);
+            assert_eq!(&out[..2], &[F(17), F(23)]);
+            assert_eq!(out.len(), BANK_CONSTRAINTS + 2);
+            assert!(out[2..].iter().all(|v| *v == F::ZERO));
+            assert_eq!(&out[2..], bank_residues(&bank, limbs, signs, selectors));
+        }
+    }
+}

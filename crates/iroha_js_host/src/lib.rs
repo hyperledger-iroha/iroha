@@ -401,121 +401,6 @@ pub fn validation_fee_verify_current_policy_proof_v1(
             .map_err(|error| napi::Error::from_reason(error.to_string()))?,
     })
 }
-/// Encode one exact bounded native-Norito Hijiri validation-fee quote request.
-#[napi(js_name = "validationFeeHijiriQuoteRequestV1")]
-pub fn validation_fee_hijiri_quote_request_v1(
-    account_id: String,
-    qualifying_transfer_count: u32,
-) -> napi::Result<Buffer> {
-    const MAX_REQUEST_BYTES: usize =
-        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
-    if account_id.is_empty()
-        || account_id.len() > MAX_REQUEST_BYTES
-        || account_id.trim() != account_id
-    {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "accountId must be one bounded canonical I105 account id",
-        ));
-    }
-    let address = AccountAddress::parse_encoded(&account_id, None).map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("accountId must be one canonical I105 account id: {error}"),
-        )
-    })?;
-    let request = iroha::client::ValidationFeeHijiriQuoteRequestV1 {
-        version: iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-        account_id: address.to_account_id().map_err(|error| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("accountId must identify one universal account: {error}"),
-            )
-        })?,
-        qualifying_transfer_count,
-    };
-    request.validate().map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid Hijiri validation-fee quote request: {error}"),
-        )
-    })?;
-    let archive = norito::to_bytes(&request).map_err(norito_to_napi)?;
-    if archive.is_empty() || archive.len() > MAX_REQUEST_BYTES {
-        return Err(napi::Error::new(
-            napi::Status::GenericFailure,
-            "encoded Hijiri validation-fee quote request exceeds its wire bound",
-        ));
-    }
-    Ok(Buffer::from(archive))
-}
-/// Verify one native-Norito Hijiri quote against the exact request archive.
-/// Account projections use the caller's required network prefix for this operation.
-#[napi(js_name = "validationFeeVerifyHijiriQuoteResponseV1")]
-pub fn validation_fee_verify_hijiri_quote_response_v1(
-    response_norito: Uint8Array,
-    request_norito: Uint8Array,
-    network_prefix: f64,
-) -> napi::Result<String> {
-    const MAX_REQUEST_BYTES: usize =
-        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
-    const MAX_RESPONSE_BYTES: usize =
-        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1;
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    if request_norito.is_empty() || request_norito.len() > MAX_REQUEST_BYTES {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("requestNorito must contain 1..{MAX_REQUEST_BYTES} bytes"),
-        ));
-    }
-    if response_norito.is_empty() || response_norito.len() > MAX_RESPONSE_BYTES {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("responseNorito must contain 1..{MAX_RESPONSE_BYTES} bytes"),
-        ));
-    }
-    let request: iroha::client::ValidationFeeHijiriQuoteRequestV1 =
-        decode_from_bytes(request_norito.as_ref()).map_err(|error| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("requestNorito is not a Hijiri quote request: {error}"),
-            )
-        })?;
-    let canonical_request = norito::to_bytes(&request).map_err(norito_to_napi)?;
-    if canonical_request != request_norito.as_ref() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "requestNorito is not canonical",
-        ));
-    }
-    request.validate().map_err(napi::Error::from_reason)?;
-    let response: iroha::client::ValidationFeeHijiriQuoteResponseV1 =
-        decode_from_bytes(response_norito.as_ref()).map_err(|error| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("responseNorito is not a Hijiri quote response: {error}"),
-            )
-        })?;
-    let canonical_response = norito::to_bytes(&response).map_err(norito_to_napi)?;
-    if canonical_response != response_norito.as_ref() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "responseNorito is not canonical",
-        ));
-    }
-    response
-        .validate_for_request(&request)
-        .map_err(napi::Error::from_reason)?;
-    let projection = json::to_json(&response).map_err(norito_to_napi)?;
-    if projection.is_empty() || projection.len() > MAX_RESPONSE_BYTES {
-        return Err(napi::Error::new(
-            napi::Status::GenericFailure,
-            "verified Hijiri quote projection exceeds its response bound",
-        ));
-    }
-    Ok(projection)
-}
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Ed25519,
     Algorithm::Secp256k1,
@@ -1679,20 +1564,15 @@ pub fn norito_decode_instruction(bytes: Uint8Array, network_prefix: f64) -> napi
 pub fn validation_fee_policy_proposal_fingerprint_v1(
     proposal_operator: String,
     policy_json: String,
-    payout_lifecycle_proposal_id: Option<Uint8Array>,
 ) -> napi::Result<Buffer> {
     let _chain_guard = scoped_chain_discriminant_for_literal(&proposal_operator)?;
     let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
-    let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
-        .map(|value| validation_fee_fixed_hash(&value, "payout lifecycle proposal id"))
-        .transpose()?;
-    validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
+    validate_validation_fee_policy_proposal(&policy)?;
     let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator,
         policy,
-        payout_lifecycle_proposal_id,
     })
     .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
@@ -5974,46 +5854,35 @@ fn validation_fee_payout_binding_from_json_value(
     value: json::Value,
     context: &str,
 ) -> napi::Result<ValidationFeeTreasuryPayoutBindingV1> {
-    const PAYOUT_BINDING_FIELDS: &[&str] = &[
+    const FIELDS: &[&str] = &[
         "contract_address",
         "code_hash",
         "entrypoint",
         "treasury_account_id",
         "ds_asset_id",
         "xor_asset_id",
+        "pool_contract_address",
+        "pool_code_hash",
         "pool_vault_account_id",
-        "batch_ds",
-        "min_xor_out",
-        "max_xor_out",
-        "recipients",
+        "reward_pool_account_id",
+        "reference_feed_id",
+        "reference_feed_config_version",
+        "reference_provider_accounts",
+        "max_sbd_per_attempt_minor",
+        "max_sbd_per_day_minor",
+        "min_interval_ms",
+        "max_source_age_ms",
+        "max_slippage_bps",
+        "validator_lane_id",
+        "min_reward_claim_xor_minor",
     ];
-    const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
-    let json::Value::Object(fields) = &value else {
-        return Err(napi::Error::new(
+    let fields = value.as_object().ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("{context} must be an object"),
-        ));
-    };
-    require_exact_json_fields(fields, PAYOUT_BINDING_FIELDS, context)?;
-    let Some(json::Value::Array(recipients)) = fields.get("recipients") else {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context}.recipients must be an array"),
-        ));
-    };
-    for (index, recipient) in recipients.iter().enumerate() {
-        let json::Value::Object(recipient_fields) = recipient else {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("{context}.recipients[{index}] must be an object"),
-            ));
-        };
-        require_exact_json_fields(
-            recipient_fields,
-            RECIPIENT_FIELDS,
-            &format!("{context}.recipients[{index}]"),
-        )?;
-    }
+        )
+    })?;
+    require_exact_json_fields(fields, FIELDS, context)?;
     json::from_value(value).map_err(norito_to_napi)
 }
 fn validate_validation_fee_payout_binding(
@@ -6054,12 +5923,8 @@ fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
     }
     Ok(account)
 }
-fn validate_validation_fee_policy_proposal(
-    policy: &ValidationFeePolicyV1,
-    payout_lifecycle_proposal_id: Option<&[u8; 32]>,
-) -> napi::Result<()> {
-    iroha_js_codec::validate_validation_fee_policy_proposal(policy, payout_lifecycle_proposal_id)
-        .map_err(codec_to_napi)
+fn validate_validation_fee_policy_proposal(policy: &ValidationFeePolicyV1) -> napi::Result<()> {
+    iroha_js_codec::validate_validation_fee_policy_proposal(policy).map_err(codec_to_napi)
 }
 fn instruction_from_json(payload: &str) -> napi::Result<InstructionBox> {
     iroha_js_codec::instruction_from_json(payload).map_err(codec_to_napi)
@@ -7911,27 +7776,6 @@ mod tests {
         }
     }
     #[test]
-    fn hijiri_quote_napi_codec_encodes_and_rejects_malformed_response() {
-        let key_pair = KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519)
-            .expect("derive Hijiri quote account");
-        let account = AccountId::new(key_pair.public_key().clone());
-        let archive = validation_fee_hijiri_quote_request_v1(account.to_string(), 2)
-            .expect("encode Hijiri quote request");
-        let decoded: iroha::client::ValidationFeeHijiriQuoteRequestV1 =
-            decode_from_bytes(archive.as_ref()).expect("decode encoded request");
-        assert_eq!(decoded.account_id, account);
-        assert_eq!(decoded.qualifying_transfer_count, 2);
-        assert!(validation_fee_hijiri_quote_request_v1(decoded.account_id.to_string(), 0).is_err());
-
-        let error = validation_fee_verify_hijiri_quote_response_v1(
-            Uint8Array::from(vec![0_u8]),
-            Uint8Array::from(archive.to_vec()),
-            f64::from(iroha_data_model::account::address::chain_discriminant()),
-        )
-        .expect_err("malformed response must fail closed");
-        assert!(error.reason.contains("not a Hijiri quote response"));
-    }
-    #[test]
     fn crypto_algorithm_parser_accepts_exact_canonical_labels() {
         assert_eq!(
             parse_crypto_algorithm(None).expect("default crypto algorithm"),
@@ -8618,10 +8462,7 @@ mod tests {
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
-            initial_validation_fee_amount, validation_fee_payout_batch_ds,
-            validation_fee_payout_max_xor, validation_fee_payout_min_xor,
-            validation_fee_payout_recipient_share,
+            ValidationFeeTreasuryPayoutBindingV1, initial_validation_fee_amount,
         },
     };
     use iroha_model_base::domain::DomainId;

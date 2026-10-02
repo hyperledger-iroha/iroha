@@ -22,7 +22,7 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     maximum_payload_bytes: 512 * 1024,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCurrentPublicationRecordV1")]
 struct Record {
     version: u16,
@@ -38,7 +38,24 @@ struct Record {
     subject_signing_digest: DigestV1,
     normalized_guard_digest: DigestV1,
     state_proof: KagemushaPairedProofV1,
+    private_state_checkpoint_original: Vec<u8>,
     paired_ordinary_guard_original: Vec<u8>,
+}
+
+impl core::fmt::Debug for Record {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OrdinaryCurrentPublicationRecordV1")
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+impl Drop for Record {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.private_state_checkpoint_original.zeroize();
+        self.initial_state.balance.zeroize();
+        self.initial_state.state_nonce_commitment.zeroize();
+    }
 }
 
 /// Exclusive initial ordinary publication retaining the actual native journals and proof owner.
@@ -46,10 +63,18 @@ struct Record {
 pub struct KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
     current: PrivateJournal,
     canonical: Vec<u8>,
+    payload_maximum: u64,
     record: Record,
     approvals: KagemushaOrdinaryLogicalApprovalJournalV1,
     financial: KagemushaOrdinaryEnrolledFinancialOwnerV1,
     verified_guard: PublishedGuard,
+}
+
+impl Drop for KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.canonical.zeroize();
+    }
 }
 
 // Both variants authenticate one published original. A restored historical result is never
@@ -112,7 +137,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         self.current
             .require_single_record(&self.canonical)
             .map_err(storage)?;
-        if decode_record(&self.canonical)? != self.record {
+        if decode_record(&self.canonical, self.payload_maximum)? != self.record {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         self.financial
@@ -198,6 +223,39 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             .require_single_record(&self.canonical)
             .map_err(storage)
     }
+    pub(super) fn with_retained_initial_state_checkpoint(
+        &self,
+        verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
+        capacity: KagemushaDurableCapacityV1,
+        consume: &mut dyn for<'a> FnMut(
+            &'a crate::kagemusha_v1_recursion::KagemushaGeneratedRecursiveStateProofV1,
+        ) -> Result<(), KagemushaStateErrorV1>,
+    ) -> core::result::Result<(), KagemushaStateErrorV1> {
+        self.recheck_historical_cash_custody()?;
+        let approval = self.approvals.historical_bootstrap_approval()?;
+        let enrollment = self.approvals.retained_enrollment();
+        let at = self.record.approval_captured_at_ms;
+        let selection = match approval.original_approval_integrity_lease() {
+            Some(lease) => KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1::from_verified_enrollment_with_current_integrity_lease(enrollment, verifier, self.record.statement.state_nonce_commitment, capacity, lease, at),
+            None => KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1::from_verified_enrollment(enrollment, verifier, self.record.statement.state_nonce_commitment, capacity, at),
+        }?;
+        if selection.preview()?.state != self.record.initial_state
+            || selection.preview()?.statement != self.record.statement
+            || !Arc::ptr_eq(
+                &selection.authenticated_release()?,
+                self.approvals.retained_release(),
+            )
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let restored = selection.restore_private_state_checkpoint(
+            &self.record.private_state_checkpoint_original,
+            &self.record.state_proof,
+        )?;
+        consume(&restored)?;
+        self.recheck_historical_cash_custody()
+    }
+
     /// Full public zero-State/Guard originals selected from this held immutable publication.
     /// This supplies only data to separate genuine Core Anchor admission and global CAS.
     pub(super) fn lineage_anchor_public_originals(
@@ -328,7 +386,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
         financial: KagemushaOrdinaryEnrolledFinancialOwnerV1,
         approvals: KagemushaOrdinaryLogicalApprovalJournalV1,
-        state_proof: KagemushaPairedProofV1,
+        generated_state: crate::kagemusha_v1_recursion::KagemushaGeneratedRecursiveStateProofV1,
         paired_ordinary_guard_original: Vec<u8>,
     ) -> Result<Self, KagemushaStateErrorV1> {
         let trusted_native_now_ms = financial.trusted_time_ms().map_err(material)?;
@@ -345,7 +403,9 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         validate_guard_bytes(&paired_ordinary_guard_original)?;
-        selection.verify_state_proof(&state_proof)?;
+        let state_proof = generated_state.proof.clone();
+        let private_state_checkpoint_original =
+            selection.capture_private_state_checkpoint(&generated_state)?;
         let approval = approvals.captured_bootstrap_at_native_time(trusted_native_now_ms)?;
         let verified_guard = verify_ordinary_bootstrap_guard_v1(
             selection,
@@ -392,16 +452,18 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             subject_signing_digest: approval.challenge().subject_signing_digest,
             normalized_guard_digest,
             state_proof,
+            private_state_checkpoint_original,
             paired_ordinary_guard_original,
         };
+        let format = publication_format(selection.recursive_verifier())?;
         let canonical = norito::encode_canonical(&record).map_err(material)?;
-        if decode_record(&canonical)? != record {
+        if decode_record(&canonical, format.maximum_payload_bytes)? != record {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let before_append_ms = financial.trusted_time_ms().map_err(material)?;
         selection.recheck_at_trusted_time(before_append_ms)?;
         approval.recheck_captured_bootstrap_at_native_time(before_append_ms)?;
-        let mut current = PrivateJournal::create_new(path, FORMAT).map_err(storage)?;
+        let mut current = PrivateJournal::create_new(path, format).map_err(storage)?;
         current.append(&canonical).map_err(storage)?;
         let before_exposure_ms = financial.trusted_time_ms().map_err(material)?;
         selection.recheck_at_trusted_time(before_exposure_ms)?;
@@ -409,6 +471,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         let publication = Self {
             current,
             canonical,
+            payload_maximum: format.maximum_payload_bytes,
             record,
             approvals,
             financial,
@@ -429,7 +492,8 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         approvals: KagemushaOrdinaryLogicalApprovalJournalV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
         require_financial_custody(&financial, &approvals)?;
-        let mut current = PrivateJournal::open_existing(path, FORMAT).map_err(storage)?;
+        let format = publication_format(selection.recursive_verifier())?;
+        let mut current = PrivateJournal::open_existing(path, format).map_err(storage)?;
         let (sequence, canonical) = current
             .replay_next()
             .map_err(storage)?
@@ -438,7 +502,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         current.require_single_record(&canonical).map_err(storage)?;
-        let record = decode_record(&canonical)?;
+        let record = decode_record(&canonical, format.maximum_payload_bytes)?;
         let now = financial.trusted_time_ms().map_err(material)?;
         if approvals.initial_publication_intent_digest(now)? != record.publication_intent_digest {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
@@ -447,7 +511,10 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         require_selected_preview(selection, &approvals, &record)?;
-        selection.verify_state_proof(&record.state_proof)?;
+        selection.restore_private_state_checkpoint(
+            &record.private_state_checkpoint_original,
+            &record.state_proof,
+        )?;
         let approval =
             approvals.approved_at_original_capture_time(record.approval_captured_at_ms, now)?;
         if approval.original() != record.approval_original
@@ -471,6 +538,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         let publication = Self {
             current,
             canonical,
+            payload_maximum: format.maximum_payload_bytes,
             record,
             approvals,
             financial,
@@ -759,8 +827,26 @@ fn require_selected_preview(
     Ok(())
 }
 
-fn decode_record(bytes: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
-    if bytes.is_empty() || bytes.len() as u64 > FORMAT.maximum_payload_bytes {
+fn publication_format(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+) -> Result<PrivateJournalFormat, KagemushaStateErrorV1> {
+    let maximum =
+        crate::kagemusha_v1_recursion::KagemushaRecursiveStateCheckpointV1::maximum_encoded_bytes(
+            verifier,
+        )
+        .map_err(material)?;
+    let maximum_payload_bytes = u64::try_from(maximum)
+        .map_err(material)?
+        .checked_add(FORMAT.maximum_payload_bytes)
+        .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
+    Ok(PrivateJournalFormat {
+        maximum_payload_bytes,
+        ..FORMAT
+    })
+}
+
+fn decode_record(bytes: &[u8], payload_maximum: u64) -> Result<Record, KagemushaStateErrorV1> {
+    if bytes.is_empty() || bytes.len() as u64 > payload_maximum {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
     let record: Record =
@@ -772,6 +858,7 @@ fn decode_record(bytes: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
         || record.approval_captured_at_ms == 0
         || record.approval_captured_at_ms > record.published_at_ms
         || record.publication_intent_digest == [0; 32]
+        || record.private_state_checkpoint_original.is_empty()
         || record.retail_certificate_original.is_empty()
         || record.retail_certificate_original.len()
             > KAGEMUSHA_ORDINARY_RETAIL_ENROLLMENT_MAX_BYTES_V1

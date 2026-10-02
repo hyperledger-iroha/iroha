@@ -15,16 +15,16 @@ use zeroize::Zeroizing;
 #[path = "hardware_evidence_bootstrap/lifecycle.rs"]
 mod lifecycle;
 use lifecycle::{Lifecycle, Step};
-/// Refusal classes of the first-device hardware evidence owner.
+/// Failures in first-device hardware evidence validation, custody or invocation settlement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaHardwareEvidenceErrorV1 {
-    /// An original, selection or interval failed validation.
+    /// An original, selector, lifecycle transition or validity interval was rejected.
     #[error("hardware bootstrap original rejected")]
     Rejected,
-    /// Journal, clock or randomness custody is unavailable.
+    /// The owned journal, authenticated clock or required custody is unavailable.
     #[error("hardware bootstrap custody unavailable")]
     Custody,
-    /// A fenced invocation may have executed; its outcome is not known.
+    /// An invocation remains unsettled or durable publication could not establish its outcome.
     #[error("hardware bootstrap original invocation outcome unknown")]
     UnknownOutcome,
 }
@@ -179,7 +179,11 @@ impl KagemushaCompiledHardwareBootstrapBindingV1 {
             .map_err(|_| Rejected)?;
         Ok(i)
     }
-    /// Return the signed release original after rechecking the network, clock selection and interval.
+    /// Borrow the authenticated signed release original after rechecking its clock binding.
+    /// This inspection does not require an unexpired release or authorize a platform effect.
+    ///
+    /// # Errors
+    /// Refuses an invalid manifest, unavailable clock or changed network/clock selection.
     pub fn public_signed_release_original(&self) -> Result<&[u8]> {
         self.interval()?;
         Ok(&self.signed_original)
@@ -256,7 +260,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             .map_err(|_| Custody)?;
         Ok(Self::blank(binding, journal, reservation))
     }
-    /// Reopen the existing journal for this binding and replay its bounded records.
+    /// Reopen the same owned journal and replay its bounded original invocation history.
+    /// Pending calls remain pending; recovery neither repeats them nor creates a new alias.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal/clock custody, oversized or invalid history, or a
+    /// reservation whose manifest binding differs from the installed compiled release.
     pub fn recover(
         root: &Path,
         binding: Arc<KagemushaCompiledHardwareBootstrapBindingV1>,
@@ -314,7 +323,11 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             receipt: None,
         }
     }
-    /// Require journal ownership and a valid bound native clock interval.
+    /// Recheck exclusive journal ownership and the installed release's clock binding.
+    /// Effect validity and invocation sequencing are checked separately at their boundaries.
+    ///
+    /// # Errors
+    /// Refuses lost journal ownership, an unavailable clock or a changed release binding.
     pub fn recheck_custody(&self) -> Result<()> {
         self.journal.check_owned().map_err(|_| Custody)?;
         self.binding.interval()?;
@@ -368,7 +381,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
         self.start(Step::Prepare, sha(google_id_token_original).to_vec())?;
         encode(&self.reservation)
     }
-    /// Capture the challenge original for the pending Prepare step.
+    /// Authenticate and durably capture the challenge returned by the fenced prepare call.
+    /// The issuer signature, reservation, OAuth token hash and bounded times must match.
+    ///
+    /// # Errors
+    /// Refuses foreign or malformed originals, a mismatched pending step, unavailable
+    /// custody or an uncertain journal append.
     pub fn accept_challenge(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Prepare, original)?;
@@ -409,7 +427,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
                 .clone(),
         ))
     }
-    /// Capture the Android key and attestation archive for the pending Key step.
+    /// Durably capture the pending Android key's public key and canonical attestation archive.
+    /// Raw attestation verification remains the separately fenced issuer's responsibility.
+    ///
+    /// # Errors
+    /// Refuses an invalid public key, noncanonical archive without an Android chain,
+    /// a mismatched pending step, lost custody or uncertain durable publication.
     pub fn capture_android_original(
         &mut self,
         key: KagemushaDevicePublicKeyV1,
@@ -426,7 +449,10 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: b,
         })
     }
-    /// Fence the RawIssuer step and return the challenge and attestation archive originals.
+    /// Durably fence raw issuer admission and return the exact challenge and archive originals.
+    ///
+    /// # Errors
+    /// Refuses expired or foreign custody, missing originals or an unsettled/out-of-order call.
     pub fn fence_raw_issuer(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
         self.start(Step::RawIssuer, vec![])?;
         Ok((
@@ -434,7 +460,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             self.raw.as_ref().ok_or(Rejected)?.archive.clone(),
         ))
     }
-    /// Capture the raw issuer admission original for the pending RawIssuer step.
+    /// Authenticate and capture the issuer's admission of the same attested key and archive.
+    /// Its signed policy, allowed security level and challenge-bound time must match.
+    ///
+    /// # Errors
+    /// Refuses invalid signatures or selectors, a mismatched pending step, unavailable
+    /// custody or uncertain durable publication.
     pub fn accept_raw_admission(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::RawIssuer, original)?;
@@ -459,12 +490,19 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             expires_at_ms: c.expires_at_ms,
         })
     }
-    /// Fence the Possession step and return the exact possession signing bytes.
+    /// Durably fence key possession and return the exact retained possession signing message.
+    ///
+    /// # Errors
+    /// Refuses expired custody, missing key/challenge originals or an unsettled/out-of-order call.
     pub fn fence_possession(&mut self) -> Result<Vec<u8>> {
         self.start(Step::Possession, vec![])?;
         self.possession()?.signing_bytes().map_err(|_| Rejected)
     }
-    /// Capture the DER possession signature for the pending Possession step.
+    /// Verify and durably capture the pending possession signature under the retained key.
+    ///
+    /// # Errors
+    /// Refuses an invalid DER signature, foreign signing subject, mismatched pending step,
+    /// unavailable custody or uncertain durable publication.
     pub fn capture_possession(&mut self, der: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Possession, der)?;
@@ -473,7 +511,11 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: der.to_vec(),
         })
     }
-    /// Return the cloud project number and integrity request hash over all captured originals.
+    /// Inspect the compiled Google Cloud project and exact evidence-bound integrity request hash.
+    /// This data inspection does not fence or authorize a platform request.
+    ///
+    /// # Errors
+    /// Refuses unavailable custody or missing challenge, archive, admission or possession originals.
     pub fn integrity_selection(&self) -> Result<(u64, [u8; 32])> {
         self.recheck_custody()?;
         let e = self.possession()?.signing_bytes().map_err(|_| Rejected)?;
@@ -489,12 +531,20 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             ),
         ))
     }
-    /// Fence the Integrity step and return its exact integrity selection.
+    /// Durably fence integrity acquisition and return its compiled project and bound request hash.
+    ///
+    /// # Errors
+    /// Refuses expired custody, missing originals or an unsettled/out-of-order call.
     pub fn fence_integrity(&mut self) -> Result<(u64, [u8; 32])> {
         self.start(Step::Integrity, vec![])?;
         self.integrity_selection()
     }
-    /// Capture the opaque integrity token for the pending Integrity step.
+    /// Durably retain the pending integrity request's bounded opaque token original.
+    /// Its authenticated verdict remains the hardware receipt issuer's responsibility.
+    ///
+    /// # Errors
+    /// Refuses empty, oversized or non-graphic tokens, a mismatched pending step,
+    /// unavailable custody or uncertain durable publication.
     pub fn capture_integrity_original(&mut self, opaque_token: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Integrity, opaque_token)?;
@@ -503,7 +553,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: opaque_token.to_vec(),
         })
     }
-    /// Fence the Receipt step and return every captured original for the issuer request.
+    /// Durably fence the receipt call and return its six exact retained originals.
+    /// Tuple order is challenge, archive, raw admission, possession message, DER signature,
+    /// then opaque integrity token.
+    ///
+    /// # Errors
+    /// Refuses expired custody, missing originals or an unsettled/out-of-order call.
     pub fn fence_receipt(
         &mut self,
     ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
@@ -517,7 +572,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             self.token.as_ref().ok_or(Rejected)?.to_vec(),
         ))
     }
-    /// Capture the hardware receipt original for the pending Receipt step.
+    /// Authenticate and durably capture the issuer receipt for all retained evidence originals.
+    /// The signed manifest, request hash, policy, owner binding and bounded times must match.
+    ///
+    /// # Errors
+    /// Refuses an invalid signature or selector, a mismatched pending step, unavailable
+    /// custody or uncertain durable publication.
     pub fn accept_hardware_receipt(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Receipt, original)?;
@@ -564,23 +624,37 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
         }
         Ok(())
     }
-    /// Return the pending step tag, if any.
+    /// Return the durable pending step tag, if any, after rechecking custody.
+    /// Tags 1 through 6 denote prepare, key, raw issuer, possession, integrity and receipt.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
     pub fn pending_step(&self) -> Result<Option<u8>> {
         self.recheck_custody()?;
         Ok(self.state.pending().map(|s| s as u8))
     }
-    /// Return the last completed step tag.
+    /// Return the last durably captured step tag, or zero before any capture.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
     pub fn completed_step(&self) -> Result<u8> {
         self.recheck_custody()?;
         Ok(self.state.completed())
     }
-    /// Return the captured hardware receipt original, if any.
+    /// Borrow the captured signed hardware receipt original, if receipt capture completed.
+    /// This inspection grants no monetary credential or readiness capability.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
     pub fn original_receipt(&self) -> Result<Option<&[u8]>> {
         self.recheck_custody()?;
         Ok(self.receipt.as_deref())
     }
     /// Public route and OAuth selections from the same authenticated hardware-only manifest.
     /// These are data originals, not wallet/session or financial authority.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
     pub fn transport_scope(&self) -> Result<(&str, &str, &str)> {
         self.recheck_custody()?;
         Ok((
@@ -589,17 +663,28 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             &self.binding.manifest.google_oauth_issuer,
         ))
     }
-    /// Return the encoded reservation original.
+    /// Encode the same canonical reservation retained at journal creation.
+    ///
+    /// # Errors
+    /// Refuses unavailable custody or a canonical encoding failure.
     pub fn reservation_original(&self) -> Result<Vec<u8>> {
         self.recheck_custody()?;
         encode(&self.reservation)
     }
-    /// Return the reservation deadline in milliseconds.
+    /// Return the original reservation deadline after rechecking custody.
+    /// Recovery and inspection never extend this deadline.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
     pub fn authoritative_deadline_ms(&self) -> Result<u64> {
         self.recheck_custody()?;
         Ok(self.reservation.deadline_ms)
     }
-    /// Persist a cancellation request when the lifecycle permits it.
+    /// Durably request cancellation, preventing any new invocation while retaining pending calls.
+    /// A matching original capture may still settle a pending call before disposal.
+    ///
+    /// # Errors
+    /// Refuses repeated cancellation, a disposed owner, lost custody or uncertain publication.
     pub fn request_cancel(&mut self) -> Result<()> {
         let mut next = self.state;
         next.cancel().map_err(|_| Rejected)?;

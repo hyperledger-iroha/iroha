@@ -24,7 +24,7 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
                 when (ByteBuffer.wrap(fields[1]).order(ByteOrder.LITTLE_ENDIAN).int) {
                     2 -> require(fields[2].size in 1..4096)
                     4 -> require(fields[2].size == 16 && fields[2].any { it != 0.toByte() })
-                    else -> error("Unknown ordinary cash business operation")
+                    else -> throw IllegalArgumentException("Unknown ordinary cash business operation")
                 }
             }
             2, 4, 5, 6, 7 -> { count(fields, 2); ticket(fields[1]) }

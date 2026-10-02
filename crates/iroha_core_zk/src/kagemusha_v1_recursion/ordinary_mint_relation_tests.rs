@@ -123,7 +123,7 @@ fn make_statement(
     let raw = envelope
         .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
         .unwrap();
-    assert_eq!(raw.len(), 384);
+    assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
     let s = KagemushaOrdinaryMintAuthorizationStatementV1 {
         version: 1,
         issuance_commitment: context.issuance_commitment().unwrap(),

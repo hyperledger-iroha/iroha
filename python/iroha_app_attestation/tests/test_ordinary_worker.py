@@ -22,20 +22,20 @@ class OrdinaryWorkerChannelTests(unittest.TestCase):
         raw=json.dumps(value,separators=(',',':')).encode();os.write(self.input_write,len(raw).to_bytes(4,'little')+raw)
 
     def reply(self,**changes):
-        value={'kind':'current','request_id':'11'*32,'sequence':1,'trusted_time_ms':1000,'projection_sha256':self.pin.hex()}
+        value={'kind':'current','request_id':'11'*32,'sequence':1,'lower_at_ms':1000,'upper_at_ms':1020,'projection_sha256':self.pin.hex()}
         value.update(changes);return value
 
     def test_actual_pipe_recheck_binds_sequence_operation_projection_and_trusted_time(self):
         self.channel.begin('11'*32,self.pin);self.packet(self.reply());self.channel.recheck()
-        self.assertEqual(self.channel.trusted_time_ms(),1000)
+        self.assertEqual(self.channel.trusted_time_interval().endpoints(),(1000,1020))
         width=int.from_bytes(os.read(self.output_read,4),'little');request=json.loads(os.read(self.output_read,width))
         self.assertEqual(request,{'kind':'recheck','request_id':'11'*32,'sequence':1})
-        self.packet(self.reply(sequence=2,trusted_time_ms=999))
+        self.packet(self.reply(sequence=2,lower_at_ms=999))
         with self.assertRaises(AttestationRejected):self.channel.recheck()
 
     def test_wrong_request_sequence_projection_and_extra_custody_claims_fail(self):
         for change in ({'request_id':'22'*32},{'sequence':2},{'projection_sha256':'33'*32},
-                       {'trusted_time_ms':True},{'authority':True}):
+                       {'lower_at_ms':True},{'upper_at_ms':999},{'upper_at_ms':True},{'trusted_time_ms':1000},{'authority':True}):
             self.channel.begin('11'*32,self.pin);self.packet(self.reply(**change))
             with self.assertRaises(AttestationRejected):self.channel.recheck()
 

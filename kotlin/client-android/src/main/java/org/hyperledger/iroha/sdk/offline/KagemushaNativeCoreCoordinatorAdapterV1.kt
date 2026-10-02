@@ -60,6 +60,10 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     fun ordinaryCurrentControlTransportBinding(): KagemushaOrdinaryCurrentControlTransportBindingV1 =
         KagemushaOrdinaryCurrentControlTransportBindingV1(bridge)
 
+    /** Dedicated ordinary Cash field transport over this same descriptor, without a ready flag. */
+    fun ordinaryOutgoingTransportBinding(): KagemushaOrdinaryOutgoingTransportBindingV1 =
+        KagemushaOrdinaryOutgoingTransportBindingV1(bridge)
+
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {
         enrollmentPhases.revokeLocal()

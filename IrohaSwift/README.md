@@ -182,19 +182,23 @@ test ! -e "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
-export RUSTC_BOOTSTRAP=1
+unset RUSTC_BOOTSTRAP
 export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
 export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
 export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-make bridge-xcframework
+scripts/build_norito_xcframework.sh \
+  --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock \
+  --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 ```
 
-The build requires Python 3.12 and an explicit `--lockfile-path`. The Make target
-selects the repository-root `Cargo.lock` for ordinary development. Privacy production
-builds and release qualification require a separately materialized, read-only external
-snapshot of the same canonical reviewed graph. The root source lock and selected
-build lock have independent file identities and equal authenticated bytes. In-tree or symbolic Cargo targets are rejected. A nonempty external isolated target
+The build requires Python 3.12, stock Rust 1.93.1, and an explicit
+`--lockfile-path`; `RUSTC_BOOTSTRAP` must be unset. Normal builds and release
+qualification require a separately materialized, read-only external snapshot of
+the same canonical reviewed graph. The root source lock and selected build lock
+have independent file identities and equal authenticated bytes. These builds
+reject in-tree or symbolic Cargo targets. Explicit local integration uses the
+fixed checkout directories described below. A nonempty external isolated target
 is supported; builds sharing that target or output are serialized by held locks,
 and every Apple slice is freshly invoked. The archive owner requires the explicit
 epoch, snapshots the complete authenticated generation under the output lock, and
@@ -301,9 +305,9 @@ The canonical XCFramework contains `ios-arm64`, the universal
 `macos-arm64_x86_64` slice. The macOS slice must contain both `arm64` and
 `x86_64`; the artifact checker rejects single-architecture substitutions.
 
-The default bridge build deliberately keeps real privacy proving and verification
-fail-closed. After the privacy production-gate evidence has been approved, build
-an opt-in Apple artifact with:
+Every bridge build includes mandatory privacy and KAGEMUSHA support using stock
+Rust 1.93.1. Building an artifact does not establish provider, proving, hardware,
+or release qualification. To build with the reviewed external graph:
 
 ```bash
 export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
@@ -316,7 +320,7 @@ mkdir -p \
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
-export RUSTC_BOOTSTRAP=1
+unset RUSTC_BOOTSTRAP
 export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
 export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
@@ -332,6 +336,34 @@ uses the explicitly selected `Cargo.lock`, and fails closed if `xcodebuild` cann
 package them. The validator, Swift pin projector, and archive owner require the
 same explicit `--lockfile-path`; omitted, symbolic, source-contained alternate,
 and unreviewed external selections are rejected.
+
+For integration inside this checkout, run the following from its canonical root.
+Use the fixed ignored lane with owned, non-symbolic, mode `0700` directories. This explicit mode selects the root `Cargo.lock`
+and accepts source changes with `--allow-dirty-source`; its artifacts carry
+`artifact_scope=local-integration` and cannot be archived, handed off, or admitted
+to a release build.
+
+```bash
+umask 077
+bridge_local="$PWD/target/norito-bridge-local"
+export CARGO_TARGET_DIR="$bridge_local/cargo"
+export NORITO_BRIDGE_BUILD_DIR="$bridge_local/build"
+export NORITO_BRIDGE_OUT_DIR="$bridge_local/artifacts"
+mkdir -p "$CARGO_TARGET_DIR" "$NORITO_BRIDGE_BUILD_DIR" \
+  "$NORITO_BRIDGE_OUT_DIR" "$bridge_local/projections"
+chmod 0700 "$bridge_local" "$CARGO_TARGET_DIR" "$NORITO_BRIDGE_BUILD_DIR" \
+  "$NORITO_BRIDGE_OUT_DIR" "$bridge_local/projections"
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+unset RUSTC_BOOTSTRAP MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT \
+  IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH
+export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+scripts/build_norito_xcframework.sh \
+  --lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source
+export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
+```
 
 The KAGEMUSHA V1 pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
@@ -859,27 +891,27 @@ The unsigned payload must carry the closed transaction domain as
 `"domain": {"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}`;
 the retired `chain`, `chainId`, and `chain_id` keys and the genesis marker are rejected.
 
-To price that base policy with the execution account's current Hijiri risk,
-request a separate native-Norito quote:
+For the native retail payment policy, hash the customer's exact ordered
+payment intent and inspect the complete assessment marker before signing:
 
 ```swift
-let request = try ValidationFeeHijiriQuoteRequestV1(
+let intent = RetailFeeQuoteRequestV1(
     accountId: accountId,
-    qualifyingTransferCount: 2
+    assetDefinitionId: feeAssetDefinitionId,
+    transfers: [RetailFeePaymentLegV1(destinationAccountId: recipient, amountMinorUnits: 100)]
 )
-let quote = try await torii.postValidationFeeHijiriQuote(
-    request,
-    canonicalAuth: canonicalAuth
-)
+let intentHash = try intent.intentHash()
+let assessment = try RetailFeeAssessmentV1.decodeMarker(assessmentMarker)
+guard assessment.intentHash == intentHash.map { String(format: "%02X", $0) }.joined() else {
+    throw RetailFeeNativeError.invalidNativeOutput
+}
+let canonicalMarker = try assessment.marker()
 ```
 
-The SDK requires bridge ABI 25, signs the exact bounded request, refuses
-redirected, cacheable, encoded, or non-Norito success responses, and exposes
-the 64 KiB-bounded result only after native canonical decoding, request-echo,
-height, hash, and aggregate-Q16 verification. The returned assurance is an
-authenticated same-snapshot evaluation, not an independent state witness;
-transaction admission remains authoritative and rejects a stale policy or
-Hijiri binding.
+The three ABI-25 retail fee operations use native typed Norito and reject
+noncanonical markers. Local decoding does not verify that an assessment is
+current or authorized. Signed read and verified finality remain required before
+payment approval; admission checks the assessment against ledger state.
 
 ### Kotodama contract manifests
 

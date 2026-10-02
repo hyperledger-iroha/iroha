@@ -1281,8 +1281,12 @@ impl Execute for SubmitOracleObservation {
             .cloned()
             .unwrap_or_else(|| ObservationWindow::new(&key));
         window
-            .push(&config, observation)
+            .push(&config, observation.clone())
             .map_err(|err| aggregation_err(&err))?;
+        crate::validation_fee_rewards::retain_authenticated_observation(
+            state_transaction,
+            &observation,
+        )?;
         state_transaction
             .world
             .oracle_observations

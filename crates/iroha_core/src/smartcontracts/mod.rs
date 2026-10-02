@@ -30,7 +30,7 @@ pub trait Execute {
     ) -> Result<(), Error>;
 }
 /// This trait defines how an Iroha Iterable query is executed.
-pub trait ValidQuery: iroha_data_model::query::Query {
+pub trait ValidQuery<E = QueryExecutionFail>: iroha_data_model::query::Query {
     /// Execute a query on a read-only state.
     ///
     /// The filter is deliberately passed to the query implementation,
@@ -42,7 +42,7 @@ pub trait ValidQuery: iroha_data_model::query::Query {
         self,
         filter: CompoundPredicate<Self::Item>,
         state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail>;
+    ) -> Result<impl Iterator<Item = Self::Item>, E>;
 }
 /// This trait defines how an Iroha Singular query is executed.
 pub trait ValidSingularQuery<E = QueryExecutionFail>:

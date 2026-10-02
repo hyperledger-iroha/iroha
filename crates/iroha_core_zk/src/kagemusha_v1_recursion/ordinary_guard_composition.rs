@@ -11,7 +11,7 @@ use super::super::{
     composite::{assigned_digest_bytes_v1, assigned_uint_bytes_v1},
     guard_bundle::{
         KagemushaAssignedGuardBundleV1, KagemushaGuardBundleRelationWitnessV1, assign_bytes,
-        constant_bytes, constrain_guard_bundle_semantics_v1, hash,
+        constant_bytes, constrain_ordinary_guard_bundle_semantics_v1, hash,
     },
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
     ordinary_app_guard_binding::{
@@ -55,6 +55,9 @@ pub(crate) struct OrdinaryGuardWitnessV1<'a> {
     pub(crate) approval: &'a KagemushaAppOperationApprovalV1,
     pub(crate) previous_app_attest_counter: Option<u32>,
     pub(crate) integrity_lease: Option<&'a KagemushaPlayIntegrityRefreshLeaseV1>,
+    /// Actual incoming purpose1 body; None is fixed inactive circuit padding for every other mode.
+    pub(crate) incoming_terminal_body:
+        Option<&'a iroha_data_model::kagemusha::KagemushaOrdinaryIncomingTerminalBodyV1>,
 }
 
 pub(crate) fn build_ordinary_app_guard_pair_v1(
@@ -187,7 +190,7 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
             .main(0)
             .load_witness(F::from(u64::from(issuer_raw[i])))
     });
-    let guard = constrain_guard_bundle_semantics_v1(&mut builder, &mut jobs, w.relation)?;
+    let guard = constrain_ordinary_guard_bundle_semantics_v1(&mut builder, &mut jobs, w.relation)?;
     let mut union = assign_ordinary_credential_union_v1(&mut builder, w.credential)?;
     let range = builder.range_chip();
     let ed_digest = reconstruct_ordinary_credential_union_v1(
@@ -283,6 +286,15 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
         issued_at_ms: ctx.load_witness(F::from(w.approval.challenge.issued_at_ms)),
         expires_at_ms: ctx.load_witness(F::from(w.approval.challenge.expires_at_ms)),
     };
+    super::super::ordinary_incoming_terminal_binding::constrain_ordinary_incoming_terminal_v1(
+        builder.main(0),
+        &range,
+        &mut jobs,
+        &guard,
+        &signed_s,
+        &wrapper,
+        w.incoming_terminal_body,
+    )?;
     let bound_wrapper = constrain_ordinary_approval_wrapper_v1(
         &mut builder,
         &mut jobs,
@@ -357,7 +369,14 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     }));
     builder.assigned_instances = vec![public];
     super::super::base_packing::finalize_base_params_v1(&mut builder, 9)?;
-    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)?;
+    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)
+        .map_err(|reason| {
+            // Public circuit shape only; original financial/platform witnesses are not logged.
+            format!(
+                "{reason}; ordinary Guard Base layout: {:?}",
+                builder.config_params
+            )
+        })?;
     Ok((
         builder,
         jobs,

@@ -6,7 +6,7 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, StateTransaction, World},
 };
-use iroha_data_model::{IntoKeyValue, block::BlockHeader};
+use iroha_data_model::{IntoKeyValue, asset::AssetBalanceScope, block::BlockHeader};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
 
@@ -794,4 +794,334 @@ fn numeric_transfer_precheck_preserves_typed_source_and_receiver_controls() {
         assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(10_u32));
         assert_eq!(asset_balance_or_zero(&tx, &destination), Quantity::zero());
     }
+}
+
+#[test]
+fn exact_same_account_scope_transfer_rebuilds_all_holder_indexes_after_source_exhaustion() {
+    let domain = wonderland_domain_id();
+    let definition = wonderland_asset_definition_id("scoped-index-owner");
+    let source = AssetId::with_scope(
+        definition.clone(),
+        ALICE_ID.clone(),
+        AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+    );
+    let destination = AssetId::with_scope(
+        definition.clone(),
+        ALICE_ID.clone(),
+        AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
+    );
+    let asset_definition = AssetDefinition::numeric(
+        definition.clone(),
+        "Scoped",
+        AssetBalancePolicy::DataspaceRestricted,
+        Some(domain.clone()),
+    )
+    .build(&ALICE_ID);
+    let world = World::with_assets(
+        [Domain::new(domain.clone()).build(&ALICE_ID)],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [asset_definition],
+        [Asset::new(source.clone(), Quantity::from(10_u32))],
+        [],
+    );
+    let state = asset_route_test_state(world);
+    let mut block = state.block(occurrence_header());
+    let mut transaction =
+        block.transaction_for_fastpq_testing(Hash::new(b"same account distinct exact scopes"));
+    let amount = Quantity::from(10_u32);
+    let delta = transaction
+        .world
+        .precheck_numeric_asset_transfer_delta_exact(&source, &destination, &amount)
+        .unwrap();
+    transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &source,
+            &destination,
+            &amount,
+            &delta,
+            NumericAssetTransferSourcePolicy::User,
+        )
+        .unwrap();
+    assert!(transaction.world.assets.get(&source).is_none());
+    assert_eq!(asset_balance_or_zero(&transaction, &destination), amount);
+    let definition_assets = transaction
+        .world
+        .asset_definition_assets
+        .get(&definition)
+        .unwrap();
+    assert!(!definition_assets.contains(&source));
+    assert!(definition_assets.contains(&destination));
+    assert_eq!(definition_assets.len(), 1);
+    let account_assets = transaction.world.assets_by_account.get(&ALICE_ID).unwrap();
+    assert!(!account_assets.contains(&source));
+    assert!(account_assets.contains(&destination));
+    let domain_assets = transaction.world.assets_by_domain.get(&domain).unwrap();
+    assert!(!domain_assets.contains(&source));
+    assert!(domain_assets.contains(&destination));
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition_holders
+            .get(&definition)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        transaction
+            .world
+            .asset_definition_holders
+            .get(&definition)
+            .unwrap()
+            .contains(&ALICE_ID)
+    );
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition_nonzero_holders
+            .get(&definition)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        transaction
+            .world
+            .asset_definition_nonzero_holders
+            .get(&definition)
+            .unwrap()
+            .contains(&ALICE_ID)
+    );
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition(&definition)
+            .unwrap()
+            .total_quantity(),
+        &amount
+    );
+}
+
+#[test]
+fn exact_pair_rechecks_destination_before_touching_source_or_its_indexes() {
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::of(definition.clone(), BOB_ID.clone());
+    let mut block = state.block(occurrence_header());
+    let mut transaction =
+        block.transaction_for_fastpq_testing(Hash::new(b"paired write fallible precheck"));
+    let amount = Quantity::from(10_u32);
+    let delta = transaction
+        .world
+        .precheck_numeric_asset_transfer_delta_exact(&source, &destination, &amount)
+        .unwrap();
+    transaction.world.accounts.remove(BOB_ID.clone());
+    assert!(
+        transaction
+            .world
+            .apply_prechecked_numeric_asset_transfer_delta_exact(
+                &source,
+                &destination,
+                &amount,
+                &delta,
+                NumericAssetTransferSourcePolicy::User
+            )
+            .is_err()
+    );
+    assert_eq!(asset_balance_or_zero(&transaction, &source), amount);
+    assert!(transaction.world.assets.get(&destination).is_none());
+    assert!(
+        transaction
+            .world
+            .asset_definition_assets
+            .get(&definition)
+            .unwrap()
+            .contains(&source)
+    );
+    assert!(
+        transaction
+            .world
+            .asset_definition_nonzero_holders
+            .get(&definition)
+            .unwrap()
+            .contains(&ALICE_ID)
+    );
+}
+
+#[test]
+fn original_supply_preparation_is_read_only_and_consumes_exact_balance_then_total() {
+    for (mint, amount, expected) in [(true, 3_u32, 13_u32), (false, 3, 7), (false, 10, 0)] {
+        let (state, definition, source) = build_asset_transfer_control_test_state(10);
+        let mut block = state.block(occurrence_header());
+        let mut transaction = block.transaction();
+        let amount = Quantity::from(amount);
+        let events_before = transaction.world.internal_event_buf.len();
+        let prepared =
+            PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, mint).unwrap();
+        assert_eq!(prepared.balance_after, Quantity::from(expected));
+        assert_eq!(
+            prepared.supply_after.as_ref().unwrap(),
+            &Quantity::from(expected)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&transaction, &source),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition(&definition)
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(10_u32)
+        );
+        assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+        let total = prepared.apply_balance(&mut transaction.world).unwrap();
+        assert_eq!(
+            asset_balance_or_zero(&transaction, &source),
+            Quantity::from(expected)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition(&definition)
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(10_u32)
+        );
+        total.apply(&mut transaction.world, &amount).unwrap();
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition(&definition)
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(expected)
+        );
+        if expected == 0 {
+            assert!(transaction.world.assets.get(&source).is_none());
+            assert!(
+                !transaction
+                    .world
+                    .asset_definition_nonzero_holders
+                    .get(&definition)
+                    .is_some_and(|holders| holders.contains(&ALICE_ID))
+            );
+        }
+        drop(transaction);
+        assert_eq!(
+            block.world.assets.get(&source).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert_eq!(
+            block
+                .world
+                .asset_definition(&definition)
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(10_u32)
+        );
+    }
+}
+
+#[test]
+fn original_supply_preparation_preserves_deferred_total_error_and_rollback() {
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    // Deliberately corrupt this private diagnostic overlay: the original aggregate
+    // failure occurs after the debit, and must never publish a complete capture.
+    transaction
+        .world
+        .asset_definitions
+        .get_mut(&definition)
+        .unwrap()
+        .total_quantity = Quantity::one();
+    let amount = Quantity::from(2_u32);
+    let prepared =
+        PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, false).unwrap();
+    assert!(matches!(
+        &prepared.supply_after,
+        Err(Error::Math(MathError::NotEnoughQuantity))
+    ));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &source),
+        Quantity::from(10_u32)
+    );
+    let total = prepared.apply_balance(&mut transaction.world).unwrap();
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &source),
+        Quantity::from(8_u32)
+    );
+    assert!(matches!(
+        total.apply(&mut transaction.world, &amount),
+        Err(Error::Math(MathError::NotEnoughQuantity))
+    ));
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition(&definition)
+            .unwrap()
+            .total_quantity(),
+        &Quantity::one()
+    );
+    drop(transaction);
+    assert_eq!(
+        block.world.assets.get(&source).unwrap().as_ref(),
+        &Quantity::from(10_u32)
+    );
+    assert_eq!(
+        block
+            .world
+            .asset_definition(&definition)
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(10_u32)
+    );
+}
+
+#[test]
+fn original_supply_preparation_rejects_source_and_recipient_controls_before_writes() {
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    let amount = Quantity::one();
+    SetAssetHoldingLimit::new(
+        ALICE_ID.clone(),
+        definition.clone(),
+        Some(Quantity::from(10_u32)),
+    )
+    .execute(&ALICE_ID, &mut transaction)
+    .unwrap();
+    let events_before = transaction.world.internal_event_buf.len();
+    assert!(matches!(
+        PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, true),
+        Err(Error::AssetTransferAdmission(
+            AssetTransferAdmissionError::HoldingLimitExceeded(_)
+        ))
+    ));
+    assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+    seed_prepared_test_orchard_reserve(&mut transaction, &source);
+    let events_before = transaction.world.internal_event_buf.len();
+    let error = PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, false)
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("public reserve cannot be burned")
+    );
+    assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &source),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition(&definition)
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(10_u32)
+    );
 }

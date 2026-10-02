@@ -237,7 +237,7 @@ fn scalar_dispatch_residues(
             )
             .unwrap()
         }
-        SegmentAdapterIdV1::Rfc5280 => evaluate_zk_x509_rfc5280_stark_residues_v1(
+        SegmentAdapterIdV1::Rfc5280 => evaluate_zk_x509_rfc5280_local_residues_v1(
             opening.base_current.try_into().unwrap(),
             opening.base_next.try_into().unwrap(),
             opening.aux_current.try_into().unwrap(),
@@ -245,7 +245,6 @@ fn scalar_dispatch_residues(
             fixed.try_into().unwrap(),
             log19.post_base.der(),
             log19.post_base.rfc5280(),
-            log19.claims.rfc5280,
         )
         .unwrap(),
         SegmentAdapterIdV1::Sha256CallBus => {
@@ -260,14 +259,13 @@ fn scalar_dispatch_residues(
                 aux: opening.aux_next.try_into().unwrap(),
                 fixed: prepared.sha_next[segment].map(native_value),
             };
-            evaluate_zk_x509_sha_batch_residues_v1(
+            evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                 &current,
                 &next,
                 log19.post_base.sha_word(),
                 log19.post_base.sha(),
                 log19.post_base.rfc5280(),
                 segment as u8,
-                &log19.claims.sha.ca_calls,
             )
             .unwrap()
         }
@@ -282,8 +280,7 @@ fn scalar_dispatch_residues(
 #[allow(clippy::too_many_lines)]
 fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration() {
     use super::super::super::tests::{
-        main_log19_statement_fixture_v1, main_log19_terminal_claims_fixture_v1,
-        p256_main_provider_post_base_fixture_v1,
+        main_log19_statement_fixture_v1, p256_main_provider_post_base_fixture_v1,
     };
 
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
@@ -304,7 +301,6 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         .unwrap();
     let point = E::from_base(x);
     let post_base = p256_main_provider_post_base_fixture_v1();
-    let claims = main_log19_terminal_claims_fixture_v1();
     let statement =
         crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(0);
     let key_plan = main_key_joins::MainKeyJoinPlanV1::new_v1(
@@ -326,7 +322,6 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         &layout,
         &main_log19_statement_fixture_v1(),
         post_base,
-        claims,
     )
     .unwrap();
     // The production preparer compiles public fixed context without creating
@@ -733,7 +728,6 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
         &layout,
         &assembly.rfc_trace.statement,
         post_base,
-        bound.claims,
     )
     .unwrap();
     log19.prepare_complete_oods_fixed_v1().unwrap();

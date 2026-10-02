@@ -15,8 +15,8 @@
 //! independently domain-separated Goldilocks products bind `(call, role, slot, word kind, word
 //! offset, value)` between source and SHA adapters. Products accumulate continuously inside each
 //! whole-call-packed physical segment. Separate per-call products can still be replayed for
-//! cross-adapter equality, while the SHA AIR itself exposes only registration-owned segment
-//! terminals and never selects a claim from an opened call identity.
+//! cross-adapter equality. The canonical local SHA relation and joint original-oracle
+//! quotients consume those products privately; no terminal scalar is serialized.
 #[cfg(test)]
 use super::sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneChallengesV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -147,6 +147,11 @@ pub(crate) const ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1: usize =
         + 2 * ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 * ZK_X509_SHA_BUS_LANES_V1
         + ZK_X509_SHA_BATCH_BASE_WIDTH_V1
         + ZK_X509_SHA_BATCH_AUX_WIDTH_V1;
+/// Local SHA relation with its208 public CA-boundary equations removed.
+/// The consuming joint MAIN composition must include all108 original CA joins.
+pub(crate) const ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
+        - 4 * ZK_X509_SHA_CA_CALL_COUNT_V1 * ZK_X509_SHA_BUS_LANES_V1;
 /// Maximum total degree including verifier-fixed selectors.
 ///
 /// The capacity equations reach six. Call-product terminal constraints also
@@ -363,7 +368,7 @@ const _: () = {
     assert!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 == 6);
 };
 /// Stable identity of the release SHA batch and call bus.
-pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints772=local564+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-private-source-digest-and-rfc-products:no-public-segment-products:main-16-quartic-native-endpoint-links-to-private-rfc-bridges:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
+pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints564=local-private-running-products:MAIN108-cross-proof-original-polynomial-quotients:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-private-source-digest-and-rfc-products:no-public-segment-products:main-16-quartic-native-endpoint-links-to-private-rfc-bridges:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-bind-original-source-and-digest-endpoints-through-MAIN108-private-polynomial-quotients-without-product-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
 /// Semantic owner of one canonical SHA call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509ShaCallRoleV1 {
@@ -542,11 +547,12 @@ pub(crate) struct ZkX509ShaCallEventV1 {
     /// Constrained 32-bit big-endian word; inactive capacity rows are zero.
     pub(crate) value: u32,
 }
-/// Per-call composite-proof terminals.
+/// Reference per-call terminal products retained by material and algebraic controls.
 ///
 /// Raw lengths, active block counts, and digest words are deliberately absent: exposing any of them
 /// in proof metadata would defeat the fixed-capacity privacy contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaCallTerminalV1 {
     /// Canonical call identity.
     pub(crate) call: u8,
@@ -557,12 +563,12 @@ pub(crate) struct ZkX509ShaCallTerminalV1 {
     /// Digest-consumer product terminal per call-bus lane.
     pub(crate) digest_products: [F; ZK_X509_SHA_BUS_LANES_V1],
 }
-/// Proof-carried cumulative start and call-local terminal products for one compact-CA SHA call.
+/// Private cumulative start and call-local terminal products for one compact-CA SHA call.
 ///
 /// The MAIN AIR binds `start` on the call's verifier-fixed first row and binds `start * terminal`
 /// to the cumulative product on its fixed last row. The multiplication-only relation remains total
 /// when a compressed factor is zero and never asks the prover or verifier to divide a bus product.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaCallBoundaryTerminalV1 {
     /// Canonical call identity in `16..=28`.
     pub(crate) call: u8,
@@ -577,17 +583,20 @@ pub(crate) struct ZkX509ShaCallBoundaryTerminalV1 {
     /// Call-local digest product.
     pub(crate) digest_products: [F; ZK_X509_SHA_BUS_LANES_V1],
 }
-impl ZkX509ShaCallBoundaryTerminalV1 {
-    pub(crate) fn terminal_v1(self) -> ZkX509ShaCallTerminalV1 {
-        ZkX509ShaCallTerminalV1 {
-            call: self.call,
-            role: self.role,
-            source_products: self.source_products,
-            digest_products: self.digest_products,
-        }
+impl core::fmt::Debug for ZkX509ShaCallBoundaryTerminalV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509ShaCallBoundaryTerminalV1 { <private products redacted> }")
     }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for ZkX509ShaCallBoundaryTerminalV1 {
+    fn zeroize(&mut self) {
+        clear_ca_boundary_products_v1(core::slice::from_mut(self));
+    }
+}
+impl ZkX509ShaCallBoundaryTerminalV1 {
     pub(crate) fn validate_identity_v1(
-        self,
+        &self,
         index: usize,
     ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
         let call = ZK_X509_SHA_CA_LEAF_CALL_V1
@@ -636,8 +645,8 @@ impl ZkX509ShaRfcConsumerTerminalV1 {
 }
 /// Private RFC stream products at one verifier-owned physical segment endpoint.
 ///
-/// Source/digest accumulators remain private except for the separately constrained
-/// compact-CA call boundaries. Their unconsumed whole-segment totals are not claims.
+/// Source/digest accumulators and compact-CA call boundaries remain private.
+/// Their unconsumed whole-segment totals are not claims.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(PartialEq, Eq)]
 pub(crate) struct ZkX509ShaSegmentPrivateEndpointV1 {
@@ -687,14 +696,47 @@ impl Drop for ZkX509ShaSegmentPrivateEndpointV1 {
 }
 /// Terminal material emitted while one physical SHA segment is streamed.
 ///
-/// Boundary claims are emitted only for compact-CA calls physically owned by
+/// Private boundary products are retained only for compact-CA calls physically owned by
 /// this segment. Across the four canonical segments they form the exact
 /// call-ordered set `16..=28`; callers must reject omissions and duplicates.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaSegmentAirTerminalsV1 {
     pub(crate) segment: ZkX509ShaSegmentPrivateEndpointV1,
     pub(crate) ca_call_boundaries: Vec<ZkX509ShaCallBoundaryTerminalV1>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn clear_ca_boundary_products_v1(values: &mut [ZkX509ShaCallBoundaryTerminalV1]) {
+    for value in values {
+        zeroize_fields_v1(&mut value.source_start_products);
+        zeroize_fields_v1(&mut value.digest_start_products);
+        zeroize_fields_v1(&mut value.source_products);
+        zeroize_fields_v1(&mut value.digest_products);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509ShaSegmentAirTerminalsV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509ShaSegmentAirTerminalsV1 { <private products redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl ZkX509ShaSegmentAirTerminalsV1 {
+    fn into_segment_v1(mut self) -> ZkX509ShaSegmentPrivateEndpointV1 {
+        core::mem::replace(
+            &mut self.segment,
+            ZkX509ShaSegmentPrivateEndpointV1 {
+                segment: 0,
+                rfc_stream_products: [[F::ZERO; 4]; 4],
+            },
+        )
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ShaSegmentAirTerminalsV1 {
+    fn drop(&mut self) {
+        clear_ca_boundary_products_v1(&mut self.ca_call_boundaries);
+    }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(PartialEq, Eq)]
@@ -1319,7 +1361,8 @@ fn manifest_role_v1(call: usize) -> Result<ZkX509ShaCallRoleV1, ZkX509ShaCallBus
         _ => Err(ZkX509ShaCallBusStarkErrorV1::Topology),
     }
 }
-/// Return the verifier-owned identity for one compact-CA boundary claim.
+/// Return the verifier-owned identity for one reference compact-CA boundary fixture.
+#[cfg(test)]
 pub(crate) fn zk_x509_sha_ca_call_identity_v1(
     index: usize,
 ) -> Result<(u8, ZkX509ShaCallRoleV1), ZkX509ShaCallBusStarkErrorV1> {
@@ -2500,7 +2543,12 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
             .checked_add(self.replay.active_rows())
             .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
         let mut products = ZkX509ShaSegmentProductStateV1::one_v1();
-        let mut ca_call_boundaries = Vec::new();
+        let mut ca_call_boundaries = PrivateTableV1::new(Vec::new(), clear_ca_boundary_products_v1);
+        // Reserve before private copies are written, so reallocation cannot leave
+        // retired product cells in an old allocation.
+        ca_call_boundaries
+            .try_reserve_exact(ZK_X509_SHA_CA_CALL_COUNT_V1)
+            .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
         ca_call_boundaries
             .try_reserve_exact(ZK_X509_SHA_CA_CALL_COUNT_V1)
             .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
@@ -2532,18 +2580,18 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
                 base, binding, &products,
             )?;
             if usize::from(manifest.call) >= ZK_X509_SHA_CA_LEAF_CALL_V1 {
-                let boundary = ZkX509ShaCallBoundaryTerminalV1 {
+                let boundary = zeroize::Zeroizing::new(ZkX509ShaCallBoundaryTerminalV1 {
                     call: manifest.call,
                     role: manifest.role,
                     source_start_products: products.source_products,
                     digest_start_products: products.digest_products,
                     source_products: call.terminal.source_products,
                     digest_products: call.terminal.digest_products,
-                };
+                });
                 boundary.validate_identity_v1(
                     usize::from(manifest.call) - ZK_X509_SHA_CA_LEAF_CALL_V1,
                 )?;
-                ca_call_boundaries.push(boundary);
+                ca_call_boundaries.push(*boundary);
             }
             for global_row in call_start..call_end {
                 let call_row = global_row
@@ -2570,7 +2618,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         }
         Ok(ZkX509ShaSegmentAirTerminalsV1 {
             segment: products.terminal_v1(self.replay.segment())?,
-            ca_call_boundaries,
+            ca_call_boundaries: ca_call_boundaries.into_vec(),
         })
     }
     fn validate_column_request_v1(
@@ -2631,7 +2679,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     ) -> Result<ZkX509ShaSegmentPrivateEndpointV1, ZkX509ShaCallBusStarkErrorV1> {
         Ok(self
             .fill_aux_column_with_air_terminals_v1(segment, local_column, target)?
-            .segment)
+            .into_segment_v1())
     }
     /// Stream all challenge-dependent auxiliary rows once and return the exact
     /// segment and compact-CA boundary terminals.
@@ -2656,7 +2704,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     ) -> Result<ZkX509ShaSegmentPrivateEndpointV1, ZkX509ShaCallBusStarkErrorV1> {
         Ok(self
             .for_each_aux_row_with_air_terminals_v1(visitor)?
-            .segment)
+            .into_segment_v1())
     }
     /// Clear the retained opaque binding and permanently close every bound replay API.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -3244,7 +3292,7 @@ fn physical_padding_row_v1(_segment_row: usize) -> ZkX509ShaBatchRowV1 {
         fixed,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 /// Evaluate one opened fixed-capacity batch row.
 ///
 /// Calls never cross a physical segment boundary.  Every active segment
@@ -3274,6 +3322,7 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
 /// Public challenges and terminal claims embed from the base field; all opened
 /// private and fixed columns stay in the evaluation field. No row value selects
 /// a host-language branch. This does not authenticate the supplied openings.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509ShaBatchRowV1<A>,
     next: &ZkX509ShaBatchRowV1<A>,
@@ -3282,6 +3331,48 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
     rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
     segment: u8,
     ca_call_boundaries: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
+) -> Result<Vec<A>, ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        Some(ca_call_boundaries),
+    )
+}
+
+/// Complete local SHA relation before original-polynomial cross-proof joins.
+/// This is not a standalone proof relation: joint MAIN must authenticate its
+/// source/digest endpoints against the original compact-CA auxiliary FRI.
+pub(crate) fn evaluate_zk_x509_sha_batch_local_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+) -> Result<Vec<A>, ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        None,
+    )
+}
+
+fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+    ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
 ) -> Result<Vec<A>, ZkX509ShaCallBusStarkErrorV1> {
     call_challenges.validate()?;
     rfc_challenges
@@ -3302,8 +3393,10 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
     if usize::from(segment) >= ZK_X509_SHA_SEGMENT_COUNT_V1 {
         return Err(ZkX509ShaCallBusStarkErrorV1::Terminal);
     }
-    for (index, boundary) in ca_call_boundaries.iter().copied().enumerate() {
-        boundary.validate_identity_v1(index)?;
+    if let Some(boundaries) = ca_call_boundaries {
+        for (index, boundary) in boundaries.iter().copied().enumerate() {
+            boundary.validate_identity_v1(index)?;
+        }
     }
     let current_word_base: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1] = current.base
         [..SHA_WORD_CAPACITY_BASE_WIDTH_V1]
@@ -3395,24 +3488,27 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
         // Whole-segment source/digest totals have no external consumer. Their
         // initial-one and live recurrence constraints remain, and compact-CA
         // boundaries below bind the actual call-local products without division.
-        for (boundary_index, boundary) in ca_call_boundaries.iter().copied().enumerate() {
-            let selector = current.fixed[ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + boundary_index];
-            let call_first = current.fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1].mul(selector);
-            let call_last = current.fixed[SHA_WORD_CAPACITY_CALL_LAST_V1].mul(selector);
-            residues.push(
-                call_first
-                    .mul(input_before.sub(A::from_base(boundary.source_start_products[lane]))),
-            );
-            residues.push(
-                call_first
-                    .mul(digest_before.sub(A::from_base(boundary.digest_start_products[lane]))),
-            );
-            residues.push(call_last.mul(input_after.sub(A::from_base(
-                boundary.source_start_products[lane].mul(boundary.source_products[lane]),
-            ))));
-            residues.push(call_last.mul(digest_after.sub(A::from_base(
-                boundary.digest_start_products[lane].mul(boundary.digest_products[lane]),
-            ))));
+        if let Some(boundaries) = ca_call_boundaries {
+            for (boundary_index, boundary) in boundaries.iter().copied().enumerate() {
+                let selector =
+                    current.fixed[ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + boundary_index];
+                let call_first = current.fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1].mul(selector);
+                let call_last = current.fixed[SHA_WORD_CAPACITY_CALL_LAST_V1].mul(selector);
+                residues.push(
+                    call_first
+                        .mul(input_before.sub(A::from_base(boundary.source_start_products[lane]))),
+                );
+                residues
+                    .push(call_first.mul(
+                        digest_before.sub(A::from_base(boundary.digest_start_products[lane])),
+                    ));
+                residues.push(call_last.mul(input_after.sub(A::from_base(
+                    boundary.source_start_products[lane].mul(boundary.source_products[lane]),
+                ))));
+                residues.push(call_last.mul(digest_after.sub(A::from_base(
+                    boundary.digest_start_products[lane].mul(boundary.digest_products[lane]),
+                ))));
+            }
         }
     }
     for stream in 0..ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 {
@@ -3439,7 +3535,12 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
     }
     residues.extend(current.base.map(|value| padding.mul(value)));
     residues.extend(current.aux.map(|value| padding.mul(value)));
-    if residues.len() != ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1 {
+    let expected_count = if ca_call_boundaries.is_some() {
+        ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
+    } else {
+        ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1
+    };
+    if residues.len() != expected_count {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
     Ok(residues)
@@ -3578,8 +3679,128 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_sha_relation_preserves_every_nonpublic_residue_for_all_segments() {
+        fn compare<A: PolynomialAirFieldV1 + core::fmt::Debug + PartialEq>(
+            embed: impl Fn(usize) -> A,
+        ) {
+            for seed in 0..8 {
+                let current = ZkX509ShaBatchRowV1 {
+                    base: core::array::from_fn(|i| embed(seed + i)),
+                    aux: core::array::from_fn(|i| embed(seed + 7 + i)),
+                    fixed: core::array::from_fn(|i| embed(seed + 11 + i)),
+                };
+                let next = ZkX509ShaBatchRowV1 {
+                    base: core::array::from_fn(|i| embed(seed + 17 + i)),
+                    aux: core::array::from_fn(|i| embed(seed + 23 + i)),
+                    fixed: core::array::from_fn(|i| embed(seed + 29 + i)),
+                };
+                for segment in 0..4 {
+                    let full = evaluate_zk_x509_sha_batch_residues_over_field_v1(
+                        &current,
+                        &next,
+                        word_challenges(),
+                        challenges(),
+                        rfc_challenges(),
+                        segment,
+                        &neutral_ca_call_boundaries(),
+                    )
+                    .unwrap();
+                    let local = evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
+                        &current,
+                        &next,
+                        word_challenges(),
+                        challenges(),
+                        rfc_challenges(),
+                        segment,
+                    )
+                    .unwrap();
+                    let prefix =
+                        SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 + ZK_X509_SHA_RFC_LENGTH_BITS_V1 + 1;
+                    let expected = full
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| {
+                            let relative = index.saturating_sub(prefix);
+                            let public = index >= prefix && relative < 4 * 56 && relative % 56 >= 4;
+                            (!public).then_some(*value)
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(full.len() - expected.len(), 208);
+                    assert_eq!(local.len(), ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1);
+                    assert_eq!(local, expected);
+                }
+            }
+        }
+        compare(|i| F((i % 17) as u64));
+        compare(|i| {
+            crate::privacy_engines::transparent_stark::GoldilocksFp4V1::canonical([
+                (i % 17) as u64,
+                (i % 11) as u64,
+                (i % 7) as u64,
+                (i % 5) as u64,
+            ])
+            .unwrap()
+        });
+    }
     include!("sha_call_bus_rfc_binding_tests.rs");
     include!("sha_cyclic_padding_tests.rs");
+    #[test]
+    fn private_ca_boundary_owners_clear_success_error_unwind_and_segment_transfer() {
+        use super::super::private_table::inspection;
+        fn boundary() -> ZkX509ShaCallBoundaryTerminalV1 {
+            ZkX509ShaCallBoundaryTerminalV1 {
+                call: ZK_X509_SHA_CA_LEAF_CALL_V1 as u8,
+                role: manifest_role_v1(ZK_X509_SHA_CA_LEAF_CALL_V1).unwrap(),
+                source_start_products: [F(19); 4],
+                digest_start_products: [F(23); 4],
+                source_products: [F(29); 4],
+                digest_products: [F(31); 4],
+            }
+        }
+        for exit in 0..3 {
+            let (result, observations) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(|| -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+                    let scratch = zeroize::Zeroizing::new(boundary());
+                    assert!(format!("{scratch:?}").contains("redacted"));
+                    let mut products =
+                        PrivateTableV1::new(Vec::with_capacity(1), clear_ca_boundary_products_v1);
+                    products.push(*scratch);
+                    if exit == 1 {
+                        return Err(ZkX509ShaCallBusStarkErrorV1::Terminal);
+                    }
+                    if exit == 2 {
+                        panic!("private boundary unwind control");
+                    }
+                    let owner = ZkX509ShaSegmentAirTerminalsV1 {
+                        segment: ZkX509ShaSegmentPrivateEndpointV1 {
+                            segment: 3,
+                            rfc_stream_products: [[F(37); 4]; 4],
+                        },
+                        ca_call_boundaries: products.into_vec(),
+                    };
+                    assert!(format!("{owner:?}").contains("redacted"));
+                    let segment = owner.into_segment_v1();
+                    assert_eq!(segment.segment, 3);
+                    assert_eq!(segment.rfc_stream_products, [[F(37); 4]; 4]);
+                    Ok(())
+                })
+            });
+            assert_eq!(result.is_err(), exit == 2);
+            if let Ok(inner) = result {
+                assert_eq!(inner.is_err(), exit == 1);
+            }
+            assert!(
+                observations
+                    .iter()
+                    .map(|entry| entry.nonzero_before)
+                    .sum::<usize>()
+                    >= 32
+            );
+            assert!(observations.iter().all(|entry| entry.nonzero_after == 0));
+        }
+    }
+
     #[test]
     fn retained_sha_witness_erasure_clears_live_message_and_digest_cells() {
         let mut witness = ZkX509ShaCallWitnessV1 {
@@ -5610,11 +5831,11 @@ mod tests {
         current.fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1] = F::ZERO;
         let mut next = second.row(0).expect("second first");
         next.fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1] = F::ZERO;
-        let terminal = second
+        let terminal_owner = second
             .segment_product_state
             .terminal_v1(0)
-            .expect("segment terminal")
-            .segment;
+            .expect("segment terminal");
+        let terminal = terminal_owner.segment;
         let ca_call_boundaries = ca_call_boundaries_for_calls(&[&first, &second]);
         assert!(
             evaluate_zk_x509_sha_batch_residues_v1(
@@ -5725,10 +5946,10 @@ mod tests {
     }
     #[test]
     fn opened_fixed_selectors_are_algebraic_and_padding_is_fail_closed() {
-        let terminal = ZkX509ShaSegmentProductStateV1::one_v1()
+        let terminal_owner = ZkX509ShaSegmentProductStateV1::one_v1()
             .terminal_v1(0)
-            .expect("empty segment terminal")
-            .segment;
+            .expect("empty segment terminal");
+        let terminal = terminal_owner.segment;
         let padding = physical_padding_row_v1(123);
         assert!(
             evaluate_zk_x509_sha_batch_residues_v1(

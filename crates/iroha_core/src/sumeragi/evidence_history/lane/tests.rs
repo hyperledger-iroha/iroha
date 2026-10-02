@@ -743,7 +743,11 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
         Signers::Quorum,
         Default::default(),
         |proposal| {
+            let parent_service_commit_qc = proposal
+                .npos_consensus_effects()
+                .and_then(|effects| effects.parent_service_commit_qc.clone());
             proposal.set_npos_consensus_effects(Some(NposConsensusEffects {
+                parent_service_commit_qc,
                 evidence_admissions: vec![proof.clone()],
                 penalty_actions: Vec::new(),
             }));

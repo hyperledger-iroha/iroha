@@ -311,6 +311,25 @@ pub struct DecodedSumeragiBlock {
 }
 
 impl DecodedSumeragiBlock {
+    /// Compare decoded decision data with an independently authenticated native execution.
+    ///
+    /// This pure equality check does not establish provenance for the offered arguments or
+    /// admit the candidate committee. The Node consumer must obtain every argument from its
+    /// actual consensus-visible committed reader and subsequently verify the portable proof.
+    #[must_use]
+    pub fn matches_native_execution_decision(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        core_hash: [u8; 32],
+        result: [u8; 32],
+        commitment: &ExecutionResultCommitment,
+    ) -> bool {
+        self.block.hash() == *block_hash
+            && self.core_hash.0 == core_hash
+            && self.result.0 == result
+            && &self.commitment == commitment
+    }
+
     /// Structurally checked execution under the proof's candidate committee.
     ///
     /// This accessor does not authenticate the committee or select a trust root.

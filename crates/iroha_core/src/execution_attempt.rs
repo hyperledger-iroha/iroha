@@ -203,6 +203,33 @@ pub(crate) fn vm_attempt_error(
     }
 }
 
+impl crate::state::WorldTransaction<'_, '_> {
+    /// Retain the first original local retry owner at the common mutation boundary.
+    /// This journal field has no serialization or monetary authority.
+    pub(crate) fn defer_execution(&self, reason: impl Into<ExecutionDeferred>) -> ValidationFail {
+        self.execution_deferral
+            .borrow_mut()
+            .get_or_insert_with(|| reason.into());
+        ValidationFail::InternalError("local execution attempt did not complete".into())
+    }
+
+    /// Bridge an ISI-owned signature while keeping its original local refusal.
+    pub(crate) fn attempt_error_to_instruction_error(
+        &self,
+        error: ExecutionAttemptError<iroha_data_model::isi::error::InstructionExecutionError>,
+    ) -> iroha_data_model::isi::error::InstructionExecutionError {
+        match error {
+            ExecutionAttemptError::Rejected(error) => error,
+            ExecutionAttemptError::Deferred(reason) => {
+                let _ = self.defer_execution(reason);
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    "local execution attempt did not complete".into(),
+                )
+            }
+        }
+    }
+}
+
 impl crate::state::StateTransaction<'_, '_> {
     /// Record the first local refusal before bridging a model-owned ISI signature.
     /// The enclosing attempt must extract this owner before settling any output.
@@ -210,13 +237,12 @@ impl crate::state::StateTransaction<'_, '_> {
         &mut self,
         reason: impl Into<ExecutionDeferred>,
     ) -> ValidationFail {
-        self.execution_deferral.get_or_insert_with(|| reason.into());
-        ValidationFail::InternalError("local execution attempt did not complete".into())
+        self.world.defer_execution(reason)
     }
 
     /// Borrow the sticky local retry reason without clearing its publication guard.
     pub(crate) fn execution_deferral(&self) -> Option<ExecutionDeferred> {
-        self.execution_deferral.clone()
+        self.world.execution_deferral.borrow().clone()
     }
 
     /// Bridge a model-owned instruction result while retaining the retry owner.
@@ -582,6 +608,68 @@ mod tests {
             block.world.domains.get(&domain_id).is_none(),
             "a bare local deferral must abandon staged semantic writes"
         );
+    }
+
+    #[test]
+    fn world_and_state_share_the_first_original_capacity_owner() {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        let budget = iroha_allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let original = budget.try_reserve_bytes(1).unwrap_err();
+        let refusal = ExecutionAttemptError::<
+            iroha_data_model::isi::error::InstructionExecutionError,
+        >::Deferred(original.clone().into());
+        stx.world.attempt_error_to_instruction_error(refusal);
+        stx.defer_execution(ExecutionDeferral::AllocationUnavailable);
+        let retained = stx.execution_deferral().unwrap();
+        assert_eq!(retained.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert_eq!(*stx.world.execution_deferral.borrow(), Some(retained));
+        drop(occupied);
+        assert!(budget.try_reserve_bytes(1).is_ok());
+    }
+
+    #[test]
+    fn poisoned_raw_world_apply_rolls_back_original_fields() {
+        use iroha_data_model::{Registrable, prelude::Domain};
+        use mv::storage::StorageReadOnly as _;
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let domain =
+            iroha_model_base::domain::DomainId::try_new("world_retry", "universal").unwrap();
+        let mut world = block.world.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        world.domains.insert(
+            domain.clone(),
+            Domain::new(domain.clone()).build(&iroha_test_samples::ALICE_ID),
+        );
+        world.defer_execution(ExecutionDeferral::ActiveMemoryCapacity);
+        world.apply();
+        assert!(block.world.domains.get(&domain).is_none());
     }
 
     #[test]

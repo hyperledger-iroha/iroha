@@ -138,8 +138,24 @@ impl<'a> CanonicalHistorySource<'a> {
     pub(crate) fn block_with_admission(
         self,
         height: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
+        self.block_with_attempt_admission(height, before_read)
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    QueryExecutionFail::GasBudgetExceeded
+                }
+            })
+    }
+
+    /// Original decoder refusals stay typed until the execution owner abandons its attempt.
+    pub(crate) fn block_with_attempt_admission(
+        self,
+        height: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<Arc<SignedBlock>, crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>>
+    {
         let expected = self
             .expected_hash(height)
             .map_err(QueryExecutionFail::CanonicalHistory)?;
@@ -151,16 +167,22 @@ impl<'a> CanonicalHistorySource<'a> {
             })
         };
         if self.kura.is_canonical_body_missing(height) {
-            return Err(missing());
+            return Err(missing().into());
         }
         let storage_error = |error: crate::kura::Error| match error {
-            crate::kura::Error::NoritoFrame(error) if error.is_decode_resource_limit() => {
-                QueryExecutionFail::GasBudgetExceeded
+            crate::kura::Error::NoritoFrame(error) => {
+                crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+                    QueryExecutionFail::Conversion(error.to_string())
+                })
             }
             crate::kura::Error::VersionedCodec(error) if error.is_decode_resource_limit() => {
-                QueryExecutionFail::GasBudgetExceeded
+                // The existing versioned boundary retains only this original resource category.
+                // It has no allocator-pool release owner to invent or wait on.
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                )
             }
-            error => QueryExecutionFail::Conversion(error.to_string()),
+            error => QueryExecutionFail::Conversion(error.to_string()).into(),
         };
         let source = self
             .kura
@@ -176,13 +198,15 @@ impl<'a> CanonicalHistorySource<'a> {
         let block =
             iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|error| {
                 if error.is_decode_resource_limit() {
-                    QueryExecutionFail::GasBudgetExceeded
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                    )
                 } else {
-                    QueryExecutionFail::Conversion(error.to_string())
+                    QueryExecutionFail::Conversion(error.to_string()).into()
                 }
             })?;
         authenticate_canonical_block(height, expected, Some(Arc::new(block)))
-            .map_err(QueryExecutionFail::CanonicalHistory)
+            .map_err(|error| QueryExecutionFail::CanonicalHistory(error).into())
     }
 
     /// Read execution identity through the original State tip, without inspecting
@@ -234,15 +258,35 @@ impl<'a> CanonicalHistorySource<'a> {
         self,
         first: NonZeroUsize,
         last: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<core::ops::ControlFlow<()>, QueryExecutionFail>,
+    ) -> Result<bool, QueryExecutionFail> {
+        self.visit_executed_backwards_until_attempt(first, last, before_read, visit)
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    QueryExecutionFail::GasBudgetExceeded
+                }
+            })
+    }
+
+    /// Walk one captured original tip without erasing decoder or allocator refusal.
+    pub(crate) fn visit_executed_backwards_until_attempt(
+        self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
         mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
         ) -> Result<core::ops::ControlFlow<()>, QueryExecutionFail>,
-    ) -> Result<bool, QueryExecutionFail> {
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
                 "native execution interval is reversed".into(),
-            ));
+            )
+            .into());
         }
         self.expected_hash(first)
             .and_then(|_| self.expected_hash(last))
@@ -254,7 +298,8 @@ impl<'a> CanonicalHistorySource<'a> {
         if usize::try_from(tip.height()).ok() != Some(self.height()) {
             return Err(invalid(
                 "native execution tip differs from the captured State history cut".into(),
-            ));
+            )
+            .into());
         }
         let mut expected_iroha = tip.iroha_hash();
         let mut expected_core = tip.core_hash();
@@ -274,15 +319,17 @@ impl<'a> CanonicalHistorySource<'a> {
             if journal_hash != expected_iroha {
                 return Err(invalid(format!(
                     "native execution parent contradicts State hash at {source_height}"
-                )));
+                ))
+                .into());
             }
-            let block = self.block_with_admission(index, &mut before_read)?;
-            let receipt = crate::sumeragi::certified_chain::read_frame(block, source_height)
-                .map_err(|error| invalid(error.to_string()))?;
+            let block = self.block_with_attempt_admission(index, &mut before_read)?;
+            let receipt =
+                crate::sumeragi::certified_chain::read_frame_attempt(block, source_height)
+                    .map_err(|error| error.map(|error| invalid(error.to_string())))?;
             if receipt.core_hash() != expected_core || receipt.result() != expected_result {
                 return Err(invalid(format!(
                     "native header or R differs from authenticated execution ancestry at {source_height}"
-                )));
+                )).into());
             }
             if source_height > target {
                 let header = receipt
@@ -304,9 +351,7 @@ impl<'a> CanonicalHistorySource<'a> {
                 return Ok(true);
             }
         }
-        Err(invalid(
-            "requested execution lies beyond the original native tip".into(),
-        ))
+        Err(invalid("requested execution lies beyond the original native tip".into()).into())
     }
 
     /// Load exact original execution bytes; the callback admits actual source

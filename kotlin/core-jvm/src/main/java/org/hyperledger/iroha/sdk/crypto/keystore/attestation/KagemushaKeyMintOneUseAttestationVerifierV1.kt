@@ -65,7 +65,7 @@ internal object KagemushaSelectionFrameV1 {
     fun requireOrdinaryPreparationExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) =
         requireSelection(frame, lane, before, after, preparation = true)
 
-    private fun requireShape(frame: ByteArray, preparation: Boolean) {
+    private fun requireSubject(frame: ByteArray, allowEnrollment: Boolean, preparation: Boolean = false): Int {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -86,56 +86,44 @@ internal object KagemushaSelectionFrameV1 {
             frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
         ) { "Core S has a zero policy or hardware generation" }
         val operation = frame[OPERATION].toInt() and 0xff
-        require(operation in 1..5) { "Core S has an invalid monetary operation" }
+        require(operation in (if (allowEnrollment) 0..5 else 1..5)) {
+            "Core S has an invalid operation"
+        }
         val outgoing = operation == 2 || operation == 4
         require(!preparation || outgoing) { "Purpose2 preparation requires Send or Redeem" }
         require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == (outgoing && !preparation) &&
             frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == (outgoing && !preparation)
         ) { "Core S has the wrong outgoing commitment shape" }
+        return operation
     }
 
     private fun requireSelection(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray, preparation: Boolean) {
-        requireShape(frame, preparation)
+        requireSubject(frame, allowEnrollment = false, preparation = preparation)
         require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
             frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
             frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
         ) { "Core S differs from the selected lane or exact-next indices" }
     }
 
-    /** Validate only Core S grammar; Apple counters are independent of financial indexes. */
+    /** Logical transition indices are independent of the Apple assertion counter. */
     fun requireAppAttestSubject(frame: ByteArray) {
-        require(frame.size == FRAME_BYTES) { "App Attest Core S width is invalid" }
-        val lane = frame.copyOfRange(LANE, LANE + 32)
-        if (frame[OPERATION] == 0.toByte()) {
-            requireOrdinaryBootstrapExact(frame, lane)
-            return
-        }
-        val before = frame.copyOfRange(BEFORE, BEFORE + 16)
-        val after = frame.copyOfRange(AFTER, AFTER + 16)
-        requireExact(frame, lane, before, after)
-        require(BigInteger(1, after.reversedArray()) ==
-            BigInteger(1, before.reversedArray()).add(BigInteger.ONE)) {
-            "Core S financial indexes are not exact-next"
+        val operation = requireSubject(frame, allowEnrollment = true)
+        val before = BigInteger(1, frame.copyOfRange(BEFORE, BEFORE + 16).reversedArray())
+        val after = BigInteger(1, frame.copyOfRange(AFTER, AFTER + 16).reversedArray())
+        require(if (operation == 0) before == BigInteger.ZERO && after == BigInteger.ZERO
+            else before + BigInteger.ONE == after) {
+            "App Attest Core S has invalid logical transition indices"
         }
     }
 
-    /** Separate ordinary Bootstrap data layout; it never admits a monetary exact-next S. */
+    /** Bootstrap requires absent outgoing commitments and zero logical indices in its original lane. */
     fun requireOrdinaryBootstrapExact(frame: ByteArray, lane: ByteArray) {
-        require(domain.size == 49 && frame.size == FRAME_BYTES &&
-            frame.copyOfRange(0, domain.size).contentEquals(domain)) { "Bootstrap S has the wrong V1 domain or width" }
-        require(frame.copyOfRange(domain.size, RELEASE - 2).contentEquals(
-            byteArrayOf(BODY_BYTES.toByte(), (BODY_BYTES ushr 8).toByte(), 0, 0, 0, 0, 0, 0)) &&
-            frame[RELEASE - 2] == 1.toByte() && frame[RELEASE - 1] == 0.toByte()) { "Bootstrap S has the wrong V1 framing" }
-        for (offset in intArrayOf(RELEASE, PROVIDER, APP_POLICY, CREDENTIAL, NETWORK, LANE,
-            PROFILE, HARDWARE_EPOCH, TRANSITION)) {
-            require(frame.copyOfRange(offset, offset + 32).any { it != 0.toByte() }) { "Bootstrap S has an absent identity or transition" }
+        require(requireSubject(frame, allowEnrollment = true) == 0 &&
+            frame.copyOfRange(BEFORE, FRAME_BYTES).all { it == 0.toByte() }
+        ) { "Ordinary Bootstrap requires zero logical indices" }
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane)) {
+            "Bootstrap S belongs to another original lane"
         }
-        require(frame.copyOfRange(POLICY_EPOCH, POLICY_EPOCH + 8).any { it != 0.toByte() } &&
-            frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() })
-        require(frame[OPERATION] == 0.toByte() && frame.copyOfRange(CANDIDATE, FRAME_BYTES).all { it == 0.toByte() }) {
-            "Ordinary Bootstrap requires absent outgoing commitments and zero logical indices"
-        }
-        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane)) { "Bootstrap S belongs to another original lane" }
     }
 }
 

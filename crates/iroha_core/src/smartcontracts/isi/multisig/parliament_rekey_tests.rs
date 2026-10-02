@@ -25,27 +25,47 @@ fn validation_fee_policy_proposal_for_rekey_test(
     treasury_account_id: AccountId,
     network_id: iroha_data_model::NetworkId,
 ) -> ProposalKind {
+    let contract = iroha_data_model::smart_contract::ContractAddress::derive(
+        &network_id,
+        &treasury_account_id,
+        1,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )
+    .expect("rekey fixture treasury wrapper");
+    let ds_asset_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "paynet").expect("fee asset domain"),
+        Name::from_str("ds").expect("fee asset name"),
+    );
+    let custody = iroha_data_model::validation_fee::ValidationFeeRewardCustodyV1 {
+        treasury_account_id: contract.subject_id(),
+        contract_address: contract,
+        ds_asset_id: ds_asset_id.clone(),
+        xor_asset_id: AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fees", "paynet").expect("reward asset domain"),
+            Name::from_str("xor").expect("reward asset name"),
+        ),
+        reward_pool_account_id: treasury_account_id,
+        validator_lane_id: iroha_model_base::topology::LaneId::new(0),
+    };
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: proposal_operator.clone(),
         policy: ValidationFeePolicyV1 {
+            retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+            effective_from_ms: 1793451600000,
+            notice_published_at_ms: 1790859600000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             network_id,
             policy_version: 1,
             previous_policy_hash: None,
-            ds_asset_id: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("fees", "paynet").expect("fee asset domain"),
-                Name::from_str("ds").expect("fee asset name"),
-            ),
+            ds_asset_id,
             ds_scale: VALIDATION_FEE_DS_SCALE,
-            fee: Quantity::zero(),
-            treasury_account_id,
-            charging_mode: ValidationFeeChargingMode::Disabled,
-            effective_from_height: 10,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            fee: "0.10".parse().unwrap(),
+            treasury_account_id: custody.treasury_account_id.clone(),
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
+            exemption_classes: vec!["TREASURY_PAYOUT".into()],
+            reward_custody: custody,
         },
-        payout_lifecycle_proposal_id: None,
     })
 }
 

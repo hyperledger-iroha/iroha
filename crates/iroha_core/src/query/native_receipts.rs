@@ -250,6 +250,89 @@ pub fn validation_fee_policy_witness(
     Ok(proof)
 }
 
+/// Derive one block's complete native fee accounting corpus from certified original writes.
+///
+/// # Errors
+/// Missing or corrupt original archive, invalid native finality, or an inconsistent corpus.
+pub fn fee_evidence_block_proof(
+    view: &impl StateReadOnly,
+    height: u64,
+) -> Result<iroha_data_model::fee_evidence::FeeEvidenceBlockProofV1, String> {
+    let source = original_source(view, height)?;
+    fee_evidence_from_source(&source, height)
+}
+
+fn fee_evidence_from_source(
+    source: &OriginalReceiptSource,
+    height: u64,
+) -> Result<iroha_data_model::fee_evidence::FeeEvidenceBlockProofV1, String> {
+    let (proof, root) =
+        crate::receiver_snapshot::fee_evidence_block_proof_v1(source.witness.get())?;
+    let execution = source
+        .finality
+        .decode_checked()
+        .map_err(|error| error.to_string())?;
+    if root != execution.execution().ordinary_writes_root
+        || !proof.verify(root)
+        || proof.snapshot_witness.commitment()?.evaluated_height != height
+    {
+        return Err("fee evidence differs from the certified ordinary-write root".into());
+    }
+    Ok(proof)
+}
+
+/// Read one immutable fee receipt, allocation or claim with compact finality membership.
+///
+/// # Errors
+/// See [`fee_evidence_block_proof`].
+pub fn fee_evidence_record_proof(
+    view: &impl StateReadOnly,
+    height: u64,
+    key: &iroha_model_base::state_path::StatePath,
+) -> Result<Option<iroha_data_model::fee_evidence::FeeEvidenceRecordProofV1>, String> {
+    Ok(fee_evidence_block_proof(view, height)?.record_proof(key))
+}
+
+/// Export a complete bounded accounting window from certified original writes.
+///
+/// The caller must independently authenticate the anchor's opening checkpoint and closing
+/// block; the exported proof is verified against it before it is returned.
+///
+/// # Errors
+/// Invalid or unbounded window, or any missing/corrupt historical evidence.
+pub fn fee_evidence_window_proof(
+    view: &impl StateReadOnly,
+    anchor: &iroha_data_model::fee_evidence::FeeEvidenceTrustAnchorV1,
+) -> Result<iroha_data_model::fee_evidence::FeeEvidenceWindowProofV1, String> {
+    use iroha_data_model::fee_evidence::{FeeEvidenceFinalizedBlockV1, FeeEvidenceWindowProofV1};
+    let opening = anchor.opening_height();
+    if opening < 2
+        || anchor.closing_height <= opening
+        || anchor.closing_height - opening
+            >= u64::try_from(iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_COUNT)
+                .unwrap_or(u64::MAX)
+    {
+        return Err("invalid or unbounded native fee window".into());
+    }
+    let mut blocks = Vec::new();
+    for height in opening..=anchor.closing_height {
+        let source = original_source(view, height)?;
+        let evidence = fee_evidence_from_source(&source, height)?;
+        let (policy_witness, _) =
+            crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(source.witness.get())?;
+        let registry = evidence.registry().cloned();
+        blocks.push(FeeEvidenceFinalizedBlockV1 {
+            finality: source.finality,
+            evidence,
+            policy_witness,
+            registry,
+        });
+    }
+    let proof = FeeEvidenceWindowProofV1 { version: 1, blocks };
+    proof.verify(anchor)?;
+    Ok(proof)
+}
+
 /// Derive one reserve receipt and its exact top-up path from original native execution.
 ///
 /// Portable finality grants no offline mint authority. The release-pinned recursive proof

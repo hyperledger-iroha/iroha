@@ -16,8 +16,8 @@ pub(super) struct PreparedCommitAdmission {
 
 /// Only genuine Main StateAdvance and its authentic global Commit can construct this owner.
 pub(super) struct RetainedStateAdvance {
-    generated: GeneratedOrdinaryCashCommitOriginalsV1,
-    commit_request_original_sha256: DigestV1,
+    pub(super) generated: GeneratedOrdinaryCashCommitOriginalsV1,
+    pub(super) commit_request_original_sha256: DigestV1,
 }
 
 /// Complete acknowledged outgoing transport retained in the physically reserved Native slot.
@@ -39,28 +39,44 @@ pub(super) struct StateAdvanceAcknowledgment {
 
 /// Exact originals retained before reserving the global Commit. On recovery every proof is
 /// independently re-admitted against the genuine retained W1/W2, clocks and CAS reservation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashPreparedCommitV1")]
 pub(super) struct PreparedCommitOriginals {
     reserve_request_original_sha256: DigestV1,
     commit: KagemushaOrdinaryLineageCommitV1,
     successor: KagemushaStateV1,
     public_state_original: Vec<u8>,
+    private_state_checkpoint_original: Vec<u8>,
     private_service_original: Vec<u8>,
     pre_receipt_outgoing_original: Vec<u8>,
+}
+impl core::fmt::Debug for PreparedCommitOriginals {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PreparedCommitOriginals")
+            .finish_non_exhaustive()
+    }
 }
 impl Drop for PreparedCommitOriginals {
     fn drop(&mut self) {
         use zeroize::Zeroize as _;
+        self.private_state_checkpoint_original.zeroize();
         self.successor.balance.zeroize();
         self.successor.state_nonce_commitment.zeroize();
     }
 }
 impl PreparedCommitOriginals {
     /// Digest the bounded canonical private operands while zeroizing their temporary encoding.
-    fn original_sha256(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
+    fn original_sha256(
+        &self,
+        maximum_payload_bytes: u64,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        if u64::try_from(norito::canonical_frame_len(self).map_err(material)?).map_err(material)?
+            > maximum_payload_bytes
+        {
+            return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
+        }
         let original = zeroize::Zeroizing::new(norito::encode_canonical(self).map_err(material)?);
-        if original.is_empty() || original.len() as u64 > FORMAT.maximum_payload_bytes {
+        if original.is_empty() || original.len() as u64 > maximum_payload_bytes {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         Ok(Sha256::digest(original.as_slice()).into())
@@ -77,6 +93,9 @@ impl PreparedCommitOriginals {
             commit: generated.commit().clone(),
             successor: generated.selected_successor_state().clone(),
             public_state_original: generated.successor_public_state_original().to_vec(),
+            private_state_checkpoint_original: generated
+                .successor_private_checkpoint_original()
+                .to_vec(),
             private_service_original: generated.private_service_original().to_vec(),
             pre_receipt_outgoing_original: generated.pre_receipt_outgoing_original().to_vec(),
         };
@@ -92,11 +111,13 @@ impl PreparedCommitOriginals {
         owner: &KagemushaNativeOrdinaryCashOwnerV1,
         generated: &GeneratedOrdinaryCashCommitOriginalsV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        owner.recheck_proving_history()?;
+        owner.recheck_proving_history(ProvingHistoryOperation::TerminalApproval)?;
         if self.reserve_request_original_sha256 == [0; 32]
             || &self.commit != generated.commit()
             || &self.successor != generated.selected_successor_state()
             || self.public_state_original != generated.successor_public_state_original()
+            || self.private_state_checkpoint_original
+                != generated.successor_private_checkpoint_original()
             || self.private_service_original != generated.private_service_original()
             || self.pre_receipt_outgoing_original != generated.pre_receipt_outgoing_original()
             || generated.proof().proof_bundle_original_sha256()
@@ -211,7 +232,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             &generated,
             reserve_request_original_sha256,
         )?;
-        let digest: DigestV1 = originals.original_sha256()?;
+        let digest: DigestV1 = originals.original_sha256(self.maximum_record_payload_bytes)?;
         if let Some(retained) = &self.prepared_commit {
             if retained.originals != originals {
                 return Err(KagemushaStateErrorV1::SnapshotIntegrity);
@@ -259,7 +280,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
 
     /// Apply an already acknowledged global Commit to the exact selected private financial State.
-    /// Complete delivery bytes stay unavailable until the separate post-original-fsync Ack.
+    /// This action performs only StateAdvance. A separately refreshed FI read and the distinct
+    /// acknowledgment action must follow its fsync before any complete delivery is available.
     pub(crate) fn advance_acknowledged_commit(
         &mut self,
         commit_request_original_sha256: DigestV1,
@@ -275,7 +297,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 self.acknowledged_outgoing_original(commit_request_original_sha256)?;
                 return Ok(());
             }
-            return self.acknowledge_state_advance(commit_request_original_sha256);
+            return self
+                .recheck_unacknowledged_outgoing_state_advance(commit_request_original_sha256);
         }
         self.require_current_financial_control()?;
         let prepared = self
@@ -287,7 +310,9 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             &prepared.generated,
             commit_request_original_sha256,
         )?;
-        let prepared_original_sha256 = prepared.originals.original_sha256()?;
+        let prepared_original_sha256 = prepared
+            .originals
+            .original_sha256(self.maximum_record_payload_bytes)?;
         self.require_outbox_capacity_for_new_slot()?;
         self.financial_journal_revision
             .checked_add(1)
@@ -302,7 +327,37 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             self.recovery_failed = true;
             return Err(error);
         }
-        self.acknowledge_state_advance(commit_request_original_sha256)
+        self.recheck_unacknowledged_outgoing_state_advance(commit_request_original_sha256)
+    }
+
+    /// Admit only the exact latest durable outgoing StateAdvance without lending money authority.
+    /// This private phase boundary checks the original storage/receipt and current FI, but cannot
+    /// consume the W1 proof capture or create the separately owned post-State acknowledgment.
+    fn recheck_unacknowledged_outgoing_state_advance(
+        &self,
+        commit_request_original_sha256: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck()?;
+        let advance = self
+            .state_advance
+            .as_ref()
+            .and_then(RetainedFinancialStateAdvance::outgoing)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let retained = self
+            .outbox
+            .get(&commit_request_original_sha256)
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        if advance.commit_request_original_sha256 != commit_request_original_sha256
+            || retained.acknowledgment.is_some()
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let financial = self.publication.cash_financial();
+        self.lineage_cas
+            .commit_receipt(commit_request_original_sha256, financial, &retained.commit)
+            .map_err(material)?
+            .recheck_for_effect(financial, &self.control.loan(financial).map_err(material)?)
+            .map_err(material)
     }
 
     /// Acknowledge only the actual retained StateAdvance after a fresh FI capture and clock sample.
@@ -318,6 +373,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         let advance = self
             .state_advance
             .as_ref()
+            .and_then(RetainedFinancialStateAdvance::outgoing)
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         if advance.commit_request_original_sha256 != commit_request_original_sha256 {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
@@ -393,7 +449,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
 
     pub(super) fn require_state_advance_acknowledged(&self) -> Result<(), KagemushaStateErrorV1> {
-        if let Some(advance) = &self.state_advance {
+        if let Some(RetainedFinancialStateAdvance::Incoming(advance)) = &self.state_advance {
+            return self.require_incoming_state_advance_acknowledged(advance);
+        }
+        if let Some(RetainedFinancialStateAdvance::Outgoing(advance)) = &self.state_advance {
             if self
                 .outbox
                 .get(&advance.commit_request_original_sha256)
@@ -408,7 +467,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     pub(super) fn require_outbox_capacity_for_new_slot(&self) -> Result<(), KagemushaStateErrorV1> {
         require_slot_capacity(
             self.outbox.len(),
-            self.carrier_budget.required_outbox_slot_bytes(),
+            self.outgoing_completion_slot_bytes()?,
             self.capacity.outbox_bytes,
         )
     }
@@ -421,11 +480,15 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     || <DigestV1>::from(Sha256::digest(&self.public_state_original))
                         != self.lineage_originals[3]
                     || !self.outbox.is_empty()
+                    || !self.incoming_commits.is_empty()
                 {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                 }
             }
-            Some(advance) => {
+            Some(RetainedFinancialStateAdvance::Incoming(advance)) => {
+                self.recheck_latest_incoming_state_advance(advance)?;
+            }
+            Some(RetainedFinancialStateAdvance::Outgoing(advance)) => {
                 let key = advance.commit_request_original_sha256;
                 let retained = self
                     .outbox
@@ -445,6 +508,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     .map_err(material)?;
             }
         }
+        self.recheck_incoming_state_advance_history()?;
         for (key, retained) in &self.outbox {
             let receipt = self
                 .lineage_cas
@@ -521,7 +585,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .prepared_commit
             .as_ref()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        if prepared.originals.original_sha256()? != prepared_original_sha256
+        if prepared
+            .originals
+            .original_sha256(self.maximum_record_payload_bytes)?
+            != prepared_original_sha256
             || self
                 .outbox
                 .contains_key(&delivery.commit_request_original_sha256)
@@ -571,6 +638,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .successor_public_state_original()
             .to_vec();
         self.pending = None;
+        self.outgoing_proof_operands = None;
+        self.outgoing_reservation_candidate = None;
         self.financial_journal_revision = next_revision;
         self.outbox.insert(
             key,
@@ -580,10 +649,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 acknowledgment: None,
             },
         );
-        self.state_advance = Some(RetainedStateAdvance {
-            generated: prepared.generated,
-            commit_request_original_sha256: key,
-        });
+        self.state_advance = Some(RetainedFinancialStateAdvance::Outgoing(
+            RetainedStateAdvance {
+                generated: prepared.generated,
+                commit_request_original_sha256: key,
+            },
+        ));
         self.recheck_state_advance_historical()
     }
 
@@ -595,6 +666,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         let advance = self
             .state_advance
             .as_ref()
+            .and_then(RetainedFinancialStateAdvance::outgoing)
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
         let retained = self
             .outbox
@@ -709,7 +781,7 @@ impl PreparedCommitOriginals {
             )
             .map_err(material)?;
         if u64::from(reserved) > owner.capacity.outbox_bytes
-            || complete_outgoing_original.len() as u64 > FORMAT.maximum_payload_bytes
+            || complete_outgoing_original.len() as u64 > owner.maximum_record_payload_bytes
         {
             return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
         }
@@ -764,5 +836,65 @@ impl PreparedCommitOriginals {
             )
             .map_err(material)?;
         receipt.recheck_historical(financial).map_err(material)
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn retained_outgoing_commit_digest(
+        &self,
+    ) -> Result<Option<DigestV1>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        self.prepared_commit
+            .as_ref()
+            .map(|prepared| {
+                prepared
+                    .originals
+                    .require_actual_generated(self, &prepared.generated)?;
+                prepared
+                    .originals
+                    .original_sha256(self.maximum_record_payload_bytes)
+            })
+            .transpose()
+    }
+    pub(super) fn sign_retained_outgoing_commit_transport(
+        &mut self,
+        sign: impl FnOnce(
+            &KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,
+        ) -> Result<[u8; 64], KagemushaStateErrorV1>,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let prepared = self
+            .prepared_commit
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        prepared
+            .originals
+            .require_actual_generated(self, &prepared.generated)?;
+        let service = prepared.generated.private_service_original().to_vec();
+        let financial = self.publication.cash_financial();
+        let current = self.control.loan(financial).map_err(material)?;
+        let acknowledged = self
+            .lineage_cas
+            .acknowledged_outgoing_commit_request(financial, &current, prepared.generated.proof())
+            .map_err(material)?;
+        let (status, request, signature) = if let Some((request, signature)) = acknowledged {
+            (2, request, signature.to_vec())
+        } else {
+            self.reserve_retained_commit()?;
+            let fields = self.sign_retained_lineage_request(sign)?;
+            match fields.as_slice() {
+                [request, signature] => (0, request.clone(), signature.clone()),
+                _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+            }
+        };
+        let key: DigestV1 = Sha256::digest(&request).into();
+        self.require_current_financial_control()?;
+        Ok(vec![
+            vec![status],
+            request,
+            signature,
+            service,
+            key.to_vec(),
+        ])
     }
 }

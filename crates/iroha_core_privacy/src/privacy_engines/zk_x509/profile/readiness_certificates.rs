@@ -38,9 +38,9 @@ const SHA_CALL_EQUALITIES_V1: u8 = 1;
 const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
 /// Independent SHA-256 pin for an accepted soundness-certificate payload.
 ///
-/// No certificate is installed while the current MAIN opening schedule exceeds
-/// the consensus proof cap under the mandatory shared STARK geometry.
-/// TODO: review and install a certificate for the bounded replacement proof.
+/// No certificate is installed while the joint relation, transcript security
+/// and correlated-opening hiding analysis await independent qualification.
+/// TODO: review the complete joint protocol before installing a certificate.
 pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
 /// Schema version of the canonical native-resource certificate payload.
 pub const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
@@ -274,12 +274,12 @@ fn append_fri_certificate_v1(
     frame: &mut CertificateFrameV1,
     certificate: AggregateFriTheorem2CertificateV1,
 ) {
-    frame.field(&[certificate.l_minus_one_numerator]);
-    frame.field(&[certificate.l_minus_one_denominator]);
+    frame.field(&[certificate.affine_coefficient_numerator]);
+    frame.field(&[certificate.affine_coefficient_denominator]);
     frame.field(&[certificate.batching_parameter_m]);
     frame.field(&[certificate.rho_numerator]);
     frame.field(&[certificate.rho_denominator]);
-    frame.field(&certificate.affine_arities);
+    frame.field(&[certificate.binary_fold_arity]);
     frame.field(&[certificate.domain_log2]);
     frame.field(&certificate.extension_field_lower_bound_bits.to_be_bytes());
     frame.field(&[certificate.base_field_two_adicity]);
@@ -408,24 +408,96 @@ fn ceil_log2_v1(value: u16) -> Option<u16> {
         u16::try_from(u16::BITS - (value - 1).leading_zeros()).ok()?
     })
 }
+fn weighted_exponent_union_security_bits_v1(terms: &[(u16, u16)]) -> Option<u16> {
+    let scale = terms.iter().map(|(bits, _)| *bits).max()?;
+    let mut numerator = 0_u128;
+    for &(bits, multiplicity) in terms {
+        if multiplicity == 0 {
+            return None;
+        }
+        let weight = 1_u128
+            .checked_shl(u32::from(scale - bits))?
+            .checked_mul(u128::from(multiplicity))?;
+        numerator = numerator.checked_add(weight)?;
+    }
+    let ceiling_log =
+        u16::try_from(u128::BITS - (numerator.checked_sub(1)?).leading_zeros()).ok()?;
+    scale.checked_sub(ceiling_log)
+}
 fn collision_union_security_bits_v1(denominator: u64, terms: &[(u64, u8, u16)]) -> Option<u16> {
-    let mut minimum_bits = u16::MAX;
-    let mut total_terms = 0_u16;
+    let mut exponents = Vec::with_capacity(terms.len());
     for &(numerator, lanes, multiplicity) in terms {
         if numerator == 0 || numerator >= denominator || lanes == 0 || multiplicity == 0 {
             return None;
         }
         let ratio = denominator / numerator;
         let ratio_floor_log2 = u16::try_from(u64::BITS - 1 - ratio.leading_zeros()).ok()?;
-        let term_bits = ratio_floor_log2.checked_mul(u16::from(lanes))?;
-        minimum_bits = minimum_bits.min(term_bits);
-        total_terms = total_terms.checked_add(multiplicity)?;
+        exponents.push((
+            ratio_floor_log2.checked_mul(u16::from(lanes))?,
+            multiplicity,
+        ));
     }
-    minimum_bits.checked_sub(ceil_log2_v1(total_terms)?)
+    weighted_exponent_union_security_bits_v1(&exponents)
 }
 fn exponent_union_security_bits_v1(terms: &[u16]) -> Option<u16> {
-    let minimum_bits = terms.iter().copied().min()?;
-    minimum_bits.checked_sub(ceil_log2_v1(u16::try_from(terms.len()).ok()?)?)
+    let terms = terms.iter().map(|bits| (*bits, 1)).collect::<Vec<_>>();
+    weighted_exponent_union_security_bits_v1(&terms)
+}
+/// Conservative paired-configuration factor for the conditional interactive argument.
+/// Each local configuration has agreement > 7/16 and degree/domain <= 9/64.
+/// The elementary incidence bound gives L < 6; eight per domain leaves slack.
+const JOINT_CONFIGURATION_BOUND_V1: u16 = 8;
+const JOINT_PAIRED_CONFIGURATION_BOUND_V1: u16 =
+    JOINT_CONFIGURATION_BOUND_V1 * JOINT_CONFIGURATION_BOUND_V1;
+/// Check the algebraic error ledger only. This is not a Fiat-Shamir, qROM,
+/// transcript-simulation, or release-qualification certificate by itself.
+/// The mixed-domain argument and term census are in the joint-relation spec.
+fn joint_relation_error_bits_v1(certificate: ZkX509SoundnessCertificateV1) -> Option<u16> {
+    let main = certificate.main_fri;
+    let ca = certificate.ca_fri;
+    let degree = |fri: AggregateFriTheorem2CertificateV1| {
+        u64::from(fri.terminal_degree_bound)
+            .checked_add(1)?
+            .checked_shl(u32::from(fri.fold_count))
+    };
+    let main_degree = degree(main)?;
+    let ca_degree = degree(ca)?;
+    if main_degree != 589_824
+        || ca_degree != 9_216
+        || main.domain_log2 != 22
+        || ca.domain_log2 != 16
+        || main.extension_field_lower_bound_bits != 252
+        || ca.extension_field_lower_bound_bits != 252
+        || u64::from(ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1) != main_degree
+        || u64::from(ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1) != 6
+        || ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 != 19
+        || ZK_X509_MAX_CONSTRAINT_DEGREE_V1 != 7
+        || ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1 != 4
+        || super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1 != 3
+        || super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1 != 12
+        || JOINT_CONFIGURATION_BOUND_V1 * (49 - 36) <= 112 - 36
+    {
+        return None;
+    }
+    // Only the linear digest joins substitute X^32. Other products are local
+    // degree<=7, unpowered quartics, or MAIN(gamma X)*CA(eta X).
+    // All MAIN divisors divide X^(2^19)-1; all CA divisors divide X^(2^12)-1.
+    let main_numerator = 32_u64.checked_mul(main_degree)?.checked_add(1 << 19)?;
+    let ca_numerator = 4_u64.checked_mul(ca_degree)?.checked_add(1 << 12)?;
+    // Original point + six power2 + five power8 + twenty power32 maps.
+    // The 24 MAIN translations preserve H19 and the common generator coset.
+    let exclusions = 1_u64
+        .checked_add((1 + 6 * 2 + 5 * 8 + 20 * 32) * ((1 << 19) + (1 << 22)))?
+        .checked_add((2 + 108) * ((1 << 12) + (1 << 16)))?;
+    let point_numerator = u64::from(JOINT_PAIRED_CONFIGURATION_BOUND_V1)
+        .checked_mul(main_numerator.checked_add(ca_numerator)?)?;
+    if exclusions != 3_277_643_777 || point_numerator >= 1 << 31 {
+        return None;
+    }
+    // |F|>2^252 and exclusions<2^64 imply admitted support>2^251.
+    // The paired point event is <2^-220; the paired independent-alpha event
+    // is <64/2^252=2^-246. Their sum is strictly below 2^-219.
+    Some(219)
 }
 fn validate_soundness_certificate_payload_v1(
     certificate: ZkX509SoundnessCertificateV1,
@@ -445,15 +517,9 @@ fn validate_soundness_certificate_payload_v1(
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;
-    let ca = validate_fri_certificate_v1(
-        certificate.ca_fri,
-        super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        ZK_X509_CA_FRI_LDE_LOG2_V1
-            - super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
-        ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
-        ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1,
-    )?;
+    let ca =
+        super::super::accumulator_stark::validate_ca_fri_theorem_certificate_v1(certificate.ca_fri)
+            .ok()?;
     let denominator = certificate.goldilocks_modulus.checked_sub(1)?;
     let rfc_bits = collision_union_security_bits_v1(
         denominator,
@@ -505,20 +571,46 @@ fn validate_soundness_certificate_payload_v1(
     {
         return None;
     }
+    let joint_bits = joint_relation_error_bits_v1(certificate)?;
+    // The explicit joint algebraic term fits inside the existing rounded MAIN
+    // allowance: FRI terms <2^-188 and <2^-220, plus joint term <2^-219.
+    let main_first_bits = certificate
+        .main_fri
+        .extension_field_lower_bound_bits
+        .checked_sub(2 * u16::from(certificate.main_fri.domain_log2))?
+        .checked_sub(20)?;
+    let main_second_bits = certificate
+        .main_fri
+        .extension_field_lower_bound_bits
+        .checked_sub(u16::from(certificate.main_fri.domain_log2))?
+        .checked_sub(10)?;
+    let main_algebraic_bits =
+        exponent_union_security_bits_v1(&[main_first_bits, main_second_bits, joint_bits])?;
+    if main_algebraic_bits != main.commitment_error_bits {
+        return None;
+    }
+    // Base commitments precede bus challenges. Account for every possible
+    // paired base configuration, rather than assuming the later extraction
+    // selects a witness independently of those challenges.
+    let configuration_bits = ceil_log2_v1(JOINT_PAIRED_CONFIGURATION_BOUND_V1)?;
     let round_by_round_bits = exponent_union_security_bits_v1(&[
         main.query_error_bits,
-        main.commitment_error_bits,
+        main_algebraic_bits,
         ca.query_error_bits,
         ca.commitment_error_bits,
-        rfc_bits,
-        p256_bits,
-        sha_bits,
+        rfc_bits.checked_sub(configuration_bits)?,
+        p256_bits.checked_sub(configuration_bits)?,
+        sha_bits.checked_sub(configuration_bits)?,
     ])?;
     if certificate.round_by_round_union_terms != SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1
         || round_by_round_bits != certificate.round_by_round_bits
     {
         return None;
     }
+    // TODO: supply the concrete joint round-by-round/Fiat-Shamir reduction.
+    // The interactive 157-bit ledger above is only the proposed RBR target.
+    // This work-security arithmetic is conditional on that separate proof;
+    // numerical success does not establish it. The activation pin stays zero.
     checked_transparent_stark_work_security_v1(
         certificate.target_bits,
         round_by_round_bits,
@@ -841,12 +933,12 @@ mod tests {
         fields: &mut Vec<Vec<u8>>,
         certificate: AggregateFriTheorem2CertificateV1,
     ) {
-        fields.push(vec![certificate.l_minus_one_numerator]);
-        fields.push(vec![certificate.l_minus_one_denominator]);
+        fields.push(vec![certificate.affine_coefficient_numerator]);
+        fields.push(vec![certificate.affine_coefficient_denominator]);
         fields.push(vec![certificate.batching_parameter_m]);
         fields.push(vec![certificate.rho_numerator]);
         fields.push(vec![certificate.rho_denominator]);
-        fields.push(certificate.affine_arities.to_vec());
+        fields.push(vec![certificate.binary_fold_arity]);
         fields.push(vec![certificate.domain_log2]);
         fields.push(
             certificate
@@ -942,18 +1034,18 @@ mod tests {
                     assert!(!soundness_certificate_matches_pin_v1(mutation, $digest));
                 }};
             }
-            reject!(
-                |value: &mut AggregateFriTheorem2CertificateV1| value.l_minus_one_numerator += 1
-            );
             reject!(|value: &mut AggregateFriTheorem2CertificateV1| value
-                .l_minus_one_denominator +=
+                .affine_coefficient_numerator +=
+                1);
+            reject!(|value: &mut AggregateFriTheorem2CertificateV1| value
+                .affine_coefficient_denominator +=
                 1);
             reject!(
                 |value: &mut AggregateFriTheorem2CertificateV1| value.batching_parameter_m += 1
             );
             reject!(|value: &mut AggregateFriTheorem2CertificateV1| value.rho_numerator += 1);
             reject!(|value: &mut AggregateFriTheorem2CertificateV1| value.rho_denominator += 1);
-            reject!(|value: &mut AggregateFriTheorem2CertificateV1| value.affine_arities[0] += 1);
+            reject!(|value: &mut AggregateFriTheorem2CertificateV1| value.binary_fold_arity += 1);
             reject!(|value: &mut AggregateFriTheorem2CertificateV1| value.domain_log2 += 1);
             reject!(|value: &mut AggregateFriTheorem2CertificateV1| value
                 .extension_field_lower_bound_bits +=
@@ -1076,6 +1168,44 @@ mod tests {
         }
     }
     #[test]
+    fn exact_dyadic_union_retains_distinct_error_weights_and_rejects_overflow() {
+        assert_eq!(
+            weighted_exponent_union_security_bits_v1(&[(172, 2), (200, 1), (165, 1)]),
+            Some(164)
+        );
+        assert_eq!(
+            exponent_union_security_bits_v1(&[160, 187, 160, 199, 164, 165, 158]),
+            Some(157)
+        );
+        assert_eq!(exponent_union_security_bits_v1(&[188, 220, 219]), Some(187));
+        assert_eq!(weighted_exponent_union_security_bits_v1(&[(8, 1)]), Some(8));
+        assert_eq!(weighted_exponent_union_security_bits_v1(&[(8, 0)]), None);
+        assert_eq!(
+            weighted_exponent_union_security_bits_v1(&[(0, 1), (128, 1)]),
+            None
+        );
+        assert_eq!(
+            weighted_exponent_union_security_bits_v1(&[(0, 3), (127, 1)]),
+            None
+        );
+        assert_eq!(weighted_exponent_union_security_bits_v1(&[]), None);
+    }
+
+    #[test]
+    fn joint_algebraic_ledger_binds_actual_restored_degrees_and_remains_unpinned() {
+        let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
+        assert_eq!(joint_relation_error_bits_v1(certificate), Some(219));
+        assert_eq!(JOINT_PAIRED_CONFIGURATION_BOUND_V1, 64);
+        let mut wrong = certificate;
+        wrong.main_fri.fold_count -= 1;
+        assert_eq!(joint_relation_error_bits_v1(wrong), None);
+        wrong = certificate;
+        wrong.ca_fri.terminal_degree_bound -= 1;
+        assert_eq!(joint_relation_error_bits_v1(wrong), None);
+        assert_eq!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
+    }
+
+    #[test]
     fn soundness_certificate_recomputes_the_complete_bound_without_installing_a_pin() {
         let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
         let digest = soundness_certificate_digest_v1(certificate);
@@ -1107,7 +1237,7 @@ mod tests {
         let (independent, payload_bytes) =
             independently_digest_soundness_certificate_v1(certificate);
         assert_eq!(SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1, 61);
-        assert_eq!(payload_bytes, 718);
+        assert_eq!(payload_bytes, 714);
         eprintln!(
             "zk-X509 soundness certificate v1 operator derivation: fields={} payload_bytes={} sha256={}",
             SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1,

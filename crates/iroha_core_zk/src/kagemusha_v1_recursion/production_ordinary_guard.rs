@@ -12,8 +12,9 @@ use super::super::super::{
         build_ordinary_app_guard_pair_v1,
     },
     ordinary_guard_verifier::{
-        OrdinaryGuardProofWireV1, incoming_preparation_digests, preparation_digests, public_column,
-        terminal_digests, verify_ordinary_incoming_preparation_guard_v1,
+        OrdinaryGuardProofWireV1, incoming_preparation_digests, incoming_terminal_digests,
+        preparation_digests, public_column, terminal_digests,
+        verify_ordinary_incoming_preparation_guard_v1, verify_ordinary_incoming_terminal_guard_v1,
         verify_ordinary_preparation_guard_v1, verify_ordinary_terminal_guard_v1,
     },
 };
@@ -25,6 +26,7 @@ use crate::kagemusha_v1_state::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1, KagemushaStateV1,
     verify_ordinary_bootstrap_guard_v1,
 };
@@ -145,6 +147,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                         selection.previous_app_attest_counter(),
                         digests,
                         &seed,
+                        None,
                     )
                 })());
                 Ok(())
@@ -245,6 +248,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                             .map_err(owner_error)?,
                         digests,
                         &seed,
+                        None,
                     )
                 })());
                 Ok(())
@@ -259,6 +263,79 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 .as_ref(),
         )?;
         verify_ordinary_incoming_preparation_guard_v1(selection, &raw).map_err(owner_error)?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(raw)
+    }
+
+    /// Resolve the revised fixed ordinary graph only from the actual captured incoming W1 owner.
+    /// Full incoming body openings are mandatory; old ordinary/OEM keys cannot be substituted.
+    pub(crate) fn load_ordinary_incoming_terminal(
+        selection: &KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        incoming_terminal_digests(selection).map_err(owner_error)?;
+        let w2 = selection.preparation_selection().map_err(owner_error)?;
+        let owner = Self::load_ordinary_incoming(&w2, profile, resolver)?;
+        incoming_terminal_digests(selection).map_err(owner_error)?;
+        Ok(owner)
+    }
+    /// Prove the complete genuine incoming W1 original and all fixed Model body equations.
+    /// State/source/global Reserve remain independently admitted and this returns no effect grant.
+    pub(crate) fn prove_ordinary_incoming_terminal_guard(
+        &self,
+        selection: &KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_>,
+    ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
+        let digests = incoming_terminal_digests(selection).map_err(owner_error)?;
+        let w2 = selection.preparation_selection().map_err(owner_error)?;
+        self.require_release_binding(w2.authenticated_release().map_err(owner_error)?.as_ref())?;
+        let (credential, original, lease) = decode_ordinary_originals(
+            w2.credential().map_err(owner_error)?.original(),
+            selection.original().map_err(owner_error)?,
+            selection
+                .original_approval_integrity_lease()
+                .map_err(owner_error)?
+                .map(|l| l.original()),
+        )?;
+        let mut entered = false;
+        let mut result = None;
+        selection
+            .with_borrowed_financial_secret(&mut |secret| {
+                if entered {
+                    return Err(
+                        crate::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity,
+                    );
+                }
+                entered = true;
+                result = Some((|| {
+                    let relation = derive_incoming_terminal_relation(selection, secret)?;
+                    let seed = ordinary_guard_seed(
+                        secret,
+                        original.challenge.operation_id,
+                        original.challenge.nonce,
+                        digests[2],
+                    )?;
+                    self.prove_shared_originals(
+                        &relation.0,
+                        &credential,
+                        &original,
+                        lease.as_ref(),
+                        selection
+                            .previous_app_attest_counter()
+                            .map_err(owner_error)?,
+                        digests,
+                        &seed,
+                        Some(selection.terminal_body().map_err(owner_error)?),
+                    )
+                })());
+                Ok(())
+            })
+            .map_err(owner_error)?;
+        let raw =
+            result.ok_or_else(|| proving_error("incoming W1 financial witness was not lent"))??;
+        verify_ordinary_incoming_terminal_guard_v1(selection, &raw).map_err(owner_error)?;
         selection
             .recheck_selected_originals_and_current_custody()
             .map_err(owner_error)?;
@@ -342,6 +419,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                         selection.previous_app_attest_counter(),
                         digests,
                         &seed,
+                        None,
                     )
                 })());
                 Ok(())
@@ -459,6 +537,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             approval.previous_app_attest_counter_floor(),
             digests,
             &seed,
+            None,
         )
     }
 
@@ -474,6 +553,9 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         previous_app_attest_counter: Option<u32>,
         digests: [DigestV1; 5],
         seed: &KagemushaRecoverySeedV1,
+        incoming_terminal_body: Option<
+            &iroha_data_model::kagemusha::KagemushaOrdinaryIncomingTerminalBodyV1,
+        >,
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
         let eq_parameters = self.artifacts.load_eq_params()?;
         let ep_parameters = self.artifacts.load_ep_params()?;
@@ -555,6 +637,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 approval: original,
                 previous_app_attest_counter,
                 integrity_lease,
+                incoming_terminal_body,
             },
             root,
             table,
@@ -734,6 +817,26 @@ pub(super) fn derive_cash_relation(
     Ok(relation)
 }
 
+/// Public ordinary incoming Guard operands from the same actual selected owner.
+/// Financial secrets remain zero and are borrowed separately by the proof consumer.
+pub(super) fn public_incoming_relation(
+    selection: &KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
+) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
+    selection
+        .recheck_selected_originals_and_current_custody()
+        .map_err(owner_error)?;
+    incoming_preparation_digests(selection).map_err(owner_error)?;
+    let release = selection.authenticated_release().map_err(owner_error)?;
+    public_relation_for_selected_state(
+        selection.credential().map_err(owner_error)?,
+        release.as_ref(),
+        selection.selected_successor_state().map_err(owner_error)?,
+        selection
+            .normalized_guard_statement()
+            .map_err(owner_error)?,
+    )
+}
+
 pub(super) fn derive_incoming_relation(
     selection: &KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
     secret: &[u8; 32],
@@ -755,6 +858,35 @@ pub(super) fn derive_incoming_relation(
         credential,
         &release,
         selection.selected_successor_state().map_err(owner_error)?,
+        selection
+            .normalized_guard_statement()
+            .map_err(owner_error)?,
+    )?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
+    relation.0.validate().map_err(ordinary_proving_error)?;
+    Ok(relation)
+}
+
+pub(super) fn derive_incoming_terminal_relation(
+    selection: &KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_>,
+    secret: &[u8; 32],
+) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
+    incoming_terminal_digests(selection).map_err(owner_error)?;
+    let w2 = selection.preparation_selection().map_err(owner_error)?;
+    let credential = w2.credential().map_err(owner_error)?;
+    if super::super::super::device_authority_commitment_v1(*secret)
+        != credential.subject().financial_authority_commitment
+    {
+        return Err(proving_error(
+            "incoming W1 witness does not open the same genuine FI authority",
+        ));
+    }
+    let release = w2.authenticated_release().map_err(owner_error)?;
+    let mut relation = HeldRelation(public_relation_for_selected_state(
+        credential,
+        &release,
+        w2.selected_successor_state().map_err(owner_error)?,
         selection
             .normalized_guard_statement()
             .map_err(owner_error)?,
@@ -961,4 +1093,16 @@ mod tests {
         };
         assert_eq!(reason, expected);
     }
+}
+
+/// Public operands of the same captured ordinary cash W2. No financial secret or proof
+/// authority enters the auxiliary source; the State consumer independently borrows the secret.
+pub(super) fn public_cash_relation(
+    selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
+) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
+    selection.recheck_selected_originals_and_current_custody().map_err(owner_error)?;
+    preparation_digests(selection).map_err(owner_error)?;
+    let release = selection.authenticated_release().map_err(owner_error)?;
+    public_relation_for_selected_state(selection.enrollment().app_credential(), &release,
+        selection.selected_successor_state(), selection.normalized_guard_statement())
 }

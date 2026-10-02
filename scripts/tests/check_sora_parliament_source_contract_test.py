@@ -362,13 +362,22 @@ def test_threshold_signer_readiness_allows_historical_id_in_a_negative_assertion
     guard.require_threshold_signer_startup_readiness(changed)
 
 
-def test_signed_staking_fee_boundary_baseline() -> None:
-    """Opaque nested staking is rejected before the optional fee-policy return."""
-    guard.require_signed_staking_fee_boundary(
-        guard.read("crates/iroha_core/src/validation_fee.rs"),
-        guard.read("crates/iroha_core/src/validation_fee/committee_effects.rs"),
-        guard.read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
+FEE_BOUNDARY_PATHS = ('crates/iroha_core/src/validation_fee.rs', 'crates/iroha_core/src/deferred_authority.rs', 'crates/iroha_core/src/retail_fee.rs', 'crates/iroha_core/src/smartcontracts/isi/asset.rs', 'crates/iroha_core/src/tx.rs', 'crates/iroha_core/src/lib.rs')
+
+
+def _fee_boundary_sources() -> dict[str, str]:
+    return {path: guard.read(path) for path in FEE_BOUNDARY_PATHS}
+
+
+def _check_fee_boundary(sources: dict[str, str]) -> None:
+    guard.require_signed_deferred_authority_and_native_fees(
+        *(sources[path] for path in FEE_BOUNDARY_PATHS)
     )
+
+
+def test_signed_staking_fee_boundary_baseline() -> None:
+    """Signed staking authority and native payment fees keep their distinct owners."""
+    _check_fee_boundary(_fee_boundary_sources())
 
 
 @pytest.mark.parametrize(
@@ -376,54 +385,44 @@ def test_signed_staking_fee_boundary_baseline() -> None:
     (
         (
             "crates/iroha_core/src/validation_fee.rs",
-            "committee_effects::reject_opaque_committee_operations_with(",
-            "committee_effects::unchecked_opaque_operations(",
+            "crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;",
+            "crate::deferred_authority::unchecked_opaque_operations(groups, stx)?;",
         ),
         (
-            "crates/iroha_core/src/validation_fee/committee_effects.rs",
-            "staking_effects::monetary_staking_wire_id(instruction)",
+            "crates/iroha_core/src/deferred_authority.rs",
+            "monetary_staking_wire_id(instruction)",
             "None::<&'static str>",
         ),
         (
-            "crates/iroha_core/src/validation_fee/committee_effects.rs",
+            "crates/iroha_core/src/deferred_authority.rs",
             "Executable::IvmProved(proved)",
             "Executable::IvmProved(_)\n                if false",
         ),
         (
-            "crates/iroha_core/src/validation_fee/staking_effects.rs",
+            "crates/iroha_core/src/deferred_authority.rs",
             "        BondPublicLaneStake,\n        FinalizePublicLaneUnbond,\n        SlashPublicLaneValidator,",
             "        BondPublicLaneStake,\n        NonMonetaryWithdrawal,\n        SlashPublicLaneValidator,",
         ),
         (
-            "crates/iroha_core/src/validation_fee/staking_effects.rs",
-            "native_staking_leg: true,", "native_staking_leg: false,",
+            "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+            "retail_payment: source_policy == NumericAssetTransferSourcePolicy::User",
+            "retail_payment: false",
         ),
         (
-            "crates/iroha_core/src/validation_fee.rs",
-            "transfer.native_staking_leg", "false",
+            "crates/iroha_core/src/retail_fee.rs",
+            "source.definition() != &policy.ds_asset_id", "false",
         ),
     ),
 )
 def test_signed_staking_fee_boundary_rejects_omitted_guards(
     path: str, original: str, replacement: str
 ) -> None:
-    """Policy absence, nested overlays and distinct fee assets cannot mask a leg."""
-    sources = {
-        name: guard.read(name)
-        for name in (
-            "crates/iroha_core/src/validation_fee.rs",
-            "crates/iroha_core/src/validation_fee/committee_effects.rs",
-            "crates/iroha_core/src/validation_fee/staking_effects.rs",
-        )
-    }
+    """Policy absence, nested overlays and actual payment assets cannot mask a leg."""
+    sources = _fee_boundary_sources()
     assert original in sources[path]
     sources[path] = sources[path].replace(original, replacement, 1)
     with pytest.raises(RuntimeError, match="missing modeled source binding"):
-        guard.require_signed_staking_fee_boundary(
-            sources["crates/iroha_core/src/validation_fee.rs"],
-            sources["crates/iroha_core/src/validation_fee/committee_effects.rs"],
-            sources["crates/iroha_core/src/validation_fee/staking_effects.rs"],
-        )
+        _check_fee_boundary(sources)
 
 
 def test_proved_trigger_registration_cannot_downgrade_to_plain_ivm() -> None:
@@ -596,10 +595,7 @@ EXPIRY_CALL = (
     "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)\n"
     "            .map_err(StateBlockStartError::Storage)?;"
 )
-ENACTMENT_CALL = (
-    "Self::apply_block_start_parliament_enactments(&mut sb, now_h)\n"
-    "            .map_err(StateBlockStartError::Storage)?;"
-)
+ENACTMENT_CALL = "Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;"
 
 
 def test_block_start_phase_helpers_preserve_original_order_and_custody() -> None:
@@ -1486,3 +1482,126 @@ def test_native_beacon_application_requires_signed_or_committed_original_root(
     sources[guard.SCHEDULE_EXECUTION_PATH] = sources[guard.SCHEDULE_EXECUTION_PATH].replace(old, new)
     with pytest.raises(RuntimeError, match=re.escape(guard.SCHEDULE_EXECUTION_PATH)):
         guard.require_native_beacon_pulse_application(*sources.values())
+
+
+@pytest.mark.parametrize("path,declaration,original,replacement", (('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH', 'false'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'reject_opaque_committee_operation(instruction, index)?;', 'let _ = instruction;'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'resolve(&approval)', 'None'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'if visited.insert(identity)', 'if false'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', '&proposal.instructions,', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', '&proved.overlay,', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'std::slice::from_ref(instruction),', '&[], '), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'active_policy(state_transaction)?', 'None::<()>'), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'crate::retail_fee::admit(tx, state_transaction)?;', 'let _ = tx;'), ('crates/iroha_core/src/validation_fee.rs', 'fn reject_ivm_proved_completed_axt_effects(', 'OpaqueIvmProvedAxtEffects', 'OpaqueAcceptedEffects'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'RETAIL_FEE_ASSESSMENT_METADATA_KEY', 'UNAUTHENTICATED_ASSESSMENT_KEY'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'Some(*tx.hash().as_ref())', 'Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'now >= assessment.expires_at_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'if stx.world.retail_fee_assessment.is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit_deferred(', 'if reviewed.replace(assessment).is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'log.msg.len() > 4096', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'norito::decode_canonical(&bytes)', 'norito::decode_from_bytes(&bytes)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.multisig_deferred_execution_stack.is_empty()', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', '!stx.world.retail_fee_assessment_marker_pending', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment.as_ref() != Some(&assessment)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment_marker_pending = false;', 'stx.world.retail_fee_assessment_marker_pending = true;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'if stx.world.retail_fee_assessment.is_none()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'approved_amount == amount', 'true'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if stx.world.retail_fee_assessment_marker_pending', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if !stx.world.retail_fee_exempt_payments.is_empty()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'observed.iter().any(|(id, _)| id != source)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'from.checked_sub(assessment.fee_minor)', 'Some(from)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'source_transaction_hash: Some(source_transaction_hash)', 'source_transaction_hash: Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment: Some(assessment.clone())', 'assessment: None'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn validate_stateful_admission(', 'crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)', 'Ok::<(), ExecutionAttemptError<TransactionRejectionReason>>(())'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn execute_accepted_transaction_in_overlay(', 'crate::retail_fee::finalize(state_transaction)?;', 'let _ = state_transaction;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.retail_enrolled != expected.retail_enrolled', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.account_id != expected.account_id', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.billing_month_start_ms != expected.billing_month_start_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.policy_revision != expected.policy_revision', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.payments_used_before != expected.payments_used_before', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.qualifying_payments != expected.qualifying_payments', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.fee_minor != expected.fee_minor', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.state_commitment != expected.state_commitment', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.intent_hash != expected.intent_hash', 'false')))
+def test_native_fee_boundary_rejects_changed_live_authority_or_assessment(
+    path: str, declaration: str, original: str, replacement: str,
+) -> None:
+    """An intact spelling in a detached comment cannot replace the actual owner."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    body = guard.rust_item(sources[path], declaration, path)
+    assert body.count(original) == 1
+    sources[path] = sources[path].replace(body, body.replace(original, replacement, 1), 1)
+    sources[path] += "\n/* " + original + " */\n"
+    with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("method", ("fn apply(", "fn apply_after_batch_preflight("))
+def test_native_fee_boundary_requires_each_common_asset_payment_hook(method: str) -> None:
+    sources = _fee_boundary_sources()
+    path = FEE_BOUNDARY_PATHS[3]
+    outer = guard.rust_item(sources[path], "impl PreparedNumericTransferPlan {", path)
+    body = guard.rust_item(outer, method, path)
+    original = "crate::retail_fee::record_payment("
+    assert body.count(original) == 1
+    changed = outer.replace(body, body.replace(original, "crate::retail_fee::ignore_payment(", 1), 1)
+    sources[path] = sources[path].replace(outer, changed, 1) + "\n/* " + original + " */\n"
+    with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("module", ("deferred_authority", "retail_fee", "validation_fee", "tx"))
+def test_native_fee_boundary_requires_unconditional_registered_owners(module: str) -> None:
+    sources = _fee_boundary_sources()
+    path = FEE_BOUNDARY_PATHS[5]
+    prefix = "pub(crate)" if module == "deferred_authority" else "pub"
+    declaration = prefix + " mod " + module + ";"
+    assert sources[path].count(declaration) == 1
+    sources[path] = sources[path].replace(declaration, "#[cfg(any())]\n" + declaration, 1)
+    with pytest.raises(RuntimeError, match="must be unconditional"):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "duplicate", "before_runtime", "after_sequence"))
+def test_native_fee_boundary_finalizes_once_after_runtime_and_triggers_before_sequence(mutation: str) -> None:
+    sources = _fee_boundary_sources()
+    path = FEE_BOUNDARY_PATHS[4]
+    body = guard.rust_item(sources[path], "pub(crate) fn execute_accepted_transaction_in_overlay(", path)
+    call = "crate::retail_fee::finalize(state_transaction)?;"
+    assert body.count(call) == 1
+    if mutation == "missing":
+        changed = body.replace(call, "", 1)
+    elif mutation == "duplicate":
+        changed = body.replace(call, call + call, 1)
+    elif mutation == "before_runtime":
+        runtime = "Self::validate_transaction_with_runtime_executor(tx.clone(), state_transaction, ivm_cache)?;"
+        assert body.count(runtime) == 1
+        changed = body.replace(call, "", 1).replace(runtime, call + runtime, 1)
+    else:
+        sequence = ".insert(authority.clone(), seq);"
+        assert body.count(sequence) == 1
+        changed = body.replace(call, "", 1).replace(sequence, sequence + call, 1)
+    sources[path] = sources[path].replace(body, changed, 1) + "\n/* " + call + " */\n"
+    with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("curr_block, None, before_start, after_start", "other_header, None, before_start, after_start"),
+    ("curr_block, None, before_start, after_start", "curr_block, Some(other_carrier), before_start, after_start"),
+    ("curr_block, None, before_start, after_start", "curr_block, None, replacement, after_start"),
+))
+def test_block_start_carrier_delegate_preserves_original_callers(original: str, replacement: str) -> None:
+    """The ordinary caller delegates once with its original header and continuations."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_enactment_phases(source)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    with pytest.raises(RuntimeError, match="start phases"):
+        guard.require_block_start_enactment_phases(changed)
+
+
+
+@pytest.mark.parametrize("replacement", (
+    "StateBlockStartError::Storage(reason)",
+    "StateBlockStartError::Stage(reason)",
+))
+def test_block_start_due_execution_keeps_original_local_deferral(replacement: str) -> None:
+    """Due effect and failure-recorder resource refusals retain their local class."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_enactment_phases(source)
+    declaration = "    fn apply_block_start_parliament_enactments<E: std::fmt::Debug>("
+    due = guard.rust_item(source, declaration, STATE_PATH)
+    original = "StateBlockStartError::ExecutionDeferred(reason)"
+    assert due.count(original) == 2
+    changed = source.replace(due, due.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match="start phases"):
+        guard.require_block_start_enactment_phases(changed)
+
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("            .validate()\n            .map_err(str::to_owned)",
+     "            .unchecked_registry()\n            .map_err(str::to_owned)"),
+    ("validate_runtime_cache_for_publication(", "unchecked_runtime_cache("),
+    ("validate_runtime_cache_for_publication(\n                    verifier,\n                    state_ref.network_id,",
+     "validate_runtime_cache_for_publication(\n                    verifier,\n                    foreign_network,"),
+))
+def test_prepared_commit_independent_registry_and_cache_checks_are_owned(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical registry and structural local cache must both precede owned transition checks."""
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    publication = guard.read(PUBLICATION_PATH)
+    assert publication.count(original) == 1
+    changed = publication.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=PUBLICATION_PATH):
+        guard.require_parliament_commit_publication(state)
+

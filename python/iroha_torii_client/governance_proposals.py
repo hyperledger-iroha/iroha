@@ -7,10 +7,12 @@ import re
 import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from datetime import date, timedelta
 from enum import Enum
 from typing import Any, Optional, Union, cast
 
 from ._account_id import decode_canonical_i105_account_id
+from ._canonical_values import _canonical_quantity, _offline_canonical_asset_definition_id
 from .governance_kagemusha_release_schema_v1 import validate_release_schema_v1
 from .vpn_validation import _is_canonical_prime_order_ed25519_public_key
 
@@ -61,10 +63,10 @@ def _decimal_u64(value: Any, context: str, *, positive: bool = False) -> int:
 
 
 def _numeric(value: Any, context: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?", value) is None:
-        raise TypeError(f"{context} must be a canonical non-negative numeric string")
-    return value
-
+    try:
+        return _canonical_quantity(value, context)
+    except RuntimeError as exc:
+        raise TypeError(str(exc)) from exc
 
 def _lower_hex32(value: Any, context: str, *, nonzero: bool = False) -> str:
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
@@ -202,10 +204,10 @@ def _account_id(value: Any, context: str) -> str:
 
 def _asset_definition_id(value: Any, context: str) -> str:
     literal = _string(value, context)
-    if literal.count("#") != 1 or any(not part for part in literal.split("#")):
-        raise TypeError(f"{context} must be a canonical asset definition id")
-    return literal
-
+    try:
+        return _offline_canonical_asset_definition_id(literal, context)
+    except RuntimeError as exc:
+        raise TypeError(str(exc)) from exc
 
 def _canonical_base64(value: Any, context: str) -> str:
     if not isinstance(value, str):
@@ -371,23 +373,81 @@ class GovernanceProposalSccpRouteGovernance:
 
 
 class GovernanceValidationFeeChargingMode(str, Enum):
-    """Closed validation-fee charging modes."""
+    """The sole first-release validation-fee charging mode."""
 
-    DISABLED = "DISABLED"
-    PER_QUALIFYING_TRANSFER_INSTRUCTION = "PER_QUALIFYING_TRANSFER_INSTRUCTION"
+    RETAIL_MONTHLY_ALLOWANCE = "RETAIL_MONTHLY_ALLOWANCE"
 
 
 @dataclass(frozen=True)
-class GovernanceValidationFeePayoutRecipient:
-    """One immutable treasury-payout recipient."""
+class GovernanceValidationFeeMaintenanceTier:
+    minimum_average_balance_minor: int
+    monthly_fee_minor: int
 
-    account_id: str
-    share: str
+
+@dataclass(frozen=True)
+class GovernanceValidationFeeRetailSchedule:
+    included_payments: int
+    overage_minor: int
+    maintenance_tiers: tuple[GovernanceValidationFeeMaintenanceTier, ...]
+
+    @classmethod
+    def from_payload(cls, value: Any, context: str) -> "GovernanceValidationFeeRetailSchedule":
+        record = _exact(value, frozenset({"included_payments", "overage_minor", "maintenance_tiers"}), context)
+        offered = record["maintenance_tiers"]
+        if not isinstance(offered, list) or not 1 <= len(offered) <= 32:
+            raise TypeError(f"{context}.maintenance_tiers must contain 1..32 tiers")
+        tiers = []
+        for index, item in enumerate(offered):
+            label = f"{context}.maintenance_tiers[{index}]"
+            tier = _exact(item, frozenset({"minimum_average_balance_minor", "monthly_fee_minor"}), label)
+            tiers.append(GovernanceValidationFeeMaintenanceTier(
+                _uint(tier["minimum_average_balance_minor"], f"{label}.minimum_average_balance_minor"),
+                _uint(tier["monthly_fee_minor"], f"{label}.monthly_fee_minor", positive=True),
+            ))
+        if tiers[0].minimum_average_balance_minor != 0 or any(
+            right.minimum_average_balance_minor <= left.minimum_average_balance_minor
+            or right.monthly_fee_minor < left.monthly_fee_minor
+            for left, right in zip(tiers, tiers[1:])
+        ):
+            raise TypeError(f"{context} requires a zero floor, increasing thresholds and nondecreasing charges")
+        return cls(
+            _uint(record["included_payments"], f"{context}.included_payments", 0xFFFFFFFF, positive=True),
+            _uint(record["overage_minor"], f"{context}.overage_minor", positive=True),
+            tuple(tiers),
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceValidationFeeRewardCustody:
+    """Immutable DATA projection; Native/Parliament still authenticates custody."""
+
+    contract_address: str
+    treasury_account_id: str
+    ds_asset_id: str
+    xor_asset_id: str
+    reward_pool_account_id: str
+    validator_lane_id: int
+
+    @classmethod
+    def from_payload(cls, value: Any, context: str) -> "GovernanceValidationFeeRewardCustody":
+        fields = frozenset({"contract_address", "treasury_account_id", "ds_asset_id", "xor_asset_id", "reward_pool_account_id", "validator_lane_id"})
+        record = _exact(value, fields, context)
+        result = cls(
+            _contract_address(record["contract_address"], f"{context}.contract_address"),
+            _account_id(record["treasury_account_id"], f"{context}.treasury_account_id"),
+            _asset_definition_id(record["ds_asset_id"], f"{context}.ds_asset_id"),
+            _asset_definition_id(record["xor_asset_id"], f"{context}.xor_asset_id"),
+            _account_id(record["reward_pool_account_id"], f"{context}.reward_pool_account_id"),
+            _uint(record["validator_lane_id"], f"{context}.validator_lane_id", 0xFFFFFFFF),
+        )
+        if result.ds_asset_id == result.xor_asset_id or result.treasury_account_id == result.reward_pool_account_id:
+            raise TypeError(f"{context} fee/reward assets and custody must differ")
+        return result
 
 
 @dataclass(frozen=True)
 class GovernanceValidationFeePayoutBinding:
-    """Exact validation-fee payout lifecycle binding."""
+    """Exact independently governed conversion binding; never approval authority."""
 
     contract_address: str
     code_hash: tuple[int, ...]
@@ -395,29 +455,64 @@ class GovernanceValidationFeePayoutBinding:
     treasury_account_id: str
     ds_asset_id: str
     xor_asset_id: str
+    pool_contract_address: str
+    pool_code_hash: tuple[int, ...]
     pool_vault_account_id: str
-    batch_ds: str
-    min_xor_out: str
-    max_xor_out: str
-    recipients: tuple[GovernanceValidationFeePayoutRecipient, ...]
+    reward_pool_account_id: str
+    reference_feed_id: str
+    reference_feed_config_version: int
+    reference_provider_accounts: tuple[str, ...]
+    max_sbd_per_attempt_minor: int
+    max_sbd_per_day_minor: int
+    min_interval_ms: int
+    max_source_age_ms: int
+    max_slippage_bps: int
+    validator_lane_id: int
+    min_reward_claim_xor_minor: int
 
     @classmethod
     def from_payload(cls, value: Any, context: str) -> "GovernanceValidationFeePayoutBinding":
-        fields = frozenset({"contract_address", "code_hash", "entrypoint", "treasury_account_id", "ds_asset_id", "xor_asset_id", "pool_vault_account_id", "batch_ds", "min_xor_out", "max_xor_out", "recipients"})
+        fields = frozenset(cls.__dataclass_fields__)
         record = _exact(value, fields, context)
-        if not isinstance(record["recipients"], list):
-            raise TypeError(f"{context}.recipients must be an array")
-        recipients = []
-        for index, item in enumerate(record["recipients"]):
-            item_context = f"{context}.recipients[{index}]"
-            recipient = _exact(item, frozenset({"account_id", "share"}), item_context)
-            recipients.append(GovernanceValidationFeePayoutRecipient(_account_id(recipient["account_id"], f"{item_context}.account_id"), _numeric(recipient["share"], f"{item_context}.share")))
-        return cls(_contract_address(record["contract_address"], f"{context}.contract_address"), _bytes32(record["code_hash"], f"{context}.code_hash", nonzero=True), _string(record["entrypoint"], f"{context}.entrypoint"), _account_id(record["treasury_account_id"], f"{context}.treasury_account_id"), _asset_definition_id(record["ds_asset_id"], f"{context}.ds_asset_id"), _asset_definition_id(record["xor_asset_id"], f"{context}.xor_asset_id"), _account_id(record["pool_vault_account_id"], f"{context}.pool_vault_account_id"), _numeric(record["batch_ds"], f"{context}.batch_ds"), _numeric(record["min_xor_out"], f"{context}.min_xor_out"), _numeric(record["max_xor_out"], f"{context}.max_xor_out"), tuple(recipients))
+        values: dict[str, Any] = {}
+        for field in ("contract_address", "pool_contract_address"):
+            values[field] = _contract_address(record[field], f"{context}.{field}")
+        for field in ("code_hash", "pool_code_hash"):
+            values[field] = _bytes32(record[field], f"{context}.{field}", nonzero=True)
+        if record["entrypoint"] != "autonomous_validation_fee_tick":
+            raise TypeError(f"{context}.entrypoint must be autonomous_validation_fee_tick")
+        values["entrypoint"] = record["entrypoint"]
+        for field in ("treasury_account_id", "pool_vault_account_id", "reward_pool_account_id"):
+            values[field] = _account_id(record[field], f"{context}.{field}")
+        if len({values[field] for field in ("treasury_account_id", "pool_vault_account_id", "reward_pool_account_id")}) != 3:
+            raise TypeError(f"{context} treasury, pool and reward custody must differ")
+        for field in ("ds_asset_id", "xor_asset_id"):
+            values[field] = _asset_definition_id(record[field], f"{context}.{field}")
+        if values["ds_asset_id"] == values["xor_asset_id"]:
+            raise TypeError(f"{context} SBD and XOR assets must differ")
+        values["reference_feed_id"] = _iroha_name(_string_tuple(record["reference_feed_id"], f"{context}.reference_feed_id"), f"{context}.reference_feed_id[0]")
+        providers = record["reference_provider_accounts"]
+        if not isinstance(providers, list) or len(providers) != 5:
+            raise TypeError(f"{context} requires five independently controlled reference providers")
+        provider_ids = tuple(_account_id(item, f"{context}.reference_provider_accounts[{index}]") for index, item in enumerate(providers))
+        # Admission remains with the actual Rust account codec. Compare complete
+        # single-controller originals, so changing the I105 network sentinel cannot
+        # make a repeated signing key appear to be an independent provider.
+        controllers = [decode_canonical_i105_account_id(item) for item in provider_ids]
+        if any(len(raw) < 2 or raw[1] != 0 for raw in controllers) or len(set(controllers)) != 5:
+            raise TypeError(f"{context} requires five distinct single-signature provider controllers")
+        values["reference_provider_accounts"] = provider_ids
+        for field in ("reference_feed_config_version", "max_sbd_per_attempt_minor", "max_sbd_per_day_minor", "min_interval_ms", "max_source_age_ms", "min_reward_claim_xor_minor", "max_slippage_bps", "validator_lane_id"):
+            maximum = 0xFFFFFFFF if field in ("reference_feed_config_version", "validator_lane_id") else _U64_MAX
+            values[field] = _uint(record[field], f"{context}.{field}", maximum, positive=field not in ("max_slippage_bps", "validator_lane_id"))
+        if values["max_slippage_bps"] >= 10000 or values["max_sbd_per_day_minor"] < values["max_sbd_per_attempt_minor"]:
+            raise TypeError(f"{context} conversion limits exceed native bounds")
+        return cls(**values)
 
 
 @dataclass(frozen=True)
 class GovernanceValidationFeePolicy:
-    """Complete exact-network validation-fee policy."""
+    """Complete current retail policy DATA; no old off or automatic-expiry shape."""
 
     schema_version: int
     network_id: str
@@ -425,55 +520,73 @@ class GovernanceValidationFeePolicy:
     previous_policy_hash: Optional[tuple[int, ...]]
     ds_asset_id: str
     ds_scale: int
+    retail_schedule: GovernanceValidationFeeRetailSchedule
+    effective_from_ms: int
+    notice_published_at_ms: int
     fee: str
     treasury_account_id: str
     charging_mode: GovernanceValidationFeeChargingMode
-    effective_from_height: int
-    expires_after_height: Optional[int]
     exemption_classes: tuple[str, ...]
-    treasury_payout_binding: Optional[GovernanceValidationFeePayoutBinding]
+    reward_custody: GovernanceValidationFeeRewardCustody
 
     @classmethod
     def from_payload(cls, value: Any) -> "GovernanceValidationFeePolicy":
         context = "ValidationFeePolicy payload.policy"
-        fields = frozenset({"schema_version", "network_id", "policy_version", "previous_policy_hash", "ds_asset_id", "ds_scale", "fee", "treasury_account_id", "charging_mode", "effective_from_height", "expires_after_height", "exemption_classes", "treasury_payout_binding"})
-        record = _exact(value, fields, context)
-        if _uint(record["schema_version"], f"{context}.schema_version", 1) != 1:
-            raise TypeError(f"{context}.schema_version must be 1")
+        record = _exact(value, frozenset(cls.__dataclass_fields__), context)
+        if _uint(record["schema_version"], f"{context}.schema_version", 1) != 1 or _uint(record["ds_scale"], f"{context}.ds_scale", 255) != 2:
+            raise TypeError(f"{context} requires schema 1 and SBD scale 2")
         mode = _exact(record["charging_mode"], frozenset({"charging_mode", "value"}), f"{context}.charging_mode")
-        if mode["value"] is not None:
-            raise TypeError(f"{context}.charging_mode.value must be null")
+        if mode["charging_mode"] != "RETAIL_MONTHLY_ALLOWANCE" or mode["value"] is not None:
+            raise TypeError(f"{context}.charging_mode must be RETAIL_MONTHLY_ALLOWANCE with null value")
+        version = _decimal_u64(record["policy_version"], f"{context}.policy_version", positive=True)
+        previous = None if record["previous_policy_hash"] is None else _bytes32(record["previous_policy_hash"], f"{context}.previous_policy_hash", nonzero=True)
+        if (version == 1) != (previous is None):
+            raise TypeError(f"{context}.previous_policy_hash differs from policy_version")
+        fee = _numeric(record["fee"], f"{context}.fee")
+        if fee == "0" or len(fee.partition(".")[2]) > 2:
+            raise TypeError(f"{context}.fee must be positive exact SBD minor units")
+        effective = _uint(record["effective_from_ms"], f"{context}.effective_from_ms", positive=True)
+        notice = _uint(record["notice_published_at_ms"], f"{context}.notice_published_at_ms")
+        local_ms = effective + 39_600_000
         try:
-            charging_mode = GovernanceValidationFeeChargingMode(mode["charging_mode"])
-        except (ValueError, TypeError) as exc:
-            raise TypeError(f"{context}.charging_mode is unsupported") from exc
-        if not isinstance(record["exemption_classes"], list):
-            raise TypeError(f"{context}.exemption_classes must be an array")
-        previous = None if record["previous_policy_hash"] is None else _bytes32(record["previous_policy_hash"], f"{context}.previous_policy_hash")
-        expires = None if record["expires_after_height"] is None else _decimal_u64(record["expires_after_height"], f"{context}.expires_after_height")
-        binding = None if record["treasury_payout_binding"] is None else GovernanceValidationFeePayoutBinding.from_payload(record["treasury_payout_binding"], f"{context}.treasury_payout_binding")
-        return cls(1, _network_id(record["network_id"], f"{context}.network_id"), _decimal_u64(record["policy_version"], f"{context}.policy_version", positive=True), previous, _asset_definition_id(record["ds_asset_id"], f"{context}.ds_asset_id"), _uint(record["ds_scale"], f"{context}.ds_scale", 255), _numeric(record["fee"], f"{context}.fee"), _account_id(record["treasury_account_id"], f"{context}.treasury_account_id"), charging_mode, _decimal_u64(record["effective_from_height"], f"{context}.effective_from_height"), expires, tuple(_string(item, f"{context}.exemption_classes[{index}]") for index, item in enumerate(record["exemption_classes"])), binding)
+            local_day = date(1970, 1, 1) + timedelta(days=local_ms // 86_400_000)
+            # The Model derives both month endpoints, so the next month
+            # must also lie inside the supported calendar domain.
+            date(local_day.year + (local_day.month == 12), local_day.month % 12 + 1, 1)
+        except (OverflowError, ValueError) as exc:
+            raise TypeError(f"{context}.effective_from_ms is outside the supported calendar") from exc
+        if effective < notice + 30 * 86_400_000 or local_ms % 86_400_000 or local_day.day != 1:
+            raise TypeError(f"{context} requires a Honiara month boundary after thirty days notice")
+        if record["exemption_classes"] != ["TREASURY_PAYOUT"]:
+            raise TypeError(f"{context} requires exactly the governed TREASURY_PAYOUT exemption")
+        custody = GovernanceValidationFeeRewardCustody.from_payload(record["reward_custody"], f"{context}.reward_custody")
+        asset = _asset_definition_id(record["ds_asset_id"], f"{context}.ds_asset_id")
+        treasury = _account_id(record["treasury_account_id"], f"{context}.treasury_account_id")
+        if custody.ds_asset_id != asset or custody.treasury_account_id != treasury:
+            raise TypeError(f"{context} fee asset and treasury must match immutable reward custody")
+        return cls(1, _network_id(record["network_id"], f"{context}.network_id"), version, previous, asset, 2,
+                   GovernanceValidationFeeRetailSchedule.from_payload(record["retail_schedule"], f"{context}.retail_schedule"),
+                   effective, notice, fee, treasury, GovernanceValidationFeeChargingMode.RETAIL_MONTHLY_ALLOWANCE,
+                   ("TREASURY_PAYOUT",), custody)
 
 
 @dataclass(frozen=True)
 class GovernanceProposalValidationFeePolicy:
-    """Canonical `ValidationFeePolicyProposal` payload."""
+    """Current two-field `ValidationFeePolicyProposal` payload."""
 
     proposal_operator: str
     policy: GovernanceValidationFeePolicy
-    payout_lifecycle_proposal_id: Optional[tuple[int, ...]]
 
     @classmethod
     def from_payload(cls, value: Any) -> "GovernanceProposalValidationFeePolicy":
         context = "ValidationFeePolicy payload"
-        record = _exact(value, frozenset({"proposal_operator", "policy", "payout_lifecycle_proposal_id"}), context)
-        lifecycle = None if record["payout_lifecycle_proposal_id"] is None else _bytes32(record["payout_lifecycle_proposal_id"], f"{context}.payout_lifecycle_proposal_id")
-        return cls(_account_id(record["proposal_operator"], f"{context}.proposal_operator"), GovernanceValidationFeePolicy.from_payload(record["policy"]), lifecycle)
+        record = _exact(value, frozenset({"proposal_operator", "policy"}), context)
+        return cls(_account_id(record["proposal_operator"], f"{context}.proposal_operator"), GovernanceValidationFeePolicy.from_payload(record["policy"]))
 
 
 @dataclass(frozen=True)
 class GovernanceProposalValidationFeePayoutLifecycle:
-    """Canonical `ValidationFeePayoutLifecycleProposal` payload."""
+    """Canonical independent `ValidationFeePayoutLifecycleProposal` payload."""
 
     proposal_operator: str
     payout_binding: GovernanceValidationFeePayoutBinding

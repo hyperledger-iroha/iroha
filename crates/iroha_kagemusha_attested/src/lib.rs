@@ -72,8 +72,16 @@ mod proto {
 
     #[test]
     fn layout() {
-        let body = Body { version: 1, id: [7; 32], label: "abc".into(), n: 5 };
-        let signed = Signed { body: body.clone(), signature: [9; 64] };
+        let body = Body {
+            version: 1,
+            id: [7; 32],
+            label: "abc".into(),
+            n: 5,
+        };
+        let signed = Signed {
+            body: body.clone(),
+            signature: [9; 64],
+        };
         let bf = norito::encode_canonical(&body).unwrap();
         let sf = norito::encode_canonical(&signed).unwrap();
         println!("body frame {} {}", bf.len(), hex::encode(&bf));
@@ -81,17 +89,29 @@ mod proto {
         assert_eq!(&sf[40..40 + bf.len() - 40], &bf[40..]);
         let back: Signed = norito::decode_canonical(&sf).unwrap();
         assert_eq!(back, signed);
-        let holder = Holder { signed: signed.clone(), opt: Some(signed.clone()), items: vec![Item { digest: [3; 32] }, Item { digest: [4; 32] }], flag: true };
+        let holder = Holder {
+            signed: signed.clone(),
+            opt: Some(signed.clone()),
+            items: vec![Item { digest: [3; 32] }, Item { digest: [4; 32] }],
+            flag: true,
+        };
         let hf = norito::encode_canonical(&holder).unwrap();
         println!("holder frame {} {}", hf.len(), hex::encode(&hf));
         let hb: Holder = norito::decode_canonical(&hf).unwrap();
         assert_eq!(hb, holder);
-        let holder2 = Holder { opt: None, items: vec![], ..holder };
+        let holder2 = Holder {
+            opt: None,
+            items: vec![],
+            ..holder
+        };
         let hf2 = norito::encode_canonical(&holder2).unwrap();
         println!("holder2 frame {} {}", hf2.len(), hex::encode(&hf2));
         let hb2: Holder = norito::decode_canonical(&hf2).unwrap();
         assert_eq!(hb2, holder2);
-        let ev = Ev::A { x: signed.clone(), sig: [1; 64] };
+        let ev = Ev::A {
+            x: signed.clone(),
+            sig: [1; 64],
+        };
         let ef = norito::encode_canonical(&ev).unwrap();
         println!("ev frame {} {}", ef.len(), hex::encode(&ef));
         let eb: Ev = norito::decode_canonical(&ef).unwrap();

@@ -14,9 +14,36 @@ pub struct KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1<'a> {
     authorization: KagemushaVerifiedOrdinaryMintAuthorizationV1,
     finalized: KagemushaOrdinaryTopUpFinalizedOriginalV1,
     finalized_original: Vec<u8>,
+    financial_enrollment_original: Vec<u8>,
     credit_statement: KagemushaMintCreditStatementV1,
 }
 impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+    // Private full-original copy solely from this authentic completed Native WAL. Historical
+    // custody checks already join its canonical FI certificate, possession, admitted time and
+    // immutable prefix; no offered bytes or newly decoded FI can create this financial owner.
+    fn retained_finalized_source_enrollment_original(&self) -> Result<Vec<u8>> {
+        self.recheck_historical_proof_custody()?;
+        let completion = decode(self.reservation.completed.as_ref().ok_or(Custody)?)?;
+        let Record::EnrollmentComplete {
+            certificate_original,
+            ..
+        } = &completion
+        else {
+            return Err(Custody);
+        };
+        if certificate_original.as_slice()
+            != self
+                .enrollment
+                .certificate()
+                .canonical_bytes()
+                .map_err(|_| Rejected)?
+        {
+            return Err(Custody);
+        }
+        let original = certificate_original.clone();
+        self.recheck_historical_proof_custody()?;
+        Ok(original)
+    }
     /// Require same-owner real Mint proof and actual acknowledged FI capture, using only this
     /// Native clock's anchored contiguous validator prefix. Offered finality cannot select or
     /// extend that prefix. Global incoming DATA reservation and current effects stay separate.
@@ -46,6 +73,7 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
             authorization,
             finalized,
             finalized_original: original.to_vec(),
+            financial_enrollment_original: self.retained_finalized_source_enrollment_original()?,
             credit_statement,
         };
         value.recheck_historical(self)?;
@@ -59,6 +87,30 @@ impl KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1<'_> {
     pub fn finalized_original(&self) -> Result<&[u8]> {
         self.recheck_retained_custody()?;
         Ok(&self.finalized_original)
+    }
+    /// Exact immutable preparation FI-control original from the same acknowledged Native capture.
+    /// This lends historical evidence, never the latest decision or a renewed grant.
+    /// # Errors
+    /// Refuses any retained owner/control/prefix/source identity change.
+    pub fn preparation_financial_control_original(&self) -> Result<&[u8]> {
+        self.recheck_retained_custody()?;
+        self.captured.original()
+    }
+    /// Exact complete original FI certificate retained by the same Native financial owner.
+    /// Reading it never reconstructs possession, a current FI grant or another financial owner.
+    /// # Errors
+    /// Refuses any retained owner/control/prefix/source identity change.
+    pub fn financial_enrollment_original(&self) -> Result<&[u8]> {
+        self.recheck_retained_custody()?;
+        Ok(&self.financial_enrollment_original)
+    }
+    /// Same actual independently selected FI issuer policy retained by the Native owner.
+    /// No incoming offered key or previous control digest selects this policy.
+    /// # Errors
+    /// Refuses any retained owner/control/prefix/source identity change.
+    pub fn issuer_policy(&self) -> Result<&KagemushaRetailEnrollmentIssuerPolicyV1> {
+        self.recheck_retained_custody()?;
+        Ok(&self.financial.reservation.selected.issuer)
     }
     /// Genuine both-parity dedicated Mint113 admission, never an OEM authorization.
     /// # Errors
@@ -111,6 +163,11 @@ impl KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1<'_> {
             return Err(Rejected);
         }
         financial.recheck_historical_proof_custody()?;
+        if financial.retained_finalized_source_enrollment_original()?
+            != self.financial_enrollment_original
+        {
+            return Err(Custody);
+        }
         self.captured.recheck_financial_owner(financial)?;
         let selected = &financial.reservation.selected;
         let request = KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(

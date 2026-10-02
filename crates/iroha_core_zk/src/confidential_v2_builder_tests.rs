@@ -40,7 +40,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         crate::verify_backend(crate::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
         "generated confidential unshield v2 proof should verify against the cached canonical VK"
     );
-    #[cfg(feature = "zk-halo2-ipa")]
     {
         const EXACT_BACKEND: &str =
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3";
@@ -114,7 +113,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         "unshield v2 proof must reject verifier-key hash substitution"
     );
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
     let network_id = network_id(b"confidential-unshield-v3-test-network");
@@ -157,11 +155,7 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
     assert!(terminal.output_commitments.is_empty());
     assert_eq!(terminal.root, root_hint);
     assert!(
-        crate::verify_backend(
-            crate::ZK_BACKEND_HALO2_IPA,
-            &terminal.proof,
-            Some(&vk_box),
-        ),
+        crate::verify_backend(crate::ZK_BACKEND_HALO2_IPA, &terminal.proof, Some(&vk_box),),
         "terminal full unshield must verify under the deployed V3 verifier",
     );
     let input_path =
@@ -339,7 +333,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         crate::verify_backend(crate::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
         "generated confidential unshield v3 proof should verify against the cached canonical VK"
     );
-    #[cfg(feature = "zk-halo2-ipa")]
     {
         const EXACT_BACKEND: &str =
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4";

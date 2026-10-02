@@ -709,7 +709,55 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
         if quota == 0 {
             assert_quarantine_overflow(network_row(&block, 0), 0);
         } else {
-            assert_plain_success(network_row(&block, 0), 0);
+            use iroha_data_model::{
+                block::consensus::{NexusFeeReceipt, NexusFeeScheduleInputs, NexusFeeSettlementV1},
+                nexus::FeeDebitSource,
+            };
+            let original = source.network_entrypoint_at(0).unwrap();
+            let TransactionEntrypoint::External(signed) = original else {
+                panic!("external signed fee fixture")
+            };
+            let receipt = NexusFeeReceipt {
+                version: NexusFeeReceipt::VERSION,
+                source_id: *iroha_crypto::Hash::from(original.hash()).as_ref(),
+                dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
+                block_height: source.header().height().get(),
+                debit_source: FeeDebitSource::Account(ALICE_ID.clone()),
+                fee_asset_id: asset.clone(),
+                program_revision: None,
+                lease_id: None,
+                fee_amount: Quantity::from(1_u32),
+                settlement: NexusFeeSettlementV1::Burn,
+                schedule: NexusFeeScheduleInputs {
+                    tx_bytes_len: u64::try_from(
+                        norito::canonical_frame_len(signed.payload()).unwrap(),
+                    )
+                    .unwrap(),
+                    instruction_count: 1,
+                    gas_used: crate::gas::meter_instructions(&[write_quarantine(
+                        "paid_quarantine_effect",
+                        1,
+                    )]),
+                    base_fee: Quantity::from(1_u32),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::zero(),
+                    per_gas_unit_fee: Quantity::zero(),
+                },
+            };
+            receipt
+                .validate_for_network_input(original, source.header().height().get())
+                .unwrap();
+            let mut result = TransactionResult::new(Ok(vec![]));
+            result.set_nexus_fee_receipt(Some(receipt));
+            assert_eq!(
+                network_row(&block, 0),
+                &NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result,
+                    completions: vec![],
+                }
+            );
         }
         let expected = Quantity::from(if quota == 0 { 10_u32 } else { 9 });
         assert_eq!(

@@ -8591,199 +8591,6 @@ mod zk_roots_selector_tests {
         assert!(validate_app_api_fee_payment(&intent, false).is_ok());
         assert!(validate_app_api_fee_payment(&intent, true).is_err());
     }
-    routing_test! { sync multisig_propose_metadata_forwards_only_non_fee_metadata
-        let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
-        let hijiri_hash = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890ABCDEF";
-        let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
-            Some("7".to_owned()),
-            Some(policy_hash.to_owned()),
-            Some(hijiri_hash.to_owned()),
-            Some("1".to_owned()),
-            Some("2".to_owned()),
-        )
-        .expect("valid policy metadata");
-        let metadata = build_multisig_propose_metadata_with_validation_fee(
-            Some("memo"),
-            validation_fee_policy_metadata.as_ref(),
-        );
-        let gas_asset_id = metadata
-            .get("gas_asset_id")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let policy_version = metadata
-            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<u64>().ok());
-        let policy_hash = metadata
-            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let hijiri_hash = metadata
-            .get(
-                iroha_data_model::validation_fee::VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-            )
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let instruction_index = metadata
-            .get(iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<u64>().ok());
-        let transfer_entry_index = metadata
-            .get(iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<u64>().ok());
-        assert_eq!(gas_asset_id, None);
-        assert!(metadata.get("fee_sponsor").is_none());
-        assert!(metadata.get("gas_limit").is_none());
-        assert_eq!(policy_version, Some(7));
-        assert_eq!(instruction_index, Some(1));
-        assert_eq!(transfer_entry_index, Some(2));
-        assert_eq!(
-            policy_hash.as_deref(),
-            Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
-        );
-        assert_eq!(
-            hijiri_hash.as_deref(),
-            Some("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-        );
-    }
-    routing_test! { sync normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair
-        assert!(
-            normalize_validation_fee_policy_metadata(None, None, None, None, None)
-                .expect("absent policy metadata is allowed")
-                .is_none()
-        );
-        assert_eq!(
-            normalize_validation_fee_policy_metadata(
-                Some(" 7 ".to_owned()),
-                Some(
-                    "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000"
-                        .to_owned(),
-                ),
-                Some("F".repeat(64)),
-                Some(" 1 ".to_owned()),
-                Some(" 2 ".to_owned()),
-            )
-            .expect("valid metadata")
-            .as_ref()
-            .map(|metadata| (
-                metadata.policy_version,
-                metadata.policy_hash.as_str(),
-                metadata.hijiri_fee_quote_hash.as_deref(),
-                metadata.instruction_index,
-                metadata.transfer_entry_index,
-            )),
-            Some((
-                7,
-                "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
-                Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-                Some(1),
-                Some(2),
-            )),
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                None,
-                None,
-                None,
-                Some("1".to_owned()),
-                None,
-            )
-                .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                None,
-                None,
-                None,
-                None,
-                Some("2".to_owned()),
-            )
-                .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("7".to_owned()),
-                None,
-                None,
-                None,
-                None,
-            )
-                .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                None,
-                None,
-                Some("cd".repeat(32)),
-                None,
-                None,
-            )
-            .is_err()
-        );
-        for invalid_hijiri_hash in ["cd".repeat(31), "gg".repeat(32)] {
-            assert!(
-                normalize_validation_fee_policy_metadata(
-                    Some("7".to_owned()),
-                    Some("0".repeat(64)),
-                    Some(invalid_hijiri_hash),
-                    Some("1".to_owned()),
-                    None,
-                )
-                .is_err()
-            );
-        }
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("7".to_owned()),
-                Some("0".repeat(64)),
-                None,
-                None,
-                Some("2".to_owned()),
-            )
-            .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("x".to_owned()),
-                Some("0".repeat(64)),
-                None,
-                None,
-                None,
-            )
-            .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("7".to_owned()),
-                Some("0".repeat(64)),
-                None,
-                Some("not-integer".to_owned()),
-                None,
-            )
-            .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("7".to_owned()),
-                Some("0".repeat(64)),
-                None,
-                Some("1".to_owned()),
-                Some("not-integer".to_owned()),
-            )
-            .is_err()
-        );
-        assert!(
-            normalize_validation_fee_policy_metadata(
-                Some("7".to_owned()),
-                Some("0".repeat(63)),
-                None,
-                None,
-                None,
-            )
-            .is_err()
-        );
-    }
     routing_test! { async handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root
         let (state, _) = selector_state();
         let payload = json_roots_payload(state, None, "usd#issuer.universal".to_owned(), 5).await;
@@ -17003,217 +16810,11 @@ fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
     memo.map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NormalizedValidationFeePolicyMetadata {
-    policy_version: u64,
-    policy_hash: String,
-    hijiri_fee_quote_hash: Option<String>,
-    instruction_index: Option<u64>,
-    transfer_entry_index: Option<u64>,
-}
-
-fn normalize_validation_fee_policy_metadata(
-    version: Option<String>,
-    hash: Option<String>,
-    hijiri_fee_quote_hash: Option<String>,
-    instruction_index: Option<String>,
-    transfer_entry_index: Option<String>,
-) -> Result<Option<NormalizedValidationFeePolicyMetadata>> {
-    let version = version
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let hash = hash
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let hijiri_fee_quote_hash = hijiri_fee_quote_hash
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let instruction_index = instruction_index
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let transfer_entry_index = transfer_entry_index
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    if version.is_none()
-        && hash.is_none()
-        && hijiri_fee_quote_hash.is_none()
-        && instruction_index.is_none()
-        && transfer_entry_index.is_none()
-    {
-        return Ok(None);
-    }
-    let (Some(version), Some(hash)) = (version, hash) else {
-        return Err(conversion_error(
-            "validation fee policy metadata requires both version and hash; Hijiri and coordinate bindings also require that pair"
-                .to_owned(),
-        ));
-    };
-    let policy_version = version.parse::<u64>().map_err(|_| {
-        conversion_error("validation_fee_policy_version must be an unsigned integer".to_owned())
-    })?;
-    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(conversion_error(
-            "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
-        ));
-    }
-    let hijiri_fee_quote_hash = hijiri_fee_quote_hash
-        .map(|value| {
-            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err(conversion_error(
-                    "validation_fee_hijiri_fee_quote_hash must be a 64-character hex string"
-                        .to_owned(),
-                ));
-            }
-            Ok(value.to_ascii_lowercase())
-        })
-        .transpose()?;
-    let instruction_index = instruction_index
-        .map(|value| {
-            value.parse::<u64>().map_err(|_| {
-                conversion_error(
-                    "validation_fee_instruction_index must be an unsigned integer".to_owned(),
-                )
-            })
-        })
-        .transpose()?;
-    let transfer_entry_index = transfer_entry_index
-        .map(|value| {
-            value.parse::<u64>().map_err(|_| {
-                conversion_error(
-                    "validation_fee_transfer_entry_index must be an unsigned integer".to_owned(),
-                )
-            })
-        })
-        .transpose()?;
-    if transfer_entry_index.is_some() && instruction_index.is_none() {
-        return Err(conversion_error(
-            "validation_fee_transfer_entry_index requires validation_fee_instruction_index"
-                .to_owned(),
-        ));
-    }
-    Ok(Some(NormalizedValidationFeePolicyMetadata {
-        policy_version,
-        policy_hash: hash.to_ascii_lowercase(),
-        hijiri_fee_quote_hash,
-        instruction_index,
-        transfer_entry_index,
-    }))
-}
-fn append_canonical_multisig_validation_fee_marker(
-    instructions: &mut Vec<iroha_data_model::isi::InstructionBox>,
-    validation_fee_policy_metadata: Option<&NormalizedValidationFeePolicyMetadata>,
-) -> Result<()> {
-    use iroha_data_model::validation_fee::ValidationFeeMultisigMarkerV1;
-    for instruction in instructions.iter() {
-        match ValidationFeeMultisigMarkerV1::parse_instruction(instruction) {
-            Ok(None) => {}
-            Ok(Some(_)) | Err(_) => {
-                return Err(conversion_error(
-                    "multisig propose instructions must not supply a top-level validation-fee marker; provide the validated policy fields and coordinate so Torii can inject the canonical signed marker"
-                        .to_owned(),
-                ));
-            }
-        }
-    }
-    let Some(metadata) = validation_fee_policy_metadata else {
-        return Ok(());
-    };
-    let Some(instruction_index) = metadata.instruction_index else {
-        return Ok(());
-    };
-    let policy_hash: [u8; 32] = hex::decode(&metadata.policy_hash)
-        .map_err(|_| conversion_error("invalid normalized validation-fee policy hash".to_owned()))?
-        .try_into()
-        .map_err(|_| {
-            conversion_error("invalid normalized validation-fee policy hash".to_owned())
-        })?;
-    let hijiri_fee_quote_hash = metadata
-        .hijiri_fee_quote_hash
-        .as_deref()
-        .map(|hash| {
-            hex::decode(hash)
-                .map_err(|_| {
-                    conversion_error(
-                        "invalid normalized validation-fee Hijiri quote hash".to_owned(),
-                    )
-                })?
-                .try_into()
-                .map_err(|_| {
-                    conversion_error(
-                        "invalid normalized validation-fee Hijiri quote hash".to_owned(),
-                    )
-                })
-        })
-        .transpose()?;
-    instructions.push(
-        ValidationFeeMultisigMarkerV1::new(
-            metadata.policy_version,
-            policy_hash,
-            hijiri_fee_quote_hash,
-            instruction_index,
-            metadata.transfer_entry_index,
-        )
-        .into_instruction(),
-    );
-    Ok(())
-}
 fn build_multisig_propose_metadata(memo: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
-    }
-    metadata
-}
-fn build_multisig_propose_metadata_with_validation_fee(
-    memo: Option<&str>,
-    validation_fee_policy_metadata: Option<&NormalizedValidationFeePolicyMetadata>,
-) -> Metadata {
-    let mut metadata = build_multisig_propose_metadata(memo);
-    if let Some(metadata_binding) = validation_fee_policy_metadata {
-        let version_key = Name::from_str(
-            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-        )
-        .expect("static metadata key `validation_fee_policy_version`");
-        metadata.insert(
-            version_key,
-            IrohaJson::new(metadata_binding.policy_version),
-        );
-        let hash_key = Name::from_str(
-            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-        )
-        .expect("static metadata key `validation_fee_policy_hash`");
-        metadata.insert(
-            hash_key,
-            IrohaJson::new(metadata_binding.policy_hash.clone()),
-        );
-        if let Some(hijiri_fee_quote_hash) = &metadata_binding.hijiri_fee_quote_hash {
-            let hijiri_hash_key = Name::from_str(
-                iroha_data_model::validation_fee::VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-            )
-            .expect("static metadata key `validation_fee_hijiri_fee_quote_hash`");
-            metadata.insert(
-                hijiri_hash_key,
-                IrohaJson::new(hijiri_fee_quote_hash.clone()),
-            );
-        }
-        if let Some(instruction_index) = metadata_binding.instruction_index {
-            let instruction_index_key = Name::from_str(
-                iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-            )
-            .expect("static metadata key `validation_fee_instruction_index`");
-            metadata.insert(instruction_index_key, IrohaJson::new(instruction_index));
-        }
-        if let Some(transfer_entry_index) = metadata_binding.transfer_entry_index {
-            let transfer_entry_index_key = Name::from_str(
-                iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
-            )
-            .expect("static metadata key `validation_fee_transfer_entry_index`");
-            metadata.insert(
-                transfer_entry_index_key,
-                IrohaJson::new(transfer_entry_index),
-            );
-        }
     }
     metadata
 }
@@ -19969,66 +19570,7 @@ mod multisig_contract_call_tests {
         assert!(json.get("fee_sponsor").is_none());
         assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
     }
-    routing_test! { sync multisig_draft_injects_canonical_fee_marker_before_proposal_hashing
-        use iroha_data_model::{
-            Level,
-            isi::{InstructionBox, Log},
-            validation_fee::ValidationFeeMultisigMarkerV1,
-        };
-        let mut instructions = vec![
-            InstructionBox::from(Log::new(Level::INFO, "principal".to_owned())),
-            InstructionBox::from(Log::new(Level::INFO, "fee".to_owned())),
-        ];
-        let unmarked_hash = HashOf::new(&instructions);
-        let binding = NormalizedValidationFeePolicyMetadata {
-            policy_version: 1,
-            policy_hash: "ab".repeat(32),
-            hijiri_fee_quote_hash: Some("cd".repeat(32)),
-            instruction_index: Some(1),
-            transfer_entry_index: None,
-        };
-        append_canonical_multisig_validation_fee_marker(
-            &mut instructions,
-            Some(&binding),
-        )
-        .expect("canonical marker injection");
-        let marker = ValidationFeeMultisigMarkerV1::parse_instruction(
-            instructions.last().expect("marker instruction"),
-        )
-        .expect("canonical marker parse")
-        .expect("marker present");
-        assert_eq!(marker.policy_version, 1);
-        assert_eq!(marker.policy_hash, [0xabu8; 32]);
-        assert_eq!(marker.hijiri_fee_quote_hash, Some([0xcdu8; 32]));
-        assert_eq!(marker.instruction_index, 1);
-        assert_eq!(marker.transfer_entry_index, None);
-        let marked_hash = HashOf::new(&instructions);
-        assert_ne!(marked_hash, unmarked_hash);
-        let mut tampered = instructions.clone();
-        *tampered.last_mut().expect("marker instruction") =
-            ValidationFeeMultisigMarkerV1::new(
-                1,
-                [0xabu8; 32],
-                Some([0xcdu8; 32]),
-                0,
-                None,
-            )
-            .into_instruction();
-        assert_ne!(
-            HashOf::new(&tampered),
-            marked_hash,
-            "proposal hash must bind policy and exact fee coordinate marker"
-        );
-        let err = append_canonical_multisig_validation_fee_marker(
-            &mut instructions,
-            Some(&binding),
-        )
-        .expect_err("caller-supplied top-level marker must not be duplicated");
-        assert!(matches!(err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
-                if message.contains("must not supply a top-level")));
-    }
+
 }
 #[cfg(all(test, feature = "app_api"))]
 mod contract_entrypoint_validation_tests {
@@ -23401,6 +22943,46 @@ seiyaku BytesPayloadNormalizeTest {
             Some(expected_hash.as_str())
         );
     }
+    routing_test! { async multisig_generic_propose_binds_assessment_only_in_signed_proposal_marker
+        use iroha_data_model::validation_fee::{RetailFeeAssessmentV1, RETAIL_FEE_ASSESSMENT_METADATA_KEY};
+        let (state, multisig_account_id, _, signer_id, _, _) = multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "proposal payload".to_owned()).into();
+        let assessment = RetailFeeAssessmentV1 {
+            account_id: multisig_account_id.clone(),
+            retail_enrolled: true,
+            billing_month_start_ms: 1_700_000_000_000,
+            policy_revision: 1,
+            payments_used_before: 0,
+            qualifying_payments: 1,
+            fee_minor: 0,
+            state_commitment: [1; 32],
+            intent_hash: [2; 32],
+            expires_at_ms: 1_700_000_060_000,
+        };
+        let marker: dm::InstructionBox = dm::Log::new(dm::Level::TRACE, format!("{}{}", iroha_core::retail_fee::ASSESSMENT_MARKER_PREFIX, hex::encode(norito::to_bytes(&assessment).unwrap()))).into();
+        let expected_proposal = vec![instruction.clone(), marker];
+        let response = handle_post_multisig_propose(
+            build_queue(), state, MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDtoV1 {
+                selector: concrete_selector(multisig_account_id.clone()),
+                signer_account_id: signer_id,
+                public_key_hex: None, signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
+                memo: Some("  reviewed transfer  ".to_owned()),
+                validation_fee_assessment: Some(assessment),
+                instructions: vec![instruction],
+            }),
+        ).await.expect("prepare proposal with one assessment");
+        let payload = decode_json_response(response).await;
+        assert_exact_unsigned_transaction_draft(&payload);
+        let bytes = base64::engine::general_purpose::STANDARD.decode(payload["transaction_payload_b64"].as_str().unwrap()).unwrap();
+        let builder = dm::TransactionBuilder::decode_payload(&bytes).unwrap();
+        assert!(builder.payload().metadata.get(RETAIL_FEE_ASSESSMENT_METADATA_KEY).is_none());
+        assert_eq!(builder.payload().metadata.get("memo").unwrap().try_into_any_norito::<String>().unwrap(), "reviewed transfer");
+        assert_eq!(builder.payload().instructions, dm::Executable::Instructions(vec![dm::InstructionBox::from(MultisigPropose::new(multisig_account_id, expected_proposal.clone(), None))].into()));
+        assert_eq!(payload["instructions_hash"].as_str(), Some(hex::encode(HashOf::new(&expected_proposal).as_ref()).as_str()));
+    }
     routing_test! { async multisig_generic_propose_prepares_with_concrete_selector
         let (
             state,
@@ -23416,7 +22998,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 public_key_hex: None,
@@ -23424,11 +23006,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction],
             }),
         )
@@ -23460,7 +23038,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: None,
@@ -23468,11 +23046,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -23483,7 +23057,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: Some("00".repeat(32)),
@@ -23491,11 +23065,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -23506,7 +23076,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: Some("  ".to_owned()),
@@ -23514,11 +23084,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction],
             }),
         )
@@ -23545,7 +23111,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: Some("not hex".to_owned()),
@@ -23553,11 +23119,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -23573,7 +23135,7 @@ seiyaku BytesPayloadNormalizeTest {
                 build_queue(),
                 state.clone(),
                 MaybeTelemetry::disabled(),
-                NoritoJson(MultisigProposeDto {
+                NoritoJson(MultisigProposeDtoV1 {
                     selector: concrete_selector(multisig_account_id.clone()),
                     signer_account_id: signer_two_id.clone(),
                     public_key_hex: Some(hex::encode(public_key)),
@@ -23581,11 +23143,7 @@ seiyaku BytesPayloadNormalizeTest {
                     creation_time_ms: Some(1_700_000_000_345),
                     fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                     memo: None,
-                    validation_fee_policy_version: None,
-                    validation_fee_policy_hash: None,
-                    validation_fee_hijiri_fee_quote_hash: None,
-                    validation_fee_instruction_index: None,
-                    validation_fee_transfer_entry_index: None,
+                    validation_fee_assessment: None,
                     instructions: vec![instruction.clone()],
                 }),
             )
@@ -23609,7 +23167,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: Some(other_public_key_hex),
@@ -23617,11 +23175,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -23637,7 +23191,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 public_key_hex: Some(signer_public_key_hex.clone()),
@@ -23645,11 +23199,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -23661,7 +23211,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id,
                 public_key_hex: Some(signer_public_key_hex),
@@ -23669,11 +23219,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: vec![instruction],
             }),
         )
@@ -23710,7 +23256,7 @@ seiyaku BytesPayloadNormalizeTest {
             &signer_account_id,
             creation_time_ms,
             fee_payment.clone(),
-            build_multisig_propose_metadata_with_validation_fee(None, None),
+            build_multisig_propose_metadata(None),
             dm::Executable::Instructions(ConstVec::from(inner_instructions.clone())),
             ENDPOINT_MULTISIG_PROPOSE,
         )
@@ -23738,9 +23284,7 @@ seiyaku BytesPayloadNormalizeTest {
         let signed = sign_app_api_transaction(
             builder
                 .with_fee_payment_intent(fee_payment.clone())
-                .with_metadata(build_multisig_propose_metadata_with_validation_fee(
-                    None, None,
-                ))
+                .with_metadata(build_multisig_propose_metadata(None))
                 .with_instructions(transaction_instructions),
             signer_keypair.private_key(),
             ENDPOINT_MULTISIG_PROPOSE,
@@ -23754,7 +23298,7 @@ seiyaku BytesPayloadNormalizeTest {
             Arc::clone(&queue),
             Arc::clone(&state),
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id,
                 public_key_hex: Some(public_key_hex),
@@ -23762,11 +23306,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(creation_time_ms),
                 fee_payment,
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions: inner_instructions,
             }),
         )
@@ -23841,9 +23381,7 @@ seiyaku BytesPayloadNormalizeTest {
         let signed = sign_app_api_transaction(
             builder
                 .with_fee_payment_intent(fee_payment.clone())
-                .with_metadata(build_multisig_propose_metadata_with_validation_fee(
-                    None, None,
-                ))
+                .with_metadata(build_multisig_propose_metadata(None))
                 .with_instructions([dm::InstructionBox::from(MultisigPropose::new(
                     multisig_account_id.clone(),
                     instructions.clone(),
@@ -23861,7 +23399,7 @@ seiyaku BytesPayloadNormalizeTest {
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
+            NoritoJson(MultisigProposeDtoV1 {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_one_id,
                 public_key_hex: Some(public_key_hex),
@@ -23869,11 +23407,7 @@ seiyaku BytesPayloadNormalizeTest {
                 creation_time_ms: Some(creation_time_ms),
                 fee_payment,
                 memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_hijiri_fee_quote_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
+                validation_fee_assessment: None,
                 instructions,
             }),
         )
@@ -23928,7 +23462,7 @@ seiyaku BytesPayloadNormalizeTest {
         );
     }
     routing_test! { sync multisig_generic_propose_does_not_deserialize_private_keys
-        norito::json::from_str::<MultisigProposeDto>(
+        norito::json::from_str::<MultisigProposeDtoV1>(
             r#"{"private_key":"ed01200000000000000000000000000000000000000000000000000000000000000000"}"#,
         )
         .expect_err("private_key must be rejected as an unknown field");
@@ -23944,7 +23478,7 @@ seiyaku BytesPayloadNormalizeTest {
         ) = multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "native norito instruction".to_owned()).into();
-        let request = MultisigProposeDto {
+        let request = MultisigProposeDtoV1 {
             selector: alias_selector(&alias_literal),
             signer_account_id: signer_two_id,
             public_key_hex: None,
@@ -23952,11 +23486,7 @@ seiyaku BytesPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
-            validation_fee_policy_version: None,
-            validation_fee_policy_hash: None,
-            validation_fee_hijiri_fee_quote_hash: None,
-            validation_fee_instruction_index: None,
-            validation_fee_transfer_entry_index: None,
+            validation_fee_assessment: None,
             instructions: vec![instruction.clone()],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -23966,7 +23496,7 @@ seiyaku BytesPayloadNormalizeTest {
             value["instructions"][0].as_str().is_some(),
             "InstructionBox JSON should expose native Norito bytes as base64"
         );
-        let decoded: MultisigProposeDto =
+        let decoded: MultisigProposeDtoV1 =
             norito::json::from_str(&raw).expect("decode native Norito instruction request");
         assert_eq!(
             norito::to_bytes(&decoded.instructions[0]).expect("encode decoded instruction"),
@@ -23987,7 +23517,7 @@ seiyaku BytesPayloadNormalizeTest {
             "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[\"not base64!!\"]}}"
         );
         let err =
-            norito::json::from_str::<MultisigProposeDto>(&raw).expect_err("invalid instruction");
+            norito::json::from_str::<MultisigProposeDtoV1>(&raw).expect_err("invalid instruction");
         let message = err.to_string();
         assert!(
             message.contains("base64") || message.contains("Invalid"),
@@ -24006,7 +23536,7 @@ seiyaku BytesPayloadNormalizeTest {
         let raw = format!(
             "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[{{\"unknown_instruction\":true}}]}}"
         );
-        let err = norito::json::from_str::<MultisigProposeDto>(&raw)
+        let err = norito::json::from_str::<MultisigProposeDtoV1>(&raw)
             .expect_err("unknown instruction object");
         let message = err.to_string();
         assert!(
@@ -24031,7 +23561,7 @@ seiyaku BytesPayloadNormalizeTest {
         let raw = format!(
             "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"creation_time_ms\":-1,\"instructions\":[\"AQID\"]}}"
         );
-        let err = norito::json::from_str::<MultisigProposeDto>(&raw)
+        let err = norito::json::from_str::<MultisigProposeDtoV1>(&raw)
             .expect_err("negative creation time must be rejected");
         let message = err.to_string();
         assert!(
@@ -24046,7 +23576,7 @@ seiyaku BytesPayloadNormalizeTest {
         let raw = format!(
             "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[null]}}"
         );
-        let err = norito::json::from_str::<MultisigProposeDto>(&raw)
+        let err = norito::json::from_str::<MultisigProposeDtoV1>(&raw)
             .expect_err("null instruction must be rejected");
         let message = err.to_string();
         assert!(
@@ -24070,7 +23600,7 @@ seiyaku BytesPayloadNormalizeTest {
         ) = multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "valid instruction".to_owned()).into();
-        let request = MultisigProposeDto {
+        let request = MultisigProposeDtoV1 {
             selector: alias_selector(&alias_literal),
             signer_account_id: signer_two_id.clone(),
             public_key_hex: None,
@@ -24078,11 +23608,7 @@ seiyaku BytesPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
-            validation_fee_policy_version: None,
-            validation_fee_policy_hash: None,
-            validation_fee_hijiri_fee_quote_hash: None,
-            validation_fee_instruction_index: None,
-            validation_fee_transfer_entry_index: None,
+            validation_fee_assessment: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -24096,7 +23622,7 @@ seiyaku BytesPayloadNormalizeTest {
         let raw = format!(
             "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[\"{valid_instruction}\",\"{malformed_frame}\"]}}"
         );
-        let err = norito::json::from_str::<MultisigProposeDto>(&raw)
+        let err = norito::json::from_str::<MultisigProposeDtoV1>(&raw)
             .expect_err("malformed native instruction frame");
         let message = err.to_string();
         assert!(
@@ -24768,12 +24294,12 @@ pub async fn handle_post_multisig_propose(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<MultisigProposeDto>,
+    NoritoJson(req): NoritoJson<MultisigProposeDtoV1>,
 ) -> Result<Response> {
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     use iroha_primitives::const_vec::ConstVec;
-    let MultisigProposeDto {
+    let MultisigProposeDtoV1 {
         selector,
         signer_account_id,
         public_key_hex,
@@ -24781,30 +24307,29 @@ pub async fn handle_post_multisig_propose(
         creation_time_ms,
         fee_payment,
         memo,
-        validation_fee_policy_version,
-        validation_fee_policy_hash,
-        validation_fee_hijiri_fee_quote_hash,
-        validation_fee_instruction_index,
-        validation_fee_transfer_entry_index,
+        validation_fee_assessment,
         instructions,
     } = req;
     validate_app_api_fee_payment(&fee_payment, false)?;
     let memo = normalize_transaction_memo(memo);
-    let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
-        validation_fee_policy_version,
-        validation_fee_policy_hash,
-        validation_fee_hijiri_fee_quote_hash,
-        validation_fee_instruction_index,
-        validation_fee_transfer_entry_index,
-    )?;
     reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let mut proposal_instructions = instructions;
-    append_canonical_multisig_validation_fee_marker(
-        &mut proposal_instructions,
-        validation_fee_policy_metadata.as_ref(),
-    )?;
+    if proposal_instructions.iter().any(|instruction| {
+        instruction.as_any().downcast_ref::<dm::Log>().is_some_and(|log| {
+            log.msg.starts_with(iroha_core::retail_fee::ASSESSMENT_MARKER_PREFIX)
+        })
+    }) {
+        return Err(conversion_error("multisig instructions must not contain a caller-supplied fee assessment marker".into()));
+    }
+    if let Some(assessment) = &validation_fee_assessment {
+        if assessment.account_id != multisig_account_id {
+            return Err(conversion_error("retail fee assessment must belong to the multisig execution account".into()));
+        }
+        let bytes = norito::encode_canonical(assessment).map_err(|error| conversion_error(error.to_string()))?;
+        proposal_instructions.push(dm::Log::new(dm::Level::TRACE, format!("{}{}", iroha_core::retail_fee::ASSESSMENT_MARKER_PREFIX, hex::encode(bytes))).into());
+    }
     let proposal_hash = HashOf::new(&proposal_instructions);
     let proposal_id = hex::encode(proposal_hash.as_ref());
     let instructions_hash = proposal_id.clone();
@@ -24832,10 +24357,9 @@ pub async fn handle_post_multisig_propose(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let tx_metadata = build_multisig_propose_metadata_with_validation_fee(
-        memo.as_deref(),
-        validation_fee_policy_metadata.as_ref(),
-    );
+    // The authenticated proposal marker is the sole assessment carrier. Repeating
+    // it in outer metadata would double-bind when the proposer reaches quorum.
+    let tx_metadata = build_multisig_propose_metadata(memo.as_deref());
     let builder = builder
         .with_fee_payment_intent(fee_payment.clone())
         .with_metadata(tx_metadata.clone())
@@ -28063,12 +27587,13 @@ pub struct MultisigAccountSelectorDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for proposing a generic multisig instruction batch.
+///
+/// This distinct wire identity binds the complete typed retail assessment; the
+/// retired positional fee-field layout is not a supported decoder.
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::routing::MultisigProposeDto")]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposeDtoV1")]
 #[norito(deny_unknown_fields)]
-
-
-pub struct MultisigProposeDto {
+pub struct MultisigProposeDtoV1 {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -28088,23 +27613,11 @@ pub struct MultisigProposeDto {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
-    /// Optional validation-fee policy version forwarded to transaction metadata.
+    /// Complete reviewed native assessment preserved in the signed proposal.
     #[norito(default)]
-    pub validation_fee_policy_version: Option<String>,
-    /// Optional validation-fee policy hash forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_policy_hash: Option<String>,
-    /// Optional composite Hijiri fee-quote hash forwarded to metadata and the signed marker.
-    #[norito(default)]
-    pub validation_fee_hijiri_fee_quote_hash: Option<String>,
-    /// Instruction batch that will be wrapped inside `MultisigPropose`.
+    pub validation_fee_assessment: Option<iroha_data_model::validation_fee::RetailFeeAssessmentV1>,
+    /// Instruction batch wrapped inside `MultisigPropose`; fees are debited by consensus.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
-    /// Optional validation-fee instruction index forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_instruction_index: Option<String>,
-    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
-    #[norito(default)]
-    pub validation_fee_transfer_entry_index: Option<String>,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for approving a generic multisig proposal.
@@ -28209,7 +27722,7 @@ pub struct MultisigContractCallApproveDto {
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_native_norito_dto_tests {
     use super::{
-        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
+        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDtoV1,
     };
     use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
     use norito::SerializePayload;
@@ -28221,6 +27734,97 @@ mod multisig_native_norito_dto_tests {
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
         payload
+    }
+    fn retail_proposal_v1_fixture(fee_minor: u64) -> MultisigProposeDtoV1 {
+        let signer = AccountId::new(
+            super::checked_routing_fixture_keypair(
+                0x73,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive retail proposal V1 fixture signer key",
+            )
+            .public_key()
+            .clone(),
+        );
+        MultisigProposeDtoV1 {
+            selector: MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
+            },
+            signer_account_id: signer.clone(),
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_788_934_200_000),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                std::num::NonZeroU64::new(10_000),
+            ),
+            memo: Some("reviewed payment".to_owned()),
+            validation_fee_assessment: Some(
+                iroha_data_model::validation_fee::RetailFeeAssessmentV1 {
+                    account_id: signer,
+                    retail_enrolled: true,
+                    billing_month_start_ms: 1_788_181_200_000,
+                    policy_revision: 7,
+                    payments_used_before: 49,
+                    qualifying_payments: if fee_minor == 0 { 1 } else { 3 },
+                    fee_minor,
+                    state_commitment: [0xAB; 32],
+                    intent_hash: [0xCD; 32],
+                    expires_at_ms: 1_788_934_500_000,
+                },
+            ),
+            instructions: vec![iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "proposal payload".to_owned(),
+            )
+            .into()],
+        }
+    }
+    routing_test! { sync multisig_generic_propose_v1_native_norito_roundtrips_typed_zero_and_paid_assessments
+        for fee_minor in [0, 20] {
+            let request = retail_proposal_v1_fixture(fee_minor);
+            let bytes = norito::to_bytes(&request).expect("encode V1 proposal");
+            assert_eq!(
+                hex::encode(&bytes[6..22]),
+                "b6ec3f91a7336cdced7608106a30976b",
+                "the revised positional layout must use its own schema identity",
+            );
+            assert_eq!(
+                &bytes[6..22],
+                norito::core::schema_hash_for_name("iroha_torii::routing::MultisigProposeDtoV1"),
+            );
+            let decoded: MultisigProposeDtoV1 =
+                norito::decode_from_bytes(&bytes).expect("decode V1 proposal");
+            assert_eq!(decoded.validation_fee_assessment, request.validation_fee_assessment);
+            assert_eq!(
+                norito::json::to_string(&decoded).expect("decoded JSON"),
+                norito::json::to_string(&request).expect("original JSON"),
+                "every selector, signing, fee, memo and instruction field must survive",
+            );
+            let view = norito::core::from_bytes_view(&bytes).expect("V1 payload view");
+            let selector_payload = bare_payload_with_flags(&request.selector, view.flags());
+            assert_eq!(view.as_bytes().get(..selector_payload.len()), Some(selector_payload.as_slice()));
+            let mut retired_schema = bytes;
+            retired_schema[6..22].copy_from_slice(&norito::core::schema_hash_for_name(
+                "iroha_torii::routing::MultisigProposeDto",
+            ));
+            assert!(matches!(
+                norito::decode_from_bytes::<MultisigProposeDtoV1>(&retired_schema),
+                Err(norito::Error::SchemaMismatch),
+            ), "retired schema must be rejected before interpreting the positional body");
+        }
+    }
+    routing_test! { sync multisig_generic_propose_v1_json_rejects_every_retired_fee_field
+        let raw = norito::json::to_string(&retail_proposal_v1_fixture(0)).expect("V1 request JSON");
+        for field in [
+            "validation_fee_policy_version", "validation_fee_policy_hash",
+            "validation_fee_hijiri_fee_quote_hash", "validation_fee_instruction_index",
+            "validation_fee_transfer_entry_index",
+        ] {
+            let invalid = format!("{},\"{field}\":\"1\"}}", raw.strip_suffix('}').expect("JSON object"));
+            norito::json::from_str::<MultisigProposeDtoV1>(&invalid)
+                .expect_err("retired fee field must not be accepted alongside a typed assessment");
+        }
     }
     routing_test! { sync multisig_contract_call_propose_native_norito_flattens_selector
         let signer = AccountId::new(
@@ -28282,41 +27886,15 @@ mod multisig_native_norito_dto_tests {
         );
     }
     fn assert_retired_multisig_payload_rejected_under_current_owner(mut bytes: Vec<u8>) {
-        let signer = AccountId::new(
-            super::checked_routing_fixture_keypair(
-                0x73, iroha_crypto::Algorithm::Ed25519,
-                "derive current multisig payload control signer",
-            ).public_key().clone(),
-        );
-        let current = MultisigProposeDto {
-            selector: MultisigAccountSelectorDto {
-                multisig_account_id: None,
-                multisig_account_alias: Some("cbdc@hbl.sbp".into()),
-            },
-            signer_account_id: signer,
-            public_key_hex: None,
-            signature_b64: None,
-            creation_time_ms: Some(1_700_000_000_234),
-            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
-                Vec::new(), std::num::NonZeroU64::new(10_000),
-            ),
-            memo: None,
-            validation_fee_policy_version: None,
-            validation_fee_policy_hash: None,
-            validation_fee_hijiri_fee_quote_hash: None,
-            instructions: Vec::new(),
-            validation_fee_instruction_index: None,
-            validation_fee_transfer_entry_index: None,
-        };
+        let current = retail_proposal_v1_fixture(0);
         crate::frame_test_support::assert_current_frame(
-            &current, "iroha_torii::routing::MultisigProposeDto",
+            &current, "iroha_torii::routing::MultisigProposeDtoV1",
         );
-        // Keep the captured unsupported payload and declared layout, replacing only
-        // its outer owner so rejection exercises the current payload decoder.
-        bytes[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<MultisigProposeDto>());
-        let error = norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
+        // Replace only the outer owner to prove the current V1 decoder rejects the
+        // retired payload even after its first frame identity check passes.
+        bytes[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<MultisigProposeDtoV1>());
+        norito::decode_from_bytes::<MultisigProposeDtoV1>(&bytes)
             .expect_err("unsupported sponsor metadata payload must not decode under current owner");
-        assert!(!matches!(error, norito::Error::SchemaMismatch));
     }
     routing_test! { sync retired_multisig_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
@@ -44995,14 +44573,12 @@ mod validation_fee_torii_ingress_tests {
         transaction::SignedTransaction,
         trigger::action::Repeats,
         validation_fee::{
-            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-            VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
-            ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutPolicyEntryV1,
+            ValidationFeePayoutPolicyRegistryV1, ValidationFeePolicyRegistryEntryV1,
             ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
-            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
+            ValidationFeeTreasuryPayoutBindingV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -45026,8 +44602,7 @@ mod validation_fee_torii_ingress_tests {
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
     const TEST_PROPOSAL_CREATED_HEIGHT: u64 = 1;
     const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 3_601;
-    const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
-        TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+    const TEST_POLICY_EFFECTIVE_HEIGHT: u64 = TEST_POLICY_ENACTMENT_HEIGHT + 100;
     const TEST_ACTIVE_VALIDATION_HEIGHT: u64 = TEST_POLICY_EFFECTIVE_HEIGHT + 1;
     const TEST_PARLIAMENT_POLICY_VERSION: u64 = 1;
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
@@ -45087,9 +44662,16 @@ mod validation_fee_torii_ingress_tests {
     fn payout_pool_vault_account() -> AccountId {
         pool_contract_address().subject_id()
     }
-    fn payout_recipient_accounts() -> Vec<AccountId> {
-        (5..=8)
-            .map(|seed| account(seed, "derive validation-fee payout recipient").0)
+    fn reward_and_reference_accounts() -> Vec<AccountId> {
+        [7, 10, 11, 12, 13, 14]
+            .into_iter()
+            .map(|seed| {
+                account(
+                    seed,
+                    "derive reward custody or independent reference provider",
+                )
+                .0
+            })
             .collect()
     }
     fn payout_contract_artifact() -> (
@@ -45237,24 +44819,28 @@ mod validation_fee_torii_ingress_tests {
         ValidationFeeTreasuryPayoutBindingV1 {
             treasury_account_id: contract_address.subject_id(),
             contract_address,
-            code_hash: <[u8; 32]>::from(Sha256::digest(contract_artifact)),
+            code_hash: ivm::contract_code_hash(&contract_artifact).into(),
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
             ds_asset_id: fee_asset.clone(),
             xor_asset_id: xor_asset_definition_id(),
             pool_vault_account_id: payout_pool_vault_account(),
-            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
-            min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
-            max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
-            recipients: payout_recipient_accounts()
-                .into_iter()
-                .map(|account_id| ValidationFeeTreasuryPayoutRecipientV1 {
-                    account_id,
-                    share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(
-                    ),
-                })
+            pool_contract_address: pool_contract_address(),
+            pool_code_hash: ivm::contract_code_hash(&pool_contract_artifact().0).into(),
+            reward_pool_account_id: account(7, "reward pool").0,
+            reference_feed_id: "xor_per_sbd".parse().unwrap(),
+            reference_feed_config_version: 1,
+            reference_provider_accounts: (10..15)
+                .map(|seed| account(seed, "reference provider").0)
                 .collect(),
+            max_sbd_per_attempt_minor: 1000,
+            max_sbd_per_day_minor: 100000,
+            min_interval_ms: 60000,
+            max_source_age_ms: 300000,
+            max_slippage_bps: 100,
+            validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+            min_reward_claim_xor_minor: 1,
         }
     }
     fn test_world(
@@ -45293,7 +44879,7 @@ mod validation_fee_torii_ingress_tests {
             Account::new(account(4, "derive validation-fee multisig account").0).build(user),
         ];
         accounts.extend(
-            payout_recipient_accounts()
+            reward_and_reference_accounts()
                 .into_iter()
                 .map(|account_id| Account::new(account_id).build(user)),
         );
@@ -45343,9 +44929,10 @@ mod validation_fee_torii_ingress_tests {
         let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
         let treasury = payout_contract_address(&user).subject_id();
         let fee_asset = fee_asset_definition_id();
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
             &user, &recipient, &treasury, &fee_asset,
         ));
+        crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
         (app, user, user_key_pair, recipient, treasury, fee_asset)
     }
     fn queue() -> Arc<Queue> {
@@ -45391,6 +44978,9 @@ mod validation_fee_torii_ingress_tests {
             "policy treasury must be the immutable payout contract subject"
         );
         ValidationFeePolicyV1 {
+            retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+            effective_from_ms: 1793451600000,
+            notice_published_at_ms: 1790859600000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             network_id: *state.network_id_ref(),
             policy_version: 1,
@@ -45399,11 +44989,10 @@ mod validation_fee_torii_ingress_tests {
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
             treasury_account_id: treasury,
-            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: TEST_POLICY_EFFECTIVE_HEIGHT,
-            expires_after_height: TEST_POLICY_EFFECTIVE_HEIGHT.checked_add(100),
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
             exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
-            treasury_payout_binding: Some(payout_binding),
+            reward_custody: payout_binding.custody(),
         }
     }
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
@@ -45795,10 +45384,8 @@ mod validation_fee_torii_ingress_tests {
         use iroha_data_model::governance::types::{
             ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         };
-        let payout_binding = policy
-            .treasury_payout_binding
-            .clone()
-            .expect("enabled validation-fee fixture must carry its payout binding");
+        let payout_binding = payout_binding(authority, &policy.ds_asset_id);
+        assert_eq!(policy.reward_custody, payout_binding.custody());
         let payout_lifecycle_kind =
             ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
                 proposal_operator: authority.clone(),
@@ -45808,7 +45395,6 @@ mod validation_fee_torii_ingress_tests {
         let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             proposal_operator: authority.clone(),
             policy: policy.clone(),
-            payout_lifecycle_proposal_id: Some(payout_lifecycle_id),
         });
         let policy_proposal_id = policy_kind.fingerprint();
         let (payout_lifecycle_authorization, payout_lifecycle_attempt) =
@@ -45828,16 +45414,19 @@ mod validation_fee_torii_ingress_tests {
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
             policy_authorization.clone(),
-            Some(ValidationFeePayoutLifecycleReferenceV1 {
-                lifecycle_seal: payout_binding
-                    .lifecycle_seal()
-                    .expect("derive payout lifecycle seal"),
-                parliament_authorization: payout_lifecycle_authorization.clone(),
-            }),
         )
         .expect("validation-fee registry entry");
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![entry],
+            payout_policies: ValidationFeePayoutPolicyRegistryV1 {
+                entries: vec![ValidationFeePayoutPolicyEntryV1 {
+                    revision: 1,
+                    proposal_id: payout_lifecycle_id,
+                    lifecycle_seal: payout_binding.lifecycle_seal().expect("seal"),
+                    payout_binding: payout_binding.clone(),
+                    parliament_authorization: payout_lifecycle_authorization.clone(),
+                }],
+            },
         };
         registry
             .validate()
@@ -45950,79 +45539,51 @@ mod validation_fee_torii_ingress_tests {
             .commit_world_overlay_for_testing()
             .expect("commit validation-fee policy");
     }
-    fn metadata_for_policy(
-        policy: &ValidationFeePolicyV1,
-        fee_instruction_index: usize,
-    ) -> Metadata {
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
-            Json::new(policy.policy_version),
-        );
-        metadata.insert(
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
-            Json::new(hex::encode(policy.policy_hash().expect("policy hash"))),
-        );
-        metadata.insert(
-            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
-            Json::new(u64::try_from(fee_instruction_index).expect("instruction index fits")),
-        );
-        metadata
-    }
-    fn transfer_builder(
-        state: &Arc<State>,
-        user: &AccountId,
-        recipient: &AccountId,
-        fee_asset: &AssetDefinitionId,
-        policy: &ValidationFeePolicyV1,
-        include_fee: bool,
-    ) -> TransactionBuilder {
-        let principal = Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            1_u32,
-            recipient.clone(),
-        );
-        let mut instructions: Vec<InstructionBox> = vec![principal.into()];
-        if include_fee {
-            instructions.push(
-                Transfer::asset_quantity(
-                    AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee.clone(),
-                    validation_fee_policy_treasury(policy),
-                )
-                .into(),
-            );
-        }
-        let metadata = if include_fee {
-            metadata_for_policy(policy, 1)
-        } else {
-            Metadata::default()
-        };
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            user.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions)
-        .with_metadata(metadata)
-    }
     fn signed_transfer(
         state: &Arc<State>,
         user: &AccountId,
         user_key_pair: &KeyPair,
         recipient: &AccountId,
         fee_asset: &AssetDefinitionId,
-        policy: &ValidationFeePolicyV1,
-        include_fee: bool,
+        _policy: &ValidationFeePolicyV1,
+        reviewed: bool,
     ) -> SignedTransaction {
-        transfer_builder(state, user, recipient, fee_asset, policy, include_fee)
-            .sign(user_key_pair.private_key())
+        let mut metadata = Metadata::default();
+        if reviewed {
+            let request = iroha_data_model::validation_fee::RetailFeeQuoteRequestV1 {
+                account_id: user.clone(),
+                asset_definition_id: fee_asset.clone(),
+                transfers: vec![iroha_data_model::validation_fee::RetailFeePaymentLegV1 {
+                    destination_account_id: recipient.clone(),
+                    amount_minor_units: 100,
+                }],
+            };
+            let assessment = iroha_core::retail_fee::quote(
+                state.view().world(),
+                TEST_ACTIVE_VALIDATION_HEIGHT,
+                1_793_451_601_000,
+                &request,
+            )
+            .unwrap();
+            metadata.insert(
+                iroha_data_model::validation_fee::RETAIL_FEE_ASSESSMENT_METADATA_KEY
+                    .parse()
+                    .unwrap(),
+                Json::new(assessment),
+            );
+        }
+        TransactionBuilder::new(
+            *state.network_id_ref(),
+            user.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            1_u32,
+            recipient.clone(),
+        )])
+        .with_metadata(metadata)
+        .sign(user_key_pair.private_key())
     }
     async fn submit_via_public_transaction_handler(
         app: crate::SharedAppState,
@@ -46099,7 +45660,10 @@ mod validation_fee_torii_ingress_tests {
             .expect("healthy pending inputs");
         assert_eq!(accepted.len(), 1, "expected one queued transaction");
         let accepted = accepted.remove(0);
-        let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
+        let mut block = state.block(block_header(
+            height,
+            1_793_451_601_000 + height.saturating_sub(TEST_ACTIVE_VALIDATION_HEIGHT),
+        ));
         let mut ivm_cache = IvmCache::new();
         let result = iroha_core::tx::execute_component_transaction_for_testing(
             &mut block,
@@ -46140,7 +45704,7 @@ mod validation_fee_torii_ingress_tests {
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         let expected_missing_fee = format!(
-            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+            "validation_fee_assessment"
         );
         assert!(
             missing_fee_error.contains(&expected_missing_fee),
@@ -46170,117 +45734,7 @@ mod validation_fee_torii_ingress_tests {
         );
         assert_eq!(exact_fee_result, "ok");
     }
-    routing_test! { async torii_native_multisig_signed_fee_coordinate_resolves_nested_context
-        let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-        commit_empty_genesis_like_block(&state);
-        let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury.clone());
-        install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
-        let (multisig, _) = account(4, "derive validation-fee multisig account");
-        let proposal = || {
-            MultisigPropose::new(
-                multisig.clone(),
-                vec![
-                    Transfer::asset_quantity(
-                        AssetId::new(fee_asset.clone(), multisig.clone()),
-                        1_u32,
-                        recipient.clone(),
-                    )
-                    .into(),
-                    Transfer::asset_quantity(
-                        AssetId::new(fee_asset.clone(), multisig.clone()),
-                        policy.fee.clone(),
-                        treasury.clone(),
-                    )
-                    .into(),
-                    ValidationFeeMultisigMarkerV1::new(
-                        policy.policy_version,
-                        policy.policy_hash().expect("policy hash"),
-                        None,
-                        1,
-                        None,
-                    )
-                    .into_instruction(),
-                ],
-                None,
-            )
-        };
-        let signed = |instructions: Vec<InstructionBox>, coordinate| {
-            TransactionBuilder::new(
-                *state.network_id_ref(),
-                user.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions(instructions)
-            .with_metadata(metadata_for_policy(&policy, coordinate))
-            .sign(user_key_pair.private_key())
-        };
-        let exact_queue = queue();
-        handle_transaction(
-            Arc::clone(&exact_queue),
-            Arc::clone(&state),
-            signed(vec![proposal().into()], 1),
-        )
-        .await
-        .expect("Torii should enqueue the nested exact-fee proposal");
-        let exact_result = validate_single_queued_transaction_in_block(
-            &state,
-            &exact_queue,
-            TEST_ACTIVE_VALIDATION_HEIGHT,
-        );
-        assert!(
-            !exact_result.contains("validation-fee admission rejected transaction"),
-            "nested exact fee must pass validation-fee admission: {exact_result}"
-        );
-        let wrong_queue = queue();
-        handle_transaction(
-            Arc::clone(&wrong_queue),
-            Arc::clone(&state),
-            signed(vec![proposal().into()], 0),
-        )
-        .await
-        .expect("Torii should enqueue the nested wrong-coordinate proposal");
-        let wrong_result = validate_single_queued_transaction_in_block(
-            &state,
-            &wrong_queue,
-            TEST_ACTIVE_VALIDATION_HEIGHT,
-        );
-        assert!(
-            wrong_result.contains("metadata and signed multisig validation-fee marker disagree"),
-            "nested principal coordinate must reject: {wrong_result}"
-        );
-        let ambiguous_queue = queue();
-        let xor = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("fees", "paynet").expect("domain id"),
-            "xor".parse().expect("asset name"),
-        );
-        handle_transaction(
-            Arc::clone(&ambiguous_queue),
-            Arc::clone(&state),
-            signed(
-                vec![
-                    proposal().into(),
-                    Transfer::asset_quantity(
-                        AssetId::new(xor, user.clone()),
-                        1_u32,
-                        recipient.clone(),
-                    )
-                    .into(),
-                ],
-                1,
-            ),
-        )
-        .await
-        .expect("Torii should enqueue the ambiguous-coordinate proposal");
-        let ambiguous_result = validate_single_queued_transaction_in_block(
-            &state,
-            &ambiguous_queue,
-            TEST_ACTIVE_VALIDATION_HEIGHT,
-        );
-        assert!(
-            ambiguous_result.contains("matches multiple transfer contexts"),
-            "ambiguous nested coordinate must reject: {ambiguous_result}"
-        );
-    }
+
     fn test_app_with_active_policy() -> (
         crate::SharedAppState,
         AccountId,
@@ -46297,14 +45751,15 @@ mod validation_fee_torii_ingress_tests {
     #[cfg(feature = "connect")]
     routing_test! { async public_transaction_handler_requires_authenticated_route_authority
         let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
-        let exact_fee_tx = transfer_builder(
+        let exact_fee_tx = signed_transfer(
             &app.state,
             &user,
+            &user_key_pair,
             &recipient,
             &validation_fee_policy_asset(&policy),
             &policy,
             true,
-        ).sign(user_key_pair.private_key());
+        );
         let response = submit_via_public_transaction_handler(Arc::clone(&app), exact_fee_tx).await;
         assert_eq!(
             response.status(),
@@ -46350,7 +45805,7 @@ mod validation_fee_torii_ingress_tests {
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         let expected_missing_fee = format!(
-            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+            "validation_fee_assessment"
         );
         assert!(
             missing_fee_error.contains(&expected_missing_fee),
@@ -46403,7 +45858,7 @@ mod validation_fee_torii_ingress_tests {
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         let expected_missing_fee = format!(
-            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+            "validation_fee_assessment"
         );
         assert!(
             missing_fee_error.contains(&expected_missing_fee),
@@ -46432,240 +45887,6 @@ mod validation_fee_torii_ingress_tests {
         );
         assert_eq!(exact_fee_result, "ok");
     }
-    routing_test! { async hijiri_quote_handler_reads_the_committed_state_snapshot
-        use iroha_data_model::IntoKeyValue as _;
-        use iroha_data_model::hijiri::{
-            FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1, Q16,
-        };
-        use iroha_torii_shared::validation_fee_api::{
-            VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1, ValidationFeeHijiriQuoteRequestV1,
-        };
-
-        let (app, user, user_key_pair, unrelated_account, policy) =
-            test_app_with_active_policy();
-        let multiplier = Q16::from_parts(1, 0x4000);
-        let parameters = HijiriParametersV1::try_new(
-            1,
-            None,
-            HijiriFeePolicy::new(
-                vec![
-                    FeeMultiplierBand::new(Q16::from_parts(0, 0x8000), Q16::ONE)
-                        .expect("canonical low-risk band"),
-                    FeeMultiplierBand::new(Q16::ONE, multiplier)
-                        .expect("canonical high-risk band"),
-                ],
-                multiplier,
-            )
-            .expect("canonical handler-test fee policy"),
-            Q16::ZERO,
-        )
-        .expect("canonical handler-test Hijiri parameters");
-        let account_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ONE)
-            .expect("canonical handler-test account risk");
-        let expected_quote_hash = parameters
-            .fee_quote_hash(&user, Some(&account_risk))
-            .expect("derive handler-test composite quote hash");
-        let multisig_policy = MultisigPolicy::new(
-            1,
-            vec![MultisigMember::new(user_key_pair.public_key().clone(), 1)
-                .expect("canonical handler-test multisig member")],
-        )
-        .expect("canonical handler-test multisig policy");
-        let multisig_account = AccountId::new_multisig(multisig_policy);
-        let multisig_spec = MultisigSpec {
-            signatories: BTreeMap::from([(user.clone(), 1_u8)]),
-            quorum: NonZeroU16::new(1).expect("nonzero handler-test multisig quorum"),
-            transaction_ttl_ms: NonZeroU64::new(60_000)
-                .expect("nonzero handler-test multisig TTL"),
-        };
-        let multisig_risk =
-            HijiriAccountRiskV1::try_new(multisig_account.clone(), 1, None, Q16::ONE)
-                .expect("canonical handler-test multisig account risk");
-        let expected_multisig_quote_hash = parameters
-            .fee_quote_hash(&multisig_account, Some(&multisig_risk))
-            .expect("derive handler-test multisig composite quote hash");
-        let unrelated_risk =
-            HijiriAccountRiskV1::try_new(unrelated_account.clone(), 1, None, Q16::ONE)
-                .expect("canonical handler-test unrelated account risk");
-
-        let evaluated_height = TEST_POLICY_EFFECTIVE_HEIGHT - 1;
-        let mut block = app.state.block(block_header(
-            evaluated_height,
-            1_700_000_003_000 + evaluated_height,
-        ));
-        let mut state_transaction = block.transaction();
-        for custom in [
-            parameters.clone().into_custom_parameter(),
-            account_risk
-                .clone()
-                .into_custom_parameter()
-                .expect("canonical account-risk custom parameter"),
-            multisig_risk
-                .clone()
-                .into_custom_parameter()
-                .expect("canonical multisig account-risk custom parameter"),
-            unrelated_risk
-                .into_custom_parameter()
-                .expect("canonical unrelated account-risk custom parameter"),
-        ] {
-            state_transaction
-                .world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(custom));
-        }
-        let (multisig_account_id, multisig_account_value) =
-            Account::new(multisig_account.clone()).build(&user).into_key_value();
-        state_transaction
-            .world
-            .insert_account_for_testing(multisig_account_id, multisig_account_value);
-        state_transaction
-            .world
-            .smart_contract_state_mut_for_testing()
-            .insert(
-                multisig_account_state_contract_key(&multisig_account),
-                norito::to_bytes(&MultisigAccountState::new(
-                    multisig_account.clone(),
-                    None,
-                    multisig_spec,
-                ))
-                .expect("encode handler-test native multisig account state"),
-            );
-        state_transaction.apply();
-        let committed_height = u64::try_from(block.block_hashes.len())
-            .expect("handler-test committed height fits u64");
-        for synthetic_height in committed_height
-            .checked_add(1)
-            .expect("handler-test committed height can advance")
-            ..=evaluated_height
-        {
-            block.block_hashes.push_for_tests(
-                block_header(
-                    synthetic_height,
-                    1_700_000_003_000 + synthetic_height,
-                )
-                .hash(),
-            );
-        }
-        block.transactions.insert_block(
-            std::collections::HashSet::new(),
-            NonZeroUsize::new(2).expect("handler-test policy block follows genesis"),
-        );
-        block
-            .commit()
-            .expect("commit quote handler Hijiri state snapshot");
-
-        let request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: user.clone(),
-            qualifying_transfer_count: 3,
-        };
-        let signer = user_key_pair.public_key().clone();
-        let verified_request = || crate::app_auth::VerifiedCanonicalRequest {
-            account: user.clone(),
-            signer: signer.clone(),
-            verified_signers: vec![signer.clone()],
-        };
-        let response = crate::validation_fee_api::handler_hijiri_quote(
-            axum::extract::State(Arc::clone(&app)),
-            axum::extract::Extension(verified_request()),
-            axum::http::HeaderMap::new(),
-            crate::loopback_connect_info(),
-            crate::utils::extractors::NoritoOnly(request.clone()),
-        )
-        .await
-        .expect("committed Hijiri state must produce a quote")
-        .0;
-
-        response
-            .validate_for_request(&request)
-            .expect("handler quote must be coherent and request-bound");
-        assert_eq!(response.evaluated_state_height, evaluated_height.to_string());
-        assert_eq!(
-            response.quoted_execution_height,
-            TEST_POLICY_EFFECTIVE_HEIGHT.to_string()
-        );
-        assert_eq!(response.active_policy_version, policy.policy_version.to_string());
-        assert_eq!(response.effective_account_risk_q16, Q16::ONE.raw());
-        assert_eq!(response.account_risk_revision.as_deref(), Some("1"));
-        assert_eq!(
-            response.hijiri_fee_quote_hash,
-            hex::encode(expected_quote_hash)
-        );
-        assert_eq!(response.adjusted_per_transfer_fee_minor_units, "13");
-        assert_eq!(response.aggregate_base_fee_minor_units, "30");
-        assert_eq!(response.aggregate_adjusted_fee_minor_units, "38");
-
-        let multisig_request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: multisig_account,
-            qualifying_transfer_count: 3,
-        };
-        let multisig_response = crate::validation_fee_api::handler_hijiri_quote(
-            axum::extract::State(Arc::clone(&app)),
-            axum::extract::Extension(verified_request()),
-            axum::http::HeaderMap::new(),
-            crate::loopback_connect_info(),
-            crate::utils::extractors::NoritoOnly(multisig_request.clone()),
-        )
-        .await
-        .expect("a direct live multisig member must be allowed to quote its controller")
-        .0;
-        multisig_response
-            .validate_for_request(&multisig_request)
-            .expect("member-authorized multisig quote must be request-bound");
-        assert_eq!(multisig_response.account_risk_revision.as_deref(), Some("1"));
-        assert_eq!(
-            multisig_response.hijiri_fee_quote_hash,
-            hex::encode(expected_multisig_quote_hash)
-        );
-
-        let (_, unrelated_key_pair) =
-            account(2, "derive validation-fee Torii unrelated quote signer key");
-        let unrelated_signer = unrelated_key_pair.public_key().clone();
-        let non_member_error = crate::validation_fee_api::handler_hijiri_quote(
-            axum::extract::State(Arc::clone(&app)),
-            axum::extract::Extension(crate::app_auth::VerifiedCanonicalRequest {
-                account: unrelated_account.clone(),
-                signer: unrelated_signer.clone(),
-                verified_signers: vec![unrelated_signer],
-            }),
-            axum::http::HeaderMap::new(),
-            crate::loopback_connect_info(),
-            crate::utils::extractors::NoritoOnly(multisig_request),
-        )
-        .await
-        .expect_err("a non-member must not quote a live multisig controller");
-        assert!(matches!(
-            non_member_error,
-            crate::Error::AppForbidden {
-                code: "validation_fee_hijiri_quote_account_mismatch",
-                ..
-            }
-        ));
-
-        let unrelated_request = ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: unrelated_account,
-            qualifying_transfer_count: 3,
-        };
-        let error = crate::validation_fee_api::handler_hijiri_quote(
-            axum::extract::State(Arc::clone(&app)),
-            axum::extract::Extension(verified_request()),
-            axum::http::HeaderMap::new(),
-            crate::loopback_connect_info(),
-            crate::utils::extractors::NoritoOnly(unrelated_request),
-        )
-        .await
-        .expect_err("an unrelated authenticated account must not read another account's risk");
-        assert!(matches!(
-            error,
-            crate::Error::AppForbidden {
-                code: "validation_fee_hijiri_quote_account_mismatch",
-                ..
-            }
-        ));
-    }
 }
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_metrics_tests {
@@ -46674,10 +45895,16 @@ mod lane_admission_metrics_tests {
     use iroha_logger::Level;
     use std::sync::Arc;
     routing_test! { async transaction_ingress_records_latency_histogram
+        let key_pair = checked_routing_fixture_keypair(
+            0x9C,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive lane admission metrics fixture signer key",
+        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::default(),
+            crate::tests_runtime_handlers::world_with_account(&account_id),
             kura,
             query,
         ));
@@ -46685,12 +45912,6 @@ mod lane_admission_metrics_tests {
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(Queue::from_config(queue_cfg, events));
         let telemetry = MaybeTelemetry::for_tests();
-        let key_pair = checked_routing_fixture_keypair(
-            0x9C,
-            iroha_crypto::Algorithm::Ed25519,
-            "derive lane admission metrics fixture signer key",
-        );
-        let account_id = AccountId::new(key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
         let tx = TransactionBuilder::new(
             *state.network_id_ref(),
@@ -58165,7 +57386,7 @@ mod app_api_inline_signing_boundary_tests {
         assert_private_key_rejected!(ProofFindByIdQueryDto);
         assert_private_key_rejected!(SetContractAliasDto);
         assert_private_key_rejected!(ContractCallDto);
-        assert_private_key_rejected!(MultisigProposeDto);
+        assert_private_key_rejected!(MultisigProposeDtoV1);
         assert_private_key_rejected!(MultisigApproveDto);
         assert_private_key_rejected!(MultisigContractCallProposeDto);
         assert_private_key_rejected!(MultisigContractCallApproveDto);

@@ -1739,24 +1739,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiMultisigResponse> ProposeMultisigAsync(
-        ToriiMultisigProposeRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeMultisigProposeRequest(request);
-
-        var response = await PostAsync<ToriiMultisigProposeRequest, ToriiMultisigResponse>(
-            "/v1/multisig/propose",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-        ValidateMultisigProposeResponse(
-            response,
-            normalizedRequest,
-            "multisig response");
-        return response;
-    }
-
     public async Task<ToriiMultisigResponse> ApproveMultisigAsync(
         ToriiMultisigApproveRequest request,
         CancellationToken cancellationToken = default)
@@ -3444,58 +3426,6 @@ public sealed partial class ToriiClient : IDisposable
             : exception;
     }
 
-    private void ValidateMultisigProposeResponse(
-        ToriiMultisigResponse response,
-        ToriiMultisigProposeRequest request,
-        string context)
-    {
-        ToriiMultisigJson.ValidateMultisigResponse(response, context);
-        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
-        ValidateResolvedMultisigAccount(
-            response.ResolvedMultisigAccountId,
-            request.MultisigAccountId,
-            context);
-
-        var proposalInstructions = request.Instructions!.ToList();
-        if (request.ValidationFeeInstructionIndex.HasValue)
-        {
-            proposalInstructions.Add(BuildValidationFeeMarkerInstruction(request));
-        }
-        var proposalHash = HashMultisigInstructions(proposalInstructions, context);
-        RequireMultisigProposalResponseHash(
-            response.ProposalId,
-            response.InstructionsHash,
-            proposalHash,
-            context);
-
-        var encoding = new TransactionEncodingContext(request.SignerAccountId);
-        var propose = BuildMultisigProposeInstruction(
-            response.ResolvedMultisigAccountId,
-            proposalInstructions);
-        var approve = BuildMultisigApproveInstruction(
-            response.ResolvedMultisigAccountId,
-            proposalHash);
-        var binding = new MultisigPayloadBinding(
-            [
-                encoding.EncodeInstructionsExecutable([propose]),
-                encoding.EncodeInstructionsExecutable([propose, approve]),
-            ],
-            encoding.EncodeMetadata(BuildMultisigProposeMetadata(request)),
-            null,
-            null,
-            response.ResolvedMultisigAccountId);
-        ValidateMultisigUnsignedPayloadBindings(
-            response.Submitted,
-            response.TransactionPayloadBase64,
-            response.SigningMessageBase64,
-            response.FeePayment,
-            response.CreationTimeMilliseconds,
-            request.SignerAccountId,
-            request.CreationTimeMilliseconds,
-            binding,
-            context);
-    }
-
     private void ValidateMultisigApproveResponse(
         ToriiMultisigResponse response,
         ToriiMultisigApproveRequest request,
@@ -3918,45 +3848,6 @@ public sealed partial class ToriiClient : IDisposable
                 $"{context}.proposal_id and instructions_hash must identify the same proposal.");
         }
         return proposalId;
-    }
-
-    private static IReadOnlyDictionary<string, JsonNode?> BuildMultisigProposeMetadata(
-        ToriiMultisigProposeRequest request)
-    {
-        var metadata = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
-        if (request.ValidationFeePolicyVersion.HasValue)
-        {
-            metadata["validation_fee_policy_version"] = JsonValue.Create(
-                request.ValidationFeePolicyVersion.Value);
-            metadata["validation_fee_policy_hash"] = JsonValue.Create(
-                request.ValidationFeePolicyHash!);
-            if (request.ValidationFeeHijiriFeeQuoteHash is not null)
-            {
-                metadata["validation_fee_hijiri_fee_quote_hash"] = JsonValue.Create(
-                    request.ValidationFeeHijiriFeeQuoteHash);
-            }
-            if (request.ValidationFeeInstructionIndex.HasValue)
-            {
-                metadata["validation_fee_instruction_index"] = JsonValue.Create(
-                    request.ValidationFeeInstructionIndex.Value);
-            }
-            if (request.ValidationFeeTransferEntryIndex.HasValue)
-            {
-                metadata["validation_fee_transfer_entry_index"] = JsonValue.Create(
-                    request.ValidationFeeTransferEntryIndex.Value);
-            }
-        }
-        return metadata;
-    }
-
-    private static string BuildValidationFeeMarkerInstruction(
-        ToriiMultisigProposeRequest request)
-    {
-        var message = string.Create(
-            CultureInfo.InvariantCulture,
-            $"iroha:validation_fee:multisig:v1:{request.ValidationFeePolicyVersion!.Value}:{request.ValidationFeePolicyHash}:{request.ValidationFeeHijiriFeeQuoteHash ?? "-"}:{request.ValidationFeeInstructionIndex!.Value}:{request.ValidationFeeTransferEntryIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
-        return new MultisigValidationFeeMarkerInstruction(message)
-            .EncodeInstructionBoxBase64(request.SignerAccountId);
     }
 
     private static TransactionInstruction BuildMultisigProposeInstruction(
@@ -4618,22 +4509,6 @@ public sealed partial class ToriiClient : IDisposable
         {
             var writer = new CanonicalNoritoWriter();
             writer.WriteField(context.EncodeJson(Payload));
-            return writer.ToArray();
-        }
-    }
-
-    private sealed record class MultisigValidationFeeMarkerInstruction(string Message)
-        : TransactionInstruction
-    {
-        internal override string WireId => "iroha.log";
-
-        internal override string TypeName => "iroha_data_model::isi::transparent::Log";
-
-        internal override byte[] EncodePayload(TransactionEncodingContext context)
-        {
-            var writer = new CanonicalNoritoWriter();
-            writer.WriteField(context.EncodeUInt32(0));
-            writer.WriteField(context.EncodeString(Message));
             return writer.ToArray();
         }
     }
@@ -8974,89 +8849,6 @@ public sealed partial class ToriiClient : IDisposable
         return feePayment;
     }
 
-    private static ToriiMultisigProposeRequest NormalizeMultisigProposeRequest(
-        ToriiMultisigProposeRequest request)
-    {
-        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
-            request.MultisigAccountId,
-            request.MultisigAccountAlias);
-        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
-        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
-        var hasValidationFeePolicyVersion = request.ValidationFeePolicyVersion.HasValue;
-        var hasValidationFeePolicyHash = request.ValidationFeePolicyHash is not null;
-        var hasValidationFeeHijiriFeeQuoteHash = request.ValidationFeeHijiriFeeQuoteHash is not null;
-        var hasValidationFeeInstructionIndex = request.ValidationFeeInstructionIndex.HasValue;
-        var hasValidationFeeTransferEntryIndex = request.ValidationFeeTransferEntryIndex.HasValue;
-        if (hasValidationFeePolicyVersion != hasValidationFeePolicyHash)
-        {
-            throw new ArgumentException(
-                "Validation fee policy version and hash must be provided together.",
-                hasValidationFeePolicyVersion
-                    ? nameof(request.ValidationFeePolicyHash)
-                    : nameof(request.ValidationFeePolicyVersion));
-        }
-        if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash)
-        {
-            throw new ArgumentException(
-                "Hijiri fee quote hash requires validation fee policy metadata.",
-                nameof(request.ValidationFeeHijiriFeeQuoteHash));
-        }
-        if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex)
-        {
-            throw new ArgumentException(
-                "Validation fee instruction index requires policy metadata.",
-                nameof(request.ValidationFeeInstructionIndex));
-        }
-        if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex)
-        {
-            throw new ArgumentException(
-                "Validation fee transfer entry index requires policy metadata.",
-                nameof(request.ValidationFeeTransferEntryIndex));
-        }
-        if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex)
-        {
-            throw new ArgumentException(
-                "Validation fee transfer entry index requires an instruction index.",
-                nameof(request.ValidationFeeTransferEntryIndex));
-        }
-        var validationFeePolicyHash = NormalizeOptionalExactSizedHex(
-            request.ValidationFeePolicyHash,
-            nameof(request.ValidationFeePolicyHash),
-            32);
-        var validationFeeHijiriFeeQuoteHash = NormalizeOptionalExactSizedHex(
-            request.ValidationFeeHijiriFeeQuoteHash,
-            nameof(request.ValidationFeeHijiriFeeQuoteHash),
-            32);
-        if (request.CreationTimeMilliseconds == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.CreationTimeMilliseconds),
-                "Creation time must be positive when provided.");
-        }
-
-        return request with
-        {
-            MultisigAccountId = multisigAccountId,
-            MultisigAccountAlias = multisigAccountAlias,
-            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
-                request.SignerAccountId,
-                nameof(request.SignerAccountId)),
-            PublicKeyHex = publicKeyHex,
-            SignatureBase64 = signatureBase64,
-            ValidationFeePolicyHash = validationFeePolicyHash,
-            ValidationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash,
-            FeePayment = NormalizeFeePaymentIntent(
-                request.FeePayment,
-                nameof(request.FeePayment),
-                requireGasLimit: false),
-            Instructions = NormalizeExactBase64List(
-                request.Instructions,
-                nameof(request.Instructions),
-                allowEmpty: false),
-        };
-    }
-
     private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
         ToriiMultisigContractCallProposeRequest request)
     {
@@ -9991,21 +9783,21 @@ public sealed partial class ToriiClient : IDisposable
     {
         var normalizedAccountId = NormalizeOptionalAccountId(
             multisigAccountId,
-            nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+            nameof(ToriiMultisigApproveRequest.MultisigAccountId));
         var normalizedAlias = NormalizeOptionalExactValue(
             multisigAccountAlias,
-            nameof(ToriiMultisigProposeRequest.MultisigAccountAlias));
+            nameof(ToriiMultisigApproveRequest.MultisigAccountAlias));
         if (normalizedAccountId is not null && normalizedAlias is not null)
         {
             throw new ArgumentException(
                 "Provide exactly one of multisig_account_id or multisig_account_alias.",
-                nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+                nameof(ToriiMultisigApproveRequest.MultisigAccountId));
         }
         if (normalizedAccountId is null && normalizedAlias is null)
         {
             throw new ArgumentException(
                 "Provide either multisig_account_id or multisig_account_alias.",
-                nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+                nameof(ToriiMultisigApproveRequest.MultisigAccountId));
         }
 
         return (normalizedAccountId, normalizedAlias);

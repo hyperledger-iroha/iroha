@@ -49,8 +49,7 @@ pub mod isi {
     use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, ParliamentBodyStateV1,
-        ParliamentDecisionModeV1, canonical_governance_attempt_ids_v1,
-        parliament_attempt_policy_v1, validate_parliament_randomness_redraw_lineage_v1,
+        ParliamentDecisionModeV1, parliament_attempt_policy_v1,
     };
     use crate::smartcontracts::isi::helpers::verify_signature_for_signer;
     use base64::engine::Engine as _;
@@ -60,11 +59,7 @@ pub mod isi {
     };
     use eyre::Result;
     use iroha_crypto::{
-        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature,
-        blake2::{
-            Blake2b512, Blake2bVar,
-            digest::{Update as BlakeUpdate, VariableOutput as BlakeVariableOutput},
-        },
+        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
     };
     use iroha_data_model::governance::conviction::{
         PlainConvictionPolicyV1, validate_conviction_update_v1,
@@ -193,9 +188,9 @@ pub mod isi {
             soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
         },
         validation_fee::{
-            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicyV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutPolicyEntryV1,
+            ValidationFeePayoutPolicyRegistryV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -3657,17 +3652,6 @@ pub mod isi {
                 ),
             ));
         }
-        if policy.charging_mode
-            == iroha_data_model::validation_fee::ValidationFeeChargingMode::PerQualifyingTransferInstruction
-            && policy.treasury_payout_binding.is_none()
-        {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "enabled validation-fee policy requires the exact first-release payout binding"
-                        .into(),
-                ),
-            ));
-        }
         if policy.network_id != state_transaction.network_id {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -3686,6 +3670,15 @@ pub mod isi {
             .world
             .asset_definition(&policy.ds_asset_id)
             .map_err(Error::from)?;
+        if asset_definition.balance_scope_policy()
+            != iroha_data_model::asset::AssetBalancePolicy::Global
+        {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "retail fee asset requires one global balance per canonical wallet".into(),
+                ),
+            ));
+        }
         if asset_definition.spec().scale() != Some(u32::from(policy.ds_scale)) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -3697,19 +3690,20 @@ pub mod isi {
             .world
             .account(&policy.treasury_account_id)
             .map_err(Error::from)?;
-        if let Some(binding) = policy.treasury_payout_binding.as_ref() {
-            if binding.treasury_account_id != policy.treasury_account_id
-                || binding.ds_asset_id != policy.ds_asset_id
-                || binding.contract_address.subject_id() != policy.treasury_account_id
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "validation-fee treasury payout binding differs from policy".into(),
-                    ),
-                ));
-            }
-        }
         let registry = validation_fee_policy_registry(state_transaction)?;
+        let payout_head = registry
+            .as_ref()
+            .and_then(|registry| registry.payout_policies.head())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "retail pricing requires an independently enacted conversion policy".into(),
+                )
+            })?;
+        if policy.reward_custody != payout_head.payout_binding.custody() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "retail pricing cannot alter protected reward custody".into(),
+            ));
+        }
         match registry
             .as_ref()
             .and_then(ValidationFeePolicyRegistryV1::head)
@@ -3740,10 +3734,10 @@ pub mod isi {
                         ),
                     ));
                 }
-                if policy.effective_from_height < head.policy.effective_from_height {
+                if policy.effective_from_ms <= head.policy.effective_from_ms {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "validation-fee policy effective height cannot move backwards".into(),
+                            "validation-fee policy calendar activation must advance".into(),
                         ),
                     ));
                 }
@@ -3847,39 +3841,10 @@ pub mod isi {
                 ));
             }
             let _ = validate_validation_fee_policy_proposal(&self.policy, state_transaction)?;
-            match (
-                self.policy.treasury_payout_binding.as_ref(),
-                self.payout_lifecycle_proposal_id,
-            ) {
-                (Some(_), Some(id)) if id != [0; 32] => {}
-                (None, None) => {}
-                (Some(_), _) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "validation-fee payout policy must identify a non-zero payout lifecycle proposal"
-                                .into(),
-                        ),
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "validation-fee policy without a payout binding cannot identify a payout lifecycle"
-                                .into(),
-                        ),
-                    ));
-                }
-            }
             let payload = ValidationFeePolicyProposal {
                 proposal_operator: authority.clone(),
                 policy: self.policy.clone(),
-                payout_lifecycle_proposal_id: self.payout_lifecycle_proposal_id,
             };
-            // Resolve the selector against protected governance state at proposal
-            // time as well as enactment time. The proposal carries no caller-made
-            // authorization evidence.
-            let _ = enacted_validation_fee_payout_lifecycle(&payload, state_transaction)
-                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             let kind = ProposalKind::ValidationFeePolicy(payload.clone());
             let id = kind.fingerprint();
             let now = state_transaction._curr_block.height().get();
@@ -3975,35 +3940,42 @@ pub mod isi {
                 .world
                 .asset_definition(&self.payout_binding.xor_asset_id)
                 .map_err(Error::from)?;
-            if xor_definition
-                .spec()
-                .check(self.payout_binding.min_xor_out.as_numeric())
-                .is_err()
-                || xor_definition
-                    .spec()
-                    .check(self.payout_binding.max_xor_out.as_numeric())
-                    .is_err()
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "validation-fee payout lifecycle XOR bounds violate the asset specification"
-                            .into(),
-                    ),
+            if xor_definition.spec().scale().is_none() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "validator reward asset must have an exact minor-unit scale".into(),
                 ));
             }
-            for account_id in core::iter::once(&self.payout_binding.treasury_account_id)
-                .chain(core::iter::once(&self.payout_binding.pool_vault_account_id))
-                .chain(
-                    self.payout_binding
-                        .recipients
-                        .iter()
-                        .map(|recipient| &recipient.account_id),
-                )
-            {
+            for account_id in [
+                &self.payout_binding.treasury_account_id,
+                &self.payout_binding.pool_vault_account_id,
+                &self.payout_binding.reward_pool_account_id,
+            ] {
                 state_transaction
                     .world
                     .account(account_id)
                     .map_err(Error::from)?;
+            }
+            if state_transaction
+                .world
+                .contract_instances
+                .get(&self.payout_binding.pool_contract_address)
+                .copied()
+                != Some(iroha_crypto::Hash::prehashed(
+                    self.payout_binding.pool_code_hash,
+                ))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "conversion pool must bind its deployed exact code hash".into(),
+                ));
+            }
+            if validation_fee_policy_registry(state_transaction)?.is_some_and(|registry| {
+                registry.payout_policies.head().is_some_and(|head| {
+                    head.payout_binding.custody() != self.payout_binding.custody()
+                })
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "conversion proposal cannot reassign protected custody".into(),
+                ));
             }
             let payload = ValidationFeePayoutLifecycleProposal {
                 proposal_operator: authority.clone(),
@@ -5734,158 +5706,6 @@ pub mod isi {
         }
         Ok(authorization)
     }
-    fn parliament_certificate_for_proposal_v1(
-        proposal_id: [u8; 32],
-        proposal: &ProposalKind,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(GovernanceCertificateV1, u64), Error> {
-        let proposal_content_id =
-            iroha_data_model::governance::types::ProposalContentId::new(proposal_id);
-        let mut history = Vec::new();
-        let mut history_ended = false;
-        for attempt_id in canonical_governance_attempt_ids_v1(proposal_content_id) {
-            let Some(attempt) = state_transaction.world.parliament_attempts.get(&attempt_id) else {
-                history_ended = true;
-                continue;
-            };
-            if history_ended {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "governance proposal has a sparse Parliament attempt history".into(),
-                ));
-            }
-            attempt.validate().map_err(parliament_reducer_error)?;
-            if attempt.attempt().id != attempt_id
-                || attempt.proposal_content_id() != proposal_content_id
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "governance proposal has a Parliament attempt under the wrong canonical key"
-                        .into(),
-                ));
-            }
-            attempt
-                .validate_proposal_bindings_v1(proposal)
-                .map_err(parliament_reducer_error)?;
-            history.push(attempt);
-        }
-        validate_parliament_randomness_redraw_lineage_v1(history.iter().copied())
-            .map_err(parliament_reducer_error)?;
-        let mut matches = history.into_iter().filter_map(|attempt| {
-            if attempt.attempt().status != GovernanceAttemptStatusV1::Enacted {
-                return None;
-            }
-            let enacted_at_height = attempt.terminal_height()?;
-            let certificate = attempt
-                .certificate()
-                .filter(|certificate| certificate.enact_at_height == enacted_at_height)?
-                .clone();
-            Some((certificate, enacted_at_height))
-        });
-        let (certificate, enacted_at_height) = matches.next().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "governance proposal has no exact certified Parliament attempt".into(),
-            )
-        })?;
-        if matches.next().is_some() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "governance proposal has multiple certified Parliament attempts".into(),
-            ));
-        }
-        certificate.validate().map_err(|error| {
-            InstructionExecutionError::InvariantViolation(
-                format!("retained Parliament certificate is invalid: {error}").into(),
-            )
-        })?;
-        if certificate.proposal_content_id != proposal_content_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "retained Parliament certificate targets different proposal content".into(),
-            ));
-        }
-        Ok((certificate, enacted_at_height))
-    }
-    fn enacted_validation_fee_payout_lifecycle(
-        payload: &ValidationFeePolicyProposal,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<
-        Option<ValidationFeePayoutLifecycleReferenceV1>,
-        crate::execution_attempt::ExecutionAttemptError<Error>,
-    > {
-        let Some(payout_binding) = payload.policy.treasury_payout_binding.as_ref() else {
-            if payload.payout_lifecycle_proposal_id.is_some() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validation-fee policy without a payout binding references a lifecycle".into(),
-                )
-                .into());
-            }
-            return Ok(None);
-        };
-        let lifecycle_id = payload.payout_lifecycle_proposal_id.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "validation-fee payout policy has no lifecycle proposal id".into(),
-            )
-        })?;
-        let lifecycle = state_transaction
-            .world
-            .governance_proposals
-            .get(&lifecycle_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "validation-fee payout lifecycle proposal not found".into(),
-                )
-            })?;
-        if lifecycle.status != crate::state::GovernanceProposalStatus::Enacted {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee payout lifecycle must be enacted before policy enactment".into(),
-            )
-            .into());
-        }
-        let (certificate, lifecycle_enacted_at_height) = parliament_certificate_for_proposal_v1(
-            lifecycle_id,
-            &lifecycle.kind,
-            state_transaction,
-        )?;
-        let lifecycle_payload =
-            lifecycle
-                .as_validation_fee_payout_lifecycle()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "referenced proposal is not a validation-fee payout lifecycle".into(),
-                    )
-                })?;
-        if &lifecycle_payload.payout_binding != payout_binding {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee payout lifecycle does not authorize the exact policy binding"
-                    .into(),
-            )
-            .into());
-        }
-        validate_validation_fee_payout_lifecycle_runtime(payout_binding, state_transaction)?;
-        let derived_lifecycle_seal =
-            lifecycle_payload
-                .payout_binding
-                .lifecycle_seal()
-                .map_err(|_| {
-                    InstructionExecutionError::InvariantViolation(
-                        "failed to derive validation-fee payout lifecycle seal".into(),
-                    )
-                })?;
-        if derived_lifecycle_seal == [0; 32] {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "enacted validation-fee payout lifecycle derives an invalid zero seal".into(),
-            )
-            .into());
-        }
-        let parliament_authorization = validation_fee_parliament_authorization(
-            lifecycle_id,
-            &lifecycle,
-            &certificate,
-            lifecycle_enacted_at_height,
-        )?;
-        Ok(Some(ValidationFeePayoutLifecycleReferenceV1 {
-            lifecycle_seal: derived_lifecycle_seal,
-            parliament_authorization,
-        }))
-    }
     fn enact_validation_fee_policy(
         proposal_id: [u8; 32],
         proposal: &crate::state::GovernanceProposalRecord,
@@ -5896,6 +5716,9 @@ pub mod isi {
         let mut registry = validation_fee_policy_registry(state_transaction)?.unwrap_or(
             ValidationFeePolicyRegistryV1 {
                 registered_policies: Vec::new(),
+                payout_policies: ValidationFeePayoutPolicyRegistryV1 {
+                    entries: Vec::new(),
+                },
             },
         );
         let predecessor_is_current = match registry.head() {
@@ -5915,22 +5738,27 @@ pub mod isi {
         }
         let _ = validate_validation_fee_policy_proposal(&payload.policy, state_transaction)?;
         let enacted_at_height = state_transaction._curr_block.height().get();
-        ensure_validation_fee_policy_activation_delay(
-            payload.policy.effective_from_height,
-            enacted_at_height,
-        )?;
+        let enactment_time_ms = state_transaction.block_unix_timestamp_ms();
+        if payload.policy.notice_published_at_ms > enactment_time_ms {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "fee public notice must not postdate finalized Parliament enactment".into(),
+            )
+            .into());
+        }
+        iroha_data_model::validation_fee::validate_retail_activation(
+            enactment_time_ms,
+            payload.policy.effective_from_ms,
+        )
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
         let parliament_authorization = validation_fee_parliament_authorization(
             proposal_id,
             proposal,
             certificate,
             enacted_at_height,
         )?;
-        let payout_lifecycle = enacted_validation_fee_payout_lifecycle(payload, state_transaction)
-            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             payload.policy.clone(),
             parliament_authorization,
-            payout_lifecycle,
         )
         .map_err(|_| {
             InstructionExecutionError::InvariantViolation(
@@ -5957,31 +5785,6 @@ pub mod isi {
                 new_value: Parameter::Custom(next),
             })));
         Ok(true)
-    }
-    fn ensure_validation_fee_policy_activation_delay(
-        effective_from_height: u64,
-        enacted_at_height: u64,
-    ) -> Result<u64, Error> {
-        let minimum_effective_height = enacted_at_height
-            .checked_add(
-                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-            )
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "validation-fee activation delay overflows the block-height domain".into(),
-                )
-            })?;
-        if effective_from_height != minimum_effective_height {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    format!(
-                        "validation-fee policy effective height must equal {minimum_effective_height}"
-                    )
-                    .into(),
-                ),
-            ));
-        }
-        Ok(minimum_effective_height)
     }
     fn ensure_contract_subject_binding(
         authority: &AccountId,
@@ -6811,6 +6614,24 @@ pub mod isi {
                         .into(),
                 )
             })?;
+        if let Some(previous) = validation_fee_policy_registry(state_transaction)?
+            .and_then(|registry| registry.payout_policies.head().cloned())
+        {
+            if previous.payout_binding.custody() != binding.custody() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "conversion custody cannot change".into(),
+                ));
+            }
+            for (permission, holder, _) in validation_fee_runtime_permissions(
+                &previous.payout_binding,
+                &previous.payout_binding.pool_contract_address,
+            ) {
+                state_transaction
+                    .world
+                    .remove_account_permission(&holder, &permission);
+                state_transaction.invalidate_permission_cache_for_account(&holder);
+            }
+        }
         let permissions = validation_fee_runtime_permissions(binding, &pool_contract_address);
         install_derived_validation_fee_runtime_permissions_with_validation(
             permissions,
@@ -6888,7 +6709,7 @@ pub mod isi {
         if record.contract_address != binding.contract_address
             || record.contract_subject != binding.treasury_account_id
             || binding.contract_address.subject_id() != binding.treasury_account_id
-            || <[u8; 32]>::from(sha2::Sha256::digest(&record.code_bytes)) != binding.code_hash
+            || ivm::contract_code_hash(&record.code_bytes).as_ref() != &binding.code_hash
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle contract code or subject differs from its typed binding"
@@ -7063,11 +6884,31 @@ pub mod isi {
                     permission_label,
                 )?;
             } else {
+                let prior_holder = validation_fee_policy_registry(state_transaction)?
+                    .and_then(|registry| registry.payout_policies.head().cloned())
+                    .and_then(|entry| {
+                        validation_fee_runtime_permissions(
+                            &entry.payout_binding,
+                            &entry.payout_binding.pool_contract_address,
+                        )
+                        .into_iter()
+                        .find(|(prior, _, _)| prior == &permission)
+                        .map(|(_, holder, _)| holder)
+                    });
                 require_absent_validation_fee_runtime_permission(
                     state_transaction,
                     &permission,
                     permission_label,
-                )?;
+                )
+                .or_else(|error| match prior_holder {
+                    Some(holder) => require_sole_direct_validation_fee_runtime_permission_holder(
+                        state_transaction,
+                        &permission,
+                        &holder,
+                        permission_label,
+                    ),
+                    None => Err(error),
+                })?;
             }
         }
         Ok(())
@@ -8547,8 +8388,6 @@ pub mod isi {
             Ok(())
         }
     }
-    const PARLIAMENT_PAYOUT_LIFECYCLE_BLOCKED_HEAD_V1: &[u8] =
-        b"iroha.governance.parliament.validation_fee_payout.blocked_head.v1";
 
     fn parliament_contract_lifecycle_head_v1(
         subject_id: [u8; 32],
@@ -8628,31 +8467,22 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<GovernanceExpectedHeadV1, crate::execution_attempt::ExecutionAttemptError<Error>>
     {
-        match validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
-            binding,
-            state_transaction,
-        ) {
-            Ok(()) => return Ok(parliament_absent_head_v1(subject_id)),
-            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
-                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                    reason,
-                ));
-            }
-            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_)) => {}
-        }
-
-        // Attempt creation separately requires the strict vacant-runtime preflight. Therefore
-        // any validation failure observed later is a competing/changed head, not an execution
-        // error that may strand a due certificate. The commitment is categorical and never
-        // depends on unstable error text.
-        let mut hasher = <Blake2bVar as BlakeVariableOutput>::new(32)
-            .expect("the Parliament blocked-head digest length is valid");
-        BlakeUpdate::update(&mut hasher, PARLIAMENT_PAYOUT_LIFECYCLE_BLOCKED_HEAD_V1);
-        BlakeUpdate::update(&mut hasher, &subject_id);
-        let mut head_root = [0_u8; 32];
-        BlakeVariableOutput::finalize_variable(hasher, &mut head_root)
-            .expect("the Parliament blocked-head output has the configured length");
-        parliament_present_head_root_v1(subject_id, 1, head_root).map_err(Into::into)
+        let _ = binding;
+        let registry = validation_fee_policy_registry(state_transaction)?;
+        registry
+            .as_ref()
+            .and_then(|registry| registry.payout_policies.head())
+            .map_or_else(
+                || Ok(parliament_absent_head_v1(subject_id)),
+                |entry| {
+                    parliament_present_head_root_v1(
+                        subject_id,
+                        entry.revision,
+                        entry.lifecycle_seal,
+                    )
+                    .map_err(Into::into)
+                },
+            )
     }
 
     fn validate_kagemusha_policy_proposal_v1(
@@ -9125,16 +8955,73 @@ pub mod isi {
                     state_transaction,
                 )
                 .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
-                let _ = validation_fee_parliament_authorization(
+                let parliament_authorization = validation_fee_parliament_authorization(
                     proposal_id,
                     proposal,
                     certificate,
                     state_transaction.block_height(),
                 )?;
+                let mut registry = validation_fee_policy_registry(state_transaction)?.unwrap_or(
+                    ValidationFeePolicyRegistryV1 {
+                        registered_policies: Vec::new(),
+                        payout_policies: ValidationFeePayoutPolicyRegistryV1 {
+                            entries: Vec::new(),
+                        },
+                    },
+                );
+                let revision = registry
+                    .payout_policies
+                    .head()
+                    .map_or(Some(1), |entry| entry.revision.checked_add(1))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "conversion revision overflow".into(),
+                        )
+                    })?;
+                if registry.payout_policies.head().is_some_and(|entry| {
+                    entry.payout_binding.custody() != payload.payout_binding.custody()
+                }) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conversion policy cannot reassign protected custody".into(),
+                    ));
+                }
                 install_derived_validation_fee_runtime_permissions(
                     &payload.payout_binding,
                     state_transaction,
-                )
+                )?;
+                registry
+                    .payout_policies
+                    .entries
+                    .push(ValidationFeePayoutPolicyEntryV1 {
+                        revision,
+                        proposal_id,
+                        lifecycle_seal,
+                        payout_binding: payload.payout_binding.clone(),
+                        parliament_authorization,
+                    });
+                registry.validate().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(error.to_string().into())
+                })?;
+                let next = registry.into_custom_parameter();
+                let previous = state_transaction
+                    .world
+                    .parameters
+                    .get_mut()
+                    .custom()
+                    .get(next.id())
+                    .cloned();
+                state_transaction
+                    .world
+                    .parameters
+                    .get_mut()
+                    .set_parameter(Parameter::Custom(next.clone()));
+                state_transaction
+                    .world
+                    .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
+                        old_value: Parameter::Custom(previous.unwrap_or_else(|| next.clone())),
+                        new_value: Parameter::Custom(next),
+                    })));
+                Ok(())
             }
         }
     }
@@ -9348,6 +9235,10 @@ pub mod isi {
                     ),
             });
         }
+        let changes_fee_policy = matches!(
+            proposal.kind,
+            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+        );
         let mut enacted = proposal;
         enacted.status = crate::state::GovernanceProposalStatus::Enacted;
         state_transaction
@@ -9358,6 +9249,28 @@ pub mod isi {
             .world
             .put_parliament_attempt(attempt)
             .map_err(parliament_reducer_error)?;
+        // Evidence reads authenticate the retained proposal and attempt. Check
+        // capacity only after both enacted records are staged in this isolated
+        // transaction; a failure still discards the entire effect overlay.
+        if changes_fee_policy {
+            match crate::validation_fee_rewards::validate_pending_fee_evidence_budget(
+                state_transaction,
+            ) {
+                Ok(()) => (),
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
+                    return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        reason,
+                    ));
+                }
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_)) => {
+                    return Ok(DueParliamentCertificateExecutionV1::EffectFailed {
+                        failure_root: iroha_data_model::governance::types::parliament_execution_failure_root_v1(
+                            &certificate, current_height,
+                        ),
+                    });
+                }
+            }
+        }
         state_transaction
             .world
             .emit_events(Some(GovernanceEvent::ProposalEnacted(
@@ -13741,9 +13654,9 @@ pub mod isi {
             iroha_primitives::json::Json::from(norito::json::native::Value::Object(policy_map));
         let key: Name = "zk.policy".parse().unwrap();
         {
-            let asset_definition = state_transaction
+            let mut asset_definition = state_transaction
                 .world
-                .asset_definition_mut(asset_def_id)
+                .asset_definition_metadata_mut(asset_def_id)
                 .map_err(Error::from)?;
             asset_definition
                 .metadata_mut()
@@ -13833,9 +13746,9 @@ pub mod isi {
                     );
             }
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(asset_def_id)
+                    .asset_definition_metadata_mut(asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(candidate_policy);
             }
@@ -14173,9 +14086,9 @@ pub mod isi {
                 pending_transition: current_policy.pending_transition,
             };
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy_struct);
             }
@@ -14259,9 +14172,9 @@ pub mod isi {
             };
             policy.pending_transition = Some(transition);
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }
@@ -14300,9 +14213,9 @@ pub mod isi {
                 .untrack_confidential_policy_transition(&asset_def_id, pending.effective_height());
             policy.pending_transition = None;
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }
@@ -18824,8 +18737,9 @@ pub mod isi {
         fn execute(
             self,
             _authority: &AccountId,
-            _state_transaction: &mut StateTransaction<'_, '_>,
+            state_transaction: &mut StateTransaction<'_, '_>,
         ) -> std::result::Result<(), Error> {
+            crate::retail_fee::execute_assessment_marker(&self, state_transaction)?;
             const TARGET: &str = "log_isi";
             let Self { level, msg } = self;
             match level {

@@ -1528,8 +1528,8 @@ mod apple_assertion_tests {
             hardware_epoch_generation: 1,
             operation_kind: KagemushaOperationKindV1::MintFold,
             transition_statement_digest: [9; 32],
-            candidate_envelope_digest: [0; 32],
-            terminal_body_commitment: [0; 32],
+            candidate_envelope_digest: [17; 32],
+            terminal_body_commitment: [18; 32],
             secure_index_before: financial_index,
             secure_index_after: financial_index + 1,
         };
@@ -1542,8 +1542,12 @@ mod apple_assertion_tests {
             authority_policy_digest: [13; 32],
             attested_key_id: [14; 32],
             enrollment_digest: [15; 32],
-            subject_signing_digest: Sha256::digest(subject.canonical_signing_bytes().unwrap())
-                .into(),
+            subject_signing_digest: Sha256::digest(
+                subject
+                    .canonical_ordinary_incoming_terminal_signing_bytes()
+                    .unwrap(),
+            )
+            .into(),
             normalized_guard_digest: [16; 32],
             issued_at_ms: 50,
             expires_at_ms: 100,

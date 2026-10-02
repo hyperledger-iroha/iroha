@@ -23,6 +23,9 @@ pub const KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:play-integrity-refresh-lease\0";
 /// Exact issuer unsigned lease body width.
 pub const KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_BODY_BYTES_V1: usize = 402;
+/// Maximum complete canonical periodic Integrity lease original, including issuer admission
+/// and actual platform possession. This names the existing enforced first-release bound.
+pub const KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_MAX_BYTES_V1: usize = 4096;
 const REQUEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:play-integrity-refresh-request\0";
 const POSSESSION_DOMAIN: &[u8] = b"iroha:kagemusha:v1:play-integrity-refresh-possession\0";
 const ORIGINAL_DOMAIN: &[u8] = b"iroha:kagemusha:v1:play-integrity-refresh-original\0";
@@ -615,7 +618,7 @@ impl KagemushaPlayIntegrityRefreshLeaseV1 {
         }
         self.circuit_admission.to_transport_bytes()?;
         let original = norito::encode_canonical(self).map_err(|e| e.to_string())?;
-        if original.len() > 4096 {
+        if original.len() > KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_MAX_BYTES_V1 {
             return Err("Integrity lease original oversized".into());
         }
         Ok(original)

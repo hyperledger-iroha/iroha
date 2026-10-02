@@ -714,10 +714,18 @@ fn validation_fee_asset(name: &str) -> AssetDefinitionId {
     )
 }
 
-fn validation_fee_policy_proposal() -> ProposalKind {
+pub(crate) fn validation_fee_policy_proposal() -> ProposalKind {
+    let lifecycle = validation_fee_payout_lifecycle_proposal();
+    let ProposalKind::ValidationFeePayoutLifecycle(ref lifecycle_proposal) = lifecycle else {
+        unreachable!()
+    };
+    let binding = lifecycle_proposal.payout_binding.clone();
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: account(43),
         policy: ValidationFeePolicyV1 {
+            retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+            effective_from_ms: 1793451600000,
+            notice_published_at_ms: 1790859600000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             network_id: network_id(),
             policy_version: 1,
@@ -725,14 +733,14 @@ fn validation_fee_policy_proposal() -> ProposalKind {
             ds_asset_id: validation_fee_asset("fee_token"),
             ds_scale: VALIDATION_FEE_DS_SCALE,
             fee: initial_validation_fee_amount(),
-            treasury_account_id: account(44),
-            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 120_960,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            treasury_account_id: binding.treasury_account_id.clone(),
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+            exemption_classes: vec![
+                iroha_data_model::validation_fee::VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS
+                    .to_owned(),
+            ],
+            reward_custody: binding.custody(),
         },
-        payout_lifecycle_proposal_id: None,
     })
 }
 
@@ -740,6 +748,13 @@ fn validation_fee_payout_lifecycle_proposal() -> ProposalKind {
     let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         .parse::<iroha_data_model::smart_contract::ContractAddress>()
         .expect("canonical validation-fee contract address");
+    let pool_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        &network_id(),
+        &account(48),
+        48,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )
+    .expect("pool address");
     let payout_binding = ValidationFeeTreasuryPayoutBindingV1 {
         treasury_account_id: contract_address.subject_id(),
         contract_address,
@@ -749,16 +764,20 @@ fn validation_fee_payout_lifecycle_proposal() -> ProposalKind {
             .expect("canonical validation-fee entrypoint"),
         ds_asset_id: validation_fee_asset("fee_token"),
         xor_asset_id: validation_fee_asset("xor"),
-        pool_vault_account_id: account(48),
-        batch_ds: validation_fee_payout_batch_ds(),
-        min_xor_out: validation_fee_payout_min_xor(),
-        max_xor_out: validation_fee_payout_max_xor(),
-        recipients: (49..=52)
-            .map(|tag| ValidationFeeTreasuryPayoutRecipientV1 {
-                account_id: account(tag),
-                share: validation_fee_payout_recipient_share(),
-            })
-            .collect(),
+        pool_vault_account_id: pool_contract_address.subject_id(),
+        pool_contract_address,
+        pool_code_hash: root(48),
+        reward_pool_account_id: account(49),
+        reference_feed_id: "xor_per_sbd".parse().expect("feed"),
+        reference_feed_config_version: 1,
+        reference_provider_accounts: (60..65).map(account).collect(),
+        max_sbd_per_attempt_minor: 1000,
+        max_sbd_per_day_minor: 100000,
+        min_interval_ms: 60000,
+        max_source_age_ms: 300000,
+        max_slippage_bps: 100,
+        validator_lane_id: iroha_model_base::topology::LaneId::new(0),
+        min_reward_claim_xor_minor: 1,
     };
     assert_eq!(payout_binding.invariant_error(), None);
     ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {

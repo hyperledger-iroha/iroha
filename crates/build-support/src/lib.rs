@@ -458,6 +458,9 @@ mod tests {
         assert!(reference_is_worktree_local("refs/rewritten/topic"));
         assert!(!reference_is_worktree_local("refs/heads/optimizations"));
     }
+    // The wall clock can repeat across concurrent tests, especially on macOS.
+    static NEXT_GIT_WATCH_FIXTURE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     struct GitWatchFixture {
         root: PathBuf,
         dirs: GitDirectories,
@@ -468,8 +471,23 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = std::env::temp_dir()
-                .join(format!("iroha-git-watch-{}-{nonce}", std::process::id()));
+            Self::new_at(linked, nonce)
+        }
+        fn new_at(linked: bool, nonce: u128) -> Self {
+            let root = loop {
+                let sequence =
+                    NEXT_GIT_WATCH_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let root = std::env::temp_dir().join(format!(
+                    "iroha-git-watch-{}-{nonce}-{sequence}",
+                    std::process::id()
+                ));
+                // Claim a fresh owner before creating children; never reuse another fixture.
+                match fs::create_dir(&root) {
+                    Ok(()) => break root,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create owned Git metadata fixture: {error}"),
+                }
+            };
             let common = root.join("repo.git");
             let worktree = if linked {
                 common.join("worktrees/linked")
@@ -514,6 +532,31 @@ mod tests {
     }
     const WATCH_SHA_A: &str = "1111111111111111111111111111111111111111";
     const WATCH_SHA_B: &str = "2222222222222222222222222222222222222222";
+    #[test]
+    fn git_watch_fixtures_with_identical_clock_have_independent_roots_and_cleanup() {
+        let first = GitWatchFixture::new_at(true, 0);
+        let second = GitWatchFixture::new_at(true, 0);
+        assert_ne!(first.root, second.root);
+        first.loose(WATCH_SHA_A);
+        second.loose(WATCH_SHA_B);
+        assert_eq!(
+            read_head_commit_hash(&first.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+        assert_eq!(
+            read_head_commit_hash(&second.dirs).as_deref(),
+            Some(WATCH_SHA_B)
+        );
+        let second_root = second.root.clone();
+        drop(first);
+        assert!(second_root.is_dir());
+        assert_eq!(
+            read_head_commit_hash(&second.dirs).as_deref(),
+            Some(WATCH_SHA_B)
+        );
+        drop(second);
+        assert!(!second_root.exists());
+    }
     #[test]
     fn loose_head_ignores_unrelated_packed_refs_but_tracks_commit_change() {
         let fixture = GitWatchFixture::new(false);

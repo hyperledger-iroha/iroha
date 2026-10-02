@@ -653,16 +653,23 @@ fn retained_initial_and_selected_replay_preserve_both_joined_phase_roots_rows_an
         let rows = 1usize << plan.commitment_lde_log2;
         let queries = [0, 15, 16, 17, rows - 1];
         let expected = plan.commit_v1(domains, &borrowed, &queries).unwrap();
-        let evaluate = |columns: &[ZeroizingFieldColumnV1], native, common| {
-            columns
-                .iter()
-                .map(|column| {
-                    masked_trace_coefficients_on_coset_v1(column, native, common)
-                        .map(ZeroizingFieldColumnV1)
-                        .map_err(map_transparent_error_v1)
-                })
-                .collect::<Result<Vec<_>, _>>()
-        };
+        let evaluate =
+            |columns: &[ZeroizingFieldColumnV1], native, common, selected: Option<&[usize]>| {
+                columns
+                    .iter()
+                    .map(|column| {
+                        masked_trace_coefficients_on_coset_v1(column, native, common)
+                            .map(ZeroizingFieldColumnV1)
+                            .map(|full| match selected {
+                                Some(indices) => ZeroizingFieldColumnV1(
+                                    indices.iter().map(|&row| full[row]).collect(),
+                                ),
+                                None => full,
+                            })
+                            .map_err(map_transparent_error_v1)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            };
         let mut calls = Vec::new();
         let (initial, cut) = plan
             .commit_retained_replayed_v1(
@@ -739,7 +746,7 @@ fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_wit
             source_calls += 1;
             Err(AggregateStarkErrorV1::InternalInvariant)
         },
-        |_, _, _| panic!("inconsistent root-only request must reject before evaluation"),
+        |_, _, _, _| panic!("inconsistent root-only request must reject before evaluation"),
     );
     assert!(result.is_err());
     assert_eq!(source_calls, 0);
@@ -751,7 +758,7 @@ fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_wit
             source_calls += 1;
             Err(AggregateStarkErrorV1::InternalInvariant)
         },
-        |_, _, _| panic!("source failure must reject before evaluation"),
+        |_, _, _, _| panic!("source failure must reject before evaluation"),
     );
     assert!(result.is_err());
     assert_eq!(source_calls, 1);

@@ -55,7 +55,7 @@ ivm = { workspace = true }
 kotodama_lang = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm", "consensus"] }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_core_zk = { workspace = true, default-features = false }
 iroha_genesis = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }

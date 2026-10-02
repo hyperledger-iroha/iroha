@@ -1637,7 +1637,7 @@ async fn retail_recipient_route_and_sponsor_program_reject_noncanonical_or_malfo
         .await
         .expect("fee quote rejection body");
     let envelope: ErrorEnvelope =
-        norito::decode_from_bytes(&body).expect("typed fee quote error envelope");
+        norito::decode_from_bytes(&body).expect("typed Norito fee quote error envelope");
     let fee = envelope
         .details
         .and_then(|details| details.fee)

@@ -285,10 +285,11 @@ impl KagemushaVerifiedAppEnrollmentPossessionV1 {
             || s.security_level != self.raw_subject.security_level
             || s.attested_key_id != self.challenge.attested_key_id
             || s.platform_evidence_digest != self.platform_evidence_digest
-            || match self.app_attest_counter {
-                Some(counter) => s.app_attest_counter_floor != counter,
-                None => s.app_attest_counter_floor != 0,
-            }
+            || self
+                .app_attest_counter
+                .map_or(s.app_attest_counter_floor != 0, |counter| {
+                    s.app_attest_counter_floor != counter
+                })
         {
             return Err("ordinary credential differs from joined possession originals".into());
         }

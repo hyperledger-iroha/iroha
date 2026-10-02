@@ -453,6 +453,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         eprintln!("{text}");
         append_receipt_v1(&receipt, &text).expect("durable public diagnostic receipt");
     };
+    record(format!("rayon_workers={}", rayon::current_num_threads()));
     record(format!(
         "output_directory={}\nprofile=complete49-MAIN-plus-compactCA\nproof_cap_bytes={ZK_X509_MAX_PROOF_BYTES_V1}\nencoded_geometry_bound_bytes={ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1}\nprover_target_seconds={ZK_X509_PROVER_TARGET_SECONDS_V1}\npeak_rss_limit_bytes={ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1}\naddress_space_limit_bytes={ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1}\nrss_evidence=external-time-l-required\nactivation=unavailable\nprivate_witness_recorded=false",
         directory.display(),
@@ -540,6 +541,25 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         )
         .is_err()
     );
+    // X5S1 fixes the public instance nonce immediately after its eight-byte prefix.
+    // Reuse one completed proof and independently change each nonce byte; framing
+    // alone accepts these substitutions, so the complete verifier must reject them.
+    let mut nonce_tampered = proof.clone();
+    for nonce_byte in 0..32 {
+        let offset = 8 + nonce_byte;
+        nonce_tampered[offset] ^= 1;
+        assert!(
+            verify_zk_x509_credential_proof_v1(
+                &fixture.statement,
+                &fixture.authoritative_state,
+                genesis,
+                &nonce_tampered,
+            )
+            .is_err(),
+            "substituted proof-instance nonce byte {nonce_byte} must be rejected",
+        );
+        nonce_tampered[offset] ^= 1;
+    }
     let mut tampered = proof.clone();
     *tampered.last_mut().expect("nonempty credential proof") ^= 1;
     assert!(
@@ -552,7 +572,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         .is_err()
     );
     record(format!(
-        "wrong_genesis_rejected=true\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
+        "wrong_genesis_rejected=true\nnonce_byte_mutations_rejected=32\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
         prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
     ));
     observation.assert_complete_main_coverage_v1(

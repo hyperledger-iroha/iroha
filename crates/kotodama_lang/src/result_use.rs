@@ -228,7 +228,7 @@ impl Shape {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct Flow {
     pending: BTreeSet<Place>,
     shapes: BTreeMap<String, Shape>,
@@ -238,7 +238,6 @@ struct Flow {
     returned: bool,
     exits: Vec<LoopExit>,
 }
-#[derive(Clone)]
 struct LoopExit {
     pending: BTreeSet<Place>,
     shapes: BTreeMap<String, Shape>,
@@ -310,6 +309,20 @@ fn place(value: &TypedExpr) -> Option<Place> {
     }
 }
 impl Flow {
+    /// Fork only the path still executing. Earlier break/continue paths belong
+    /// to their enclosing flow: they neither execute later branches nor exit a
+    /// subsequently entered inner loop. `join` retains them exactly once.
+    fn fork(&self) -> Self {
+        Self {
+            pending: self.pending.clone(),
+            shapes: self.shapes.clone(),
+            list_epoch: self.list_epoch,
+            names: self.names.clone(),
+            durable: self.durable.clone(),
+            returned: self.returned,
+            exits: Vec::new(),
+        }
+    }
     fn bind(&mut self, name: &str, shape: Shape) -> Result<(), SemanticError> {
         let (_, path, capture) = aggregate_binding_origin(name);
         if name == "_" || !path.is_empty() || self.durable.contains(name) {
@@ -698,7 +711,8 @@ impl Flow {
         self.pending.clear();
         let mut shapes: Option<BTreeMap<String, Shape>> = None;
         self.returned = true;
-        self.exits.clear();
+        // Forks own only exits reached within that fork. Preserve exits from
+        // earlier statements without cloning them into every later branch.
         for path in paths {
             self.exits.extend(path.exits);
             if !path.returned {
@@ -769,7 +783,7 @@ impl Flow {
                 exits: Vec::new(),
             };
             if exit.continuing {
-                let mut repeated = path.clone();
+                let mut repeated = path.fork();
                 repeated.block(body, false)?;
             }
             paths.push(path);
@@ -785,8 +799,8 @@ impl Flow {
         pattern: Option<&TypedSumPattern>,
         tail_used: bool,
     ) -> Result<Shape, SemanticError> {
-        let mut a = self.clone();
-        let mut b = self.clone();
+        let mut a = self.fork();
+        let mut b = self.fork();
         let left_shape;
         if let Some(pattern) = pattern {
             let outer = a.names.clone();
@@ -840,11 +854,11 @@ impl Flow {
             if pattern.pattern.variant == crate::ast::SumVariant::ResultErr {
                 self.consume_tag(&selected);
             }
-            let mut matched = self.clone();
+            let mut matched = self.fork();
             matched.consume(&selected);
             matched.pattern(pattern)?;
             let left_shape = matched.block(left, tail_used)?;
-            let mut unmatched = self.clone();
+            let mut unmatched = self.fork();
             let right_shape = if let Some(right) = right {
                 unmatched.block(right, tail_used)?
             } else {
@@ -909,12 +923,12 @@ impl Flow {
             }
             TypedStatement::While { cond, body } => {
                 self.expression(cond)?;
-                let initial = self.clone();
-                let mut iteration = self.clone();
+                let initial = self.fork();
+                let mut iteration = self.fork();
                 iteration.block(body, false)?;
                 if !iteration.returned {
                     // A second iteration exposes unconsumed overwrites on backedges.
-                    let mut repeat = iteration.clone();
+                    let mut repeat = iteration.fork();
                     repeat.expression(cond)?;
                     repeat.block(body, false)?;
                 }
@@ -933,14 +947,14 @@ impl Flow {
                 if let Some(cond) = cond {
                     self.expression(cond)?;
                 }
-                let initial = self.clone();
-                let mut iteration = self.clone();
+                let initial = self.fork();
+                let mut iteration = self.fork();
                 iteration.block(body, false)?;
                 if !iteration.returned {
                     if let Some(step) = step {
                         iteration.statement(step)?;
                     }
-                    let mut repeat = iteration.clone();
+                    let mut repeat = iteration.fork();
                     if let Some(cond) = cond {
                         repeat.expression(cond)?;
                     }
@@ -964,9 +978,9 @@ impl Flow {
                     }
                 };
                 let entry_epoch = self.list_epoch;
-                let mut empty = self.clone();
+                let mut empty = self.fork();
                 empty.consume(&source);
-                let mut iteration = self.clone();
+                let mut iteration = self.fork();
                 iteration.block(body, false)?;
                 let mut paths = vec![empty];
                 for exit in std::mem::take(&mut iteration.exits) {
@@ -980,7 +994,7 @@ impl Flow {
                         exits: Vec::new(),
                     };
                     if exit.continuing {
-                        let mut repeat = path.clone();
+                        let mut repeat = path.fork();
                         repeat.block(body, false)?;
                         if path.list_epoch == entry_epoch {
                             path.consume(&source);
@@ -989,7 +1003,7 @@ impl Flow {
                     paths.push(path);
                 }
                 if !iteration.returned {
-                    let mut repeat = iteration.clone();
+                    let mut repeat = iteration.fork();
                     repeat.block(body, false)?;
                     if iteration.list_epoch == entry_epoch {
                         iteration.consume(&source);
@@ -1041,8 +1055,8 @@ impl Flow {
             ExprKind::Binary { op, left, right } => {
                 self.expression(left)?;
                 if matches!(op, crate::ast::BinaryOp::And | crate::ast::BinaryOp::Or) {
-                    let skip = self.clone();
-                    let mut active = self.clone();
+                    let skip = self.fork();
+                    let mut active = self.fork();
                     active.expression(right)?;
                     self.join([skip, active]);
                 } else {
@@ -1078,8 +1092,8 @@ impl Flow {
                 else_expr,
             } => {
                 self.expression(cond)?;
-                let mut a = self.clone();
-                let mut b = self.clone();
+                let mut a = self.fork();
+                let mut b = self.fork();
                 let mut output = a.expression(then_expr)?;
                 output.merge(b.expression(else_expr)?);
                 self.join([a, b]);
@@ -1106,7 +1120,7 @@ impl Flow {
                 let mut paths = Vec::with_capacity(arms.len());
                 let mut output: Option<Shape> = None;
                 for arm in arms {
-                    let mut path = self.clone();
+                    let mut path = self.fork();
                     path.pattern(&arm.pattern)?;
                     let shape = path.block(&arm.body, true)?;
                     if !path.returned {
@@ -1197,9 +1211,9 @@ impl Flow {
                     }
                 };
                 let entry_epoch = self.list_epoch;
-                let mut initial = self.clone();
+                let mut initial = self.fork();
                 initial.consume(&selected); // The zero-element path is exhaustive.
-                let mut item = self.clone();
+                let mut item = self.fork();
                 let Type::List(element, _) = resolve_struct_type(&source.ty) else {
                     unreachable!("typed comprehension")
                 };
@@ -1480,6 +1494,203 @@ mod tests {
         analyze("fn f(bool flag) { let Option<Result<quantity, NumericError>> empty = if flag { Option::none } else { Option::none }; let absent = empty.is_none(); }").unwrap();
         analyze("fn f() { let List<Result<quantity, NumericError>, 2> values = [quantity::try_from_int(1)]; let copied = values.take(2); let _ = copied.get(0); }").unwrap();
     }
+    fn boolean(value: bool) -> TypedExpr {
+        TypedExpr {
+            expr: ExprKind::Bool(value),
+            ty: Type::Bool,
+        }
+    }
+    fn statements(statements: Vec<TypedStatement>) -> TypedBlock {
+        TypedBlock {
+            statements,
+            tail: None,
+        }
+    }
+    #[test]
+    fn sequential_forks_retain_each_loop_exit_once() {
+        let mut flow = Flow::default();
+        let result = Type::Result(Box::new(Type::Unit), Box::new(Type::Int));
+        flow.bind("result", Shape::typed(&result)).unwrap();
+        let optional = Type::Option(Box::new(result));
+        flow.bind("optional", Shape::typed(&optional)).unwrap();
+        let optional_value = TypedExpr {
+            expr: ExprKind::Ident("optional".into()),
+            ty: optional,
+        };
+        let none = TypedSumPattern {
+            pattern: crate::ast::SumPattern {
+                variant: crate::ast::SumVariant::OptionNone,
+                binding: None,
+            },
+            error_code: None,
+            payload_type: None,
+        };
+        let empty = statements(Vec::new());
+        let consume_optional = statements(vec![TypedStatement::Let {
+            name: "_".into(),
+            value: optional_value.clone(),
+        }]);
+        let expression_branches = [
+            TypedExpr {
+                expr: ExprKind::Binary {
+                    op: crate::ast::BinaryOp::And,
+                    left: Box::new(boolean(true)),
+                    right: Box::new(boolean(false)),
+                },
+                ty: Type::Bool,
+            },
+            TypedExpr {
+                expr: ExprKind::Conditional {
+                    cond: Box::new(boolean(true)),
+                    then_expr: Box::new(boolean(true)),
+                    else_expr: Box::new(boolean(false)),
+                },
+                ty: Type::Bool,
+            },
+            TypedExpr {
+                expr: ExprKind::Match {
+                    value: Box::new(TypedExpr {
+                        expr: ExprKind::OptionNone,
+                        ty: Type::Option(Box::new(Type::Bool)),
+                    }),
+                    arms: vec![
+                        crate::semantic::TypedMatchArm {
+                            pattern: none.clone(),
+                            body: empty.clone(),
+                        },
+                        crate::semantic::TypedMatchArm {
+                            pattern: TypedSumPattern {
+                                pattern: crate::ast::SumPattern {
+                                    variant: crate::ast::SumVariant::OptionSome,
+                                    binding: Some(crate::ast::PatternBinding::Wildcard),
+                                },
+                                error_code: None,
+                                payload_type: Some(Type::Bool),
+                            },
+                            body: empty.clone(),
+                        },
+                    ],
+                },
+                ty: Type::Unit,
+            },
+            TypedExpr {
+                expr: ExprKind::ListComprehension {
+                    source: Box::new(TypedExpr {
+                        expr: ExprKind::List(Vec::new()),
+                        ty: Type::List(Box::new(Type::Bool), 1),
+                    }),
+                    expression: Box::new(boolean(true)),
+                    condition: None,
+                    item: "item".into(),
+                },
+                ty: Type::List(Box::new(Type::Bool), 1),
+            },
+        ];
+        for index in 0..96 {
+            let exit = if index % 2 == 0 {
+                TypedStatement::Break
+            } else {
+                TypedStatement::Continue
+            };
+            flow.branches(&statements(vec![exit]), None, None, false)
+                .unwrap();
+            assert_eq!(flow.exits.len(), index + 1);
+            flow.branches(&empty, Some(&empty), None, false).unwrap();
+            flow.if_let(
+                &optional_value,
+                &none,
+                &empty,
+                Some(&consume_optional),
+                false,
+            )
+            .unwrap();
+            for expression in &expression_branches {
+                flow.expression(expression).unwrap();
+                assert_eq!(flow.exits.len(), index + 1);
+            }
+            assert!(
+                flow.exits
+                    .iter()
+                    .all(|exit| { exit.pending.iter().any(|pending| pending.name == "result") })
+            );
+        }
+        assert_eq!(flow.exits.iter().filter(|exit| exit.continuing).count(), 48);
+        assert_eq!(flow.check_exit().unwrap_err().code(), "E_RESULT_MUST_USE");
+    }
+    #[test]
+    fn inner_loops_do_not_reinterpret_outer_break_or_continue_paths() {
+        let empty = statements(Vec::new());
+        let inner_loops = [
+            TypedStatement::While {
+                cond: boolean(true),
+                body: empty.clone(),
+            },
+            TypedStatement::For {
+                line: 1,
+                init: None,
+                cond: Some(boolean(true)),
+                step: None,
+                body: empty.clone(),
+            },
+            TypedStatement::ForEachMap {
+                key: "item".into(),
+                value: None,
+                map: TypedExpr {
+                    expr: ExprKind::List(Vec::new()),
+                    ty: Type::List(Box::new(Type::Bool), 1),
+                },
+                body: empty,
+            },
+        ];
+        for continuing in [false, true] {
+            for inner in &inner_loops {
+                let mut flow = Flow::default();
+                flow.bind(
+                    "result",
+                    Shape::typed(&Type::Result(Box::new(Type::Unit), Box::new(Type::Int))),
+                )
+                .unwrap();
+                let exit = if continuing {
+                    TypedStatement::Continue
+                } else {
+                    TypedStatement::Break
+                };
+                flow.branches(&statements(vec![exit]), None, None, false)
+                    .unwrap();
+                flow.consume(&Place {
+                    name: "result".into(),
+                    path: Vec::new(),
+                });
+                flow.statement(inner).unwrap();
+                flow.check_exit()
+                    .expect("the live path consumed its Result");
+                assert_eq!(flow.exits.len(), 1);
+                assert_eq!(flow.exits[0].continuing, continuing);
+                assert_eq!(flow.exits[0].pending.len(), 1);
+                assert_eq!(flow.exits[0].pending.first().unwrap().name, "result");
+            }
+        }
+    }
+    #[test]
+    fn earlier_loop_exits_still_reject_unread_scoped_and_pattern_results() {
+        for exit in ["break", "continue", "return"] {
+            reject(&format!(
+                "fn f(bool stop) {{ for i in range(2) {{ let result = quantity::try_from_int(i); if stop {{ {exit}; }} for j in range(1) {{ }} let _ = result; }} }}"
+            ));
+            reject(&format!(
+                "fn f(bool stop) {{ for i in range(2) {{ let optional = Option::some(quantity::try_from_int(i)); if let Option::some(result) = optional {{ if stop {{ {exit}; }} for j in range(1) {{ }} let _ = result; }} }} }}"
+            ));
+            analyze(&format!(
+                "fn f(bool stop) {{ for i in range(2) {{ let result = quantity::try_from_int(i); if stop {{ let _ = result; {exit}; }} for j in range(1) {{ }} let _ = result; }} }}"
+            ))
+            .unwrap();
+        }
+        let branches = "if stop { continue; } if stop { break; } ".repeat(64);
+        analyze(&format!(
+            "fn f(bool stop) {{ for i in range(2) {{ {branches} let _ = quantity::try_from_int(i); }} }}"
+        ))
+        .unwrap();
+    }
     #[test]
     fn sequential_joins_do_not_enumerate_combinations_of_unread_slots() {
         let mut flow = Flow::default();
@@ -1492,8 +1703,8 @@ mod tests {
         )
         .unwrap();
         for pair in 0..32 {
-            let mut left = flow.clone();
-            let mut right = flow.clone();
+            let mut left = flow.fork();
+            let mut right = flow.fork();
             left.consume(&Place {
                 name: "values".into(),
                 path: vec![Part::slot(pair * 2)],

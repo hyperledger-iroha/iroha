@@ -28,13 +28,13 @@ pub const KAGEMUSHA_ORDINARY_INCOMING_PREPARATION_BYTES_V1: usize = 306;
 pub struct KagemushaOrdinaryIncomingPreparationV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// Sole full IncomingReservation digest; excludes this later preparation and all proofs.
+    /// Sole full `IncomingReservation` digest; excludes this later preparation and all proofs.
     pub reservation_digest: [u8; 32],
     /// Native source/incoming operation identity, fixed before invocation and shared with W2.
     pub operation_id: [u8; 32],
     /// Fresh Native W2 nonce, independent of dedicated Mint and original receiver signatures.
     pub nonce: [u8; 32],
-    /// Full sole TransitionProofStatement digest, opening the actual amount and both State edges.
+    /// Full sole `TransitionProofStatement` digest, opening the actual amount and both State edges.
     pub transition_statement_digest: [u8; 32],
     /// Actual hiding predecessor State commitment.
     pub predecessor_state_commitment: [u8; 32],

@@ -342,7 +342,9 @@ fn multisig_proposal_terminal_state_key(
     ))
     .expect("multisig proposal terminal state path must be valid")
 }
-fn multisig_proposal_terminal_execution_state_key(
+/// Canonical immutable native multisig terminal-execution record key.
+#[must_use]
+pub fn multisig_proposal_terminal_execution_state_key(
     terminal_entrypoint_hash: [u8; Hash::LENGTH],
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -354,7 +356,9 @@ fn multisig_proposal_terminal_execution_state_key(
     ))
     .expect("multisig proposal terminal execution path must be valid")
 }
-fn multisig_approval_outcome_state_key(
+/// Canonical immutable native multisig approval-outcome record key.
+#[must_use]
+pub fn multisig_approval_outcome_state_key(
     entrypoint_hash: [u8; Hash::LENGTH],
     entrypoint_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -744,6 +748,8 @@ fn rekey_account_id(
                 .then_some(migrated_grantee)
         })
         .collect::<BTreeSet<_>>();
+    crate::retail_fee::prepare_rekey(state_transaction, old_account, new_account)?;
+    crate::validation_fee_rewards::rekey_beneficiary(state_transaction, old_account, new_account)?;
     state_transaction
         .validate_fastpq_governance_rekey(old_account, new_account)
         .map_err(|error| state_transaction.mandatory_source_instruction_error(error))?;
@@ -857,6 +863,10 @@ fn rekey_account_id(
             *asset_id.scope(),
         );
         if let Some(value) = state_transaction.world.assets.remove(asset_id.clone()) {
+            let is_nonzero = !value.as_ref().is_zero();
+            state_transaction
+                .world
+                .refresh_nonzero_asset_holder(&asset_id);
             state_transaction
                 .world
                 .untrack_asset_holder_if_empty(&asset_id);
@@ -865,6 +875,11 @@ fn rekey_account_id(
                 .assets
                 .insert(new_asset_id.clone(), value);
             state_transaction.world.track_asset_holder(&new_asset_id);
+            if is_nonzero {
+                state_transaction
+                    .world
+                    .track_nonzero_asset_holder(&new_asset_id);
+            }
         }
         if let Some(meta) = state_transaction
             .world
@@ -877,6 +892,7 @@ fn rekey_account_id(
                 .insert(new_asset_id, meta);
         }
     }
+    crate::retail_fee::finish_rekey(state_transaction, old_account, new_account)?;
     let nft_ids: Vec<_> = state_transaction
         .world
         .nfts_in_account_iter(old_account)
@@ -909,12 +925,11 @@ fn rekey_account_id(
         .map(|definition| definition.id.clone())
         .collect();
     for asset_def_id in asset_def_ids {
-        if let Some(definition) = state_transaction
+        if let Ok(mut definition) = state_transaction
             .world
-            .asset_definitions
-            .get_mut(&asset_def_id)
+            .asset_definition_metadata_mut(&asset_def_id)
         {
-            definition.owned_by = new_account.clone();
+            definition.set_owned_by(new_account.clone());
         }
         state_transaction
             .world
@@ -3382,6 +3397,7 @@ mod tests {
             seed_default_namespace_policies_for_payment_asset,
         },
         state::{State, StateReadOnly, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -3407,7 +3423,7 @@ mod tests {
             },
         },
         kaigi::{KaigiId, KaigiRecord, NewKaigi},
-        nexus::{DataSpaceCatalog, DataSpaceMetadata, UniversalAccountId},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
         prelude::{Domain, InstructionBox, Json, Quantity, Register},
@@ -3422,11 +3438,11 @@ mod tests {
     };
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
-    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
     };
     fn new_account_id(key_pair: &KeyPair) -> AccountId {
@@ -3441,23 +3457,14 @@ mod tests {
         chain_id: ChainId,
         nexus: Option<iroha_config::parameters::actual::Nexus>,
     ) -> State {
-        runtime_state_with_genesis_instructions(world, chain_id, nexus, Vec::new())
-    }
-    fn runtime_state_with_genesis_instructions(
-        world: World,
-        chain_id: ChainId,
-        nexus: Option<iroha_config::parameters::actual::Nexus>,
-        genesis_instructions: Vec<InstructionBox>,
-    ) -> State {
-        use crate::sumeragi::{
-            startup,
-            test_chain::{CertifiedTestChain, TestChainConfig},
-        };
-
         let mut config = TestChainConfig::new(world, 0);
         config.chain_id = chain_id;
         config.nexus = nexus;
-        config.genesis_instructions = genesis_instructions;
+        runtime_state_from_config(config)
+    }
+    fn runtime_state_from_config(config: TestChainConfig) -> State {
+        use crate::sumeragi::startup;
+
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
         let prepared =
@@ -3560,13 +3567,24 @@ mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         }
     }
-    fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
+    struct FiRegistrationAliasFixture {
+        config: TestChainConfig,
+        signer1: KeyPair,
+        signer2: KeyPair,
+        retail_account: AccountId,
+        sbp: DataSpaceId,
+        sbp_lane: LaneId,
+        hbl_domain: DomainId,
+        payment_asset_definition_id: AssetDefinitionId,
+    }
+    fn fi_registration_alias_fixture() -> FiRegistrationAliasFixture {
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let retail_account = new_account_id(&checked_keypair());
         let sbp = DataSpaceId::new(10);
+        let sbp_lane = LaneId::new(1);
         let hbl_domain = DomainId::try_new("hbl", "sbp").expect("hbl.sbp domain");
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
@@ -3600,9 +3618,28 @@ mod tests {
             },
         ])
         .expect("sbp dataspace catalog");
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        // Retain SBP's configured physical lane geometry in the original fixture;
+        // global topology and parameter control retain the universal lane.
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sbp_lane,
+                    dataspace_id: sbp,
+                    alias: "sbp".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("SBP and universal lane catalog");
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
         // The executor resolves aliases from committed SNS state. A static node
-        // catalog alone cannot stand in for the original bootstrap name lease.
+        // catalog and domain entity cannot replace either original parent lease.
         let bootstrap_dataspace = EnsureAlias::new(
             AliasIntentV1::Dataspace(iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
                 dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
@@ -3619,14 +3656,155 @@ mod tests {
                 valid_until_ms: u64::MAX,
             },
         );
-        let state = runtime_state_with_genesis_instructions(
-            world,
-            ChainId::from("multisig-fi-registration-alias-batch"),
-            Some(nexus),
-            vec![bootstrap_dataspace.into()],
+        let bootstrap_domain = EnsureAlias::new(
+            AliasIntentV1::Domain(iroha_data_model::alias_setup::AliasDomainIntentV1 {
+                domain: iroha_data_model::alias_setup::ResolvedDomainV1::new(
+                    hbl_domain.clone(),
+                    sbp,
+                ),
+                owner: signer1_id.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset_definition_id.clone(),
+                max_amount: Quantity::zero(),
+                valid_until_ms: u64::MAX,
+            },
+        );
+        let mut config = TestChainConfig::new(world, 0);
+        config.chain_id = ChainId::from("multisig-fi-registration-alias-batch");
+        config.nexus = Some(nexus);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        // Foundational permissions belong to the actual genesis authority. The
+        // original signed EnsureAlias batch retains its single global route;
+        // SBP-scoped Grant instructions would require their own physical route.
+        config.world.account_permissions_mut_for_testing().insert(
+            genesis_account,
+            BTreeSet::from([
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(sbp),
+                }),
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(hbl_domain.clone()),
+                }),
+            ]),
+        );
+        config.genesis_instructions = vec![bootstrap_dataspace.into(), bootstrap_domain.into()];
+        FiRegistrationAliasFixture {
+            config,
+            signer1,
+            signer2,
+            retail_account,
+            sbp,
+            sbp_lane,
+            hbl_domain,
+            payment_asset_definition_id,
+        }
+    }
+    #[test]
+    fn multisig_fi_bootstrap_requires_each_exact_genesis_signer_permission() {
+        for missing_domain_permission in [false, true] {
+            let mut fixture = fi_registration_alias_fixture();
+            let genesis_account = AccountId::new(fixture.config.genesis_key.public_key().clone());
+            let permission = Permission::from(CanManageAccountAlias {
+                scope: if missing_domain_permission {
+                    AccountAliasPermissionScope::Domain(fixture.hbl_domain)
+                } else {
+                    AccountAliasPermissionScope::Dataspace(fixture.sbp)
+                },
+            });
+            let permissions = fixture
+                .config
+                .world
+                .account_permissions_mut_for_testing()
+                .view()
+                .get(&genesis_account)
+                .expect("actual genesis signer permissions")
+                .iter()
+                .filter(|existing| *existing != &permission)
+                .cloned()
+                .collect();
+            fixture
+                .config
+                .world
+                .account_permissions_mut_for_testing()
+                .insert(genesis_account.clone(), permissions);
+            let failure = CertifiedTestChain::prepare(fixture.config)
+                .expect_err("each exact parent permission is required by original signed genesis");
+            assert_eq!(failure.state.view().height(), 0);
+            assert!(matches!(
+                &failure.error,
+                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(_)
+            ));
+            assert!(
+                format!("{:?}", failure.error).contains("alias.setup.authority_forbidden"),
+                "missing exact permission must refuse at alias authority: {:?}",
+                failure.error,
+            );
+            assert!(
+                !failure
+                    .state
+                    .view()
+                    .world()
+                    .account_permissions()
+                    .get(&genesis_account)
+                    .expect("unapplied signer permissions")
+                    .contains(&permission),
+                "bootstrap cannot recreate an absent signer permission",
+            );
+        }
+    }
+    fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
+        let FiRegistrationAliasFixture {
+            config,
+            signer1,
+            signer2,
+            retail_account,
+            sbp,
+            sbp_lane,
+            hbl_domain,
+            payment_asset_definition_id,
+        } = fi_registration_alias_fixture();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let state = runtime_state_from_config(config);
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .dataspace_catalog
+                .by_alias("sbp")
+                .map(|entry| entry.id),
+            Some(sbp),
+            "signed genesis retains the configured SBP catalog",
+        );
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| (lane.id, lane.dataspace_id))
+                .collect::<Vec<_>>(),
+            vec![(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (sbp_lane, sbp)],
+            "signed genesis retains both original physical execution lanes",
+        );
+        assert_eq!(
+            state
+                .view()
+                .world()
+                .dataspace_catalog()
+                .by_alias("sbp")
+                .map(|entry| entry.id),
+            Some(sbp),
+            "the authoritative World view retains the same SBP mapping",
         );
         let block_header = runtime_header(&state, 0);
         let mut block = state.block(block_header);
+        let proposal_call = Hash::prehashed([0xD3; Hash::LENGTH]);
+        let approval_call = Hash::prehashed([0xD4; Hash::LENGTH]);
+        block.admit_fastpq_source_for_testing(proposal_call);
+        block.admit_fastpq_source_for_testing(approval_call);
         let mut tx = block.transaction_for_callback_testing();
         assert_eq!(
             crate::sns::resolve_active_dataspace_id_by_alias(
@@ -3647,6 +3825,18 @@ mod tests {
                 tx.block_unix_timestamp_ms(),
             )
             .expect("committed bootstrap dataspace lease")
+            .owner,
+            signer1_id,
+        );
+        assert_eq!(
+            get_name_record(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                SnsNamespace::Domain,
+                &hbl_domain.to_string(),
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("committed bootstrap FI domain lease")
             .owner,
             signer1_id,
         );
@@ -3748,14 +3938,14 @@ mod tests {
             )),
         ];
         let instructions_hash = HashOf::new(&instructions);
-        tx.tx_call_hash = Some(Hash::prehashed([0xD3; Hash::LENGTH]));
+        tx.tx_call_hash = Some(proposal_call);
         execute_propose(
             &mut tx,
             &signer1_id,
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("signer1 proposes FI registration batch");
-        tx.tx_call_hash = Some(Hash::prehashed([0xD4; Hash::LENGTH]));
+        tx.tx_call_hash = Some(approval_call);
         execute_approve(
             &mut tx,
             &signer2_id,
@@ -6202,13 +6392,16 @@ mod tests {
         .expect("register asset definition");
         let old_asset_id =
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
-        let (_, old_asset_value) =
-            iroha_data_model::asset::Asset::new(old_asset_id.clone(), Quantity::from(5_u32))
-                .into_key_value();
-        tx.world
-            .assets
-            .insert(old_asset_id.clone(), old_asset_value);
-        tx.world.track_asset_holder(&old_asset_id);
+        Mint::asset_quantity(5_u32, old_asset_id.clone())
+            .execute(&old_account, &mut tx)
+            .expect("seed an actual nonzero balance and tracked supply");
+        assert!(
+            tx.world
+                .asset_definition_nonzero_holders
+                .get(&asset_def_id)
+                .unwrap()
+                .contains(&old_account)
+        );
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
         rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
@@ -6239,7 +6432,114 @@ mod tests {
             !holders.contains(&old_account),
             "old account should be removed from holder index"
         );
+        let nonzero = tx
+            .world
+            .asset_definition_nonzero_holders
+            .get(&asset_def_id)
+            .expect("migrated nonzero holder");
+        assert!(nonzero.contains(&new_account));
+        assert!(!nonzero.contains(&old_account));
+        assert_eq!(nonzero.len(), 1);
+        assert_eq!(
+            tx.world
+                .asset_definition(&asset_def_id)
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(5_u32)
+        );
     }
+
+    #[test]
+    fn rekey_moves_nonzero_membership_across_every_scope_and_ignores_zero_only_holdings() {
+        use iroha_data_model::asset::{Asset, AssetBalancePolicy, AssetBalanceScope};
+        for quantities in [[0_u32, 0_u32], [5, 0], [5, 7]] {
+            tx!(
+                state,
+                block,
+                tx,
+                World::new(),
+                "multisig-rekey-scoped-nonzero-index"
+            );
+            let domain = DomainId::try_new("rekey-scopes", "universal").unwrap();
+            let old_account = new_account_id(&checked_keypair());
+            domain!(tx, old_account, domain, "register rekey domain");
+            account!(
+                tx,
+                old_account,
+                domain,
+                old_account,
+                "register old scoped holder"
+            );
+            let definition =
+                AssetDefinitionId::derive_from_components(domain.clone(), "units".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(
+                definition.clone(),
+                "Scoped Units",
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(domain.clone()),
+            ))
+            .execute(&old_account, &mut tx)
+            .unwrap();
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            let mut sources = Vec::new();
+            for (index, amount) in quantities.into_iter().enumerate() {
+                let id = AssetId::with_scope(
+                    definition.clone(),
+                    old_account.clone(),
+                    AssetBalanceScope::Dataspace(DataSpaceId::new(7 + index as u64)),
+                );
+                if amount == 0 {
+                    let (id, value) = Asset::new(id.clone(), Quantity::zero()).into_key_value();
+                    tx.world.assets.insert(id.clone(), value);
+                    tx.world.track_asset_holder(&id);
+                } else {
+                    Mint::asset_quantity(amount, id.clone())
+                        .execute(&old_account, &mut tx)
+                        .unwrap();
+                }
+                sources.push(id);
+            }
+            let total = Quantity::from(quantities.into_iter().sum::<u32>());
+            let new_account = new_account_id(&checked_keypair());
+            rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain)).unwrap();
+            for (id, amount) in sources.iter().zip(quantities) {
+                assert!(tx.world.assets.get(id).is_none());
+                let moved =
+                    AssetId::with_scope(definition.clone(), new_account.clone(), *id.scope());
+                assert_eq!(
+                    tx.world.assets.get(&moved).unwrap().as_ref(),
+                    &Quantity::from(amount)
+                );
+                assert!(
+                    tx.world
+                        .asset_definition_assets
+                        .get(&definition)
+                        .unwrap()
+                        .contains(&moved)
+                );
+            }
+            assert!(tx.world.assets_by_account.get(&old_account).is_none());
+            assert_eq!(
+                tx.world.assets_by_account.get(&new_account).unwrap().len(),
+                2
+            );
+            let nonzero = tx.world.asset_definition_nonzero_holders.get(&definition);
+            assert!(!nonzero.is_some_and(|holders| holders.contains(&old_account)));
+            assert_eq!(
+                nonzero.is_some_and(|holders| holders.contains(&new_account)),
+                !total.is_zero()
+            );
+            assert_eq!(
+                tx.world
+                    .asset_definition(&definition)
+                    .unwrap()
+                    .total_quantity(),
+                &total
+            );
+        }
+    }
+
     #[test]
     fn rekey_rejects_privacy_reserve_before_moving_account_or_asset() {
         use iroha_data_model::privacy::{
@@ -6894,18 +7194,21 @@ seiyaku TriggerDispatch {
             .expect("compile trigger dispatch contract");
         let (bytecode, contract_address) =
             install_trigger_contract(&mut tx, &owner_id, &owner_keypair, program, manifest, 6_061);
-        // Context authority remains the multisig caller, while ledger effects
-        // are authorized by the contract subject. Delegate only this target.
-        Grant::account_permission(
-            Permission::from(
-                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
-                    account: multisig_id.clone(),
-                },
-            ),
-            contract_address.subject_id(),
-        )
-        .execute(&multisig_id, &mut tx)
-        .expect("delegate exact caller metadata permission to the contract subject");
+        Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &multisig_id,
+                Grant::account_permission(
+                    iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                        account: multisig_id.clone(),
+                    },
+                    contract_address.subject_id(),
+                )
+                .into(),
+            )
+            .expect(
+                "multisig owner delegates its exact metadata permission to the contract subject",
+            );
         let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(

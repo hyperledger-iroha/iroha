@@ -22,3 +22,6 @@ pub mod native_finality;
 pub mod ordinary_app_enrollment;
 /// Ordinary Mint codec/signature fixtures with explicit inert proof data; no debit authority.
 pub mod ordinary_mint;
+
+/// Complete ordinary Node Mint transport fixtures; all clock/policy proofs are explicitly inert.
+pub mod ordinary_node_mint;

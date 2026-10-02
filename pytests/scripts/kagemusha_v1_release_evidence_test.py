@@ -71,7 +71,7 @@ def _provider_policy_signature(profile_id: str, position: int, commitment: str) 
 
 def native_profile_fixture(protocols: dict[str, Any]) -> dict[str, Any]:
     """Native layout shape fixture; it does not claim synthesis or qualification."""
-    result: dict[str, Any] = {}
+    result: dict[str, Any] = {"mint_authorization_family": 1}
     for name in VERIFIER.NATIVE_PROFILE_LAYOUT_TAGS:
         k = 12 if name.startswith("mint_hash_shard_") else 16
         result[name] = {
@@ -2105,11 +2105,21 @@ def test_hardware_profile_codec_binds_u32_class_specific_guarantees() -> None:
         assert VERIFIER.rust_hardware_profile_id(candidate) != VERIFIER.rust_hardware_profile_id(profile)
 
 
-def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields() -> None:
+@pytest.mark.parametrize(("family", "expected_digest"), [
+    (1, "5b14e09f3f4d83ceea1a1fd4e293e524a0338940d29b18fa394d28099ab7c413"),
+    (2, "dbe397f8f5e842cc83b446903357d31e69d1363a0b800a5a3c5bdb5fdfeee221"),
+])
+def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields(
+    family: int, expected_digest: str
+) -> None:
     protocols = native_golden_protocols()
     profile = native_profile_fixture(protocols)
+    profile["mint_authorization_family"] = family
     digest = VERIFIER.rust_native_profile_digest(profile, protocols)
-    assert digest == "4cafcb7a8658d0cd082f187fe33ba042930fb846c9caa7462887675bf71721cf"
+    assert digest == expected_digest
+    changed = json.loads(json.dumps(profile))
+    changed["mint_authorization_family"] = 3 - family
+    assert VERIFIER.rust_native_profile_digest(changed, protocols) != digest
     for name in VERIFIER.NATIVE_PROFILE_LAYOUT_TAGS:
         changed = json.loads(json.dumps(profile))
         changed[name]["num_fixed"] += 1
@@ -2139,6 +2149,19 @@ def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields()
     ("mint_genesis_authorization_id", None, [0] * 32),
     ("mint_genesis_authorization_id", None, [1] * 31),
     ("opaque_native_profile_digest", None, "aa" * 32),
+    ("mint_authorization_family", None, 0),
+    ("mint_authorization_family", None, 3),
+    ("mint_authorization_family", None, 255),
+    ("mint_authorization_family", None, True),
+    ("mint_authorization_family", None, False),
+    ("mint_authorization_family", None, 1.0),
+    ("mint_authorization_family", None, "1"),
+    ("mint_authorization_family", None, "recursive_hardware_84"),
+    ("mint_authorization_family", None, None),
+    ("mint_authorization_family", None, []),
+    ("mint_authorization_family", None, {}),
+    ("mint_authorization_public_instance_count", None, 84),
+    ("mint_authorization_public_instance_count", None, 113),
 ])
 def test_native_profile_rejects_malformed_layouts_and_role_substitution(
     field: str, member: str | None, value: object
@@ -2151,6 +2174,50 @@ def test_native_profile_rejects_malformed_layouts_and_role_substitution(
         profile[field][member] = value
     with pytest.raises(VERIFIER.KagemushaEvidenceError):
         VERIFIER.rust_native_profile_digest(profile, protocols)
+
+
+def test_native_profile_requires_explicit_mint_authorization_family() -> None:
+    protocols = native_golden_protocols()
+    profile = native_profile_fixture(protocols)
+    del profile["mint_authorization_family"]
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="fields must be exactly"):
+        VERIFIER.rust_native_profile_digest(profile, protocols)
+
+
+def test_native_profile_family_matches_required_runtime_schema_and_transcript() -> None:
+    """Check the family contract; source assertions do not qualify native proofs."""
+    native = (
+        ROOT / "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs"
+    ).read_text()
+    config = (ROOT / "crates/iroha_core/src/smartcontracts/isi/kagemusha.rs").read_text()
+    config_profile = config.split(
+        "struct KagemushaRecursiveVerifierProfileFileV1 {", 1
+    )[1].split("}", 1)[0]
+    assert re.search(r"^    mint_authorization_family: u8,", config_profile, re.MULTILINE)
+    assert "KagemushaMintAuthorizationFamilyV1::from_profile_tag(self.mint_authorization_family)" in config
+    assert "1 => Ok(Self::RecursiveHardware84)" in native
+    assert "2 => Ok(Self::OrdinaryPreDebit113)" in native
+    assert VERIFIER.NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILY_TAG == 30
+    assert VERIFIER.NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILIES == {1: 84, 2: 113}
+    assert re.search(
+        r"bytes\.push\(30\);\s*bytes\.push\(self\.mint_authorization_family\.profile_tag\(\)\);",
+        native,
+    )
+    assert "&(self.mint_authorization_family.public_instance_count() as u64).to_le_bytes()" in native
+
+
+def test_observed_native_family_change_changes_both_signed_receipt_identities(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    before = _verify_direct(fixture)["receipt_projection"]
+    path = fixture.manifest["global_reports"]["circuit_shape"]
+    report = json.loads(fixture.path(path).read_text())
+    report["native_profile"]["mint_authorization_family"] = 2
+    fixture.write(path, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(path)
+    fixture.refresh_files()
+    after = _verify_direct(fixture)["receipt_projection"]
+    assert after["native_profile_digest"] != before["native_profile_digest"]
+    assert after["profile_digest"] != before["profile_digest"]
 
 
 def test_observed_native_layout_change_changes_both_signed_receipt_identities(tmp_path: Path) -> None:

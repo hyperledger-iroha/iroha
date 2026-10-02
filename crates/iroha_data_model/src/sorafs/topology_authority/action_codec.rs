@@ -104,6 +104,17 @@ impl<'de> ncore::DeserializePayload<'de> for TopologyActionV1 {
 
 impl<'de> ncore::DecodeFromSlice<'de> for TopologyActionV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
+        fn decode<T>(field: &[u8]) -> Result<T, ncore::Error>
+        where
+            T: ncore::SerializePayload + for<'a> ncore::DeserializePayload<'a>,
+        {
+            let (value, used) = ncore::decode_field_canonical::<T>(field)?;
+            if used != field.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            Ok(value)
+        }
+
         let tag_bytes = bytes.get(..4).ok_or(ncore::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -126,16 +137,6 @@ impl<'de> ncore::DecodeFromSlice<'de> for TopologyActionV1 {
             return Err(ncore::Error::LengthMismatch);
         }
         let field = bytes.get(start..end).ok_or(ncore::Error::LengthMismatch)?;
-        fn decode<T>(field: &[u8]) -> Result<T, ncore::Error>
-        where
-            T: ncore::SerializePayload + for<'a> ncore::DeserializePayload<'a>,
-        {
-            let (value, used) = ncore::decode_field_canonical::<T>(field)?;
-            if used != field.len() {
-                return Err(ncore::Error::LengthMismatch);
-            }
-            Ok(value)
-        }
         let value = match tag {
             0 => Self::Configure(decode(field)?),
             1 => Self::Enroll(decode(field)?),

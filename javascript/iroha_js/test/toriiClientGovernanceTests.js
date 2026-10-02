@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 // Governance and protected-namespace Torii client regression registrations.
 
 export function buildIntegrationGovernancePlainBallotPayload(
@@ -481,24 +482,9 @@ export function registerToriiClientGovernanceTests({
   test("getGovernanceProposalTyped closes over all eleven V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    const payoutBinding = {
-      contract_address: contractAddress,
-      code_hash: Array(32).fill(0x44),
-      entrypoint: "autonomous_validation_fee_tick",
-      treasury_account_id: FIXTURE_ALICE_TEST_ID,
-      ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-      xor_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
-      pool_vault_account_id: FIXTURE_BOB_NARNIA_ID,
-      batch_ds: "10",
-      min_xor_out: "4",
-      max_xor_out: "100",
-      recipients: [
-        FIXTURE_ALICE_ID,
-        FIXTURE_BOB_ID,
-        FIXTURE_CAROL_ID,
-        SAMPLE_ACCOUNT_FORMS.canonical,
-      ].map((account_id) => ({ account_id, share: "0.25" })),
-    };
+    const payoutBinding = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_conversion_v1.json", import.meta.url), "utf8"));
+    const retailPolicy = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_policy_v1.json", import.meta.url), "utf8"));
+    retailPolicy.network_id = GOVERNANCE_NETWORK_ID.toString();
     const packageId = {
       home_dataspace: 7,
       scope: { kind: "DataspaceRoot", value: null },
@@ -556,25 +542,7 @@ export function registerToriiClientGovernanceTests({
         "ValidationFeePolicy",
         {
           proposal_operator: FIXTURE_ALICE_ID,
-          policy: {
-            schema_version: 1,
-            network_id: GOVERNANCE_NETWORK_ID.toString(),
-            policy_version: "1",
-            previous_policy_hash: null,
-            ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            ds_scale: 2,
-            fee: "0.1",
-            treasury_account_id: FIXTURE_ALICE_TEST_ID,
-            charging_mode: {
-              charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
-              value: null,
-            },
-            effective_from_height: "121100",
-            expires_after_height: null,
-            exemption_classes: [],
-            treasury_payout_binding: null,
-          },
-          payout_lifecycle_proposal_id: null,
+          policy: retailPolicy,
         },
         "validation_fee_policy",
       ],

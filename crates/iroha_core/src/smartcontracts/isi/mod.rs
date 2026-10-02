@@ -449,6 +449,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaV1>,
+    dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaOrdinaryV1>,
     dispatch_instruction::<iroha_data_model::isi::RedeemKagemushaV1>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,

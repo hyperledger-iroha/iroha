@@ -771,3 +771,145 @@ fn predeclared_time_e_survives_failure_but_lazy_dynamic_work_disappears_on_drop(
     assert_eq!(empty_dynamic.commit(), time_e);
     assert_eq!(ledger.usage(), time_e);
 }
+
+fn ledger_with_retained_contribution() -> (ReservationLedger, EntryOwner, OccurrenceSlot) {
+    let mut ledger = ledger();
+    let mut transaction = ledger.transaction(context()).unwrap();
+    let owner = transaction.open_owner().unwrap();
+    let slot = transaction.reserve(&owner, occurrence(1, 10, 12)).unwrap();
+    transaction.commit();
+    (ledger, owner, slot)
+}
+
+#[test]
+fn retained_commit_seal_preserves_dropped_unwound_and_empty_children() {
+    let (mut ledger, owner, slot) = ledger_with_retained_contribution();
+    let seal = ledger.retain_commit_seal();
+    let before = ledger.usage();
+    {
+        let mut transaction = ledger.transaction(context()).unwrap();
+        transaction
+            .replace(&owner, &slot, occurrence(2, 20, 24))
+            .unwrap();
+    }
+    assert!(ledger.matches_commit_seal(&seal));
+    assert_eq!(ledger.usage(), before);
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut transaction = ledger.transaction(context()).unwrap();
+        transaction
+            .replace(&owner, &slot, occurrence(2, 20, 24))
+            .unwrap();
+        panic!("drop the original source journal during unwinding");
+    }));
+    assert!(unwind.is_err());
+    assert!(ledger.matches_commit_seal(&seal));
+    ledger.transaction(context()).unwrap().commit();
+    assert_eq!(ledger.usage(), before);
+    assert!(ledger.matches_commit_seal(&seal));
+}
+
+#[test]
+fn retained_commit_seal_rejects_applied_same_value_restore_and_replacement() {
+    let (mut ledger, owner, slot) = ledger_with_retained_contribution();
+    let seal = ledger.retain_commit_seal();
+    let before = ledger.usage();
+    let mut transaction = ledger.transaction(context()).unwrap();
+    let changed = transaction
+        .replace(&owner, &slot, occurrence(2, 20, 24))
+        .unwrap();
+    let restored = transaction
+        .replace(&owner, &changed, occurrence(1, 10, 12))
+        .unwrap();
+    transaction.commit();
+    assert_eq!(ledger.usage(), before);
+    assert!(!ledger.matches_commit_seal(&seal));
+    let current = ledger.retain_commit_seal();
+    let mut transaction = ledger.transaction(context()).unwrap();
+    transaction
+        .replace(&owner, &restored, occurrence(1, 10, 12))
+        .unwrap();
+    transaction.commit();
+    assert_eq!(ledger.usage(), before);
+    assert!(!ledger.matches_commit_seal(&current));
+}
+
+#[test]
+fn retained_commit_seal_distinguishes_original_allocation_from_equal_reconstruction() {
+    let (original, _, _) = ledger_with_retained_contribution();
+    let seal = original.retain_commit_seal();
+    let original_allocation = Arc::as_ptr(&seal.identity);
+    let (reconstructed, _, _) = ledger_with_retained_contribution();
+    assert_eq!(original.context, reconstructed.context);
+    assert_eq!(original.policy, reconstructed.policy);
+    assert_eq!(
+        original.applied_generation,
+        reconstructed.applied_generation
+    );
+    assert_eq!(original.usage(), reconstructed.usage());
+    assert!(!reconstructed.matches_commit_seal(&seal));
+    drop(original);
+    assert_eq!(Arc::as_ptr(&seal.identity), original_allocation);
+    assert_eq!(Arc::strong_count(&seal.identity), 1);
+    assert!(!reconstructed.matches_commit_seal(&seal));
+}
+
+#[test]
+fn retained_commit_seal_tracks_surviving_nested_prefix_only() {
+    let (mut ledger, owner, slot) = ledger_with_retained_contribution();
+    let seal = ledger.retain_commit_seal();
+    let before = ledger.usage();
+    let mut transaction = ledger.transaction(context()).unwrap();
+    let root = transaction.checkpoint();
+    let outer = transaction
+        .replace(&owner, &slot, occurrence(2, 20, 24))
+        .unwrap();
+    let inner = transaction.checkpoint();
+    transaction
+        .replace(&owner, &outer, occurrence(3, 30, 36))
+        .unwrap();
+    transaction.rollback(inner).unwrap();
+    transaction.rollback(root).unwrap();
+    transaction.commit();
+    assert_eq!(ledger.usage(), before);
+    assert!(ledger.matches_commit_seal(&seal));
+    let mut transaction = ledger.transaction(context()).unwrap();
+    let outer = transaction
+        .replace(&owner, &slot, occurrence(1, 10, 12))
+        .unwrap();
+    let inner = transaction.checkpoint();
+    transaction
+        .replace(&owner, &outer, occurrence(3, 30, 36))
+        .unwrap();
+    transaction.rollback(inner).unwrap();
+    transaction.commit();
+    assert_eq!(ledger.usage(), before);
+    assert!(!ledger.matches_commit_seal(&seal));
+}
+
+#[test]
+fn retained_commit_generation_exhaustion_never_wraps_or_revives_an_old_seal() {
+    let (mut ledger, owner, slot) = ledger_with_retained_contribution();
+    let seal = ledger.retain_commit_seal();
+    ledger.next_generation = u64::MAX - 2;
+    let mut transaction = ledger.transaction(context()).unwrap();
+    transaction
+        .replace(&owner, &slot, occurrence(1, 10, 12))
+        .unwrap();
+    transaction.commit();
+    assert_eq!(ledger.applied_generation, u64::MAX - 2);
+    assert_eq!(ledger.next_generation, u64::MAX);
+    assert!(!ledger.matches_commit_seal(&seal));
+    let final_seal = ledger.retain_commit_seal();
+    for _ in 0..2 {
+        assert!(matches!(
+            ledger.transaction(context()),
+            Err(ReservationError::Invariant(
+                ReservationInvariant::GenerationOverflow
+            ))
+        ));
+        assert_eq!(ledger.applied_generation, u64::MAX - 2);
+        assert_eq!(ledger.next_generation, u64::MAX);
+        assert!(!ledger.matches_commit_seal(&seal));
+        assert!(ledger.matches_commit_seal(&final_seal));
+    }
+}
