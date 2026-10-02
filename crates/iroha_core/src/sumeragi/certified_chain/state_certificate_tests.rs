@@ -548,3 +548,39 @@ fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_r
     assert!(Arc::ptr_eq(certified.block(), current.block()));
     assert_eq!(parent.id(), chain.committed(2).id());
 }
+
+#[test]
+fn state_certificate_original_qc_inner_limit_is_not_adopted_by_wider_query_scope() {
+    let (chain, _) = chain();
+    let current = chain.committed(3);
+    let bytes = current.block().commit_certificate().unwrap().commit_qc();
+    let original: iroha_sumeragi::message::Qc = norito::decode_canonical(bytes).unwrap();
+    norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 128),
+        || {
+            let error = norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 128),
+                || norito::decode_canonical::<iroha_sumeragi::message::Qc>(bytes).unwrap_err(),
+            );
+            assert!(
+                matches!(&error, norito::Error::FieldLengthExceeded { length, limit: 1 } if *length > 1)
+            );
+            let expected = error.to_string();
+            assert!(matches!(verification_codec_error(3, error),
+                VerificationReadError::Source(ChainReadError::Malformed { height: 3, reason }) if reason == expected));
+            let mut malformed = bytes.to_vec();
+            malformed.push(0);
+            let error =
+                norito::decode_canonical::<iroha_sumeragi::message::Qc>(&malformed).unwrap_err();
+            assert!(error.decode_resource_error().is_none());
+            assert!(matches!(
+                verification_codec_error(3, error),
+                VerificationReadError::Source(ChainReadError::Malformed { height: 3, .. })
+            ));
+        },
+    );
+    assert_eq!(
+        norito::decode_canonical::<iroha_sumeragi::message::Qc>(bytes).unwrap(),
+        original
+    );
+}

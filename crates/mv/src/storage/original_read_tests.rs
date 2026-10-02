@@ -63,7 +63,10 @@ fn equal_foreign_maps_and_equal_republication_never_restore_original_source() {
 #[test]
 fn any_publication_between_identity_observations_rejects_mixed_or_equal_reads() {
     let storage: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
-    let original = storage.publication.try_capture_reads(|| true).unwrap();
+    let original = storage
+        .publication
+        .try_capture_reads::<std::convert::Infallible>(|| true)
+        .unwrap();
     let current = storage.blocks.read();
     let mut first = storage.block();
     first.insert(1, 11);
@@ -72,7 +75,10 @@ fn any_publication_between_identity_observations_rejects_mixed_or_equal_reads() 
         storage.finish_committed_reads(original, current, storage.revert.read()),
         Err(PublicationPreparationError::Changed)
     ));
-    let original = storage.publication.try_capture_reads(|| true).unwrap();
+    let original = storage
+        .publication
+        .try_capture_reads::<std::convert::Infallible>(|| true)
+        .unwrap();
     let current = storage.blocks.read();
     let undo = storage.revert.read();
     storage.block().commit();

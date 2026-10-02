@@ -2,6 +2,7 @@
 //! admission ([`super::admit`]); commit makes a block's chain facts the applied lane state; the
 //! payload builder anchors a batch at the global chain's applied tip.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
@@ -136,6 +137,7 @@ pub struct LaneRecovery<A, C, T> {
     tip: u64,
     next: u64,
     pending: Option<RecoveryRead>,
+    refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 
 enum RecoveryRead {
@@ -201,6 +203,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
             tip,
             next,
             pending: None,
+            refusal: None,
         }
     }
 
@@ -330,10 +333,13 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
     pub fn complete(mut self) -> Result<LaneExecutor<A, C, T>, (Self, io::Error)> {
         match self.advance() {
             Ok(()) => Ok(self.executor),
-            Err(error) => Err((self, error)),
+            Err(error) => {
+                let error = crate::sumeragi::storage_attempt::retained_io(error, &mut self.refusal);
+                Err((self, error))
+            }
         }
     }
-    fn advance(&mut self) -> io::Result<()> {
+    fn advance(&mut self) -> Result<(), Attempt<io::Error>> {
         while self.next <= self.tip {
             if self.pending.is_none() {
                 let entry = self.store.entry(self.next)?.ok_or_else(|| {
@@ -352,7 +358,8 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "lane recovery authority differs from activated incarnation",
-                    ));
+                    )
+                    .into());
                 }
                 let job = StoredAcquisition::begin(&*self.store, source).map_err(recovery_error)?;
                 self.pending = Some(RecoveryRead::Acquiring(entry.commit_qc, job));
@@ -362,12 +369,15 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
                     .poll(&self.executor.budget, &*self.crypto)
                     .map_err(recovery_error)?;
                 match progress {
-                    StoredProgress::Pending(_) => return Err(io::ErrorKind::WouldBlock.into()),
+                    StoredProgress::Pending(error) => {
+                        return Err(crate::sumeragi::storage_attempt::byte(error));
+                    }
                     StoredProgress::Absent => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "committed lane body missing",
-                        ));
+                        )
+                        .into());
                     }
                     StoredProgress::Available(body) => {
                         let Some(RecoveryRead::Acquiring(qc, _)) = self.pending.take() else {
@@ -383,10 +393,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
             let batch = match LaneBatch::from_payload(body.payload().as_slice()) {
                 Ok(batch) => batch,
                 Err(AdmissionAttemptError::Deferred(_)) => {
-                    return Err(io::ErrorKind::WouldBlock.into());
+                    return Err(io::Error::from(io::ErrorKind::WouldBlock).into());
                 }
                 Err(AdmissionAttemptError::Rejected(error)) => {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, error).into());
                 }
             };
             self.executor.applied.state = self.executor.applied.state.after(
@@ -406,24 +416,17 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
         Ok(())
     }
 }
-fn recovery_error(error: crate::sumeragi::driver::acquisition::StoredError) -> io::Error {
-    use crate::sumeragi::{driver::acquisition::StoredError, durable_artifact::BodyReadError};
-    let retry = match &error {
-        StoredError::Restoration(error) => error.is_local_refusal(),
-        StoredError::Read(BodyReadError::Admission(error)) => error.is_local_refusal(),
-        StoredError::Read(BodyReadError::Io(error)) => matches!(
-            error.kind(),
-            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-        ),
-        _ => false,
-    };
-    if retry {
-        return io::ErrorKind::WouldBlock.into();
+fn recovery_error(error: crate::sumeragi::driver::acquisition::StoredError) -> Attempt<io::Error> {
+    use crate::sumeragi::driver::acquisition::StoredError;
+    match error {
+        StoredError::Read(error) => error.into_attempt(),
+        StoredError::Restoration(error) => crate::sumeragi::storage_attempt::restoration(error),
+        error => io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("lane recovery: {error:?}"),
+        )
+        .into(),
     }
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("lane recovery: {error:?}"),
-    )
 }
 
 impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
@@ -724,19 +727,29 @@ mod tests {
         }
     }
     impl BlockStore for NoStore {
-        fn committed_body(&self, _: u64) -> std::io::Result<Option<(AvailableBody, Qc)>> {
+        fn committed_body(
+            &self,
+            _: u64,
+        ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
             Ok(None)
         }
         fn height(&self) -> u64 {
             0
         }
-        fn entry(&self, _height: u64) -> io::Result<Option<iroha_sumeragi::message::SyncEntry>> {
+        fn entry(
+            &self,
+            _height: u64,
+        ) -> Result<Option<iroha_sumeragi::message::SyncEntry>, Attempt<io::Error>> {
             Ok(None)
         }
-        fn availability_source(&self, _: u64, _: Hash32) -> io::Result<Option<AvailabilitySource>> {
+        fn availability_source(
+            &self,
+            _: u64,
+            _: Hash32,
+        ) -> Result<Option<AvailabilitySource>, Attempt<io::Error>> {
             Ok(None)
         }
-        fn append(&self, _block: &AvailableBody, _qc: &Qc) -> std::io::Result<()> {
+        fn append(&self, _block: &AvailableBody, _qc: &Qc) -> Result<(), Attempt<io::Error>> {
             Ok(())
         }
     }

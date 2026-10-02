@@ -256,3 +256,76 @@ fn full_retry_queue_cannot_drop_author_or_application_completion() {
     assert_eq!(scheduler.next(0), Some(fetch));
     assert_eq!(scheduler.dropped(), 0);
 }
+
+#[test]
+fn refused_metadata_owner_cannot_be_replaced_by_another_peer_during_backoff() {
+    let budget = iroha_allocation::AllocationBudget::new(1);
+    let held = budget.try_reserve_bytes(1).unwrap();
+    let refusal = budget.try_reserve_bytes(1).unwrap_err();
+    let owner = crate::execution_attempt::ExecutionDeferred::from(refusal.clone());
+    let mut scheduler = ServeSched::new(ServeLimits::default());
+    let original = blocks(1, 1);
+    let other = blocks(2, 2);
+    assert!(scheduler.push(original.clone(), 0));
+    assert_eq!(scheduler.next(0), Some(original.clone()));
+    scheduler.done(
+        0,
+        &Served {
+            retry_request: Some(original.clone()),
+            deferred: Some(owner.clone()),
+            ..Served::default()
+        },
+    );
+    assert!(scheduler.push(other.clone(), 0));
+    assert!(
+        scheduler.next(1).is_none(),
+        "another refused metadata answer must not evict the only original retry slot"
+    );
+    assert_eq!(
+        scheduler
+            .failed
+            .as_ref()
+            .unwrap()
+            .2
+            .as_ref()
+            .unwrap()
+            .allocation_refusal(),
+        Some(&refusal)
+    );
+    let payload = ServeRequest::Payload(Box::new(PayloadWork::Serve {
+        to: key(3),
+        height: 1,
+        block_hash: Hash32([7; 32]),
+    }));
+    assert!(scheduler.push(payload.clone(), 1));
+    assert_eq!(
+        scheduler.next(1),
+        Some(payload),
+        "payload replies remain runnable during metadata backoff"
+    );
+    scheduler.done(
+        1,
+        &Served {
+            payload: true,
+            ..Served::default()
+        },
+    );
+    assert!(scheduler.next(1).is_none());
+    assert_eq!(
+        scheduler
+            .failed
+            .as_ref()
+            .unwrap()
+            .2
+            .as_ref()
+            .unwrap()
+            .allocation_refusal(),
+        Some(&refusal)
+    );
+    drop(held);
+    assert_eq!(scheduler.next(10), Some(original));
+    assert_eq!(scheduler.in_flight_refusal, Some(owner));
+    scheduler.done(10, &Served::default());
+    assert!(scheduler.in_flight_refusal.is_none());
+    assert_eq!(scheduler.next(10), Some(other));
+}

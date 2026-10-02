@@ -34,10 +34,10 @@ use crate::state::{NativeExecutionTip, StateReadOnly, WorldReadOnly};
 pub(crate) enum NativeEvidenceError {
     /// Original history is missing, corrupt or refused by the supplied source budget.
     #[error("native evidence history: {0}")]
-    History(QueryExecutionFail),
+    History(crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>),
     /// Retained lane source I/O or local capacity refusal; never blame the signed report.
     #[error("native lane evidence source: {0}")]
-    Source(std::io::Error),
+    Source(crate::execution_attempt::ExecutionAttemptError<std::io::Error>),
     /// The requested subject or its authenticated schedule is inconsistent.
     #[error("native evidence context: {0}")]
     Context(String),

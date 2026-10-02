@@ -24,6 +24,22 @@ pub(crate) enum ArchiveFinalityError {
     Storage(String),
     #[error(transparent)]
     Chain(#[from] ChainReadError),
+    /// Original local history acquisition has not completed.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
+}
+
+impl From<crate::execution_attempt::ExecutionAttemptError<ChainReadError>>
+    for ArchiveFinalityError
+{
+    fn from(error: crate::execution_attempt::ExecutionAttemptError<ChainReadError>) -> Self {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => Self::Chain(error),
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                Self::Deferred(local)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

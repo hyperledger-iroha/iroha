@@ -89,7 +89,7 @@ fn identity_frame_capture() -> Value {
 fn signed_query_case(
     name: &str,
     query: SingularQueryBox,
-    inputs: Value,
+    inputs: &Value,
     network: NetworkId,
     authority: &AccountId,
     keypair: &KeyPair,
@@ -265,7 +265,7 @@ fn managed_singular_cases(
     queries
         .into_iter()
         .map(|(name, query, inputs)| {
-            signed_query_case(name, query, inputs, network, authority, keypair, nonce)
+            signed_query_case(name, query, &inputs, network, authority, keypair, nonce)
         })
         .collect()
 }

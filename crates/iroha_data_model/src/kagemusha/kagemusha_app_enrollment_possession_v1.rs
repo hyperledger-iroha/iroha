@@ -301,7 +301,7 @@ mod tests {
             attested_key_id: Sha256::digest(key.as_sec1_bytes()).into(),
             raw_platform_evidence_digest: [11; 32],
             issued_at_ms: 1000,
-            expires_at_ms: 121000,
+            expires_at_ms: 121_000,
         }
     }
     #[test]
@@ -369,7 +369,7 @@ mod tests {
                     [12; 32],
                     [13; 32],
                     None,
-                    121000
+                    121_000
                 )
                 .is_err()
         );
@@ -425,7 +425,7 @@ mod tests {
         raw.extend_from_slice(&authenticator);
         raw.push(0x69);
         raw.extend_from_slice(b"signature");
-        raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+        raw.extend_from_slice(&[0x58, u8::try_from(der.as_bytes().len()).unwrap()]);
         raw.extend_from_slice(der.as_bytes());
         let proof = KagemushaAppEnrollmentPossessionV1 {
             challenge: c,
@@ -512,6 +512,8 @@ mod tests {
 
     #[test]
     fn possession_formatter_and_alias_retain_original_c_scope_and_reject_other_roles() {
+        use p256::ecdsa::signature::Verifier as _;
+
         use super::super::KagemushaOrdinaryAppEnrollmentChallengeV1;
         let signing = SigningKey::from_bytes((&[17; 32]).into()).unwrap();
         let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -537,7 +539,7 @@ mod tests {
             policy_epoch: 1,
             hardware_epoch: 1,
             issued_at_ms: 1000,
-            expires_at_ms: 121000,
+            expires_at_ms: 121_000,
         };
         let e = KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
             &c, &key, [14; 32],
@@ -575,7 +577,6 @@ mod tests {
             )
             .unwrap();
             assert_ne!(changed.canonical_signing_bytes().unwrap(), original_message);
-            use p256::ecdsa::signature::Verifier as _;
             assert!(
                 signing
                     .verifying_key()
@@ -594,7 +595,6 @@ mod tests {
         stable_id.enrollment_attempt_id = c.enrollment_id;
         let stable_signature: p256::ecdsa::Signature =
             signing.sign(&stable_id.canonical_signing_bytes().unwrap());
-        use p256::ecdsa::signature::Verifier as _;
         assert!(
             signing
                 .verifying_key()

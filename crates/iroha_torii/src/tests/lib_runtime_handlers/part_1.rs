@@ -3427,3 +3427,103 @@ async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue(
         );
     }
 }
+
+/// The production alias mounts must bind index enumeration to canonical signature authentication.
+#[tokio::test]
+async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() {
+    let cfg = crate::test_utils::mk_minimal_root_cfg();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+        ChainId::from("alias-route-registration-test"),
+        signed_query_test_network_id(),
+    ));
+    let queue_cfg = iroha_config::parameters::actual::Queue {
+        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+        transaction_time_to_live: Duration::from_secs(60),
+        ..Default::default()
+    };
+    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    let torii = Torii::new_with_handle(
+        ChainId::from("alias-route-registration-test"),
+        signed_query_test_network_id(),
+        kiso,
+        cfg.torii.clone(),
+        queue,
+        tokio::sync::broadcast::channel(1).0,
+        LiveQueryStore::start_test(),
+        kura,
+        state,
+        cfg.common.key_pair.clone(),
+        OnlinePeersProvider::new(peers_rx),
+        None,
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
+    )
+    .expect("valid Torii test fixture");
+    let app = mk_app_state_for_tests();
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(route_catalog::aliases::ROUTES),
+        compiled_route_features(),
+    )
+    .expect("alias catalog is valid");
+    torii.add_alias_routes(&mut builder);
+    let (router, manifest) = builder
+        .finish()
+        .expect("every production alias route must match its authenticated catalog");
+    assert_eq!(manifest.explicit_routes().len(), route_catalog::aliases::ROUTES.len());
+    let index = manifest
+        .explicit_routes()
+        .iter()
+        .find(|route| route.stable_route_id() == "aliases.resolve_index")
+        .expect("production index route is mounted");
+    assert_eq!(
+        index.authentication(),
+        iroha_torii_shared::route_catalog::AuthenticationPolicy::CanonicalAccountSignature
+    );
+    let router = router.with_state(app);
+    let make_request = |method: Method, body: axum::body::Body| {
+        Request::builder()
+            .method(method)
+            .uri(route_catalog::aliases::RESOLVE_INDEX.path())
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .extension(crate::loopback_connect_info())
+            .body(body)
+            .expect("alias index dispatch request")
+    };
+    let unsigned = router
+        .clone()
+        .oneshot(make_request(Method::POST, axum::body::Body::from("{")))
+        .await
+        .expect("unsigned alias index response");
+    assert_eq!(
+        unsigned.status(),
+        StatusCode::UNAUTHORIZED,
+        "signature admission precedes malformed index decoding"
+    );
+    let wrong_method = router
+        .clone()
+        .oneshot(make_request(Method::GET, axum::body::Body::empty()))
+        .await
+        .expect("alias index method response");
+    assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let oversized = router
+        .oneshot(make_request(
+            Method::POST,
+            axum::body::Body::from(vec![b'x'; EXACT_ALIAS_READ_MAX_BODY_BYTES + 1]),
+        ))
+        .await
+        .expect("bounded alias index response");
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}

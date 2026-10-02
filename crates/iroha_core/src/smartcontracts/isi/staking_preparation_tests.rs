@@ -285,7 +285,7 @@ fn global_staking_preparation_rejects_a_zero_validity_window() {
     let error = validator_eligibility_height(&stx, LaneId::SINGLE, 2, 2).unwrap_err();
     assert!(matches!(
         error,
-        Error::InvariantViolation(message)
+        Attempt::Rejected(Error::InvariantViolation(message))
             if message.as_ref() == "height 0 is not committed in this view"
     ));
     let request = PublicLanePreparationRequestV1 {

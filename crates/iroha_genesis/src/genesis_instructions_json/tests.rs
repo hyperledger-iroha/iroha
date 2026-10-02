@@ -886,7 +886,9 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
                 .custom()
                 .get(&super::super::SumeragiNposParameters::parameter_id())
                 .unwrap();
-            let npos = super::super::SumeragiNposParameters::from_custom_parameter(custom).unwrap();
+            let npos = super::super::SumeragiNposParameters::from_custom_parameter(custom)
+                .unwrap()
+                .unwrap();
             assert_eq!(npos.xor_asset_definition_id, definition);
         }
         for instruction in &transaction.instructions {

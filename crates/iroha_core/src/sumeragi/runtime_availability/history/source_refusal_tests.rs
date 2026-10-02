@@ -1,0 +1,196 @@
+//! Genuine original lane-history producers preserve their finite pool and decoder refusals.
+
+use super::*;
+use crate::execution_attempt::{ExecutionAttemptError as Attempt, ExecutionDeferred};
+use iroha_allocation::AllocationRefusal;
+use std::{future::Future, pin::pin, task::Context};
+
+fn original_deferred<'a>(error: &'a (dyn std::error::Error + 'static)) -> &'a ExecutionDeferred {
+    let Some(Attempt::Deferred(original)) = error.downcast_ref::<Attempt<io::Error>>() else {
+        panic!("the original history producer erased its local refusal: {error:?}");
+    };
+    original
+}
+
+fn complete_release(original: &ExecutionDeferred, budget: &AllocationBudget) {
+    let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
+        panic!("the original pool refusal must retain its release observation");
+    };
+    let mut wait = pin!(release.clone().wait_for_release());
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    let foreign = AllocationBudget::new(1);
+    drop(foreign.try_reserve_bytes(1).unwrap());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+}
+
+#[test]
+fn original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix() {
+    let (chain, record, _epoch) = super::super::tests::fixed_lane_chain();
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let limit = budget.limit_bytes();
+    let mut scan = HistoryScan::open(state, record.lane, record.incarnation)
+        .unwrap()
+        .unwrap();
+    let genesis = chain
+        .kura()
+        .get_block(NonZeroUsize::new(1).unwrap())
+        .unwrap();
+    // The actual committed carrier is already selected before its original archive read.
+    scan.current = Some(Arc::clone(&genesis));
+    let path = chain
+        .kura()
+        .store_root()
+        .join("native-contexts")
+        .join(format!(
+            "{:020}-{}.nrt",
+            1,
+            hex::encode(genesis.hash().as_ref()),
+        ));
+    let requested = usize::try_from(std::fs::metadata(&path).unwrap().len()).unwrap();
+    let occupied = budget
+        .try_reserve_bytes(limit - budget.reserved_bytes())
+        .unwrap();
+    let error = scan.complete().unwrap_err();
+    let original = original_deferred(&error);
+    assert!(matches!(original.allocation_refusal(),
+        Some(AllocationRefusal::Capacity { requested_bytes, limit_bytes, .. })
+            if *requested_bytes == requested && *limit_bytes == limit));
+    complete_release(original, &budget);
+    assert_eq!(scan.next, 1);
+    assert!(!scan.completed);
+    assert!(scan.read.is_some());
+    assert!(Arc::ptr_eq(scan.current.as_ref().unwrap(), &genesis));
+    let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
+        unreachable!("checked original capacity");
+    };
+    let mut wait = pin!(release.clone().wait_for_release());
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    let retained = path.with_extension("original-source-refusal");
+    std::fs::rename(&path, &retained).unwrap();
+    std::fs::write(&path, b"a replacement cannot become this pending read").unwrap();
+    drop(occupied);
+    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert_eq!(budget.limit_bytes(), limit);
+    scan.complete().unwrap();
+    let authority = scan.finish().expect("same original full prefix completes");
+    assert!(authority.belongs_to(&budget));
+    drop(authority);
+    assert_eq!(budget.reserved_bytes(), baseline);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(retained, path).unwrap();
+}
+
+#[test]
+fn original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier() {
+    let (chain, record, _epoch) = super::super::tests::fixed_lane_chain();
+    let budget = chain.state().ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let limit = budget.limit_bytes();
+    let mut scan = HistoryScan::open(chain.state(), record.lane, record.incarnation)
+        .unwrap()
+        .unwrap();
+    let genesis = chain
+        .kura()
+        .get_block(NonZeroUsize::new(1).unwrap())
+        .unwrap();
+    let archive = scan.archive.as_ref().unwrap();
+    let genesis_bytes = archive.read_exact(1, genesis.hash()).unwrap();
+    assert!(
+        scan.verifier
+            .push_shared_height(Arc::clone(&genesis), genesis_bytes.as_slice())
+            .unwrap()
+            .is_none()
+    );
+    scan.genesis_bytes = Some(genesis_bytes);
+    scan.next = 2;
+    let original = chain
+        .kura()
+        .get_block(NonZeroUsize::new(2).unwrap())
+        .unwrap();
+    scan.current_bytes = Some(archive.read_exact(2, original.hash()).unwrap());
+    let pointer = scan.current_bytes.as_ref().unwrap().as_slice().as_ptr();
+    scan.current = Some(Arc::clone(&original));
+    let occupied = budget
+        .try_reserve_bytes(limit - budget.reserved_bytes())
+        .unwrap();
+    let error = scan.complete().unwrap_err();
+    let refusal = original_deferred(&error);
+    complete_release(refusal, &budget);
+    assert_eq!(scan.next, 2);
+    assert!(!scan.completed);
+    assert!(scan.artifacts.is_some());
+    assert!(Arc::ptr_eq(scan.current.as_ref().unwrap(), &original));
+    assert_eq!(
+        scan.current_bytes.as_ref().unwrap().as_slice().as_ptr(),
+        pointer
+    );
+    drop(occupied);
+    assert_eq!(budget.limit_bytes(), limit);
+    scan.complete().unwrap();
+    let authority = scan
+        .finish()
+        .expect("same original certificate prefix completes");
+    assert!(authority.belongs_to(&budget));
+    drop(authority);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
+fn original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut() {
+    let (chain, record, _epoch) = super::super::tests::npos_fixed_lane_chain_at(4);
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let generation = state.state_view_generation();
+    let view = state.view();
+    let tip = view.native_execution_tip().unwrap();
+    let capture = HistoryCapture::from_view(state, &view, generation)
+        .unwrap()
+        .unwrap();
+    let scope = LaneEvidenceScope {
+        lane: record.lane,
+        incarnation: record.incarnation,
+        created_at: record.created_at,
+        admission_parent_height: tip.height(),
+        admission_parent_hash: tip.iroha_hash(),
+        admission_parent_core_hash: tip.core_hash().0,
+        admission_parent_result: tip.result().0,
+    };
+    drop(view);
+    let mut scan = HistoryScan::open_for_evidence(capture, scope).unwrap();
+    scan.complete().unwrap();
+    let charged = budget.reserved_bytes();
+    assert!(charged > baseline);
+    let (scan, error) = norito::core::with_decode_limits_scope(
+        norito::core::DecodeLimits::new(1024, 1, 4096, 0, 32),
+        || {
+            scan.finish_evidence()
+                .err()
+                .expect("actual original custody field refuses")
+        },
+    );
+    let original = original_deferred(&error);
+    assert_eq!(
+        original.reason(),
+        ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+    );
+    assert!(
+        original.allocation_refusal().is_none(),
+        "decoder scope has no pool release"
+    );
+    assert_eq!(scan.evidence_cut, Some(scope));
+    assert_eq!(scan.generation(), generation);
+    assert_eq!(budget.reserved_bytes(), charged);
+    let context = scan
+        .finish_evidence()
+        .unwrap_or_else(|(_, error)| panic!("{error}"));
+    assert_eq!(context.scope, scope);
+    assert!(context.budget.same_pool(&budget));
+    drop(context);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}

@@ -281,6 +281,9 @@ impl core::fmt::Debug for CertifiedTestChain {
 /// Why the test chain could not start.
 #[derive(Debug, thiserror::Error)]
 pub enum TestChainError {
+    /// Original signed source preparation could not complete locally.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// The genesis could not be built.
     #[error("genesis: {0}")]
     Genesis(String),
@@ -476,7 +479,17 @@ impl CertifiedTestChain {
         .map_err(|error| invalid(format!("original prepared manifest: {error:#}")))?;
         let genesis = validated_genesis.block().clone();
         let chain_id = manifest.chain_id().clone();
-        let epoch = super::epoch::genesis_epoch(&genesis).map_err(&invalid)?;
+        let epoch = super::epoch::genesis_epoch(&genesis).map_err(|error| {
+            match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                invalid(error.to_string())
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => StartFailure {
+                    error: TestChainError::Deferred(reason),
+                    state: Arc::clone(&state),
+                },
+            }
+        })?;
         if state.chain_id_ref() != &chain_id
             || state.view().network_id() != &epoch.network_id
             || !std::ptr::eq(state.kura(), kura.as_ref())
@@ -547,7 +560,14 @@ impl CertifiedTestChain {
             )
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
-        let instance = root_instance(&genesis, &chain_id.to_string()).map_err(invalid)?;
+        let instance =
+            root_instance(&genesis, &chain_id.to_string()).map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => invalid(error),
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => StartFailure {
+                    error: TestChainError::Deferred(reason),
+                    state: Arc::clone(&state),
+                },
+            })?;
         let availability: Arc<dyn AvailabilitySchedule> = Arc::new(
             super::runtime_availability::NativeGlobalAvailability::new(
                 Arc::clone(&state),
@@ -1836,9 +1856,20 @@ pub(super) fn prepare_configured_genesis(
         let mut parameters = manifest.sumeragi_context_parameters();
         parameters.execution_policy_hash = execution.into();
         parameters.nexus_amx_context_hash = nexus.into();
-        manifest = manifest
+        manifest = match manifest
             .with_sumeragi_context_parameters(parameters)
-            .with_consensus_meta();
+            .with_consensus_meta()
+        {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                return Err(StartFailure {
+                    error: TestChainError::Genesis(format!(
+                        "derive native genesis metadata: {error:#}"
+                    )),
+                    state: Arc::new(state),
+                });
+            }
+        };
         genesis = match manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
@@ -1942,7 +1973,8 @@ fn build_genesis(
         .build_raw()
         .map_err(|error| format!("{error:#}"))?
         .with_consensus_mode(consensus_mode)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .map_err(|error| format!("{error:#}"))?;
     let genesis = raw
         .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
@@ -2035,7 +2067,11 @@ mod tests {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         let current = {
             let view = chain.state().view();
-            let policy = view.world().sumeragi_npos_parameters().unwrap();
+            let policy = view
+                .world()
+                .sumeragi_npos_parameters()
+                .expect("original policy decoder completes")
+                .unwrap();
             let currency = view
                 .world()
                 .asset_definitions()
@@ -2086,6 +2122,7 @@ mod tests {
             .view()
             .world()
             .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
             .unwrap()
             .xor_asset_definition_id;
         assert!(

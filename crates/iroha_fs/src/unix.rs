@@ -378,7 +378,11 @@ impl Directory {
             private: private || create_new,
             writable: create_new,
             read_only: false,
-            publishable: create_new,
+            publication: if create_new {
+                PublicationAuthority::ExclusiveCreation
+            } else {
+                PublicationAuthority::None
+            },
         };
         retained.revalidate()?;
         if create_new {
@@ -668,6 +672,13 @@ impl Directory {
     }
 }
 
+// Publication belongs only to the exclusively created descriptor and is consumed by rename.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationAuthority {
+    ExclusiveCreation,
+    None,
+}
+
 #[derive(Debug)]
 pub struct RetainedFile {
     directory: Directory,
@@ -677,7 +688,7 @@ pub struct RetainedFile {
     private: bool,
     writable: bool,
     read_only: bool,
-    publishable: bool,
+    publication: PublicationAuthority,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

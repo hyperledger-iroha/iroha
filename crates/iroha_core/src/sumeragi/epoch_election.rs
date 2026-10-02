@@ -7,11 +7,23 @@
 
 mod owned;
 mod plan;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 pub(crate) use owned::{
     BoundaryCaptureError, FrozenEpochBoundary, capture_continuation, retain_outcome_schedule,
     retain_schedule,
 };
 use plan::{BoundaryInputs, boundary_inputs};
+
+impl From<String> for Attempt<BoundaryCaptureError> {
+    fn from(message: String) -> Self {
+        Self::Rejected(BoundaryCaptureError::Invalid(message))
+    }
+}
+impl From<&str> for Attempt<BoundaryCaptureError> {
+    fn from(message: &str) -> Self {
+        Self::Rejected(BoundaryCaptureError::Invalid(message.into()))
+    }
+}
 
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::Algorithm;
@@ -68,10 +80,11 @@ impl<'a> CheckedElectionView<'a> {
         world: &'a impl WorldReadOnly,
         policy: &'a ValidatorElectionPolicyV1,
         budget: &AllocationBudget,
-    ) -> Result<Self, BoundaryCaptureError> {
+    ) -> Result<Self, Attempt<BoundaryCaptureError>> {
         policy.validate()?;
         let parameters = world
             .sumeragi_npos_parameters()
+            .map_err(|error| error.map_rejection(BoundaryCaptureError::Invalid))?
             .ok_or("validator selection lacks signed NPoS parameters")?;
         if parameters.xor_asset_definition_id != policy.xor_asset_definition_id {
             return Err("frozen election currency differs from network XOR".into());
@@ -85,7 +98,8 @@ impl<'a> CheckedElectionView<'a> {
         {
             return Err("canonical XOR must use global nine-decimal custody".into());
         }
-        validate_public_lane_stake_reserves(world)?;
+        validate_public_lane_stake_reserves(world)
+            .map_err(|error| error.map_rejection(BoundaryCaptureError::Invalid))?;
         for (_, (asset, held)) in world.public_lane_stake_custody().iter() {
             if asset.scope() != &AssetBalanceScope::Global
                 || held.scale() > policy.asset_scale
@@ -560,12 +574,14 @@ pub(crate) fn freeze_boundary(
     policy: &ValidatorElectionPolicyV1,
     height: u64,
     original_budget: &AllocationBudget,
-) -> Result<Option<FrozenEpochBoundary>, BoundaryCaptureError> {
+) -> Result<Option<FrozenEpochBoundary>, Attempt<BoundaryCaptureError>> {
     let Some(inputs) = boundary_inputs(world, hashes, current, policy, height, original_budget)?
     else {
         return Ok(None);
     };
-    owned::materialize(&inputs, original_budget).map(Some)
+    owned::materialize(&inputs, original_budget)
+        .map(Some)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

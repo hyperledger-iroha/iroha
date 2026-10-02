@@ -2755,6 +2755,11 @@ pub mod isi {
             if state_transaction
                 .world
                 .sumeragi_npos_parameters()
+                .map_err(|error| {
+                    state_transaction.attempt_error_to_instruction_error(error.map_rejection(
+                        |message| InstructionExecutionError::InvariantViolation(message.into()),
+                    ))
+                })?
                 .is_some_and(|params| params.xor_asset_definition_id == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(

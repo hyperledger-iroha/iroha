@@ -17,7 +17,7 @@ const INVERSE_SLOTS: u16 = 255;
 const MAX_INPUT_BYTES: usize = 63;
 const MAX_OUTPUTS: usize = 64;
 /// Fixed key-switch roles shared with the test-only structural planner.
-pub(crate) const GALOIS_EXPONENTS: [u16; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
+pub const GALOIS_EXPONENTS: [u16; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackingError {
@@ -758,7 +758,7 @@ mod tests {
             let recovered = ClientInput::from_slots(input.encode().decode()).unwrap();
             assert_eq!(*recovered.0.0.0, *input.0.0.0);
             assert_eq!(
-                &input.0.0.0[1..bytes.len() + 1],
+                &input.0.0.0[1..=bytes.len()],
                 bytes.iter().copied().map(u16::from).collect::<Vec<_>>()
             );
         }
@@ -815,7 +815,13 @@ mod tests {
     fn typed_output_preserves_scalar_256_order_count_and_snapshots() {
         for count in [1, 64] {
             let mut values: Vec<_> = (0..count)
-                .map(|i| if i % 2 == 0 { 256 } else { i as u16 })
+                .map(|i| {
+                    if i % 2 == 0 {
+                        256
+                    } else {
+                        u16::try_from(i).expect("fixture index is below 64")
+                    }
+                })
                 .collect();
             let output = ScalarOutput::from_values(&values).unwrap();
             let recovered = ScalarOutput::from_slots(count, output.encode().decode()).unwrap();

@@ -113,7 +113,13 @@ fn executed_history_denial_precedes_cold_body_decode_and_projection() {
             assert_eq!((blocks, bytes), (1, tip_len));
             Err(QueryExecutionFail::GasBudgetExceeded)
         });
-        assert!(matches!(denied, Err(QueryExecutionFail::GasBudgetExceeded)));
+        let Err(crate::execution_attempt::ExecutionAttemptError::Deferred(local)) = denied else {
+            panic!("original source allowance must defer before reading");
+        };
+        assert_eq!(
+            local.reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
         assert_eq!(charged, vec![(1, tip_len)]);
         assert_eq!(
             kura.canonical_query_reads_for_test(),

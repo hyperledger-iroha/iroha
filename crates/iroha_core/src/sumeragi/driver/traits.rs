@@ -6,6 +6,7 @@
 //! conformance runs use in-memory fakes. Every method either returns at once or blocks only the
 //! driver thread that owns the call (persistence, execution, serving), never the event loop.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{io, sync::Arc, time::Instant};
 
 use iroha_sumeragi::{
@@ -165,12 +166,15 @@ pub trait BlockStore: BodyReader {
     ///
     /// # Errors
     /// I/O, corruption, missing authority and resource refusal are never absence.
-    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>>;
+    fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>>;
     /// The committed block and `CommitQC` of `height`, if stored.
     ///
     /// # Errors
     /// I/O, corruption and resource refusal remain errors, never missing entries.
-    fn entry(&self, height: u64) -> io::Result<Option<SyncEntry>>;
+    fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>>;
     /// Resolve the exact authenticated historical schedule independently of stored bytes.
     ///
     /// # Errors
@@ -179,12 +183,12 @@ pub trait BlockStore: BodyReader {
         &self,
         height: u64,
         block_hash: Hash32,
-    ) -> io::Result<Option<AvailabilitySource>>;
+    ) -> Result<Option<AvailabilitySource>, Attempt<io::Error>>;
     /// Durably append the next height.
     ///
     /// # Errors
     /// A write failure; nothing was appended (the driver retries, never skips).
-    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> io::Result<()>;
+    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> Result<(), Attempt<io::Error>>;
 }
 
 /// A monotonic local clock in milliseconds (§1.5: no synchronised time is assumed).

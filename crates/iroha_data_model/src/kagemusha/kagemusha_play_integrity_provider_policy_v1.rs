@@ -126,7 +126,7 @@ mod tests {
     fn provider_projection_reads_original_project_and_rejects_grammar_substitutions() {
         let selected =
             kagemusha_play_integrity_provider_policy_projection_v1(ORIGINAL.as_bytes()).unwrap();
-        assert_eq!(selected.cloud_project_number, 642560099159);
+        assert_eq!(selected.cloud_project_number, 642_560_099_159);
         assert_eq!(selected.package_name, "pg.bpng.digitalkina");
         for changed in [
             ORIGINAL.replace("642560099159", "0"),

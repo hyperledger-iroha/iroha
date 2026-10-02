@@ -359,3 +359,38 @@ fn signature_count_tracks_all_multisig_entries() {
         TransactionSignatureError::NonCanonicalMultisigSignatures
     );
 }
+
+#[test]
+fn signed_transaction_verification_borrows_original_signature_under_decode_refusal() {
+    for algorithm in [Algorithm::Ed25519, Algorithm::MlDsa] {
+        let signer = checked_random_keypair_with_algorithm(algorithm);
+        let other = checked_random_keypair_with_algorithm(algorithm);
+        let transaction = TransactionBuilder::new(
+            test_network_id(0x69),
+            AccountId::new(signer.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "original signature".into())])
+        .sign(signer.private_key());
+        let mut forged = transaction.clone();
+        forged.signature = TransactionSignature(checked_transaction_payload_signature(
+            other.private_key(),
+            forged.payload(),
+        ));
+        let original_signature = transaction.signature.0.payload().to_vec();
+        transaction.verify_signature().unwrap();
+        assert!(forged.verify_signature().is_err());
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        norito::with_decode_limits_scope(limits, || {
+            transaction
+                .verify_signature()
+                .expect("borrowed valid relation");
+            assert!(
+                forged.verify_signature().is_err(),
+                "forged relation remains rejected"
+            );
+        });
+        assert_eq!(transaction.signature.0.payload(), original_signature);
+        transaction.verify_signature().unwrap();
+    }
+}

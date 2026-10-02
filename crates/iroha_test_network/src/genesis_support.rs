@@ -265,7 +265,7 @@ pub fn prepare_unpublished_genesis_from_config(
         },
     )
     .wrap_err("prepare unpublished genesis with native execution")?;
-    let bound_manifest = bound_manifest.with_consensus_meta();
+    let bound_manifest = bound_manifest.with_consensus_meta()?;
     let block = executed.0;
     let wire = block
         .encode_wire()
@@ -550,7 +550,8 @@ mod tests {
         context.execution_policy_hash = staged.execution_policy.into();
         let manifest = manifest
             .with_sumeragi_context_parameters(context)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let proposal = manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
@@ -698,7 +699,8 @@ revocation_store_path = "managed/soranet/revocations.norito"
         expected_context.nexus_amx_context_hash = actual_context.nexus_amx_context_hash;
         let expected = original
             .with_sumeragi_context_parameters(expected_context)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         assert_eq!(
             norito::json::to_value(&bound).unwrap(),
             norito::json::to_value(&expected).unwrap(),
@@ -728,7 +730,12 @@ revocation_store_path = "managed/soranet/revocations.norito"
     #[test]
     fn unpublished_preparation_rejects_already_bound_metadata() {
         let (_directory, path, config, manifest, key) = unpublished_fixture();
-        let bound = norito::json::to_vec_pretty(&manifest.with_consensus_meta()).unwrap();
+        let bound = norito::json::to_vec_pretty(
+            &manifest
+                .with_consensus_meta()
+                .expect("valid fixture consensus parameters"),
+        )
+        .unwrap();
         fs::write(&path, &bound).unwrap();
         let error = prepare_unpublished_genesis_from_config(&path, &config, &key, None)
             .expect_err("reviewed metadata cannot be rebound through unpublished preparation");

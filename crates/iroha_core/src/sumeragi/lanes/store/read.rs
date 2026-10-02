@@ -1,5 +1,6 @@
 //! Retained lane file decoding and authenticated availability restoration jobs.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
@@ -17,16 +18,13 @@ use crate::sumeragi::{
     lanes::record::{LaneRecord, LaneRecordDecode, LaneRecordError, PreparedLaneWrite},
 };
 
-pub(super) fn record_error(error: LaneRecordError) -> io::Error {
-    let kind = match &error {
-        LaneRecordError::Allocation(_) => io::ErrorKind::WouldBlock,
-        LaneRecordError::Bytes(error) if error.is_local_refusal() => io::ErrorKind::WouldBlock,
-        _ => io::ErrorKind::InvalidData,
-    };
-    if kind == io::ErrorKind::WouldBlock {
-        return kind.into();
+pub(super) fn record_error(error: LaneRecordError) -> Attempt<io::Error> {
+    match error {
+        LaneRecordError::Allocation(error) => crate::sumeragi::storage_attempt::buffer(error),
+        LaneRecordError::Bytes(error) => crate::sumeragi::storage_attempt::byte(error),
+        LaneRecordError::Codec(error) => BodyReadError::from_decode(error).into_attempt(),
+        completed => io::Error::new(io::ErrorKind::InvalidData, completed).into(),
     }
-    io::Error::new(kind, error)
 }
 
 pub(in crate::sumeragi) enum RecordPoll {
@@ -88,9 +86,9 @@ impl ReadRecord {
                                 Ok(RecordPoll::Pending(e))
                             }
                             LaneRecordError::Bytes(e) => Err(BodyReadError::Admission(e)),
-                            LaneRecordError::Codec(e) => Err(BodyReadError::Decode(e)),
+                            LaneRecordError::Codec(e) => Err(BodyReadError::from_decode(e)),
                             LaneRecordError::ForeignBudget => Err(BodyReadError::ForeignBudget),
-                            error => Err(BodyReadError::Io(record_error(error))),
+                            error => Err(BodyReadError::from_attempt(record_error(error))),
                         };
                     }
                 },
@@ -143,7 +141,7 @@ impl BodyReadJob for LaneBodyRead {
             .as_ref()
             .expect("retained decoded owners")
             .check_context(&self.source, &*self.crypto)
-            .map_err(|e| BodyReadError::Io(record_error(e)))?;
+            .map_err(|e| BodyReadError::from_attempt(record_error(e)))?;
         let (restoration, _qc) = self
             .record
             .take()
@@ -186,7 +184,10 @@ impl RestoreFrame {
             verifier,
         })
     }
-    pub(super) fn poll(&mut self, budget: &AllocationBudget) -> io::Result<PreparedLaneWrite> {
+    pub(super) fn poll(
+        &mut self,
+        budget: &AllocationBudget,
+    ) -> Result<PreparedLaneWrite, Attempt<io::Error>> {
         loop {
             match std::mem::replace(&mut self.state, RestoreState::Consumed) {
                 RestoreState::Reading(mut read) => match read.poll(budget) {
@@ -194,10 +195,13 @@ impl RestoreFrame {
                     result => {
                         self.state = RestoreState::Reading(read);
                         return Err(match result {
-                            Ok(RecordPoll::Absent) => invalid("committed lane frame disappeared"),
-                            Ok(RecordPoll::Pending(_)) => io::ErrorKind::WouldBlock.into(),
-                            Err(BodyReadError::Io(e)) => e,
-                            Err(e) => invalid(e.to_string()),
+                            Ok(RecordPoll::Absent) => {
+                                invalid("committed lane frame disappeared").into()
+                            }
+                            Ok(RecordPoll::Pending(error)) => {
+                                crate::sumeragi::storage_attempt::byte(error)
+                            }
+                            Err(error) => error.into_attempt(),
                             Ok(RecordPoll::Ready(_)) => unreachable!(),
                         });
                     }
@@ -233,17 +237,13 @@ impl RestoreFrame {
                         Ok(body) => return Ok(PreparedLaneWrite::new(body, qc)),
                         Err((restoration, error)) => {
                             self.state = RestoreState::Restoring(restoration, qc);
-                            if error.is_local_refusal() {
-                                return Err(io::ErrorKind::WouldBlock.into());
-                            }
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("lane availability restoration: {error:?}"),
-                            ));
+                            return Err(crate::sumeragi::storage_attempt::restoration(error));
                         }
                     }
                 }
-                RestoreState::Consumed => return Err(invalid("lane restoration already consumed")),
+                RestoreState::Consumed => {
+                    return Err(invalid("lane restoration already consumed").into());
+                }
             }
         }
     }
@@ -257,10 +257,10 @@ pub(super) fn certified_source(
     height: u64,
     header: &BlockHeader,
     qc: &Qc,
-) -> io::Result<AvailabilitySource> {
+) -> Result<AvailabilitySource, Attempt<io::Error>> {
     let instance = schedule.instance();
     if header.instance != instance || header.height != height || qc.height != height {
-        return Err(invalid("lane recovery instance or height mismatch"));
+        return Err(invalid("lane recovery instance or height mismatch").into());
     }
     let config = schedule.height_config(height)?.ok_or_else(|| {
         io::Error::new(
@@ -273,8 +273,8 @@ pub(super) fn certified_source(
         qc,
         Some(header),
     ) {
-        return Err(invalid("original lane commit certificate does not verify"));
+        return Err(invalid("original lane commit certificate does not verify").into());
     }
     AvailabilitySource::new(instance, height, qc.block_hash, config)
-        .map_err(|error| invalid(format!("lane recovery source: {error:?}")))
+        .map_err(|error| invalid(format!("lane recovery source: {error:?}")).into())
 }

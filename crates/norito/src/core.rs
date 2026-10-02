@@ -538,7 +538,8 @@ pub fn decode_limits_active() -> bool {
 ///
 /// Call this after the inner decoder's scopes have unwound and before projecting the error.
 /// A wider surviving scope cannot claim an inner format limit. The global archive cap and
-/// nesting limits are not local capacity refusals. This does not supply an allocation-pool
+/// canonical nesting limits are not local capacity refusals. A narrower caller's decode-budget
+/// depth is local only while that exact ceiling survives. This does not supply an allocation-pool
 /// owner or a release notification.
 #[doc(hidden)]
 pub fn decode_error_matches_active_limits(error: &Error) -> bool {
@@ -557,6 +558,16 @@ pub fn decode_error_matches_active_limits(error: &Error) -> bool {
                 }
                 Error::TotalAllocationExceeded { attempted, limit } => {
                     attempted > limit && *limit == limit_to_u64(limits.max_total_allocated_bytes())
+                }
+                Error::NestingDepthExceeded {
+                    depth,
+                    limit,
+                    context,
+                } => {
+                    *context == "decode budget"
+                        && depth > limit
+                        && *limit < MAX_VALUE_NESTING_DEPTH
+                        && *limit == limits.max_nesting_depth()
                 }
                 _ => false,
             }

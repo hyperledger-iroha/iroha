@@ -38246,7 +38246,7 @@ impl Torii {
             LEASE_RENEW_PLAN => limited_canonical_signature_post(handler_alias_lease_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             AUTO_RENEW_PLAN => limited_canonical_signature_post(handler_alias_auto_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RESOLVE => limited_optional_canonical_signature_post(handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            RESOLVE_INDEX => limited_optional_canonical_signature_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE_INDEX => limited_canonical_signature_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             BY_ACCOUNT => limited_optional_canonical_signature_post(handler_public_alias_lookup_by_account, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_LOOKUP => limited_canonical_signature_post(handler_retail_recipient_lookup, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_ROUTE => limited_canonical_signature_post(handler_retail_recipient_route, EXACT_ALIAS_READ_MAX_BODY_BYTES);

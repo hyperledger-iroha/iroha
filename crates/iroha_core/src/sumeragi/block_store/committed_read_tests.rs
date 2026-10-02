@@ -1,5 +1,6 @@
 //! Original decoded quorum-certificate ownership across committed-body restoration.
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{
     attestation::NativePastaVerifier,
     crypto::BlsCrypto,
@@ -16,7 +17,7 @@ impl AvailabilitySchedule for FixedSchedule {
     fn instance(&self) -> Hash32 {
         self.instance
     }
-    fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         assert_eq!(height, 10, "the retained source must never change height");
         Ok(Some(self.config.clone()))
     }
@@ -75,9 +76,9 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
     budget.set_limit_bytes(retained);
     for _ in 0..2 {
         let error = read.poll().unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
         assert!(
-            error.get_ref().is_none(),
+            matches!(error, Attempt::Deferred(_)),
             "refusal must not allocate a diagnostic"
         );
         assert_eq!(budget.reserved_bytes(), retained);
@@ -290,9 +291,9 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
             || store.committed_body(height),
         )
         .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
         assert!(
-            error.get_ref().is_none(),
+            matches!(error, Attempt::Deferred(_)),
             "resource refusal cannot allocate a replacement boxed diagnostic"
         );
         assert_eq!(
@@ -356,7 +357,7 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
         fn instance(&self) -> Hash32 {
             self.instance
         }
-        fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>> {
+        fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
             assert_eq!(height, 2);
             Ok(Some(self.config.clone()))
         }
@@ -384,8 +385,8 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
         "actual certificate bitmap must reach the fallible allocator"
     );
     let error = result.err().expect("physical decoder allocation refuses");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.get_ref().is_none());
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+    assert!(matches!(error, Attempt::Deferred(_)));
     assert_eq!(read.retained_certificate_owners_for_test().unwrap(), owners);
     assert_eq!(budget.reserved_bytes(), 0);
     let (body, qc) = read.poll().unwrap();

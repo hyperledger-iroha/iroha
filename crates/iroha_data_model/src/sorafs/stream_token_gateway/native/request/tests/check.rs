@@ -32,7 +32,7 @@ fn result(acknowledged: bool) -> AdmissionResult {
         },
     }
 }
-fn check(subject: Subject) -> StreamTokenGatewayCheckV1 {
+fn check(subject: &Subject) -> StreamTokenGatewayCheckV1 {
     let policy = policy();
     StreamTokenGatewayCheckV1 {
         challenge: [0x81; 32],
@@ -45,10 +45,10 @@ fn check(subject: Subject) -> StreamTokenGatewayCheckV1 {
                 [0x83; 32],
             ))),
         },
-        subject,
+        subject: *subject,
     }
 }
-fn request(subject: Subject) -> StreamTokenGatewayRequestV1 {
+fn request(subject: &Subject) -> StreamTokenGatewayRequestV1 {
     envelope(StreamTokenGatewayActionV1::Check(check(subject)))
 }
 fn pending(count: u32) -> Readback {
@@ -74,7 +74,7 @@ fn pending(count: u32) -> Readback {
 
 #[test]
 fn gateway_check_shape_binds_nonzero_floor_challenge_accounts_and_policy() {
-    let valid = request(Subject::Admission {
+    let valid = request(&Subject::Admission {
         request_digest: [0x91; 32],
         result: result(false),
     });
@@ -113,7 +113,7 @@ fn gateway_check_shape_binds_nonzero_floor_challenge_accounts_and_policy() {
     foreign.gateway_id = [0x94; 32];
     assert!(foreign.validate().is_err());
     assert!(
-        request(Subject::Admission {
+        request(&Subject::Admission {
             request_digest: [0; 32],
             result: result(false)
         })
@@ -124,7 +124,7 @@ fn gateway_check_shape_binds_nonzero_floor_challenge_accounts_and_policy() {
 
 #[test]
 fn gateway_finality_floor_rejects_the_marked_empty_context_after_roundtrip() {
-    let mut floor = check(Subject::Qualification).floor;
+    let mut floor = check(&Subject::Qualification).floor;
     let empty = Hash::prehashed([0; 32]);
     assert_ne!(
         *empty.as_ref(),
@@ -150,7 +150,7 @@ fn gateway_finality_floor_rejects_the_marked_empty_context_after_roundtrip() {
 
 #[test]
 fn gateway_check_rejects_distinct_accounts_with_shared_controller_keys() {
-    let mut candidate = check(Subject::Qualification);
+    let mut candidate = check(&Subject::Qualification);
     let original_key = candidate
         .expected_operator
         .expect_single_signatory()
@@ -164,7 +164,7 @@ fn gateway_check_rejects_distinct_accounts_with_shared_controller_keys() {
             .validate()
             .is_err()
     );
-    request(Subject::Qualification)
+    request(&Subject::Qualification)
         .validate()
         .expect("independent controller keys");
 }
@@ -172,14 +172,14 @@ fn gateway_check_rejects_distinct_accounts_with_shared_controller_keys() {
 #[test]
 fn gateway_serving_requires_accepted_acknowledged_original_while_admission_is_historical() {
     let accepted = result(true);
-    request(Subject::Serving {
+    request(&Subject::Serving {
         request_digest: [0x91; 32],
         result: accepted,
     })
     .validate()
     .unwrap();
     assert!(
-        request(Subject::Serving {
+        request(&Subject::Serving {
             request_digest: [0x91; 32],
             result: result(false)
         })
@@ -194,19 +194,19 @@ fn gateway_serving_requires_accepted_acknowledged_original_while_admission_is_hi
     diagnostic.record.lease_id = None;
     diagnostic.record.lease_expires_at_unix_ms = None;
     diagnostic.record.lease_token_expires_at_epoch = None;
-    request(Subject::Admission {
+    request(&Subject::Admission {
         request_digest: [0x91; 32],
         result: diagnostic,
     })
     .validate()
     .unwrap();
-    request(Subject::Acknowledged {
+    request(&Subject::Acknowledged {
         record: diagnostic.record,
     })
     .validate()
     .unwrap();
     assert!(
-        request(Subject::Serving {
+        request(&Subject::Serving {
             request_digest: [0x91; 32],
             result: diagnostic
         })
@@ -214,7 +214,7 @@ fn gateway_serving_requires_accepted_acknowledged_original_while_admission_is_hi
         .is_err()
     );
     assert!(
-        request(Subject::Released {
+        request(&Subject::Released {
             record: diagnostic.record
         })
         .validate()
@@ -223,7 +223,7 @@ fn gateway_serving_requires_accepted_acknowledged_original_while_admission_is_hi
     let mut substituted = accepted;
     substituted.record.serving_attempt_id = [0; 32];
     assert!(
-        request(Subject::Serving {
+        request(&Subject::Serving {
             request_digest: [0x91; 32],
             result: substituted
         })
@@ -241,7 +241,7 @@ fn gateway_serving_requires_accepted_acknowledged_original_while_admission_is_hi
         let mut invalid = accepted;
         invalid.delivery_state = delivery_state;
         assert!(
-            request(Subject::Admission {
+            request(&Subject::Admission {
                 request_digest: [0x91; 32],
                 result: invalid
             })
@@ -304,7 +304,7 @@ fn gateway_pending_full_limit_fits_aggregate_bound_and_rejects_extra_work() {
     for limit in [0, max + 1, u32::MAX] {
         assert!(pending_digest(qualification, limit, &full).is_err());
         assert!(
-            request(Subject::Pending {
+            request(&Subject::Pending {
                 max_items: limit,
                 readback_digest: [1; 32]
             })
@@ -318,14 +318,14 @@ fn gateway_pending_full_limit_fits_aggregate_bound_and_rejects_extra_work() {
         Err(Error::InvalidRequest)
     );
     assert!(
-        request(Subject::Pending {
+        request(&Subject::Pending {
             max_items: 1,
             readback_digest: [0; 32]
         })
         .validate()
         .is_err()
     );
-    let check = request(Subject::Pending {
+    let check = request(&Subject::Pending {
         max_items: max,
         readback_digest: pending_digest(qualification, max, &full).unwrap(),
     });
@@ -355,7 +355,7 @@ fn gateway_check_subjects_have_distinct_strict_canonical_frames_and_schemas() {
     ];
     let mut distinct = BTreeSet::new();
     for subject in subjects {
-        let value = check(subject);
+        let value = check(&subject);
         let envelope = envelope(StreamTokenGatewayActionV1::Check(value.clone()));
         envelope.validate().unwrap();
         let frame = norito::encode_canonical(&envelope).unwrap();
@@ -399,7 +399,7 @@ fn gateway_check_subjects_have_distinct_strict_canonical_frames_and_schemas() {
                 .is_err()
         );
     }
-    let floor = check(Subject::Qualification).floor;
+    let floor = check(&Subject::Qualification).floor;
     let json = norito::json::to_json(&floor).unwrap();
     assert_eq!(
         norito::json::from_str::<StreamTokenGatewayFinalityFloorV1>(&json).unwrap(),

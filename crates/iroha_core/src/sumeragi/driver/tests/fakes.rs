@@ -4,6 +4,7 @@
 //! executor `R = H(parent_R ‖ payload)` (the simulator's reference execution) with a post-state
 //! cache, execution counts, injectable failures and a gate that holds executions.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{
     collections::BTreeMap,
     io,
@@ -190,7 +191,7 @@ impl BodyStore for FakeBodies {
         let mut fail = self.fail.lock();
         if *fail > 0 {
             *fail -= 1;
-            return Err(io::Error::other("injected EIO"));
+            return Err(io::Error::other("injected EIO").into());
         }
         self.bodies
             .lock()
@@ -252,7 +253,10 @@ fn take(counter: &Mutex<u32>) -> bool {
 }
 
 impl BlockStore for FakeBlocks {
-    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+    fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         self.entry(height)?;
         Ok(height
             .checked_sub(1)
@@ -263,7 +267,7 @@ impl BlockStore for FakeBlocks {
         u64::try_from(self.entries.lock().len()).unwrap_or(u64::MAX)
     }
 
-    fn entry(&self, height: u64) -> io::Result<Option<SyncEntry>> {
+    fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let delay = self.read_delay_ms.load(Ordering::SeqCst);
         if delay > 0 {
@@ -288,7 +292,7 @@ impl BlockStore for FakeBlocks {
         &self,
         height: u64,
         block_hash: Hash32,
-    ) -> io::Result<Option<iroha_sumeragi::availability::AvailabilitySource>> {
+    ) -> Result<Option<iroha_sumeragi::availability::AvailabilitySource>, Attempt<io::Error>> {
         Ok(self
             .entries
             .lock()
@@ -297,7 +301,7 @@ impl BlockStore for FakeBlocks {
             .map(|(body, _)| body.source().clone()))
     }
 
-    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> io::Result<()> {
+    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> Result<(), Attempt<io::Error>> {
         assert!(
             !take(&self.panic_appends),
             "injected block store append panic"
@@ -305,12 +309,12 @@ impl BlockStore for FakeBlocks {
         let mut fail = self.fail.lock();
         if *fail > 0 {
             *fail -= 1;
-            return Err(io::Error::other("injected EIO"));
+            return Err(io::Error::other("injected EIO").into());
         }
         let mut entries = self.entries.lock();
         let next = u64::try_from(entries.len()).unwrap_or(u64::MAX) + 1;
         if block.header().height != next {
-            return Err(io::Error::other("append out of order"));
+            return Err(io::Error::other("append out of order").into());
         }
         entries.push((block.clone(), commit_qc.clone()));
         Ok(())

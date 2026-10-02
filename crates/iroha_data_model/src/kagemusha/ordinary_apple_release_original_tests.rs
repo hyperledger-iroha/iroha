@@ -8,9 +8,9 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
 fn field(major: u8, bytes: &[u8]) -> Vec<u8> {
     let mut v = if bytes.len() < 24 {
-        vec![(major << 5) | bytes.len() as u8]
+        vec![(major << 5) | u8::try_from(bytes.len()).unwrap()]
     } else {
-        vec![(major << 5) | 24, bytes.len() as u8]
+        vec![(major << 5) | 24, u8::try_from(bytes.len()).unwrap()]
     };
     v.extend_from_slice(bytes);
     v

@@ -700,6 +700,9 @@ pub type CoreHost = CoreHostImpl<NoQueryState>;
 /// Errors returned while constructing a core host from a state snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreHostStateError {
+    /// Original signed NPoS policy was invalid or locally unfinished.
+    #[error("NPoS policy snapshot: {0}")]
+    NposPolicy(crate::execution_attempt::ExecutionAttemptError<String>),
     /// A deployed contract registry read was rejected or remains locally unfinished.
     #[error("contract registry snapshot: {0}")]
     ContractRegistry(crate::execution_attempt::ExecutionAttemptError<ValidationFail>),
@@ -2992,7 +2995,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_output_limits_from_parameters(view.world().parameters().smart_contract());
         host.set_public_inputs_from_parameters(view.world().parameters());
-        host.set_vrf_epoch_seeds_from_state(&view);
+        host.set_vrf_epoch_seeds_from_state(&view)
+            .map_err(CoreHostStateError::NposPolicy)?;
         host.set_bound_contract_records_by_subject_snapshot(
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view)
                 .map_err(CoreHostStateError::ContractRegistry)?,
@@ -4294,14 +4298,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// epoch boundary are projected, after full public-session/signature and
     /// canonical block-anchor verification. Missing or conflicting evidence
     /// leaves that epoch absent so the syscall fails closed with `found=false`.
-    pub fn set_vrf_epoch_seeds_from_state(&mut self, state: &impl StateReadOnly) {
+    pub fn set_vrf_epoch_seeds_from_state(
+        &mut self,
+        state: &impl StateReadOnly,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         let Some(epoch_length) = state
             .world()
-            .sumeragi_npos_parameters()
+            .sumeragi_npos_parameters()?
             .map(|params| params.epoch_length_blocks().get())
         else {
             self.vrf_epoch_seeds.clear();
-            return;
+            return Ok(());
         };
         let maximum_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
         let mut projected = BTreeMap::new();
@@ -4350,6 +4357,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             projected.remove(&epoch);
         }
         self.vrf_epoch_seeds = projected;
+        Ok(())
     }
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///

@@ -700,7 +700,8 @@ mod tests {
         .set_topology(crate::deterministic_test_genesis_topology_entries())
         .build_raw()
         .expect("complete bounded signed-genesis fixture")
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let block = manifest
             .build_and_sign(&crate::checked_genesis_fixture_keypair())
             .expect("sign bounded signed-genesis fixture")

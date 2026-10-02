@@ -54,7 +54,7 @@ pub fn verify_checkpoint_page(
     proofs: &[SumeragiFinalityProof],
     max_proofs: usize,
     max_bytes: usize,
-) -> Result<VerifiedFinalityPage, FinalityError> {
+) -> Result<VerifiedFinalityPage, FinalityReadError> {
     need(
         max_proofs > 0
             && max_proofs <= crate::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_COUNT

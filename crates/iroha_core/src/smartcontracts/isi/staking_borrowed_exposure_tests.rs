@@ -61,13 +61,27 @@ fn indexed_exposure_borrows_ordered_rows_and_skips_consumed_share() {
     let mut keys = [self_key, delegated_key.clone()];
     keys.sort();
     assert_eq!(
-        indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(8), &keys)
-            .unwrap(),
+        indexed_slashable_validator_exposure(
+            &stx.world,
+            lane_id,
+            &validator,
+            &record,
+            ConsensusSlashLiability::Root(8),
+            &keys
+        )
+        .unwrap(),
         Quantity::from(150_u64)
     );
     assert_eq!(
-        indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(9), &keys)
-            .unwrap(),
+        indexed_slashable_validator_exposure(
+            &stx.world,
+            lane_id,
+            &validator,
+            &record,
+            ConsensusSlashLiability::Root(9),
+            &keys
+        )
+        .unwrap(),
         Quantity::from(120_u64)
     );
 
@@ -75,12 +89,12 @@ fn indexed_exposure_borrows_ordered_rows_and_skips_consumed_share() {
     reversed.reverse();
     assert!(matches!(
         indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(8), &reversed),
-        Err(Error::InvariantViolation(message)) if message.contains("not canonical")
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(Error::InvariantViolation(message))) if message.contains("not canonical")
     ));
     let foreign = [(lane_id, delegator.clone(), delegator)];
     assert!(matches!(
         indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(8), &foreign),
-        Err(Error::InvariantViolation(message)) if message.contains("another validator")
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(Error::InvariantViolation(message))) if message.contains("another validator")
     ));
 
     let last_key = keys.last().unwrap();
@@ -97,7 +111,7 @@ fn indexed_exposure_borrows_ordered_rows_and_skips_consumed_share() {
         .insert((*last_key).clone(), malformed);
     assert!(matches!(
         indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(8), &keys),
-        Err(Error::InvariantViolation(message)) if message.contains("does not match its storage key")
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(Error::InvariantViolation(message))) if message.contains("does not match its storage key")
     ));
     stx.world
         .public_lane_stake_shares
@@ -106,7 +120,7 @@ fn indexed_exposure_borrows_ordered_rows_and_skips_consumed_share() {
     stx.world.public_lane_stake_shares.remove(delegated_key);
     assert!(matches!(
         indexed_slashable_validator_exposure(&stx.world, lane_id, &validator, &record, ConsensusSlashLiability::Root(8), &keys),
-        Err(Error::InvariantViolation(message)) if message.contains("totals do not match")
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(Error::InvariantViolation(message))) if message.contains("totals do not match")
     ));
     let record_after = PublicLaneValidatorRecord {
         total_stake: Quantity::from(100_u64),

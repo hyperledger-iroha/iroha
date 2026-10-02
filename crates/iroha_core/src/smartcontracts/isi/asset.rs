@@ -4217,7 +4217,8 @@ pub mod isi {
                 &validator,
                 &source_id,
                 &destination_id,
-            )?
+            )
+            .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "staking slash capability does not match retained stake and configured custody"

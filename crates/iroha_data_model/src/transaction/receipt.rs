@@ -1,6 +1,8 @@
 //! Transaction submission receipt types and signing helpers.
 use super::{SignedTransaction, signed::TransactionEntrypoint};
-use iroha_crypto::{Algorithm, HashOf, KeyPair, PublicKey, Signature};
+#[cfg(test)]
+use iroha_crypto::Algorithm;
+use iroha_crypto::{HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
     SerializePayload,
@@ -42,16 +44,7 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
+    iroha_crypto::verify_signature_for_admission(signature, signer, payload)
 }
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
@@ -237,6 +230,30 @@ mod tests {
     fn signature_with_payload(replacement_payload: &[u8]) -> Signature {
         Signature::from_bytes(replacement_payload)
     }
+    #[test]
+    fn submission_receipt_verification_borrows_original_signature_under_decode_refusal() {
+        for key in [checked_ed25519_keypair(), checked_mldsa_keypair()] {
+            let receipt = TransactionSubmissionReceipt::sign(sample_receipt_payload(&key), &key);
+            let mut forged = receipt.clone();
+            forged.payload.submitted_at_height += 1;
+            let original_signature = receipt.signature.payload().to_vec();
+            receipt.verify().unwrap();
+            assert!(forged.verify().is_err());
+            norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+                || {
+                    receipt.verify().expect("borrowed original signature");
+                    assert!(
+                        forged.verify().is_err(),
+                        "changed original payload is rejected"
+                    );
+                },
+            );
+            assert_eq!(receipt.signature.payload(), original_signature);
+            receipt.verify().unwrap();
+        }
+    }
+
     #[test]
     fn submission_receipt_roundtrips_signature() {
         let key_pair = checked_random_keypair();

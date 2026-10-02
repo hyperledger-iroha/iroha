@@ -4,6 +4,7 @@
 //! signed global genesis, fee settlement or whole-network qualification.
 
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{
     availability_schedule::AvailabilitySchedule,
     crypto::{BlsCrypto, KeyPairSigner},
@@ -71,7 +72,7 @@ impl AvailabilitySchedule for Schedule {
     fn instance(&self) -> Hash32 {
         self.0.instance()
     }
-    fn height_config(&self, _: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, _: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         Ok(Some(self.0.config().clone()))
     }
 }

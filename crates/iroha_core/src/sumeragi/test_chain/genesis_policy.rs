@@ -145,6 +145,7 @@ pub(crate) fn signed_genesis_fixture_for_state(
     let genesis = manifest
         .with_sumeragi_context_parameters(context)
         .with_consensus_meta()
+        .map_err(|error| format!("{error:#}"))?
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             genesis_key,
             None,

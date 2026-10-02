@@ -2560,7 +2560,7 @@ mod tests {
         raw.extend_from_slice(&auth);
         raw.push(0x69);
         raw.extend_from_slice(b"signature");
-        raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+        raw.extend_from_slice(&[0x58, u8::try_from(der.as_bytes().len()).unwrap()]);
         raw.extend_from_slice(der.as_bytes());
         original.evidence =
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw };

@@ -133,7 +133,7 @@ pub struct KagemushaOrdinaryLineageOperationSelectionV1 {
     pub receiver_request_original_sha256: [u8; 32],
     /// Complete pre-W2 output body SHA; committed by the actual selected State/Guard relation.
     pub output_body_original_sha256: [u8; 32],
-    /// Full genuine Native neutral OutboxReservation original SHA.
+    /// Full genuine Native neutral `OutboxReservation` original SHA.
     pub neutral_reservation_original_sha256: [u8; 32],
     /// Model-owned neutral reservation digest used by actual purpose2 S/W.
     pub neutral_reservation_digest: [u8; 32],
@@ -428,10 +428,10 @@ impl KagemushaOrdinaryLineageRequestV1 {
     /// # Errors
     /// Refuses invalid request shape.
     pub fn account_signing_message(&self) -> Result<Vec<u8>, String> {
-        message(
+        Ok(message(
             KAGEMUSHA_ORDINARY_LINEAGE_REQUEST_DOMAIN_V1,
             &self.canonical_bytes()?,
-        )
+        ))
     }
     /// Verify exact single-member Ed account consent, matching the actual Native wallet selection.
     /// # Errors
@@ -527,7 +527,10 @@ impl KagemushaOrdinaryLineageResultSubjectV1 {
         {
             return Err("ordinary lineage result lacks actual committed context".into());
         }
-        message(KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1, &bounded(self)?)
+        Ok(message(
+            KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1,
+            &bounded(self)?,
+        ))
     }
 }
 /// Complete purpose-bound result original. Public signature verification still supplies neither
@@ -595,14 +598,14 @@ fn bounded<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn message(domain: &[u8], bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn message(domain: &[u8], bytes: &[u8]) -> Vec<u8> {
     let mut out = domain.to_vec();
     out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     out.extend_from_slice(bytes);
-    Ok(out)
+    out
 }
 fn digest<T: norito::NoritoSerialize>(domain: &[u8], value: &T) -> Result<[u8; 32], String> {
-    Ok(Sha256::digest(message(domain, &bounded(value)?)?).into())
+    Ok(Sha256::digest(message(domain, &bounded(value)?)).into())
 }
 
 /// Public signing-purpose original admitted by the independently installed runtime inventory.
@@ -692,7 +695,7 @@ impl KagemushaOrdinaryLineageIssuerPolicyV1 {
         Ok(Sha256::digest(message(
             b"iroha:kagemusha:v1:ordinary-lineage-cas-policy\0",
             &self.canonical_bytes()?,
-        )?)
+        ))
         .into())
     }
 }

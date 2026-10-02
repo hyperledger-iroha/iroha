@@ -40,6 +40,35 @@ fn finality_root_scope_preserves_original_global_and_private_genesis_authority()
     assert_ne!(restored.instance(), global.verifier().instance());
 }
 
+#[test]
+fn signed_genesis_policy_reads_preserve_original_json_refusal_and_retry() {
+    let fixture = Fixture::new();
+    let verifier = fixture.verifier();
+    let original_wire = fixture.genesis.encode_wire().unwrap();
+    let expected_scope = verifier.root_scope().unwrap();
+    let expected_epoch = genesis_epoch(&fixture.genesis).unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    for error in [
+        norito::with_decode_limits_scope(limits, || {
+            signed_genesis_consensus_metadata(&fixture.genesis)
+        })
+        .unwrap_err(),
+        norito::with_decode_limits_scope(limits, || genesis_epoch(&fixture.genesis)).unwrap_err(),
+        norito::with_decode_limits_scope(limits, || verifier.root_scope()).unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                error,
+                GenesisReadError::Json(norito::json::Error::DecodeResourceLimit)
+            ),
+            "{error:?}"
+        );
+    }
+    assert_eq!(fixture.genesis.encode_wire().unwrap(), original_wire);
+    assert_eq!(genesis_epoch(&fixture.genesis).unwrap(), expected_epoch);
+    assert_eq!(verifier.root_scope().unwrap(), expected_scope);
+}
+
 pub struct Fixture {
     pub(super) genesis: SignedBlock,
     pub(crate) first: SumeragiFinalityProof,

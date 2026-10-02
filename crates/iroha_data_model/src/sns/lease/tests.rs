@@ -48,7 +48,7 @@ fn fixture() -> (
         60_000,
         70_000,
         80_000,
-        Default::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     record.ownership_generation = u64::MAX;
     let mut proof = SnsLeaseProofV1 {

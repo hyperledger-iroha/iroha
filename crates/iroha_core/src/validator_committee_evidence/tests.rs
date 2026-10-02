@@ -126,7 +126,8 @@ fn offline_proposal(
     parent: &SignedBlock,
     input: crate::tx::AcceptedTransaction<'static>,
 ) -> Result<SignedBlock, String> {
-    let epoch = crate::sumeragi::epoch::genesis_epoch(genesis)?;
+    let epoch =
+        crate::sumeragi::epoch::genesis_epoch(genesis).map_err(|error| error.to_string())?;
     let network = match input.entrypoint() {
         iroha_data_model::transaction::TransactionEntrypoint::External(transaction) => {
             transaction.network_id()
@@ -141,7 +142,8 @@ fn offline_proposal(
     if network != Some(&epoch.network_id) {
         return Err("offline input does not belong to its original signed genesis".into());
     }
-    let scope = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)?
+    let scope = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)
+        .map_err(|error| error.to_string())?
         .sumeragi_context
         .root_scope;
     let context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![

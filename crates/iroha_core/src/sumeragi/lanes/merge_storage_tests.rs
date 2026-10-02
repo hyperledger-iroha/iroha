@@ -19,12 +19,24 @@ struct Source {
     kind: io::ErrorKind,
 }
 impl LaneBlockSource for Source {
-    fn tip(&self, _: LaneId, _: &[u8; 32]) -> io::Result<Option<u64>> {
+    fn tip(
+        &self,
+        _: LaneId,
+        _: &[u8; 32],
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<io::Error>> {
         Ok(Some(1))
     }
-    fn block(&self, _: LaneId, _: &[u8; 32], _: u64) -> io::Result<Option<CommittedLaneBlock>> {
+    fn block(
+        &self,
+        _: LaneId,
+        _: &[u8; 32],
+        _: u64,
+    ) -> Result<
+        Option<CommittedLaneBlock>,
+        crate::execution_attempt::ExecutionAttemptError<io::Error>,
+    > {
         if self.read_error {
-            return Err(io::Error::new(self.kind, OriginalFailure));
+            return Err(io::Error::new(self.kind, OriginalFailure).into());
         }
         Ok(self.block.then_some(CommittedLaneBlock {
             block_hash: Hash32([1; 32]),
@@ -32,9 +44,15 @@ impl LaneBlockSource for Source {
             batch: None,
         }))
     }
-    fn wait_for(&self, _: LaneId, _: &[u8; 32], _: u64, _: Duration) -> io::Result<bool> {
+    fn wait_for(
+        &self,
+        _: LaneId,
+        _: &[u8; 32],
+        _: u64,
+        _: Duration,
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<io::Error>> {
         if self.wait_error {
-            return Err(io::Error::new(self.kind, OriginalFailure));
+            return Err(io::Error::new(self.kind, OriginalFailure).into());
         }
         Ok(self.available)
     }
@@ -97,7 +115,7 @@ fn wait_and_read_errors_preserve_original_io_source_including_would_block() {
                 block: true,
                 kind,
             };
-            let MergeError::Storage(error) =
+            let MergeError::Storage(Attempt::Rejected(error)) =
                 load(&[merge], &lanes, &policy, 3, &source, Duration::ZERO).unwrap_err()
             else {
                 panic!("storage is neither malformed consensus nor absent")

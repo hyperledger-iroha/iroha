@@ -585,7 +585,7 @@ impl<T: Write> RunArgs<T> for Args {
         .wrap_err("reproduce the external signer's deterministic manifest preparation")?;
         let expected_bound = signer_prepared
             .with_sumeragi_context_parameters(manifest.sumeragi_context_parameters())
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         ensure!(
             expected_bound.encode() == manifest.encode(),
             "bound genesis differs from the pre-sign manifest outside the exact staged-context transform"
@@ -861,7 +861,8 @@ mod tests {
         .expect("complete prepared-bundle test genesis")
         .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
         .with_consensus_mode(SumeragiConsensusMode::Npos)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let reviewed = super::super::sign::tests::with_explicit_test_xor_allocations(
             reviewed,
             &validator_bindings

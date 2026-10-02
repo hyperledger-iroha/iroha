@@ -95,3 +95,5 @@ pub mod durable_artifact;
 
 /// Native State availability authority.
 pub(crate) mod runtime_availability;
+
+mod storage_attempt;

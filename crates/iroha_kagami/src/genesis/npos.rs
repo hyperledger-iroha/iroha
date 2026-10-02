@@ -24,7 +24,9 @@ pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> Result<bool> {
     Ok(params
         .custom()
         .get(&npos_param_id)
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .is_some())
 }
 #[cfg(test)]

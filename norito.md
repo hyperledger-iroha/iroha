@@ -345,8 +345,10 @@ An execution boundary that preserves local retry outcomes must inspect the
 original error after inner decoder scopes unwind. The hidden
 `core::decode_error_matches_active_limits` helper requires the recorded field,
 sequence, cumulative element or allocation ceiling to match a surviving scope.
-An unrelated wider scope cannot turn an inner format limit into local pressure;
-the global archive cap and nesting limits remain format rejections. This query
+A decode-budget nesting refusal also requires an exact surviving caller depth
+that is narrower than `MAX_VALUE_NESTING_DEPTH`. An unrelated wider scope cannot
+turn an inner format limit into local pressure; the global archive cap and
+canonical nesting ceiling remain format rejections. This query
 adds no wire data, allocation owner or release notification, and does not retry
 the decoder.
 

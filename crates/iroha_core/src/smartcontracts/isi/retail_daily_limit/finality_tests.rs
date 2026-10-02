@@ -114,7 +114,11 @@ const ACTIVATION_HEIGHT: u64 = 6;
 struct DeferredLaneStores(OnceLock<Arc<LaneStores>>);
 
 impl LaneBlockSource for DeferredLaneStores {
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+    fn tip(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
         self.0
             .get()
             .map_or(Ok(None), |stores| stores.tip(lane, incarnation))
@@ -125,7 +129,10 @@ impl LaneBlockSource for DeferredLaneStores {
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+    ) -> Result<
+        Option<CommittedLaneBlock>,
+        crate::execution_attempt::ExecutionAttemptError<std::io::Error>,
+    > {
         self.0
             .get()
             .map_or(Ok(None), |stores| stores.block(lane, incarnation, height))
@@ -137,7 +144,7 @@ impl LaneBlockSource for DeferredLaneStores {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> std::io::Result<bool> {
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
         self.0.get().map_or(Ok(false), |stores| {
             stores.wait_for(lane, incarnation, height, timeout)
         })

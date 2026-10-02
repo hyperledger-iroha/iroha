@@ -54,7 +54,7 @@ fn policy_digest_binds_every_semantic_field_and_excludes_only_itself() {
     assert_eq!(arbitrary_digest.calculate_policy_digest().unwrap(), digest);
     assert!(arbitrary_digest.validate().is_err());
 
-    let changes: [fn(&mut StreamTokenGatewayPolicyV1); 12] = [
+    let mutations: [fn(&mut StreamTokenGatewayPolicyV1); 12] = [
         |p| {
             p.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
                 b"other-network",
@@ -76,7 +76,7 @@ fn policy_digest_binds_every_semantic_field_and_excludes_only_itself() {
         |p| p.valid_until_unix_ms += 1,
         |p| p.max_observation_age_ms += 1,
     ];
-    for change in changes {
+    for change in mutations {
         let mut changed = original.clone();
         change(&mut changed);
         assert_ne!(changed.calculate_policy_digest().unwrap(), digest);
@@ -93,7 +93,7 @@ fn policy_digest_binds_every_semantic_field_and_excludes_only_itself() {
 
 #[test]
 fn policy_rejects_malformed_roles_time_scope_and_frame_size() {
-    let changes: [fn(&mut StreamTokenGatewayPolicyV1); 10] = [
+    let mutations: [fn(&mut StreamTokenGatewayPolicyV1); 10] = [
         |p| p.operators.clear(),
         |p| p.observers.clear(),
         |p| p.observers = p.operators.clone(),
@@ -105,7 +105,7 @@ fn policy_rejects_malformed_roles_time_scope_and_frame_size() {
         |p| p.max_observation_age_ms = 0,
         |p| p.max_observation_age_ms = STREAM_TOKEN_GATEWAY_MAX_OBSERVATION_AGE_MS_V1 + 1,
     ];
-    for change in changes {
+    for change in mutations {
         let mut changed = policy();
         change(&mut changed);
         resign(&mut changed);

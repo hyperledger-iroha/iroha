@@ -684,3 +684,148 @@ def test_parameter_control_scope_gate_preserves_signed_global_and_physical_autho
     assert not rule.scenarios
     assert gate.has_switch("HC41", core=True)
     assert not gate.has_switch("HC41")
+
+def test_auto_renew_rekey_keeps_current_owner_revision_and_capacity():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC42"]
+    assert rule.tests == ('smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_current_owner_can_replace_stale_auto_renew_configuration', 'smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_same_configuration_requires_owner_replacement_cas', 'smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_disabled_clean_record_requires_exact_owner_revision')
+    assert not rule.scenarios
+    assert gate.has_switch("HC42", core=True)
+    assert not gate.has_switch("HC42")
+
+
+def test_worker_validation_and_certificate_gate_preserves_original_attempt_owner():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC44"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry",
+        "sumeragi::executor::validation_refusal_tests::original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC44", core=True)
+    assert not gate.has_switch("HC44")
+
+def test_payload_local_decoder_gate_retains_original_typed_worker_reason():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC45"]
+    assert rule.tests == ("sumeragi::executor::payload_refusal_tests::original_available_payload_local_decode_refusal_keeps_typed_worker_reason_and_retry",)
+    assert not rule.scenarios
+    assert gate.has_switch("HC45", core=True)
+    assert not gate.has_switch("HC45")
+
+
+def test_narrow_caller_depth_gate_requires_original_bytes_and_worker_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC46"]
+    assert rule.tests == (
+        "execution_attempt::tests::original_surviving_narrow_decode_depth_refusal_retries_identical_bytes",
+        "sumeragi::executor::payload_refusal_tests::original_available_payload_narrow_depth_refusal_keeps_typed_worker_reason_and_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC46", core=True)
+    assert not gate.has_switch("HC46")
+
+def test_certified_history_keeps_original_result_and_successor_refusal_local():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC43"]
+    assert rule.tests == ('sumeragi::certified_chain::refusal_tests::original_result_frame_refusal_is_local_and_same_bytes_retry', 'sumeragi::certified_chain::refusal_tests::original_successor_history_refusal_is_local_and_same_source_retries', 'sumeragi::certified_chain::tests::state_certificate::state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_source')
+    assert not rule.scenarios
+    assert gate.has_switch("HC43", core=True)
+    assert not gate.has_switch("HC43")
+def test_staking_payload_gate_preserves_original_preparation_and_worker_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC49"]
+    assert rule.tests == (
+        "sumeragi::penalties::tests::original_staking_payload_refusal_retains_evidence_pool_and_exact_assembly_retry",
+        "sumeragi::executor::publication_tests::original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC49", core=True)
+    assert not gate.has_switch("HC49")
+
+
+
+
+def test_availability_attempts_keep_original_reader_and_retry_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC47"]
+    assert rule.tests == ('sumeragi::certified_chain::refusal_tests::original_availability_history_refusal_is_pending_without_corruption', 'sumeragi::certified_chain::refusal_tests::original_availability_constructor_refusal_retries_without_installing_authority', 'sumeragi::driver::exec::refusal_tests::append_refusal_keeps_original_commit_and_release_owner_until_durable', 'sumeragi::driver::serve::tests::refused_metadata_owner_cannot_be_replaced_by_another_peer_during_backoff')
+    assert not rule.scenarios
+    assert gate.has_switch("HC47", core=True)
+    assert not gate.has_switch("HC47")
+
+
+def test_lane_history_attempts_preserve_original_producers_and_consumer_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC51"]
+    assert rule.tests == ('sumeragi::runtime_availability::history::source_refusal_tests::original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix', 'sumeragi::runtime_availability::history::source_refusal_tests::original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier', 'sumeragi::runtime_availability::history::source_refusal_tests::original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut', 'sumeragi::lanes::registry::tests::original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry', 'sumeragi::evidence::tests::original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection', 'sumeragi::executor::publication_tests::original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry')
+    assert not rule.scenarios
+    assert gate.has_switch("HC51", core=True)
+    assert not gate.has_switch("HC51")
+
+
+def test_incumbent_and_lifecycle_refusals_keep_original_state_attempt():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC48"]
+    assert rule.tests == ('state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry')
+    assert not rule.scenarios
+    assert gate.has_switch("HC48", core=True)
+    assert not gate.has_switch("HC48")
+
+
+def test_original_npos_policy_read_refusal_keeps_connected_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC50"]
+    assert rule.tests == ('state::validator_committee::tests::refusal::original_npos_parameter_refusal_does_not_become_missing_staking_policy', 'state::validator_committee::tests::refusal::original_npos_exit_policy_refusal_keeps_stake_and_same_signed_retry', 'state::validator_committee::tests::refusal::original_npos_reserve_validation_refuses_without_changing_current_or_undo', 'smartcontracts::ivm::host::return_resource_tests::original_npos_policy_refusal_preserves_host_seed_projection_and_retries', 'sumeragi::evidence::tests::original_npos_policy_refusal_cannot_prune_retained_evidence', 'state::validator_committee::tests::refusal::late_original_npos_activation_read_refusal_rolls_back_and_same_signed_retry', 'sumeragi::evidence_history::lane::tests::original_lane_observer_late_policy_refusal_retains_observation_and_retries')
+    assert not rule.scenarios
+    assert gate.has_switch("HC50", core=True)
+    assert not gate.has_switch("HC50")
+
+
+def test_original_checkpoint_decode_resource_stays_a_typed_attempt():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC52"]
+    assert rule.tests == ('sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source',)
+    assert not rule.scenarios
+    assert gate.has_switch("HC52", core=True)
+    assert not gate.has_switch("HC52")
+
+
+@pytest.mark.parametrize("late_verdict,late_exit", [("ok", 0), ("FAILED", 101)])
+def test_deadline_waits_for_owned_cargo_without_signalling_or_counting_late_result(
+    monkeypatch, tmp_path, late_verdict, late_exit
+):
+    late_output = (
+        f"test tests::named ... {late_verdict}\n"
+        + ("test result: ok. 1 passed; 0 failed;\n" if late_exit == 0
+           else "test result: FAILED. 0 passed; 1 failed;\n")
+    )
+    calls = []
+    omitted = object()
+
+    class Process:
+        pid = 123
+        returncode = late_exit
+
+        def communicate(self, *, timeout=omitted):
+            calls.append(timeout)
+            if timeout is not omitted:
+                raise subprocess.TimeoutExpired("cargo test", timeout)
+            return late_output, None
+
+    monkeypatch.setattr(gate.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(
+        gate.os, "killpg",
+        lambda *args: pytest.fail("a qualification deadline must not signal Cargo"),
+    )
+    args = SimpleNamespace(core=True, core_profile="test")
+    log = tmp_path / "owned-deadline.log"
+    code, output, _ = gate.cargo_test(args, tmp_path, None, ["named"], None, 7, log)
+    assert calls == [7, omitted], "original deadline is retained; then wait for natural exit"
+    assert code is None, "neither late success nor a late failed test satisfies its deadline"
+    assert output == late_output
+    assert "# exit None" in log.read_text()
+    monkeypatch.setattr(gate, "cargo_test", lambda *args: (code, output, 8))
+    step = gate.run_step(args, tmp_path, None, ["named"], None, 7, log)
+    assert step.status == "timeout"
+    assert step.ran == ["tests::named"]
+
+
+def test_suspend_inclusive_network_time_has_original_deterministic_kill_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC53"]
+    assert rule.tests == (
+        'time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes',
+        'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC53", core=True)
+    assert not gate.has_switch("HC53")

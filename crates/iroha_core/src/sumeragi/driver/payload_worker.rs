@@ -6,6 +6,7 @@ use super::{
     payload_jobs::{AuthorJob, NetworkAcquisition, PayloadDissemination},
     traits::{BlockStore, BodyStore, Net},
 };
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::durable_artifact::BodyReadError;
 use iroha_allocation::AllocationBudget;
 use iroha_primitives::erasure::rs16::compact::{CodecAllocationError, Encoded};
@@ -162,6 +163,7 @@ struct Read {
     retired: bool,
     remote_ready: bool,
     delivery: Option<super::serve::DeliveryBatch>,
+    refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 struct RecipientStream {
     peer: PublicKey,
@@ -202,7 +204,10 @@ pub struct PayloadWorker {
     incoming: BTreeMap<Key, Incoming>,
     incoming_cursor: Option<Key>,
     reads: VecDeque<Read>,
-    deferred: VecDeque<PayloadWork>,
+    deferred: VecDeque<(
+        PayloadWork,
+        Option<crate::execution_attempt::ExecutionDeferred>,
+    )>,
     outgoing: VecDeque<Outgoing>,
     applied: u64,
     next_acquisition: u64,
@@ -229,6 +234,7 @@ fn author_refusal(error: &AuthoringError) -> bool {
 }
 fn read_refusal(error: &StoredError) -> bool {
     match error {
+        StoredError::Read(BodyReadError::Deferred(_)) => true,
         StoredError::Read(BodyReadError::Io(error)) => matches!(
             error.kind(),
             io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
@@ -237,6 +243,15 @@ fn read_refusal(error: &StoredError) -> bool {
         StoredError::Restoration(error) => error.is_local_refusal(),
         _ => false,
     }
+}
+
+fn stored_refusal(error: StoredError) -> Option<crate::execution_attempt::ExecutionDeferred> {
+    let error = match error {
+        StoredError::Read(error) => error.into_attempt(),
+        StoredError::Restoration(error) => super::super::storage_attempt::restoration(error),
+        StoredError::Source | StoredError::Completed => return None,
+    };
+    super::super::storage_attempt::take_deferred(error).ok()
 }
 
 impl PayloadWorker {
@@ -279,8 +294,9 @@ impl PayloadWorker {
     ) -> io::Result<PayloadProgress> {
         let mut progress = PayloadProgress::default();
         self.accept(work, blocks)?;
-        if let Some(work) = self.deferred.pop_front() {
+        if let Some((work, refusal)) = self.deferred.pop_front() {
             self.accept(work, blocks)?;
+            drop(refusal);
         }
         progress.refused |= !self.deferred.is_empty();
         self.author(&mut progress)?;
@@ -499,6 +515,7 @@ impl PayloadWorker {
                     retired: false,
                     remote_ready: false,
                     delivery: None,
+                    refusal: None,
                 });
             }
             PayloadWork::Serve {
@@ -545,20 +562,34 @@ impl PayloadWorker {
                 let source = match blocks.availability_source(height, block_hash) {
                     Ok(Some(source)) => source,
                     Ok(None) => return Ok(()),
-                    Err(error)
+                    Err(Attempt::Deferred(reason)) => {
+                        self.defer(
+                            PayloadWork::Serve {
+                                to,
+                                height,
+                                block_hash,
+                            },
+                            Some(reason),
+                        );
+                        return Ok(());
+                    }
+                    Err(Attempt::Rejected(error))
                         if matches!(
                             error.kind(),
                             io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                         ) =>
                     {
-                        self.defer(PayloadWork::Serve {
-                            to,
-                            height,
-                            block_hash,
-                        });
+                        self.defer(
+                            PayloadWork::Serve {
+                                to,
+                                height,
+                                block_hash,
+                            },
+                            None,
+                        );
                         return Ok(());
                     }
-                    Err(error) => return Err(error),
+                    Err(Attempt::Rejected(error)) => return Err(error),
                 };
                 if source.instance() != self.instance {
                     return Err(fault("foreign historical schedule"));
@@ -571,6 +602,7 @@ impl PayloadWorker {
                     retired: false,
                     remote_ready: false,
                     delivery: None,
+                    refusal: None,
                 });
             }
             PayloadWork::Retain { height, keep } => {
@@ -614,9 +646,19 @@ impl PayloadWorker {
         Ok(())
     }
 
-    fn defer(&mut self, work: PayloadWork) {
-        if self.deferred.len() < self.max_jobs && !self.deferred.contains(&work) {
-            self.deferred.push_back(work);
+    fn defer(
+        &mut self,
+        work: PayloadWork,
+        refusal: Option<crate::execution_attempt::ExecutionDeferred>,
+    ) {
+        if let Some((_, retained)) = self
+            .deferred
+            .iter_mut()
+            .find(|(pending, _)| *pending == work)
+        {
+            *retained = refusal;
+        } else if self.deferred.len() < self.max_jobs {
+            self.deferred.push_back((work, refusal));
         }
     }
 
@@ -743,6 +785,7 @@ impl PayloadWorker {
             match StoredAcquisition::begin(bodies, read.source.clone()) {
                 Ok(job) => read.job = Some(job),
                 Err(error) if read_refusal(&error) => {
+                    read.refusal = stored_refusal(error);
                     self.reads.push_back(read);
                     progress.retry = true;
                     progress.refused = true;
@@ -763,7 +806,11 @@ impl PayloadWorker {
                 read.job = None;
                 self.reads.push_back(read);
             }
-            Ok(StoredProgress::Pending(_)) => {
+            Ok(StoredProgress::Pending(error)) => {
+                read.refusal = super::super::storage_attempt::take_deferred(
+                    super::super::storage_attempt::byte(error),
+                )
+                .ok();
                 self.reads.push_back(read);
                 progress.retry = true;
                 progress.refused = true;
@@ -783,6 +830,7 @@ impl PayloadWorker {
                 self.reads.push_back(read);
             }
             Err(error) if read_refusal(&error) => {
+                read.refusal = stored_refusal(error);
                 self.reads.push_back(read);
                 progress.retry = true;
                 progress.refused = true;
@@ -827,7 +875,13 @@ impl PayloadWorker {
                     self.reads.push_back(read);
                 }
             }
-            Err(error)
+            Err(Attempt::Deferred(reason)) => {
+                read.refusal = Some(reason);
+                self.reads.push_back(read);
+                progress.retry = true;
+                progress.refused = true;
+            }
+            Err(Attempt::Rejected(error))
                 if matches!(
                     error.kind(),
                     io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
@@ -837,7 +891,7 @@ impl PayloadWorker {
                 progress.retry = true;
                 progress.refused = true;
             }
-            Err(error) => return Err(error),
+            Err(Attempt::Rejected(error)) => return Err(error),
         }
         Ok(())
     }

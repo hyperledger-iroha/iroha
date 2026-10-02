@@ -117,13 +117,29 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
         })?;
     apply_merges(&mut state, input, height)?;
     record_sample(&mut state, policy.as_ref(), input, height, time_ms, budget)?;
-    super::custody::prepare_retirement(&mut state, &block.world, height)
-        .map_err(LaneStepError::Custody)?;
+    super::custody::prepare_retirement(&mut state, &block.world, height).map_err(|error| {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                LaneStepError::Custody(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                LaneStepError::Deferred(reason)
+            }
+        }
+    })?;
     retire(&mut state, height);
     let pool = |incarnation: &[u8; 32], size: u32| {
         elastic_committee(&block.world, height, incarnation, size)
     };
-    let creation_capacity = super::custody::creation_capacity(&state, &block.world);
+    let creation_capacity =
+        super::custody::creation_capacity(&state, &block.world).map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                LaneStepError::Custody(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                LaneStepError::Deferred(reason)
+            }
+        })?;
     reconcile(
         &mut state,
         policy.as_ref(),
@@ -143,8 +159,15 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
         budget,
     )
     .map_err(|error| match error {
-        super::custody::CustodyError::Invalid(reason) => LaneStepError::Custody(reason),
-        super::custody::CustodyError::Allocation => LaneStepError::CustodyAllocation,
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            super::custody::CustodyError::Invalid(reason),
+        ) => LaneStepError::Custody(reason),
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            super::custody::CustodyError::Allocation,
+        ) => LaneStepError::CustodyAllocation,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            LaneStepError::Deferred(reason)
+        }
     })?;
     *block.world.sumeragi_lanes.get_mut() = state;
     Ok(())

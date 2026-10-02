@@ -2820,6 +2820,9 @@ impl EvidencePreparationError {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// The original committed NPoS policy is invalid or its local read is unfinished.
+    #[error(transparent)]
+    NposPolicy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
     /// Process-local evidence preparation cannot fund one complete prune and penalty plan.
     #[error(
         "consensus evidence preparation pool {configured_bytes} bytes is below the required {minimum_bytes} bytes"
@@ -15018,20 +15021,22 @@ where
 fn bounded_global_committee_size(
     world: &impl WorldReadOnly,
     available_candidates: usize,
-) -> Option<usize> {
+) -> Result<Option<usize>, crate::execution_attempt::ExecutionAttemptError<String>> {
     let configured = world
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .and_then(|params| usize::try_from(params.max_validators()).ok())
         .unwrap_or(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     let capped = available_candidates
         .min(configured)
         .min(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     if capped < iroha_data_model::block::consensus::MIN_VALIDATORS_PER_HEIGHT {
-        return None;
+        return Ok(None);
     }
     let committee_size = capped - (capped - 1) % 3;
-    iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
-        .then_some(committee_size)
+    Ok(
+        iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
+            .then_some(committee_size),
+    )
 }
 #[cfg_attr(
     not(test),
@@ -15056,10 +15061,12 @@ fn select_threshold_beacon_committee(
     epoch: u64,
     seed: [u8; 32],
     mut candidates: Vec<PeerId>,
-) -> Option<Vec<PeerId>> {
+) -> Result<Option<Vec<PeerId>>, crate::execution_attempt::ExecutionAttemptError<String>> {
     candidates.sort();
     candidates.dedup();
-    let committee_size = bounded_global_committee_size(world, candidates.len())?;
+    let Some(committee_size) = bounded_global_committee_size(world, candidates.len())? else {
+        return Ok(None);
+    };
     let mut scored = candidates
         .into_iter()
         .map(|peer| (threshold_beacon_seat_score(seed, epoch, &peer), peer))
@@ -15072,7 +15079,7 @@ fn select_threshold_beacon_committee(
     scored.truncate(committee_size);
     let mut committee = scored.into_iter().map(|(_, peer)| peer).collect::<Vec<_>>();
     committee.sort();
-    Some(committee)
+    Ok(Some(committee))
 }
 /// Resolve the exact global election candidate pool, optionally projecting one
 /// validator record replacement before any custody or lifecycle mutation.
@@ -15256,7 +15263,7 @@ pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
     nexus: &iroha_config::parameters::actual::Nexus,
     epoch: u64,
     selection_seed: [u8; 32],
-) -> Option<Vec<PeerId>>
+) -> Result<Option<Vec<PeerId>>, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     I: IntoIterator<Item = PeerId>,
 {
@@ -15280,6 +15287,7 @@ impl StateView<'_> {
         let selection_seed = self
             .world()
             .sumeragi_npos_parameters()
+            .expect("valid original test policy")
             .map_or([0; 32], |params| params.epoch_seed);
         epoch_validator_peer_ids_from_world_with_seed(
             self.world(),
@@ -15289,6 +15297,7 @@ impl StateView<'_> {
             epoch,
             selection_seed,
         )
+        .expect("original test committee policy")
     }
 }
 #[cfg(test)]
@@ -17465,7 +17474,11 @@ mod custom_parameter_tests {
     #[test]
     fn npos_parameters_absent_when_custom_missing() {
         let params = Parameters::default();
-        assert!(sumeragi_npos_parameters_from_parameters(&params).is_none());
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params)
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn npos_parameters_roundtrip() {
@@ -17474,10 +17487,10 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(expected.clone().into_custom_parameter()));
         let decoded =
             sumeragi_npos_parameters_from_parameters(&params).expect("decode npos parameters");
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded.unwrap(), expected);
     }
     #[test]
-    fn npos_parameters_invalid_payload_is_ignored() {
+    fn npos_parameters_invalid_payload_is_rejected() {
         let mut params = Parameters::default();
         let bad_payload = Json::new(norito::json!({ "unexpected": "shape" }));
         let custom = iroha_data_model::parameter::CustomParameter::new(
@@ -17485,7 +17498,10 @@ mod custom_parameter_tests {
             bad_payload,
         );
         params.set_parameter(Parameter::Custom(custom));
-        assert!(sumeragi_npos_parameters_from_parameters(&params).is_none());
+        assert!(matches!(
+            sumeragi_npos_parameters_from_parameters(&params),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+        ));
     }
     #[test]
     fn npos_parameters_string_wrapped_payload_is_rejected() {
@@ -17500,7 +17516,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "string-wrapped compatibility payload must be rejected"
         );
     }
@@ -17537,7 +17556,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "numeric-string compatibility payload must be rejected"
         );
     }
@@ -17569,7 +17591,7 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(custom));
         let decoded = sumeragi_npos_parameters_from_parameters(&params)
             .expect("decode npos parameters from hex epoch seed payload");
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded.unwrap(), expected);
     }
     #[test]
     fn npos_parameters_epoch_seed_nested_quotes_payload_is_rejected() {
@@ -17599,7 +17621,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "nested-quoted compatibility payload must be rejected"
         );
     }
@@ -17615,7 +17640,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "retired NPoS fields and an all-zero seed must fail closed"
         );
     }
@@ -18322,35 +18350,40 @@ impl World {
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
-    fn validate_quantity_ledger_invariants(&self) -> Result<(), String> {
+    fn validate_quantity_ledger_invariants(
+        &self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
             if rwa.held_quantity > rwa.quantity {
-                return Err(format!(
+                return Err((format!(
                     "RWA {rwa_id} held quantity {} exceeds total quantity {}",
                     rwa.held_quantity, rwa.quantity
-                ));
+                ))
+                .into());
             }
             for (label, quantity) in [
                 ("quantity", &rwa.quantity),
                 ("held quantity", &rwa.held_quantity),
             ] {
                 if rwa.spec.check(quantity.as_numeric()).is_err() {
-                    return Err(format!(
+                    return Err((format!(
                         "RWA {rwa_id} {label} {quantity} violates numeric spec {}",
                         rwa.spec
-                    ));
+                    ))
+                    .into());
                 }
             }
         }
         for (escrow_id, escrow) in self.asset_escrows.view().iter() {
             if escrow.remaining_amount > escrow.amount {
-                return Err(format!(
+                return Err((format!(
                     "asset escrow {:?} remaining amount {} exceeds total amount {}",
                     escrow_id.as_hash(),
                     escrow.remaining_amount,
                     escrow.amount
-                ));
+                ))
+                .into());
             }
         }
         for (agreement_id, agreement) in self.repo_agreements.view().iter() {
@@ -18359,15 +18392,16 @@ impl World {
                 ("collateral", agreement.collateral_leg().quantity()),
             ] {
                 if quantity.is_zero() {
-                    return Err(format!(
+                    return Err((format!(
                         "repo agreement {agreement_id} {label} quantity must be positive"
-                    ));
+                    ))
+                    .into());
                 }
             }
         }
         let parameters = self.parameters.view();
         let npos_penalty_window =
-            sumeragi_npos_parameters_from_parameters(&parameters).map(|parameters| {
+            sumeragi_npos_parameters_from_parameters(&parameters)?.map(|parameters| {
                 (
                     parameters.evidence_horizon_blocks(),
                     parameters.slashing_delay_blocks(),
@@ -18378,59 +18412,60 @@ impl World {
         let mut bonded_totals = BTreeMap::<(LaneId, AccountId), (Quantity, Quantity)>::new();
         for ((lane_id, validator_id), validator) in validators.iter() {
             if validator.lane_id != *lane_id || &validator.validator != validator_id {
-                return Err(format!(
+                return Err((format!(
                     "public-lane validator key ({lane_id}, {validator_id}) does not match embedded identity ({}, {})",
                     validator.lane_id, validator.validator
-                ));
+                )).into());
             }
             if validator.stake_account != *validator_id {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} stake account {} must match the validator account",
                     validator.stake_account
-                ));
+                )).into());
             }
             if validator.activation_height == 0 {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} activation height must be positive"
-                ));
+                ))
+                .into());
             }
             if validator
                 .deactivation_height
                 .is_some_and(|height| height < validator.activation_height)
             {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} deactivation height precedes activation height {}",
                     validator.activation_height
-                ));
+                )).into());
             }
             match validator.status {
                 PublicLaneValidatorStatus::PendingActivation(height) => {
                     if height != validator.activation_height {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} pending height {height} does not match activation height {}",
                             validator.activation_height
-                        ));
+                        )).into());
                     }
                     if validator.deactivation_height.is_some() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} pending tenure already has a deactivation height"
-                        ));
+                        )).into());
                     }
                 }
                 PublicLaneValidatorStatus::Active => {
                     if validator.deactivation_height.is_some() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} active tenure already has a deactivation height"
-                        ));
+                        )).into());
                     }
                 }
                 PublicLaneValidatorStatus::Exiting(_)
                 | PublicLaneValidatorStatus::Exited
                 | PublicLaneValidatorStatus::Slashed(_) => {
                     if validator.deactivation_height.is_none() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} terminal tenure has no deactivation height"
-                        ));
+                        )).into());
                     }
                 }
             }
@@ -18444,10 +18479,10 @@ impl World {
                 || &share.validator != validator_id
                 || &share.staker != staker_id
             {
-                return Err(format!(
+                return Err((format!(
                     "public-lane stake-share key ({lane_id}, {validator_id}, {staker_id}) does not match embedded identity ({}, {}, {})",
                     share.lane_id, share.validator, share.staker
-                ));
+                )).into());
             }
             let validator_key = (*lane_id, validator_id.clone());
             validators.get(&validator_key).ok_or_else(|| {
@@ -18459,26 +18494,26 @@ impl World {
             let mut pending_total = Quantity::zero();
             for (request_id, pending) in &share.pending_unbonds {
                 if request_id != &pending.request_id {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending-unbond key {request_id:?} does not match embedded request id {:?}",
                         pending.request_id
-                    ));
+                    )).into());
                 }
                 if pending.amount.is_zero() {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} amount must be positive"
-                    ));
+                    )).into());
                 }
                 if pending.slashable_through_height == 0 {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} slashable-through height must be positive"
-                    ));
+                    )).into());
                 }
                 if pending.liability_release_height < pending.slashable_through_height {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} precedes slashable-through height {}",
                         pending.liability_release_height, pending.slashable_through_height
-                    ));
+                    )).into());
                 }
                 let (evidence_horizon, slashing_delay) = npos_penalty_window.ok_or_else(|| {
                     format!(
@@ -18495,10 +18530,10 @@ impl World {
                         )
                     })?;
                 if pending.liability_release_height < minimum_release_height {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} does not cover the signed evidence-and-slashing window through {minimum_release_height}",
                         pending.liability_release_height
-                    ));
+                    )).into());
                 }
                 pending_total = pending_total.checked_add(&pending.amount).map_err(|_| {
                     format!(
@@ -18529,16 +18564,16 @@ impl World {
                 .get(&(*lane_id, validator_id.clone()))
                 .expect("canonical validator initialized an aggregate row");
             if &validator.total_stake != bonded {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} total stake {} does not match bonded share total {bonded}",
                     validator.total_stake
-                ));
+                )).into());
             }
             if &validator.self_stake != self_bonded {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} self stake {} does not match self-supplied bonded share total {self_bonded}",
                     validator.self_stake
-                ));
+                )).into());
             }
         }
         for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
@@ -18549,10 +18584,11 @@ impl World {
                 })?;
             }
             if total != reward.total_reward {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} epoch {epoch} reward shares total {total} does not match {}",
                     reward.total_reward
-                ));
+                ))
+                .into());
             }
         }
         Ok(())
@@ -18573,9 +18609,10 @@ impl World {
         if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
             && existing_contract != *contract_address
         {
-            return Err(Error::InvariantViolation(
+            return Err((Error::InvariantViolation(
                 format!("contract alias `{alias}` is already bound").into(),
-            ));
+            ))
+            .into());
         }
         self.contract_alias_bindings.insert(
             contract_address.clone(),
@@ -21379,7 +21416,15 @@ macro_rules! world_ro_accessors {
 pub trait WorldReadOnly {
     world_ro_accessors!(configuration, declaration);
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
-    fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
+    ///
+    /// # Errors
+    /// Matching malformed policy is rejected; an unfinished local decoder read is deferred.
+    fn sumeragi_npos_parameters(
+        &self,
+    ) -> Result<
+        Option<SumeragiNposParameters>,
+        crate::execution_attempt::ExecutionAttemptError<String>,
+    > {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
     world_ro_accessors!(identity, declaration);
@@ -27415,7 +27460,14 @@ impl State {
             .expect("initial world contains invalid numeric asset state");
         world
             .validate_quantity_ledger_invariants()
-            .expect("initial world contains invalid quantity ledger state");
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(error)
+                }
+            })?;
         u64::try_from(exact_durable_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
                 "persisted block height exceeds u64 during startup".to_owned(),
@@ -28929,6 +28981,14 @@ impl State {
         let epoch_length = sb
             .world
             .sumeragi_npos_parameters()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    StateBlockStartError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    StateBlockStartError::Policy(error)
+                }
+            })?
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks.get(),
@@ -32203,7 +32263,7 @@ impl State {
         if !nexus_fee_asset_selector_is_canonical(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
-        if let Some(params) = self.world.view().sumeragi_npos_parameters() {
+        if let Some(params) = self.world.view().sumeragi_npos_parameters()? {
             // Runtime selectors cannot replace the identity authenticated by genesis.
             // Aliases are resolved at execution; the literal XOR alias is only a
             // routing convenience and every monetary use still checks this pin.
@@ -34821,31 +34881,21 @@ static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
 static DEFAULT_TEST_NETWORK_ID: LazyLock<iroha_data_model::NetworkId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.1);
-fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<SumeragiNposParameters> {
+pub(crate) fn sumeragi_npos_parameters_from_parameters(
+    params: &Parameters,
+) -> Result<Option<SumeragiNposParameters>, crate::execution_attempt::ExecutionAttemptError<String>>
+{
     let id = SumeragiNposParameters::parameter_id();
-    let custom = params.custom().get(&id)?;
-    if let Some(parsed) = SumeragiNposParameters::from_custom_parameter(custom) {
-        return Some(parsed);
+    let Some(custom) = params.custom().get(&id) else {
+        return Ok(None);
+    };
+    let decoded = SumeragiNposParameters::from_custom_parameter(custom);
+    if cfg!(all(test, sumeragi_core_mutation = "HC50")) && decoded.is_err() {
+        return Ok(None);
     }
-    let payload = custom.payload();
-    let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<SumeragiNposParameters>() {
-        Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
-        Ok(parsed) => {
-            warn!(
-                error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-            );
-            None
-        }
-        Err(error) => {
-            warn!(
-                ?error,
-                "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-            );
-            None
-        }
-    }
+    decoded.map_err(|error| {
+        crate::execution_attempt::json_decode_attempt_error(error, |error| error.to_string())
+    })
 }
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
@@ -42367,7 +42417,11 @@ impl StateTransaction<'_, '_> {
         host.set_zk_config(&self.zk);
         host.set_chain_id(self.chain_id());
         host.set_public_inputs_from_parameters(self.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_state(self);
+        host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+            self.attempt_error_to_validation_fail(
+                error.map_rejection(ValidationFail::InternalError),
+            )
+        })?;
         host.set_query_state(self);
         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
         crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
@@ -42869,7 +42923,11 @@ impl StateTransaction<'_, '_> {
                 host.set_zk_config(&self.zk);
                 host.set_chain_id(self.chain_id());
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_state(self);
+                host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+                    self.attempt_error_to_validation_fail(
+                        error.map_rejection(ValidationFail::InternalError),
+                    )
+                })?;
                 host.set_query_state(self);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -43153,7 +43211,11 @@ impl StateTransaction<'_, '_> {
                             host.set_zk_config(&self.zk);
                             host.set_chain_id(self.chain_id());
                             host.set_public_inputs_from_parameters(self.world.parameters.get());
-                            host.set_vrf_epoch_seeds_from_state(self);
+                            host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+                                self.attempt_error_to_validation_fail(
+                                    error.map_rejection(ValidationFail::InternalError),
+                                )
+                            })?;
                             host.set_query_state(self);
                             host.set_contract_runtime_context(contract_runtime_context.clone());
                             host.set_contract_entrypoint_authorization(Some(

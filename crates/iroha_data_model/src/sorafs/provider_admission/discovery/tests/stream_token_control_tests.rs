@@ -349,56 +349,60 @@ fn control_requires_all_native_indices_and_absence_of_a_later_revision() {
     let (record, control) = control_record(&original);
     for mutation in 0..9 {
         let mut proof = original.clone();
-        if mutation < 3 {
-            let key = match mutation {
-                0 => head_key(provider),
-                1 => record_key(provider, record.revision),
-                _ => height_key(provider, record.execution_height, record.ordinal),
-            };
-            let key_hash = world_state_value_hash_v1(&key).unwrap();
-            proof
-                .world
-                .entries
-                .retain(|entry| entry.key_hash != Some(key_hash));
-        } else if mutation == 3 {
-            proof.world.entries.push(row(
-                "world.smart_contract_state",
-                &record_key(provider, record.revision + 1),
-                &vec![1_u8],
-            ));
-            proof.world.entries.sort_by(|a, b| {
-                (&a.field_id, a.kind, a.key_hash).cmp(&(&b.field_id, b.kind, b.key_hash))
-            });
-        } else {
-            let token = proof.stream_token.as_mut().unwrap();
-            let mut head: StreamTokenCustodyControlIndexV1 =
-                norito::decode_canonical(&token.head).unwrap();
-            match mutation {
-                4 => head.revision += 1,
-                5 => head.height += 1,
-                6 => head.ordinal += 1,
-                7 => head.digest = [28; 32],
-                8 => {
-                    // A different value at the expected native height index is not the head.
-                    let key_hash = world_state_value_hash_v1(&height_key(
-                        provider,
-                        record.execution_height,
-                        record.ordinal,
-                    ))
-                    .unwrap();
-                    proof
-                        .world
-                        .entries
-                        .iter_mut()
-                        .find(|entry| entry.key_hash == Some(key_hash))
-                        .unwrap()
-                        .value_hash = Hash::new(b"substituted index");
-                }
-                _ => unreachable!(),
+        match mutation {
+            0..=2 => {
+                let key = match mutation {
+                    0 => head_key(provider),
+                    1 => record_key(provider, record.revision),
+                    _ => height_key(provider, record.execution_height, record.ordinal),
+                };
+                let key_hash = world_state_value_hash_v1(&key).unwrap();
+                proof
+                    .world
+                    .entries
+                    .retain(|entry| entry.key_hash != Some(key_hash));
             }
-            token.head = norito::encode_canonical(&head).unwrap();
-            if mutation != 8 {
-                rebuild(&mut proof, provider);
+            3 => {
+                proof.world.entries.push(row(
+                    "world.smart_contract_state",
+                    &record_key(provider, record.revision + 1),
+                    &vec![1_u8],
+                ));
+                proof.world.entries.sort_by(|a, b| {
+                    (&a.field_id, a.kind, a.key_hash).cmp(&(&b.field_id, b.kind, b.key_hash))
+                });
+            }
+            _ => {
+                let token = proof.stream_token.as_mut().unwrap();
+                let mut head: StreamTokenCustodyControlIndexV1 =
+                    norito::decode_canonical(&token.head).unwrap();
+                match mutation {
+                    4 => head.revision += 1,
+                    5 => head.height += 1,
+                    6 => head.ordinal += 1,
+                    7 => head.digest = [28; 32],
+                    8 => {
+                        // A different value at the expected native height index is not the head.
+                        let key_hash = world_state_value_hash_v1(&height_key(
+                            provider,
+                            record.execution_height,
+                            record.ordinal,
+                        ))
+                        .unwrap();
+                        proof
+                            .world
+                            .entries
+                            .iter_mut()
+                            .find(|entry| entry.key_hash == Some(key_hash))
+                            .unwrap()
+                            .value_hash = Hash::new(b"substituted index");
+                    }
+                    _ => unreachable!(),
+                }
+                token.head = norito::encode_canonical(&head).unwrap();
+                if mutation != 8 {
+                    rebuild(&mut proof, provider);
+                }
             }
         }
         let block = certify(&mut native, &proof);

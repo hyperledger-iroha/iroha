@@ -44,6 +44,9 @@ impl From<StateAdmissionError> for MergeLedgerCommitError {
 /// Separate local acquisition refusal from the caller's deterministic start stage.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateBlockStartError<E: std::fmt::Debug> {
+    /// The original committed scheduling policy is malformed.
+    #[error("invalid committed block-start policy: {0}")]
+    Policy(String),
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
     Storage(#[from] StateStorageAdmissionError),
@@ -68,6 +71,7 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
             StateBlockStartError::Membership(error) => Self::MembershipAdmission(error),
             StateBlockStartError::ExecutionDeferred(error) => Self::ExecutionDeferred(error),
             StateBlockStartError::Stage(error) => error,
+            StateBlockStartError::Policy(error) => Self::ExecutionStatePublication(error),
         }
     }
 }
@@ -165,7 +169,7 @@ impl<E: std::fmt::Debug> StateBlockStartError<E> {
                 }
                 _ => None,
             },
-            Self::Stage(_) => None,
+            Self::Stage(_) | Self::Policy(_) => None,
         }
     }
 }

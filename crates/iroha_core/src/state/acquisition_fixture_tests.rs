@@ -59,6 +59,7 @@ fn genesis(
         .build_raw()
         .unwrap()
         .with_consensus_meta()
+        .expect("valid fixture consensus parameters")
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
             Some(proof_policies),

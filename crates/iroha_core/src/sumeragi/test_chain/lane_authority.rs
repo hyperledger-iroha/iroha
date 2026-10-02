@@ -1,5 +1,6 @@
 //! Lane store authority from a certified test chain's committed State, never a supplied frame.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::{
     state::{State, StateReadOnly, WorldReadOnly},
     sumeragi::{
@@ -24,7 +25,7 @@ impl AvailabilitySchedule for PinnedSchedule {
     fn instance(&self) -> Hash32 {
         self.instance
     }
-    fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         Ok(self
             .config
             .epoch
@@ -53,7 +54,10 @@ impl LaneStoreAuthorities for TestLaneStoreAuthorities {
         lane: LaneId,
         incarnation: &[u8; 32],
         instance: Hash32,
-    ) -> io::Result<Option<LaneStoreAuthority>> {
+    ) -> Result<
+        Option<LaneStoreAuthority>,
+        crate::execution_attempt::ExecutionAttemptError<io::Error>,
+    > {
         let view = self.state.view();
         let Some(record) = view.world().sumeragi_lanes().lane(lane).cloned() else {
             return Ok(None);
@@ -72,7 +76,8 @@ impl LaneStoreAuthorities for TestLaneStoreAuthorities {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "fixture lane authority has another instance",
-            ));
+            )
+            .into());
         }
         self.crypto
             .admit_committee(

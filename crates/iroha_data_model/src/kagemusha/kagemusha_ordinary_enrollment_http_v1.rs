@@ -177,7 +177,7 @@ fn hash(original: &[u8]) -> [u8; 32] {
 }
 #[cfg(test)]
 fn hex(original: &[u8]) -> String {
-    original.iter().map(|b| format!("{b:02x}")).collect()
+    hex::encode(original)
 }
 fn hex32(value: &str) -> Result<[u8; 32]> {
     let raw = value.as_bytes();
@@ -405,13 +405,12 @@ impl KagemushaOrdinaryEnrollmentHttpRequestV1 {
                     }
                     _ => return reject(),
                 }
-                if let Some(token) = &v.play_integrity_token {
-                    if token.is_empty()
+                if let Some(token) = &v.play_integrity_token
+                    && (token.is_empty()
                         || token.len() > 64 * 1024
-                        || !token.bytes().all(|b| (0x21..=0x7e).contains(&b))
-                    {
-                        return reject();
-                    }
+                        || !token.bytes().all(|b| (0x21..=0x7e).contains(&b)))
+                {
+                    return reject();
                 }
             }
             Self::Start(v) => {

@@ -1,6 +1,14 @@
 //! One retained authenticated archive scan, bounded to a captured original State publication.
 
-use crate::sumeragi::certified_chain::PrefixArtifactsRead;
+#[cfg(test)]
+mod source_refusal_tests;
+
+use crate::execution_attempt::{ExecutionAttemptError as Attempt, norito_decode_attempt_error};
+use crate::sumeragi::{
+    block_store::certificate_read::CertificateReadError,
+    certified_chain::{PrefixArtifactsError, PrefixArtifactsRead},
+    driver::payload_build::PayloadBuildError,
+};
 
 use super::{invalid, pending, selection::LaneSelection};
 use crate::query::native_receipts::lane_payload::{
@@ -62,12 +70,10 @@ impl HistoryCapture {
         state: &State,
         view: &StateView<'_>,
         generation: u64,
-    ) -> io::Result<Option<Self>> {
+    ) -> Result<Option<Self>, Attempt<io::Error>> {
         if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
         {
-            return Err(pending(
-                "native State publication changed before history capture",
-            ));
+            return Err(pending("native State publication changed before history capture").into());
         }
         let kura = state.kura_handle();
         let budget = state.ivm_execution_budget();
@@ -80,14 +86,12 @@ impl HistoryCapture {
             || view.network_id() != state.network_id_ref()
             || view.chain_id() != state.chain_id_ref()
         {
-            return Err(invalid(
-                "native history capture belongs to another original State",
-            ));
+            return Err(invalid("native history capture belongs to another original State").into());
         }
         if view.kura().native_consensus_gate().is_closed() {
-            return Err(io::Error::other(
-                "native storage gate is closed; restart is required",
-            ));
+            return Err(
+                io::Error::other("native storage gate is closed; restart is required").into(),
+            );
         }
         let Some(tip) = view.native_execution_tip() else {
             return Ok(None);
@@ -95,24 +99,24 @@ impl HistoryCapture {
         if tip.height() != view.height() as u64
             || Some(tip.iroha_hash()) != view.latest_block_hash()
         {
-            return Err(invalid(
-                "native lane lookup has no matching original State tip",
-            ));
+            return Err(invalid("native lane lookup has no matching original State tip").into());
         }
         if tip.height() < 2 {
             return Ok(None);
         }
-        let policy = view.world().sumeragi_npos_parameters().map(|policy| {
-            (
-                policy.evidence_horizon_blocks(),
-                policy.slashing_delay_blocks(),
-            )
-        });
+        let policy = view
+            .world()
+            .sumeragi_npos_parameters()
+            .map_err(|error| error.map_rejection(|message| invalid(&message)))?
+            .map(|policy| {
+                (
+                    policy.evidence_horizon_blocks(),
+                    policy.slashing_delay_blocks(),
+                )
+            });
         if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
         {
-            return Err(pending(
-                "native State publication changed during history capture",
-            ));
+            return Err(pending("native State publication changed during history capture").into());
         }
         Ok(Some(Self {
             generation,
@@ -151,6 +155,7 @@ pub(in crate::sumeragi) struct HistoryScan {
     genesis_bytes: Option<ChargedBuffer<u8>>,
     evidence_cut: Option<LaneEvidenceScope>,
     completed: bool,
+    refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 
 impl HistoryScan {
@@ -158,10 +163,10 @@ impl HistoryScan {
         state: &State,
         lane: LaneId,
         incarnation: [u8; 32],
-    ) -> io::Result<Option<Self>> {
+    ) -> Result<Option<Self>, Attempt<io::Error>> {
         let generation = state.state_view_generation();
         if generation % 2 != 0 {
-            return Err(pending("native State publication is in progress"));
+            return Err(pending("native State publication is in progress").into());
         }
         let capture = {
             let view = state.view();
@@ -184,13 +189,11 @@ impl HistoryScan {
         capture: HistoryCapture,
         lane: LaneId,
         incarnation: [u8; 32],
-    ) -> Result<Self, (HistoryCapture, io::Error)> {
-        let prepared = (|| {
+    ) -> Result<Self, (HistoryCapture, Attempt<io::Error>)> {
+        let prepared: Result<_, Attempt<io::Error>> = (|| {
             let height = capture.original_tip.height();
             if height < 2 {
-                return Err(invalid(
-                    "native history requires a genesis/successor interval",
-                ));
+                return Err(invalid("native history requires a genesis/successor interval").into());
             }
             let state_bound = u64::try_from(capture.kura.native_context_archive_max_bytes().get())
                 .map_err(invalid)?;
@@ -267,6 +270,7 @@ impl HistoryScan {
             genesis_bytes: None,
             evidence_cut: None,
             completed: false,
+            refusal: None,
         })
     }
 
@@ -279,7 +283,7 @@ impl HistoryScan {
     pub(in crate::sumeragi) fn open_for_evidence(
         capture: HistoryCapture,
         scope: LaneEvidenceScope,
-    ) -> Result<Self, (HistoryCapture, io::Error)> {
+    ) -> Result<Self, (HistoryCapture, Attempt<io::Error>)> {
         if scope.admission_parent_height > capture.original_tip.height()
             || scope
                 .created_at
@@ -289,7 +293,7 @@ impl HistoryScan {
         {
             return Err((
                 capture,
-                invalid("lane evidence parent is outside its original root lifetime"),
+                invalid("lane evidence parent is outside its original root lifetime").into(),
             ));
         }
         let mut scan = Self::open_captured(capture, scope.lane, scope.incarnation)?;
@@ -312,7 +316,16 @@ impl HistoryScan {
 
     // Local archive admission refusal leaves the verified prefix, selected original record,
     // exact current carrier and retained directory descriptor untouched for the next call.
-    pub(in crate::sumeragi) fn complete(&mut self) -> io::Result<()> {
+    pub(in crate::sumeragi) fn complete(&mut self) -> Result<(), Attempt<io::Error>> {
+        let result = self.progress().map_err(original_history_attempt);
+        self.refusal = match &result {
+            Err(Attempt::Deferred(original)) => Some(original.clone()),
+            _ => None,
+        };
+        result
+    }
+
+    fn progress(&mut self) -> Result<(), Attempt<io::Error>> {
         self.completed = false;
         while self.next <= self.height {
             if self.current.is_none() {
@@ -324,35 +337,36 @@ impl HistoryScan {
                     if self.kura.native_consensus_gate().is_closed() {
                         return Err(io::Error::other(
                             "original native storage gate is closed; recovery is required",
-                        ));
+                        )
+                        .into());
                     }
                     // Kura's Option API cannot distinguish resource refusal from missing
                     // bytes. Neither outcome proves corrupt authority. Keep this original
                     // cut/cursor pending; a typed Kura read remains a separate prerequisite.
-                    return Err(io::ErrorKind::WouldBlock.into());
+                    return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock).into());
                 };
                 let length = norito::canonical_frame_len(block.as_ref())
                     .map_err(invalid)?
                     .checked_add(1)
                     .ok_or_else(|| invalid("native carrier byte length overflow"))?;
                 if length > MAX_FINALITY_BLOCK_BYTES {
-                    return Err(invalid(
-                        "native carrier exceeds its independent reader bound",
-                    ));
+                    return Err(
+                        invalid("native carrier exceeds its independent reader bound").into(),
+                    );
                 }
                 self.current = Some(block);
             }
             let block = self.current.as_ref().expect("retained original carrier");
             if self.next == self.height && block.hash() != self.carrier {
-                return Err(invalid(
-                    "native authority prefix differs from captured State tip",
-                ));
+                return Err(
+                    invalid("native authority prefix differs from captured State tip").into(),
+                );
             }
             if self.evidence_cut.is_some_and(|scope| {
                 self.next == scope.admission_parent_height
                     && block.hash() != scope.admission_parent_hash
             }) {
-                return Err(invalid("lane evidence admission parent carrier differs"));
+                return Err(invalid("lane evidence admission parent carrier differs").into());
             }
             if self.current_bytes.is_none() {
                 if self.read.is_none() {
@@ -391,13 +405,7 @@ impl HistoryScan {
                     Ok(artifacts) => Some(artifacts),
                     Err((read, error)) => {
                         self.artifacts = Some(read);
-                        let kind = error.kind();
-                        return Err(if kind == io::ErrorKind::WouldBlock {
-                            // Reporting local allocation refusal must not allocate a box.
-                            io::Error::from(kind)
-                        } else {
-                            io::Error::new(kind, error)
-                        });
+                        return Err(prefix_error(error));
                     }
                 }
             } else {
@@ -444,7 +452,8 @@ impl HistoryScan {
                 if self.next == self.height && !receipt.matches_original_tip(self.original_tip) {
                     return Err(invalid(
                         "verified authority prefix differs from original native execution result",
-                    ));
+                    )
+                    .into());
                 }
                 if let Some(scope) = self.evidence_cut
                     && self.next == scope.admission_parent_height
@@ -457,7 +466,8 @@ impl HistoryScan {
                 {
                     return Err(invalid(
                         "lane evidence parent differs from its original execution",
-                    ));
+                    )
+                    .into());
                 }
                 if selected.observe(receipt.block().header().height().get(), receipt.lanes())? {
                     *authority = Some(AuthorityRead::Payload(LanePayloadRead::from_verified(
@@ -574,27 +584,21 @@ pub(in crate::sumeragi) struct LaneEvidenceContext {
 impl HistoryScan {
     /// Validate the complete borrowed handoff before moving any original funded owner.
     /// Zero-copy field inspection still observes the ambient decoder field ceiling.
-    fn validate_evidence_completion(&self) -> io::Result<()> {
+    fn validate_evidence_completion(&self) -> Result<(), Attempt<io::Error>> {
         if !self.completed {
-            return Err(invalid(
-                "lane evidence history has not completed authentication",
-            ));
+            return Err(invalid("lane evidence history has not completed authentication").into());
         }
         let scope = self
             .evidence_cut
             .ok_or_else(|| invalid("missing original evidence cut"))?;
         let Some(AuthorityRead::Ready(authority)) = self.authority.as_ref() else {
-            return Err(invalid(
-                "original lane was not active at evidence admission",
-            ));
+            return Err(invalid("original lane was not active at evidence admission").into());
         };
         let Some(TipPayloadRead::Ready(payload)) = self.tip_payload.as_ref() else {
-            return Err(invalid("original admission payload is missing"));
+            return Err(invalid("original admission payload is missing").into());
         };
         if authority.created_at() != scope.created_at {
-            return Err(invalid(
-                "lane evidence creation differs from original authority",
-            ));
+            return Err(invalid("lane evidence creation differs from original authority").into());
         }
         let row = payload
             .custody_record(&scope.incarnation)
@@ -618,7 +622,8 @@ impl HistoryScan {
         {
             return Err(invalid(
                 "lane evidence admission is outside its original custody lifetime",
-            ));
+            )
+            .into());
         }
         Ok(())
     }
@@ -630,9 +635,9 @@ impl HistoryScan {
     )]
     pub(in crate::sumeragi) fn finish_evidence(
         self,
-    ) -> Result<LaneEvidenceContext, (Self, io::Error)> {
+    ) -> Result<LaneEvidenceContext, (Self, Attempt<io::Error>)> {
         if let Err(error) = self.validate_evidence_completion() {
-            return Err((self, error));
+            return Err((self, original_history_attempt(error)));
         }
         let scope = self.evidence_cut.expect("validated original evidence cut");
         let Some(AuthorityRead::Ready(authority)) = self.authority else {
@@ -655,20 +660,65 @@ impl HistoryScan {
     }
 }
 
-fn payload_error(error: LanePayloadError) -> io::Error {
-    if error.is_local_refusal() {
-        return io::ErrorKind::WouldBlock.into();
+// The compiled mutation restores the original erased producer outcome without injecting
+// faults into a configured node. Normal attempts move the exact original retry owner.
+fn original_history_attempt(error: Attempt<io::Error>) -> Attempt<io::Error> {
+    if cfg!(all(test, sumeragi_core_mutation = "HC51")) && matches!(error, Attempt::Deferred(_)) {
+        return io::Error::from(io::ErrorKind::WouldBlock).into();
     }
-    io::Error::new(io::ErrorKind::InvalidData, error)
+    error
 }
 
-fn archive_error(error: NativeContextArchiveError) -> io::Error {
-    if error.is_local_refusal() {
-        return io::ErrorKind::WouldBlock.into();
+/// Retain the original local attempt before either history consumer constructs a diagnostic.
+pub(in crate::sumeragi) fn payload_error(error: LanePayloadError) -> Attempt<io::Error> {
+    if let LanePayloadError::Codec(error) = error {
+        return norito_decode_attempt_error(error, |error| {
+            io::Error::new(io::ErrorKind::InvalidData, error)
+        });
+    }
+    if !error.is_local_refusal() {
+        return io::Error::new(io::ErrorKind::InvalidData, error).into();
     }
     match error {
-        NativeContextArchiveError::Io(error) => error,
-        error => io::Error::new(io::ErrorKind::InvalidData, error),
+        LanePayloadError::Admission(refusal) => Attempt::Deferred(refusal.into()),
+        LanePayloadError::Materialization(iroha_allocation::PrepaidBufferError::Allocation(
+            error,
+        ))
+        | LanePayloadError::Proof(
+            iroha_data_model::sumeragi_finality::NativeLaneStateProofError::Scratch(error),
+        ) => crate::sumeragi::storage_attempt::buffer(error),
+        error => io::Error::new(io::ErrorKind::InvalidData, error).into(),
+    }
+}
+
+fn archive_error(error: NativeContextArchiveError) -> Attempt<io::Error> {
+    let local = error.is_local_refusal();
+    match error {
+        NativeContextArchiveError::Allocation(error) if local => {
+            crate::sumeragi::storage_attempt::buffer(error)
+        }
+        NativeContextArchiveError::Codec(error) => norito_decode_attempt_error(error, |error| {
+            io::Error::new(io::ErrorKind::InvalidData, error)
+        }),
+        NativeContextArchiveError::Io(error) => error.into(),
+        error => io::Error::new(io::ErrorKind::InvalidData, error).into(),
+    }
+}
+
+fn prefix_error(error: PrefixArtifactsError) -> Attempt<io::Error> {
+    match error {
+        PrefixArtifactsError::Certificate(CertificateReadError::Admission(error))
+        | PrefixArtifactsError::Projection(PayloadBuildError::Admission(error))
+            if error.is_local_refusal() =>
+        {
+            crate::sumeragi::storage_attempt::byte(error)
+        }
+        PrefixArtifactsError::Certificate(CertificateReadError::Decode(error)) => {
+            norito_decode_attempt_error(error, |error| {
+                io::Error::new(io::ErrorKind::InvalidData, error)
+            })
+        }
+        error => io::Error::new(io::ErrorKind::InvalidData, error).into(),
     }
 }
 
@@ -684,15 +734,15 @@ mod tests {
         for requested in [1, 2] {
             let refused = ChargedBuffer::<u8>::new(requested, &budget).err().unwrap();
             let mapped = archive_error(NativeContextArchiveError::Allocation(refused));
-            assert_eq!(mapped.kind(), io::ErrorKind::WouldBlock);
-            assert!(mapped.get_ref().is_none());
+            assert_eq!(mapped.io_kind(), io::ErrorKind::WouldBlock);
+            assert!(matches!(mapped, Attempt::Deferred(_)));
             assert_eq!(budget.reserved_bytes(), 1);
         }
         let physical = archive_error(NativeContextArchiveError::Allocation(
             iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 1 },
         ));
-        assert_eq!(physical.kind(), io::ErrorKind::WouldBlock);
-        assert!(physical.get_ref().is_none());
+        assert_eq!(physical.io_kind(), io::ErrorKind::WouldBlock);
+        assert!(matches!(physical, Attempt::Deferred(_)));
         drop(held);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -704,8 +754,8 @@ mod tests {
         for requested in [1, 2] {
             let refused = budget.try_reserve_bytes(requested).err().unwrap();
             let mapped = payload_error(LanePayloadError::Admission(refused));
-            assert_eq!(mapped.kind(), io::ErrorKind::WouldBlock);
-            assert!(mapped.get_ref().is_none());
+            assert_eq!(mapped.io_kind(), io::ErrorKind::WouldBlock);
+            assert!(matches!(mapped, Attempt::Deferred(_)));
             assert_eq!(budget.reserved_bytes(), 1);
         }
         let physical = payload_error(LanePayloadError::Materialization(
@@ -713,12 +763,14 @@ mod tests {
                 iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 1 },
             ),
         ));
-        assert_eq!(physical.kind(), io::ErrorKind::WouldBlock);
-        assert!(physical.get_ref().is_none());
+        assert_eq!(physical.io_kind(), io::ErrorKind::WouldBlock);
+        assert!(matches!(physical, Attempt::Deferred(_)));
         for error in [LanePayloadError::Source, LanePayloadError::Commitment] {
             let mapped = payload_error(error);
-            assert_eq!(mapped.kind(), io::ErrorKind::InvalidData);
-            assert!(mapped.get_ref().unwrap().is::<LanePayloadError>());
+            assert_eq!(mapped.io_kind(), io::ErrorKind::InvalidData);
+            assert!(
+                matches!(&mapped, Attempt::Rejected(error) if error.get_ref().unwrap().is::<LanePayloadError>())
+            );
         }
         drop(held);
         assert_eq!(budget.reserved_bytes(), 0);
@@ -727,9 +779,9 @@ mod tests {
     #[test]
     fn missing_archive_and_malformed_source_are_not_absence_or_capacity_refusal() {
         let io = archive_error(NativeContextArchiveError::Io(
-            io::ErrorKind::NotFound.into(),
+            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
         ));
-        assert_eq!(io.kind(), io::ErrorKind::NotFound);
+        assert_eq!(io.io_kind(), io::ErrorKind::NotFound);
         for error in [
             NativeContextArchiveError::Source("substituted archive"),
             NativeContextArchiveError::Limit {
@@ -738,8 +790,10 @@ mod tests {
             },
         ] {
             let mapped = archive_error(error);
-            assert_eq!(mapped.kind(), io::ErrorKind::InvalidData);
-            assert!(mapped.get_ref().unwrap().is::<NativeContextArchiveError>());
+            assert_eq!(mapped.io_kind(), io::ErrorKind::InvalidData);
+            assert!(
+                matches!(&mapped, Attempt::Rejected(error) if error.get_ref().unwrap().is::<NativeContextArchiveError>())
+            );
         }
     }
 }
@@ -791,9 +845,9 @@ mod artifact_tests {
         assert_eq!(budget.reserved_bytes(), artifact_baseline);
         budget.set_limit_bytes(budget.reserved_bytes());
         let error = scan.complete().unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
         assert!(
-            error.get_ref().is_none(),
+            matches!(error, Attempt::Deferred(_)),
             "local refusal has no diagnostic box"
         );
         assert_eq!(scan.next, 2);
@@ -804,7 +858,7 @@ mod artifact_tests {
             bytes
         );
         assert_eq!(
-            scan.complete().unwrap_err().kind(),
+            scan.complete().unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         assert_eq!(
@@ -900,7 +954,7 @@ mod capture_tests {
                 HistoryCapture::from_view(chain.state(), &view, invalid)
                     .err()
                     .unwrap()
-                    .kind(),
+                    .io_kind(),
                 io::ErrorKind::WouldBlock
             );
         }
@@ -908,7 +962,7 @@ mod capture_tests {
             HistoryCapture::from_view(other.state(), &view, other.state().state_view_generation())
                 .err()
                 .unwrap()
-                .kind(),
+                .io_kind(),
             io::ErrorKind::InvalidData
         );
     }
@@ -933,7 +987,7 @@ mod capture_tests {
             HistoryCapture::from_view(&other, &view, other.state_view_generation())
                 .err()
                 .unwrap()
-                .kind(),
+                .io_kind(),
             io::ErrorKind::InvalidData,
         );
         let mut view = state.view();
@@ -949,7 +1003,7 @@ mod capture_tests {
             HistoryCapture::from_view(state, &view, state.state_view_generation())
                 .err()
                 .unwrap()
-                .kind(),
+                .io_kind(),
             io::ErrorKind::InvalidData,
         );
     }
@@ -1063,10 +1117,10 @@ mod evidence_cut_tests {
         for claim in claims {
             let result = HistoryScan::open_for_evidence(capture(chain.state()), claim);
             match result {
-                Err((_, error)) => assert_eq!(error.kind(), io::ErrorKind::InvalidData),
+                Err((_, error)) => assert_eq!(error.io_kind(), io::ErrorKind::InvalidData),
                 Ok(mut read) => {
                     if let Err(error) = read.complete() {
-                        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                        assert_eq!(error.io_kind(), io::ErrorKind::InvalidData);
                     }
                     assert!(read.finish_evidence().is_err());
                 }
@@ -1084,7 +1138,7 @@ mod evidence_cut_tests {
         let mut read = HistoryScan::open_for_evidence(capture(chain.state()), claim).unwrap();
         read.complete().unwrap();
         assert_eq!(
-            read.finish_evidence().err().unwrap().1.kind(),
+            read.finish_evidence().err().unwrap().1.io_kind(),
             io::ErrorKind::InvalidData
         );
     }
@@ -1103,7 +1157,7 @@ mod evidence_cut_tests {
         // namespace check must revoke completion before a consuming call can extract it.
         read.policy = None;
         assert_eq!(
-            read.complete().unwrap_err().kind(),
+            read.complete().unwrap_err().io_kind(),
             io::ErrorKind::InvalidData
         );
         assert!(read.finish().is_none());
@@ -1120,7 +1174,7 @@ mod evidence_cut_tests {
         let mut read = HistoryScan::open_for_evidence(capture(state), claim).unwrap();
         budget.set_limit_bytes(budget.reserved_bytes());
         assert_eq!(
-            read.complete().unwrap_err().kind(),
+            read.complete().unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         assert!(!read.completed);

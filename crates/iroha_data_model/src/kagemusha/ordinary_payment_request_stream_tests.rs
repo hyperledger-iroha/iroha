@@ -62,13 +62,13 @@ fn ordinary_request_canonical_stream_matches_sole_encoder_all376_platform_widths
         value.evidence = if variant.apple {
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
                 raw_assertion: (0..variant.evidence_length)
-                    .map(|i| (i as u8).wrapping_mul(13))
+                    .map(|i| u8::try_from(i % 256).unwrap().wrapping_mul(13))
                     .collect(),
             }
         } else {
             KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
                 signature_der: (0..variant.evidence_length)
-                    .map(|i| (i as u8).wrapping_mul(17))
+                    .map(|i| u8::try_from(i % 256).unwrap().wrapping_mul(17))
                     .collect(),
             }
         };
@@ -97,7 +97,10 @@ fn ordinary_request_canonical_stream_matches_sole_encoder_all376_platform_widths
         }
         let frame = &original[variant.layout.original.clone()];
         let header = norito::core::Header::read(frame).unwrap();
-        assert_eq!(header.length as usize, variant.archive_payload.len());
+        assert_eq!(
+            usize::try_from(header.length).expect("bounded native frame length"),
+            variant.archive_payload.len()
+        );
         assert_eq!(
             variant.archive_payload.start,
             native_layout

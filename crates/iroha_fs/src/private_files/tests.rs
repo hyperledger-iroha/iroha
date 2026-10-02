@@ -190,7 +190,7 @@ fn inventory_counts_mode_zero_tombstones_but_rejects_links_and_nonprivate_modes(
     let tombstone = directory.create_retained_private("incomplete", 64).unwrap();
     std::fs::set_permissions(
         directory.path().join("incomplete"),
-        std::fs::Permissions::from_mode(0),
+        std::fs::Permissions::from_mode(0o0),
     )
     .unwrap();
     drop(tombstone);
@@ -318,7 +318,7 @@ fn mode_zero_inventory_authenticates_extended_acl_without_reading_file_data() {
     let (_temporary, directory) = store();
     let tombstone = directory.create_retained_private("incomplete", 64).unwrap();
     let path = directory.path().join("incomplete");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
     drop(tombstone);
     assert!(
         Command::new("chmod")

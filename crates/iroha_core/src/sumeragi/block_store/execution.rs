@@ -1,17 +1,18 @@
 //! Bind the exact executed block, including all outputs, to its certified result preimage.
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use iroha_data_model::{
     block::SignedBlock,
     sumeragi_finality::{CommitmentError, ExecutionResultCommitment},
 };
 use std::io;
 
-pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
+pub(super) fn validate(block: &SignedBlock) -> Result<(), Attempt<io::Error>> {
     let invalid = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
     let certificate = block
         .commit_certificate()
         .ok_or_else(|| invalid("executed block has no result certificate"))?;
     if !block.has_results() {
-        return Err(invalid("certified block has no execution results"));
+        return Err(invalid("certified block has no execution results").into());
     }
     block
         .validate_proposal_commitments()
@@ -23,17 +24,32 @@ pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
     // cumulative decode budgets. No schedule decoded here selects availability authority.
     let result =
         ExecutionResultCommitment::decode(certificate.result_preimage()).map_err(|error| {
-            // Local refusal preserves the original certified read. Its outward category must
-            // need no replacement allocation while the original pool or allocator is exhausted.
-            if matches!(&error, CommitmentError::Resource(_))
-                && !cfg!(all(test, sumeragi_core_mutation = "HC20"))
-            {
-                #[cfg(all(test, sumeragi_core_mutation = "HC24"))]
-                return io::Error::new(io::ErrorKind::WouldBlock, error);
-                #[cfg(not(all(test, sumeragi_core_mutation = "HC24")))]
-                return io::ErrorKind::WouldBlock.into();
+            if let CommitmentError::Resource(resource) = error {
+                if !cfg!(all(test, sumeragi_core_mutation = "HC20")) {
+                    #[cfg(all(test, sumeragi_core_mutation = "HC24"))]
+                    return io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        CommitmentError::Resource(resource),
+                    )
+                    .into();
+                    #[cfg(not(all(test, sumeragi_core_mutation = "HC24")))]
+                    return crate::execution_attempt::norito_decode_attempt_error(
+                        resource.into(),
+                        |_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                CommitmentError::Resource(resource),
+                            )
+                        },
+                    );
+                }
+                return io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    CommitmentError::Resource(resource),
+                )
+                .into();
             }
-            io::Error::new(io::ErrorKind::InvalidData, error)
+            io::Error::new(io::ErrorKind::InvalidData, error).into()
         })?;
     let (len, hash) = block
         .executed_block_wire_identity()
@@ -44,9 +60,7 @@ pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
         || result.execution.transaction_input_commitment != block.network_input_merkle_commitment()
         || result.execution.transaction_output_commitment != block.output_merkle_commitment()
     {
-        return Err(invalid(
-            "executed block differs from its certified result commitment",
-        ));
+        return Err(invalid("executed block differs from its certified result commitment").into());
     }
     Ok(())
 }

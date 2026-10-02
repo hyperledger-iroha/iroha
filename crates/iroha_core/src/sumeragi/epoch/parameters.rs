@@ -4,13 +4,16 @@
 //! threshold-beacon pulses. The pre-release commit/reveal VRF lifecycle and
 //! its peer messages are not part of the first-release protocol.
 
-use crate::state::WorldReadOnly;
+use crate::{execution_attempt::ExecutionAttemptError as Attempt, state::WorldReadOnly};
 use iroha_data_model::parameter::system::ConsensusMode;
 use thiserror::Error;
 
 /// Failure while resolving or validating first-release NPoS consensus state.
 #[derive(Debug, Error)]
 pub(crate) enum NposParameterError {
+    /// The committed policy is malformed or outside its intrinsic bounds.
+    #[error("invalid NPoS parameters: {0}")]
+    Invalid(String),
     /// NPoS requires the signed genesis/on-chain parameter snapshot.
     #[error("NPoS requires committed sumeragi_npos_parameters")]
     MissingCommittedParameters,
@@ -19,20 +22,21 @@ pub(crate) enum NposParameterError {
 /// Resolve the committed epoch length used by the first-release NPoS schedule.
 pub(crate) fn committed_epoch_length_blocks(
     world: &impl WorldReadOnly,
-) -> Result<u64, NposParameterError> {
+) -> Result<u64, Attempt<NposParameterError>> {
     world
         .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(NposParameterError::Invalid))?
         .map(|params| params.epoch_length_blocks().get())
-        .ok_or(NposParameterError::MissingCommittedParameters)
+        .ok_or(NposParameterError::MissingCommittedParameters.into())
 }
 
 /// Resolve the signed on-chain delay before consensus-evidence penalties apply.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
-) -> Option<u64> {
-    world
-        .sumeragi_npos_parameters()
-        .map(|params| params.slashing_delay_blocks())
+) -> Result<Option<u64>, Attempt<String>> {
+    Ok(world
+        .sumeragi_npos_parameters()?
+        .map(|params| params.slashing_delay_blocks()))
 }
 /// Resolve the epoch index for a height under an authenticated frozen mode.
 ///
@@ -43,7 +47,7 @@ pub(crate) fn epoch_for_height_from_world(
     world: &impl WorldReadOnly,
     height: u64,
     frozen_mode: ConsensusMode,
-) -> Result<u64, NposParameterError> {
+) -> Result<u64, Attempt<NposParameterError>> {
     match frozen_mode {
         ConsensusMode::Permissioned => Ok(0),
         ConsensusMode::Npos => {
@@ -132,7 +136,9 @@ mod tests {
         let world = state.world_view();
         assert!(matches!(
             epoch_for_height_from_world(&world, 1, ConsensusMode::Npos),
-            Err(NposParameterError::MissingCommittedParameters)
+            Err(Attempt::Rejected(
+                NposParameterError::MissingCommittedParameters
+            ))
         ));
     }
 }

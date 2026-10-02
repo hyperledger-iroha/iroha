@@ -326,7 +326,11 @@ fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
             .to_string()
             .contains("committed network XOR")
     );
-    let mut parameters = stx.world.sumeragi_npos_parameters().unwrap();
+    let mut parameters = stx
+        .world
+        .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
+        .unwrap();
     parameters.xor_asset_definition_id = other;
     stx.world
         .parameters
@@ -382,18 +386,22 @@ fn staking_and_reward_configuration_reject_registered_xor_lookalike() {
             &validator,
             stx.block_unix_timestamp_ms(),
         );
-        let rewards = resolve_nexus_fee_asset_definition(&stx);
+        let rewards = resolve_nexus_fee_asset_definition(&mut stx);
         if configured == &committed_xor {
             assert_eq!(stake.unwrap().asset_definition, committed_xor);
             assert_eq!(rewards.unwrap(), committed_xor);
         } else {
-            for error in [stake.unwrap_err(), rewards.unwrap_err()] {
+            for error in [
+                crate::execution_attempt::expect_completed_rejection(stake.unwrap_err()),
+                rewards.unwrap_err(),
+            ] {
                 assert!(error.to_string().contains("committed network XOR"));
             }
         }
         assert_eq!(
             stx.world
                 .sumeragi_npos_parameters()
+                .expect("original policy decoder completes")
                 .unwrap()
                 .xor_asset_definition_id,
             committed_xor,

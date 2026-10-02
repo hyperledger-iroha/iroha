@@ -37,15 +37,22 @@ const KEY_DOMAIN: &[u8] = b"iroha:native-consensus-evidence:v1\0";
 /// An invalid proof is distinct from local original-history or preparation refusal.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EvidenceAdmissionError {
+    /// Original signed policy read, retaining unfinished local decode work.
+    #[error(transparent)]
+    Policy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
     /// Deterministically invalid signed input, replay or bounded canonical state.
     #[error("native evidence: {0}")]
     Invalid(String),
     /// A source was missing, corrupt or locally refused before authenticated observation.
     #[error("native evidence source: {0}")]
-    History(iroha_data_model::query::error::QueryExecutionFail),
+    History(
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    ),
     /// An original retained lane read is pending, missing or invalid locally.
     #[error("native lane evidence source: {0}")]
-    Source(std::io::Error),
+    Source(crate::execution_attempt::ExecutionAttemptError<std::io::Error>),
     /// Original process capacity refused preparation.
     #[error(transparent)]
     Preparation(#[from] EvidencePreparationError),
@@ -103,11 +110,11 @@ pub(crate) fn evidence_key(evidence: &Evidence) -> Hash {
     .expect("incremental evidence hashing is infallible")
 }
 
-fn horizon(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
-    world
-        .sumeragi_npos_parameters()
+fn horizon(world: &(impl WorldReadOnly + ?Sized)) -> Result<Option<u64>, EvidenceAdmissionError> {
+    Ok(world
+        .sumeragi_npos_parameters()?
         .map(|parameters| parameters.evidence_horizon_blocks())
-        .filter(|value| *value > 0)
+        .filter(|value| *value > 0))
 }
 /// Terminal root reports remain replay fences through their signed offence horizon. Lane
 /// reports retain their exact original incarnation until strictly after retirement admission
@@ -116,18 +123,18 @@ pub(crate) fn committed_evidence_record_is_prunable(
     world: &(impl WorldReadOnly + ?Sized),
     record: &EvidenceRecord,
     height: u64,
-) -> bool {
+) -> Result<bool, EvidenceAdmissionError> {
     use iroha_data_model::block::consensus::EvidenceScope;
     if !record.penalty_status.is_terminal() {
-        return false;
+        return Ok(false);
     }
-    let Some(parameters) = world.sumeragi_npos_parameters() else {
-        return false;
+    let Some(parameters) = world.sumeragi_npos_parameters()? else {
+        return Ok(false);
     };
     if parameters.evidence_horizon_blocks() == 0 {
-        return false;
+        return Ok(false);
     }
-    match record.attribution.scope {
+    Ok(match record.attribution.scope {
         EvidenceScope::Root => {
             height.saturating_sub(record.attribution.height) > parameters.evidence_horizon_blocks()
         }
@@ -152,7 +159,7 @@ pub(crate) fn committed_evidence_record_is_prunable(
                     .admission_deadline()
                     .is_ok_and(|deadline| deadline.is_some_and(|deadline| height > deadline))
         }),
-    }
+    })
 }
 /// Borrowed count and byte-capacity observation, without copying nested proofs.
 pub(crate) struct CommittedEvidenceCapacity {
@@ -192,14 +199,15 @@ pub(crate) fn committed_evidence_capacity(
 pub(crate) fn committed_evidence_prune_keys_from_state(
     state: &State,
     height: u64,
-) -> Result<ChargedBuffer<Hash>, EvidencePreparationError> {
+) -> Result<ChargedBuffer<Hash>, EvidenceAdmissionError> {
     let mut keys = ChargedBuffer::new(
         MAX_COMMITTED_EVIDENCE_RECORDS,
         state.evidence_preparation_budget(),
-    )?;
+    )
+    .map_err(EvidencePreparationError::from)?;
     let view = state.view();
     for (key, record) in view.world().consensus_evidence().iter() {
-        if committed_evidence_record_is_prunable(view.world(), record, height) {
+        if committed_evidence_record_is_prunable(view.world(), record, height)? {
             keys.try_push(*key)
                 .map_err(|_| EvidencePreparationError::Invariant)?;
         }
@@ -273,7 +281,7 @@ fn validate_persisted_records_inner(
     }
     let parameters = view
         .world()
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .ok_or_else(|| invalid("restored evidence requires signed NPoS parameters"))?;
     let committed_height =
         u64::try_from(view.height()).map_err(|_| invalid("restored height overflows"))?;
@@ -407,8 +415,13 @@ struct LocalLane {
     created_at: u64,
 }
 impl LocalLane {
-    fn admits_at(&self, world: &impl WorldReadOnly, carrier: u64) -> bool {
-        let Some(policy) = world.sumeragi_npos_parameters() else {
+    fn admits_at(
+        &self,
+        world: &impl WorldReadOnly,
+        policy: Option<&iroha_data_model::parameter::system::SumeragiNposParameters>,
+        carrier: u64,
+    ) -> bool {
+        let Some(policy) = policy else {
             return false;
         };
         world.sumeragi_lanes().custody.iter().any(|row| {
@@ -495,11 +508,19 @@ impl NativeEvidencePool {
         self.bytes = bytes;
         Ok(true)
     }
-    fn prune(&mut self, committed: &impl WorldReadOnly, height: u64) {
+    fn prune(
+        &mut self,
+        committed: &impl WorldReadOnly,
+        height: u64,
+    ) -> Result<(), EvidenceAdmissionError> {
         let Some(entries) = &mut self.entries else {
-            return;
+            return Ok(());
         };
-        let horizon = horizon(committed);
+        let policy = committed.sumeragi_npos_parameters()?;
+        let horizon = policy
+            .as_ref()
+            .map(|parameters| parameters.evidence_horizon_blocks())
+            .filter(|value| *value > 0);
         let mut index = 0;
         while index < entries.as_slice().len() {
             let entry = &entries.as_slice()[index];
@@ -510,7 +531,7 @@ impl NativeEvidencePool {
                             height.saturating_sub(entry.subject_height) > horizon
                         })
                     },
-                    |lane| !lane.admits_at(committed, height),
+                    |lane| !lane.admits_at(committed, policy.as_ref(), height),
                 )
             {
                 let last = entries.as_slice().len() - 1;
@@ -525,6 +546,7 @@ impl NativeEvidencePool {
         entries
             .as_mut_slice()
             .sort_unstable_by_key(|entry| entry.key);
+        Ok(())
     }
 }
 
@@ -537,7 +559,7 @@ pub(crate) fn observe(
     let evidence = Evidence::from_native(native).map_err(EvidenceAdmissionError::from)?;
     let generation = state.state_view_generation();
     let view = state.view();
-    let Some(horizon) = horizon(view.world()) else {
+    let Some(horizon) = horizon(view.world())? else {
         return Ok(false);
     };
     let height =
@@ -551,7 +573,7 @@ pub(crate) fn observe(
         return Ok(false);
     }
     let mut pending = state.native_pending_evidence.lock();
-    pending.prune(view.world(), height);
+    pending.prune(view.world(), height)?;
     pending.retain(
         &evidence,
         subject_height,
@@ -593,7 +615,11 @@ pub(crate) fn observe_lane(
         instance: instance.0,
         created_at: row.created_at,
     };
-    if !scope.admits_at(view.world(), carrier) {
+    if !scope.admits_at(
+        view.world(),
+        view.world().sumeragi_npos_parameters()?.as_ref(),
+        carrier,
+    ) {
         return Ok(false);
     }
     let evidence = Evidence::from_native(native).map_err(EvidenceAdmissionError::from)?;
@@ -601,7 +627,7 @@ pub(crate) fn observe_lane(
         return Ok(false);
     }
     let mut pending = state.native_pending_evidence.lock();
-    pending.prune(view.world(), carrier);
+    pending.prune(view.world(), carrier)?;
     pending.retain(
         &evidence,
         subject_height,
@@ -618,22 +644,24 @@ pub(crate) fn pending_evidence_admissions(
     height: u64,
     generation: u64,
 ) -> Vec<Evidence> {
-    let captured = (|| -> Result<ChargedBuffer<ChargedBuffer<u8>>, EvidencePreparationError> {
+    let captured = (|| -> Result<ChargedBuffer<ChargedBuffer<u8>>, EvidenceAdmissionError> {
         let view = state.view();
         if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
         {
-            return Err(EvidencePreparationError::OriginalHistoryPending);
+            return Err(EvidencePreparationError::OriginalHistoryPending.into());
         }
         let mut pending = state.native_pending_evidence.lock();
-        pending.prune(view.world(), height);
+        pending.prune(view.world(), height)?;
         let entries = pending
             .entries
             .as_ref()
             .map_or(&[][..], ChargedBuffer::as_slice);
         let budget = state.evidence_preparation_budget();
-        let mut frames = ChargedBuffer::new(entries.len(), budget)?;
+        let mut frames =
+            ChargedBuffer::new(entries.len(), budget).map_err(EvidencePreparationError::from)?;
         for entry in entries {
-            let mut frame = ChargedBuffer::new(entry.frame.as_slice().len(), budget)?;
+            let mut frame = ChargedBuffer::new(entry.frame.as_slice().len(), budget)
+                .map_err(EvidencePreparationError::from)?;
             frame
                 .append(entry.frame.as_slice())
                 .map_err(|_| EvidencePreparationError::Invariant)?;
@@ -749,7 +777,11 @@ pub(crate) fn prepare<'state>(
     let view = state.view();
     let no_effects = iroha_data_model::consensus::NposConsensusEffects::default();
     let effects = block.npos_consensus_effects().unwrap_or(&no_effects);
-    let npos = view.world().sumeragi_npos_parameters().is_some();
+    let npos = view
+        .world()
+        .sumeragi_npos_parameters()
+        .map_err(|error| classify(error.into()))?
+        .is_some();
     let tip = view.native_execution_tip();
     drop(view);
     let admissions = admission::prepare_admissions(
@@ -783,8 +815,7 @@ pub(crate) fn prepare<'state>(
         ));
     }
     let prune = if block.npos_consensus_effects().is_some() {
-        committed_evidence_prune_keys_from_state(state, header.height().get())
-            .map_err(BlockValidationError::EvidencePreparation)?
+        committed_evidence_prune_keys_from_state(state, header.height().get()).map_err(classify)?
     } else {
         ChargedBuffer::new(0, state.evidence_preparation_budget())
             .map_err(EvidencePreparationError::from)
@@ -810,7 +841,11 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
     use crate::block::BlockValidationError;
     if matches!(
         &error,
-        EvidenceAdmissionError::Source(_) | EvidenceAdmissionError::History(_)
+        EvidenceAdmissionError::Source(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            _
+        )) | EvidenceAdmissionError::History(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(_)
+        )
     ) && admission::retryable(&error)
     {
         return BlockValidationError::EvidencePreparation(
@@ -818,19 +853,31 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
         );
     }
     match error {
+        EvidenceAdmissionError::Policy(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+        ) => BlockValidationError::ExecutionDeferred(reason),
+        EvidenceAdmissionError::Policy(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error),
+        ) => BlockValidationError::NposEffectsInvalid(error),
         EvidenceAdmissionError::Preparation(error) => {
             BlockValidationError::EvidencePreparation(error)
         }
-        EvidenceAdmissionError::Source(error) => {
-            BlockValidationError::LocalStorageRecoveryRequired {
-                reason: error.to_string(),
-            }
-        }
-        EvidenceAdmissionError::History(error) => {
-            BlockValidationError::LocalStorageRecoveryRequired {
-                reason: error.to_string(),
-            }
-        }
+        EvidenceAdmissionError::Source(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local),
+        ) => BlockValidationError::ExecutionDeferred(local),
+        EvidenceAdmissionError::Source(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error),
+        ) => BlockValidationError::LocalStorageRecoveryRequired {
+            reason: error.to_string(),
+        },
+        EvidenceAdmissionError::History(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local),
+        ) => BlockValidationError::ExecutionDeferred(local),
+        EvidenceAdmissionError::History(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error),
+        ) => BlockValidationError::LocalStorageRecoveryRequired {
+            reason: error.to_string(),
+        },
         EvidenceAdmissionError::Invalid(error) => BlockValidationError::NposEffectsInvalid(error),
     }
 }

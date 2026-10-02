@@ -22,6 +22,10 @@ Purpose
       error                    build/execution failed, timed out, or a filter matched no
                                executed test. A process failure is not a mutation kill.
 
+    Deadlines classify execution as an error. After a deadline the runner waits for
+    its owned Cargo child to exit naturally and retains the output without sending
+    termination signals. A late completed result never counts as a mutation kill.
+
     The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
     extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
     (the as-built rules E1-E7 of Appendix E, with their regression tests) and MR-* (revision-4
@@ -56,7 +60,6 @@ import json
 import os
 import queue
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -537,6 +540,39 @@ CORE_MUTATIONS = [
       ["queue::router::alias_registry_routing_tests::parameter_control_preserves_global_physical_route_before_private_account_rule",
        "queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal",
        "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap"]),
+
+    m("HC42", "SNS auto-renew: reject exact current-owner replacement after authenticated account rekey",
+      ['smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_current_owner_can_replace_stale_auto_renew_configuration', 'smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_same_configuration_requires_owner_replacement_cas', 'smartcontracts::isi::sns::rekey_auto_renew_tests::signed_rekey_disabled_clean_record_requires_exact_owner_revision']),
+    m("HC43", "certified history: classify an original local read refusal as malformed committed input",
+      ['sumeragi::certified_chain::refusal_tests::original_result_frame_refusal_is_local_and_same_bytes_retry', 'sumeragi::certified_chain::refusal_tests::original_successor_history_refusal_is_local_and_same_source_retries', 'sumeragi::certified_chain::tests::state_certificate::state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_source']),
+    m("HC45", "payload worker: discard the original typed local decoder refusal",
+      ["sumeragi::executor::payload_refusal_tests::original_available_payload_local_decode_refusal_keeps_typed_worker_reason_and_retry"]),
+    m("HC46", "decode classifier: reject a valid original under a surviving narrower caller depth",
+      ["execution_attempt::tests::original_surviving_narrow_decode_depth_refusal_retries_identical_bytes",
+       "sumeragi::executor::payload_refusal_tests::original_available_payload_narrow_depth_refusal_keeps_typed_worker_reason_and_retry"]),
+    m("HC44", "execution worker: discard original validation and certificate read refusal before retry diagnostics",
+      ["sumeragi::executor::validation_refusal_tests::original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry",
+       "sumeragi::executor::validation_refusal_tests::original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution"]),
+    m("HC49", "staking payload: erase original evidence and State preparation refusal owners",
+      ["sumeragi::penalties::tests::original_staking_payload_refusal_retains_evidence_pool_and_exact_assembly_retry",
+       "sumeragi::executor::publication_tests::original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry"]),
+
+
+    m("HC47", "availability attempts: discard original local read or queued retry ownership",
+      ['sumeragi::certified_chain::refusal_tests::original_availability_history_refusal_is_pending_without_corruption', 'sumeragi::certified_chain::refusal_tests::original_availability_constructor_refusal_retries_without_installing_authority', 'sumeragi::driver::exec::refusal_tests::append_refusal_keeps_original_commit_and_release_owner_until_durable', 'sumeragi::driver::serve::tests::refused_metadata_owner_cannot_be_replaced_by_another_peer_during_backoff']),
+    m("HC51", "lane history: erase original archive, prefix, evidence or proposal policy refusal",
+      ['sumeragi::runtime_availability::history::source_refusal_tests::original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix', 'sumeragi::runtime_availability::history::source_refusal_tests::original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier', 'sumeragi::runtime_availability::history::source_refusal_tests::original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut', 'sumeragi::lanes::registry::tests::original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry', 'sumeragi::evidence::tests::original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection', 'sumeragi::executor::publication_tests::original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry']),
+    m("HC53", "network time: omit host suspension from admission time and probe custody",
+      ['time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes', 'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip']),
+    m("HC48", "incumbent authority and key lifecycle: turn local read refusal into completed instruction failure",
+      ['state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry']),
+    m("HC50", "original NPoS policy: erase local decoder refusal as absent authority",
+      ['state::validator_committee::tests::refusal::original_npos_parameter_refusal_does_not_become_missing_staking_policy', 'state::validator_committee::tests::refusal::original_npos_exit_policy_refusal_keeps_stake_and_same_signed_retry', 'state::validator_committee::tests::refusal::original_npos_reserve_validation_refuses_without_changing_current_or_undo', 'smartcontracts::ivm::host::return_resource_tests::original_npos_policy_refusal_preserves_host_seed_projection_and_retries', 'sumeragi::evidence::tests::original_npos_policy_refusal_cannot_prune_retained_evidence', 'state::validator_committee::tests::refusal::late_original_npos_activation_read_refusal_rolls_back_and_same_signed_retry', 'sumeragi::evidence_history::lane::tests::original_lane_observer_late_policy_refusal_retains_observation_and_retries']),
+
+    m("HC52", "checkpoint reader: turn original binary decoder refusal into completed invalidity",
+      ['sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source']),
+
+
 ]
 
 
@@ -596,14 +632,15 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     else:
         cmd += ["--"] + list(filters)
     started = time.monotonic()
-    # A new session: on timeout only this command's own process group is killed.
+    # Own this child session, but never signal Cargo when a deadline is missed.
     proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = proc.communicate(timeout=timeout or None)
         code = proc.returncode
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        # Keep the deadline verdict even if the naturally completed harness later
+        # passes or reports a failed test; neither can qualify a late mutation.
         out, _ = proc.communicate()
         code = None
     elapsed = time.monotonic() - started
@@ -755,11 +792,11 @@ def main():
     parser.add_argument("--core-profile", choices=("release", "test"),
                         help="Core-only build profile (default: release); identical for baseline and mutant")
     parser.add_argument("--timeout-build", type=int, default=1800,
-                        help="seconds per build (0 waits without terminating it)")
+                        help="seconds per build deadline (0 disables its deadline)")
     parser.add_argument("--timeout-test", type=int, default=900,
-                        help="seconds per named-test run (0 waits without terminating it)")
+                        help="seconds per named-test deadline (0 disables its deadline)")
     parser.add_argument("--timeout-scenario", type=int, default=3600,
-                        help="seconds per scenario run (0 waits without terminating it)")
+                        help="seconds per scenario deadline (0 disables its deadline)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
     if args.target_dir is None:

@@ -163,7 +163,7 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
                 .add_permission(delegation),
         ))
         .build_raw()?
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     fs::write(manifest, json::to_vec(&raw)?)?;
     Ok(client_path)
 }
@@ -233,7 +233,9 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
         let mut npos = parameters
             .custom
             .get(&id)
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten()
             .ok_or_else(|| eyre!("native localnet omitted valid signed NPoS parameters"))?;
         ensure!(
             npos.max_validators == 4,
@@ -258,7 +260,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
         "native fixture must have one structured parameter block"
     );
     let raw = RawGenesisTransaction::from_json_slice_at_path(&json::to_vec(&value)?, path)?
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     fs::write(path, json::to_vec(&raw)?)?;
     Ok(())
 }

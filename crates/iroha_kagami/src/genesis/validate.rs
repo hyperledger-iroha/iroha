@@ -249,7 +249,8 @@ mod tests {
         .build_raw()
         .expect("complete permissioned validation fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), manifest).expect("write manifest");
@@ -284,7 +285,8 @@ mod tests {
         .build_raw()
         .expect("complete mismatched validation fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
 
         let error = validate_consensus_manifest(&manifest)
             .expect_err("embedded topology must match the KAGEMUSHA authority exactly");
@@ -309,7 +311,8 @@ mod tests {
         .build_raw()
         .expect("complete NPoS validation fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), json).expect("write manifest");

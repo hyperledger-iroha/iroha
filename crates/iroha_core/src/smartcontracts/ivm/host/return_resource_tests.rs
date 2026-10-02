@@ -243,3 +243,53 @@ fn vrf_seed_syscall_keeps_deterministic_guest_oom_status() {
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), 3);
 }
+
+#[test]
+fn original_npos_policy_refusal_preserves_host_seed_projection_and_retries() {
+    use crate::{
+        state::{World, WorldReadOnly},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
+    };
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config.genesis_parameters.push(Parameter::Custom(
+        SumeragiNposParameters::default().into_custom_parameter(),
+    ));
+    let chain = CertifiedTestChain::start(config).unwrap();
+    let view = chain.state().view();
+    let original = view
+        .world()
+        .parameters()
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .unwrap();
+    let bytes = original.payload().get().to_owned();
+    let mut host = CoreHost::new(iroha_test_samples::ALICE_ID.clone());
+    host.vrf_epoch_seeds.insert(7, [0x42; 32]);
+    let before = host.vrf_epoch_seeds.clone();
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || host.set_vrf_epoch_seeds_from_state(&view),
+    )
+    .unwrap_err();
+    let ExecutionAttemptError::Deferred(refusal) = error else {
+        panic!("original policy refusal cleared completed seeds: {error:?}");
+    };
+    assert_eq!(
+        refusal.reason(),
+        ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+    );
+    assert!(refusal.allocation_refusal().is_none());
+    assert_eq!(host.vrf_epoch_seeds, before);
+    assert_eq!(original.payload().get(), &bytes);
+    host.set_vrf_epoch_seeds_from_state(&view).unwrap();
+    assert!(
+        host.vrf_epoch_seeds.is_empty(),
+        "the authenticated source has no finalized pulses"
+    );
+    assert_eq!(original.payload().get(), &bytes);
+}

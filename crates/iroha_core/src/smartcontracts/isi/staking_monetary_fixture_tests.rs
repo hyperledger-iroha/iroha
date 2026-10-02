@@ -16,7 +16,12 @@ fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
         .get_mut()
         .custom
         .remove(&SumeragiNposParameters::parameter_id());
-    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    assert!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
+            .is_none()
+    );
     assert!(effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1).is_ok());
     for invalid_height in [0, 2] {
         let error = effects::validate_plan_context(
@@ -349,6 +354,7 @@ fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() 
                     + stx
                         .world
                         .sumeragi_npos_parameters()
+                        .expect("original policy decoder completes")
                         .unwrap()
                         .epoch_length_blocks
                         .get()

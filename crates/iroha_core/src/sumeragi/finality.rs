@@ -32,6 +32,20 @@ pub enum ProofError {
     /// The portable verifier rejected the produced proof.
     #[error(transparent)]
     Portable(#[from] FinalityError),
+    /// Original local history acquisition has not completed.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
+}
+
+impl From<crate::execution_attempt::ExecutionAttemptError<ChainReadError>> for ProofError {
+    fn from(error: crate::execution_attempt::ExecutionAttemptError<ChainReadError>) -> Self {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => Self::Chain(error),
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                Self::Deferred(local)
+            }
+        }
+    }
 }
 
 /// Build the current embedded-certificate proof from one immutable state view.
@@ -303,6 +317,68 @@ mod tests {
         ));
     }
     #[test]
+    fn original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source() {
+        use crate::execution_attempt::ExecutionDeferred;
+        use iroha_data_model::block::decode_versioned_signed_block;
+        use ivm::error::ExecutionDeferral;
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+            .expect("original signed State genesis");
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let checkpoint = build_checkpoint(&view, 2).unwrap();
+        let original = checkpoint.encode_canonical().unwrap();
+        let chain_id = view.chain_id().to_string();
+        let wire = chain
+            .genesis()
+            .canonical_resultless_proposal()
+            .unwrap()
+            .encode_wire()
+            .unwrap();
+        let limits = |allocation| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64)
+        };
+        let producer =
+            norito::with_decode_limits_scope(limits(0), || decode_versioned_signed_block(&wire))
+                .unwrap_err();
+        assert!(
+            matches!(producer, iroha_version::error::Error::NoritoResourceLimit(
+            norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+        ) if attempted > 0),
+            "{producer:?}"
+        );
+        let read = || {
+            SumeragiFinalityVerifier::from_trusted_checkpoint(
+                &checkpoint,
+                &chain.network_id(),
+                &chain_id,
+            )
+        };
+        let error =
+            norito::with_decode_limits_scope(limits(0), || read().map_err(ProofError::from))
+                .unwrap_err();
+        let expected = ExecutionDeferred::from(ExecutionDeferral::ActiveMemoryCapacity);
+        assert!(
+            matches!(&error, ProofError::Deferred(local) if local == &expected),
+            "{error:?}"
+        );
+        assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+        let retried = read().unwrap();
+        assert_eq!(
+            retried.export_checkpoint(checkpoint.tip()).unwrap(),
+            checkpoint
+        );
+        let completed = norito::with_decode_limits_scope(limits(8 * 1024 * 1024), || {
+            let inner = norito::with_decode_limits_scope(limits(0), read).unwrap_err();
+            ProofError::from(inner)
+        });
+        assert!(
+            matches!(completed, ProofError::Portable(_)),
+            "dropped inner ceiling is not current caller refusal: {completed:?}"
+        );
+        assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+    }
+
+    #[test]
     fn native_checkpoint_continues_the_exact_original_prefix() {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
@@ -397,5 +473,43 @@ mod tests {
             changed.verify().is_err(),
             "the exact current reading belongs to the node's signature"
         );
+    }
+}
+
+impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for ProofError {
+    fn from(error: iroha_data_model::sumeragi_finality::FinalityReadError) -> Self {
+        use iroha_data_model::sumeragi_finality::FinalityReadError;
+        match error {
+            FinalityReadError::Invalid(error) => Self::Portable(error),
+            FinalityReadError::DecodeResource(resource) => {
+                let completed = |_: norito::Error| {
+                    Self::Portable(FinalityError(
+                        iroha_version::error::Error::NoritoResourceLimit(resource).to_string(),
+                    ))
+                };
+                if cfg!(all(test, sumeragi_core_mutation = "HC52")) {
+                    return completed(resource.into());
+                }
+                match crate::execution_attempt::norito_decode_attempt_error(
+                    resource.into(),
+                    completed,
+                ) {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                        Self::Deferred(local)
+                    }
+                }
+            }
+            FinalityReadError::Genesis(error) => {
+                match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                    Self::Encoding(error.to_string())
+                }) {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        Self::Deferred(reason)
+                    }
+                }
+            }
+        }
     }
 }

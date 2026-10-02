@@ -8945,9 +8945,11 @@ fn parse_world(
             })?;
         world
             .validate_quantity_ledger_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "world.numeric_ledgers".into(),
-                message,
+            .map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
+                    field: "world.numeric_ledgers".into(),
+                    message,
+                })
             })?;
     }
     world.rebuild_domain_owner_index();

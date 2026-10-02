@@ -129,7 +129,8 @@ impl Fixture {
             .unwrap()
             .with_chain_discriminant(CHAIN_DISCRIMINANT)
             .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         // Match Kagami's signing boundary: the unpublished draft may have unbound
         // policy commitments. Only the native validator's typed mismatch may supply
         // their actual values; the newly signed final fixture must pass unchanged.
@@ -142,7 +143,8 @@ impl Fixture {
         context.execution_policy_hash = execution_hash.into();
         let manifest = manifest
             .with_sumeragi_context_parameters(context)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let (mut block, final_nexus_hash, final_execution_hash) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
                 .expect("newly signed fixture must reproduce both exact native policies");
@@ -543,7 +545,8 @@ fn native_fixture_rejects_changed_signed_policies_after_draft_binding() {
             .manifest
             .clone()
             .with_sumeragi_context_parameters(changed)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         assert_eq!(
             execute_fixture_genesis(&manifest, &fixture.genesis, None).unwrap_err(),
             expected,
@@ -937,8 +940,15 @@ fn beacon_public_preparation_derives_native_network_bound_seats_and_rejects_subs
     let invalid = fixture
         .manifest
         .clone()
-        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+    assert!(
+        invalid
+            .clone()
+            .with_consensus_meta()
+            .unwrap_err()
+            .to_string()
+            .contains("permissioned genesis must omit `sumeragi_npos_parameters`")
+    );
     assert!(
         prepare(
             &inventory.authorization_nonce,
@@ -981,8 +991,15 @@ fn public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback(
     let invalid = fixture
         .manifest
         .clone()
-        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+    assert!(
+        invalid
+            .clone()
+            .with_consensus_meta()
+            .unwrap_err()
+            .to_string()
+            .contains("permissioned genesis must omit `sumeragi_npos_parameters`")
+    );
     fs::write(
         args.localnet_dir.join("genesis.json"),
         json_line(&invalid).unwrap(),

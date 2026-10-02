@@ -867,7 +867,7 @@ pub(super) fn prepare_genesis_for_signing(
             .build_raw()?
             .with_chain_discriminant(chain_discriminant)
             .with_consensus_mode(consensus_mode)
-            .with_consensus_meta()
+            .with_consensus_meta()?
     };
     prepared
         .validate_kagemusha_mint_finality_topology()
@@ -1765,7 +1765,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("complete private config identity fixture")
             .with_consensus_mode(manifest.consensus_mode())
             .with_chain_discriminant(manifest.chain_discriminant())
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let provisional = identity_manifest
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
                 genesis_key_pair,
@@ -2089,7 +2090,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         unbound_parameters.execution_policy_hash = Hash::new(b"unbound-execution-policy").into();
         raw = raw
             .with_sumeragi_context_parameters(unbound_parameters)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let da_proof_policies = Some(iroha_core::da::proof_policy_bundle(
             &config.nexus.lane_config,
         ));
@@ -2316,7 +2318,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let asset = parameters
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()
+            .expect("valid fixture NPoS parameters")
+            .flatten()
             .expect("fixture NPoS asset pin")
             .xor_asset_definition_id;
         let mut registrations = BootstrapRegistrations::from_manifest(&manifest);
@@ -2380,6 +2385,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_chain_discriminant(chain_discriminant)
             .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
+            .expect("valid fixture consensus parameters")
     }
     fn with_test_authority_for_topology(path: PathBuf, topology: &[PeerId]) -> PathBuf {
         let manifest =
@@ -2395,7 +2401,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("complete topology-bound signing fixture")
         .with_consensus_mode(consensus_mode)
         .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, topology);
         fs::write(
             &path,
@@ -3457,7 +3464,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .build_raw()
         .expect("complete topology-override fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, &new_peers);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
@@ -3516,7 +3524,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .build_raw()
         .expect("complete direct-sign fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
             .expect("derive checked genesis fixture key");
         let (manifest, _) = bind_and_sign_staged_sumeragi_context(
@@ -3562,6 +3571,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let expected = manifest
             .with_sumeragi_context_parameters(bound_parameters)
             .with_consensus_meta()
+            .expect("valid fixture consensus parameters")
             .build_and_sign_with_confidential_policy_hash(
                 &key_pair,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
@@ -4484,8 +4494,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let genesis_file = minimal_genesis_file();
         let manifest = RawGenesisTransaction::from_path(&genesis_file)
             .expect("read permissioned fixture without NPoS parameters")
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta();
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+        assert!(
+            manifest
+                .clone()
+                .with_consensus_meta()
+                .unwrap_err()
+                .to_string()
+                .contains("NPoS genesis requires `sumeragi_npos_parameters`")
+        );
         fs::write(
             &genesis_file,
             norito::json::to_vec_pretty(&manifest)
@@ -4606,7 +4623,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("complete policy fixture genesis")
             .with_chain_discriminant(*config.common.chain_discriminant.value())
             .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let genesis_file = tempfile::NamedTempFile::new().expect("policy fixture genesis");
         fs::write(
             genesis_file.path(),
@@ -4724,7 +4742,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .build_raw()
                 .expect("complete minimal signing fixture")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-                .with_consensus_meta();
+                .with_consensus_meta()
+                .expect("valid fixture consensus parameters");
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -4762,7 +4781,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .build_raw()
                 .expect("complete NPoS signing fixture")
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_consensus_meta();
+                .with_consensus_meta()
+                .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, &valid_test_topology(4).0);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
@@ -4804,7 +4824,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .build_raw()
         .expect("complete alias-backed NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -4848,7 +4869,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("complete public Taira NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -4871,7 +4893,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("complete public Nexus NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -4929,7 +4952,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("complete conflicting Taira XOR fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

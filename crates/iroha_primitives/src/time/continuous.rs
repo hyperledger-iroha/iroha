@@ -72,7 +72,10 @@ fn platform_nanos() -> io::Result<u128> {
         .get_or_init(|| {
             let mut info = MachTimebase { numer: 0, denom: 0 };
             // SAFETY: the initialized native SDK struct remains writable for this call.
-            if unsafe { mach_timebase_info(&mut info) } != 0 || info.numer == 0 || info.denom == 0 {
+            if unsafe { mach_timebase_info(&raw mut info) } != 0
+                || info.numer == 0
+                || info.denom == 0
+            {
                 None
             } else {
                 Some((info.numer, info.denom))

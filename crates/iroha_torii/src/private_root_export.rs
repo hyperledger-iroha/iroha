@@ -60,6 +60,21 @@ pub(crate) async fn anchor(
     export(app, headers, remote, Some(anchor_height(&height)?)).await
 }
 
+/// Project an unfinished local export attempt into the API's retry response.
+fn export_error(error: iroha_core::sumeragi::private_dataspace_export::ExportError) -> Error {
+    match error {
+        iroha_core::sumeragi::private_dataspace_export::ExportError::Deferred(reason) => {
+            Error::AppServiceUnavailable {
+                code: "private_root_export_pending",
+                message: format!("private root export read must retry: {reason}"),
+            }
+        }
+        error => Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "private root original certified custody is unavailable: {error}"
+        ))),
+    }
+}
+
 async fn export(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -85,14 +100,9 @@ async fn export(
         routing::run_admitted_blocking(admission, "private root export worker failed", move || {
             let view = state.view();
             require_private_root(view.world())?;
-            let error = |error: iroha_core::sumeragi::private_dataspace_export::ExportError| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "private root original certified custody is unavailable: {error}"
-                )))
-            };
             if let Some(height) = height {
                 let proof = iroha_core::sumeragi::private_dataspace_export::anchor(&view, height)
-                    .map_err(error)?;
+                    .map_err(export_error)?;
                 if matches!(format, crate::utils::ResponseFormat::Norito) {
                     Ok(crate::NoritoBody(proof).into_response())
                 } else {
@@ -100,7 +110,7 @@ async fn export(
                 }
             } else {
                 let proof = iroha_core::sumeragi::private_dataspace_export::registration(&view)
-                    .map_err(error)?;
+                    .map_err(export_error)?;
                 if matches!(format, crate::utils::ResponseFormat::Norito) {
                     Ok(crate::NoritoBody(proof).into_response())
                 } else {
@@ -123,6 +133,38 @@ async fn export(
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_local_export_pool_refusal_is_a_retryable_http_response() {
+        use std::{future::Future, pin::pin, task::Context};
+        let budget = iroha_allocation::AllocationBudget::new(8);
+        let original_owner = budget.try_reserve_bytes(8).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let iroha_allocation::AllocationRefusal::Capacity { release, .. } = &refusal else {
+            panic!("the original occupied pool refuses this actual attempt");
+        };
+        let mut release = pin!(release.clone().wait_for_release());
+        let mut context = Context::from_waker(std::task::Waker::noop());
+        assert!(release.as_mut().poll(&mut context).is_pending());
+        let error = export_error(
+            iroha_core::sumeragi::private_dataspace_export::ExportError::Deferred(
+                refusal.clone().into(),
+            ),
+        );
+        assert!(
+            matches!(&error, Error::AppServiceUnavailable { code, message }
+            if *code == "private_root_export_pending" && message.contains(&refusal.to_string()))
+        );
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(budget.reserved_bytes(), 8);
+        assert!(release.as_mut().poll(&mut context).is_pending());
+        drop(original_owner);
+        assert!(release.as_mut().poll(&mut context).is_ready());
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 
     #[test]
     fn export_height_rejects_aliases_and_genesis_without_narrowing_u64() {

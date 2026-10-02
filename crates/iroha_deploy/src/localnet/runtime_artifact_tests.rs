@@ -9,7 +9,8 @@ fn localnet_uses_a_durable_fsync_policy() {
 #[cfg(unix)]
 #[test]
 fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make private writer temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("make private writer temp dir");
     let path = crate::localnet::custody::prepare_empty_private_directory(temp.path())
         .expect("prepare private writer directory")
         .join("peer0.toml");
@@ -31,10 +32,12 @@ fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
 }
 #[test]
 fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make genesis key temp dir");
-    let custody =
-        crate::localnet::custody::prepare_empty_private_directory(&temp.path().join("genesis-custody"))
-            .expect("prepare genesis key custody directory");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("make genesis key temp dir");
+    let custody = crate::localnet::custody::prepare_empty_private_directory(
+        &temp.path().join("genesis-custody"),
+    )
+    .expect("prepare genesis key custody directory");
     let public_path = custody.join(GENESIS_PUBLIC_KEY_FILE);
     let private_path = custody.join(GENESIS_PRIVATE_KEY_FILE);
     let (public_key, private_key) =
@@ -91,7 +94,10 @@ fn raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed() {
     let npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()
+        .expect("valid fixture NPoS parameters")
+        .flatten()
         .expect("generated NPoS parameters");
     assert_eq!(npos.epoch_seed(), localnet_npos_epoch_seed(&chain_id));
     assert_ne!(npos.epoch_seed(), [0; 32]);

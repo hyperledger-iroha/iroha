@@ -65,9 +65,9 @@ fn lane_obligation_never_moves_to_a_later_registration_sharing_key_and_account()
         .get_mut()
         .custody
         .push(obligation(&original, 1));
-    assert!(retains_registration(&world, &original, u64::MAX));
+    assert!(retains_registration(&world, &original, u64::MAX).unwrap());
     original.activation_height = 2;
-    assert!(!retains_registration(&world, &original, 12));
+    assert!(!retains_registration(&world, &original, 12).unwrap());
 }
 #[test]
 fn every_original_incarnation_must_finish_its_delay_before_custody_releases() {
@@ -77,10 +77,10 @@ fn every_original_incarnation_must_finish_its_delay_before_custody_releases() {
     let mut first = obligation(&original, 1);
     first.retired_at = Some(20);
     world.sumeragi_lanes.get_mut().custody = vec![first, obligation(&original, 2)];
-    assert!(retains_registration(&world, &original, 30));
+    assert!(retains_registration(&world, &original, 30).unwrap());
     world.sumeragi_lanes.get_mut().custody[1].retired_at = Some(25);
-    assert!(retains_registration(&world, &original, 34));
-    assert!(!retains_registration(&world, &original, 35));
+    assert!(retains_registration(&world, &original, 34).unwrap());
+    assert!(!retains_registration(&world, &original, 35).unwrap());
 }
 #[test]
 fn malformed_original_deadline_cannot_release_retained_custody() {
@@ -90,7 +90,7 @@ fn malformed_original_deadline_cannot_release_retained_custody() {
     let mut invalid = obligation(&original, 1);
     invalid.retired_at = Some(u64::MAX);
     world.sumeragi_lanes.get_mut().custody.push(invalid);
-    assert!(retains_registration(&world, &original, u64::MAX));
+    assert!(retains_registration(&world, &original, u64::MAX).unwrap());
 }
 
 fn parameters(world: &mut WorldBlock<'_>, horizon: u64, delay: u64) {
@@ -212,10 +212,10 @@ fn retirement_marks_exact_boundary_and_policy_extension_precedes_withdrawal() {
     prepare_retirement(&mut state, &world, 20).unwrap();
     assert_eq!(state.custody[0].retired_at, Some(20));
     world.sumeragi_lanes.get_mut().custody = state.custody.clone();
-    assert!(!retains_registration(&world, &original, 30));
+    assert!(!retains_registration(&world, &original, 30).unwrap());
     parameters(&mut world, 8, 4);
     assert!(
-        retains_registration(&world, &original, 30),
+        retains_registration(&world, &original, 30).unwrap(),
         "same-block extension must already retain custody"
     );
     state.lanes.clear();
@@ -260,7 +260,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
     assert_eq!(state.custody.len(), 1);
     assert!(state.custody[0].signers.as_slice().is_empty());
     assert_eq!(
-        creation_capacity(&state, &world),
+        creation_capacity(&state, &world).unwrap(),
         MAX_LANE_CUSTODY_OBLIGATIONS - 1
     );
     assert!(
@@ -296,12 +296,12 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
     state.lanes.clear();
     prepare_retirement(&mut state, &world, 29).unwrap();
     assert_eq!(
-        creation_capacity(&state, &world),
+        creation_capacity(&state, &world).unwrap(),
         MAX_LANE_CUSTODY_OBLIGATIONS - 1
     );
     prepare_retirement(&mut state, &world, 30).unwrap();
     assert_eq!(
-        creation_capacity(&state, &world),
+        creation_capacity(&state, &world).unwrap(),
         MAX_LANE_CUSTODY_OBLIGATIONS
     );
 }
@@ -346,7 +346,7 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
         },
     );
     world.sumeragi_lanes.get_mut().custody = state.custody.clone();
-    assert!(retains_registration(&world, &original, 30));
+    assert!(retains_registration(&world, &original, 30).unwrap());
     prepare_retirement(&mut state, &world, 30).unwrap();
     assert_eq!(state.custody.len(), 1);
     world
@@ -361,7 +361,7 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
         "terminal report retains reauthentication provenance"
     );
     assert!(
-        !retains_registration(&world, &original, 30),
+        !retains_registration(&world, &original, 30).unwrap(),
         "completed penalty permits release"
     );
     world.consensus_evidence.remove(key);
@@ -438,7 +438,9 @@ fn an_existing_frontier_cannot_regress_or_switch_hash_or_result_at_the_same_nati
         };
         assert_eq!(
             prepare_retirement(&mut state, &world, 20),
-            Err(CustodyViolation::Frontier)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                CustodyViolation::Frontier
+            ))
         );
         assert_eq!(state.custody[0].merged, frontier);
     }

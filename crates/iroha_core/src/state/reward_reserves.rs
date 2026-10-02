@@ -5,10 +5,11 @@ use super::*;
 /// Validate exact unpaid entitlements and their retained custody backing.
 pub(super) fn validate_public_lane_reward_reserves(
     world: &impl WorldReadOnly,
-) -> Result<(), String> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     let currency = world
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .map(|params| params.xor_asset_definition_id);
+    (|| -> Result<(), String> {
     let mut expected = BTreeMap::<AssetId, Quantity>::new();
     let mut processed = BTreeMap::<(LaneId, AccountId, AssetId), Quantity>::new();
     for ((lane, _), claim) in world.public_lane_reward_claims().iter() {
@@ -93,6 +94,7 @@ pub(super) fn validate_public_lane_reward_reserves(
         }
     }
     Ok(())
+    })().map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
 }
 
 /// Initialize snapshot fixture custody through the canonical registration and mint paths.
@@ -260,7 +262,9 @@ mod tests {
             (LaneId::SINGLE, BOB_ID.clone(), asset),
             Quantity::from(26_u64),
         );
-        let error = validate_public_lane_reward_reserves(&world.view()).unwrap_err();
+        let error = validate_public_lane_reward_reserves(&world.view())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .unwrap_err();
         assert!(
             error.contains("exceeds its processed entitlement"),
             "{error}"
@@ -280,6 +284,7 @@ mod tests {
         }
         assert!(
             validate_public_lane_reward_reserves(&world.view())
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .unwrap_err()
                 .contains("network XOR")
         );
@@ -290,7 +295,9 @@ mod tests {
         let (mut world, asset) = fixture();
         let (id, value) = Asset::new(asset.clone(), Quantity::from(24_u64)).into_key_value();
         world.assets.insert(id, value);
-        let error = validate_public_lane_reward_reserves(&world.view()).unwrap_err();
+        let error = validate_public_lane_reward_reserves(&world.view())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .unwrap_err();
         assert!(error.contains("below unpaid rewards"), "{error}");
 
         let (_, value) = Asset::new(asset.clone(), Quantity::from(25_u64)).into_key_value();
@@ -301,7 +308,9 @@ mod tests {
             value,
         );
         assets.commit();
-        let error = validate_public_lane_reward_reserves(&world.view()).unwrap_err();
+        let error = validate_public_lane_reward_reserves(&world.view())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .unwrap_err();
         assert!(error.contains("is missing"), "{error}");
     }
 
