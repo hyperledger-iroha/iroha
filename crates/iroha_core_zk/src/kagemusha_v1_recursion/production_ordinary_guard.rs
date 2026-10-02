@@ -12,7 +12,8 @@ use super::super::super::{
         build_ordinary_app_guard_pair_v1,
     },
     ordinary_guard_verifier::{
-        OrdinaryGuardProofWireV1, preparation_digests, public_column, terminal_digests,
+        OrdinaryGuardProofWireV1, incoming_preparation_digests, preparation_digests, public_column,
+        terminal_digests, verify_ordinary_incoming_preparation_guard_v1,
         verify_ordinary_preparation_guard_v1, verify_ordinary_terminal_guard_v1,
     },
 };
@@ -23,6 +24,7 @@ use crate::kagemusha_v1_state::{
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1, KagemushaStateV1,
     verify_ordinary_bootstrap_guard_v1,
 };
@@ -156,6 +158,107 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 .as_ref(),
         )?;
         verify_ordinary_preparation_guard_v1(selection, &raw).map_err(owner_error)?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(raw)
+    }
+
+    /// Resolve genuine released ordinary keys for the actual retained incoming proof selection.
+    /// This private native entry point accepts no decoded owner, time or financial witness.
+    pub(crate) fn load_ordinary_incoming(
+        selection: &KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        incoming_preparation_digests(selection).map_err(owner_error)?;
+        let owner = Self::from_selected_ordinary_release(
+            selection.authenticated_release().map_err(owner_error)?,
+            profile,
+            resolver,
+        )?;
+        owner.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(owner)
+    }
+
+    /// Prove the exact captured purpose2 selection with its separately held financial witness.
+    /// Real paired Guard verification is mandatory before these originals are exposed. A slow
+    /// proof keeps the original admission instant and never renews or reinterprets its approval.
+    pub(crate) fn prove_ordinary_incoming_preparation_guard(
+        &self,
+        selection: &KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
+    ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        let digests = incoming_preparation_digests(selection).map_err(owner_error)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        let (credential, original, lease) = decode_ordinary_originals(
+            selection.credential().map_err(owner_error)?.original(),
+            selection.original().map_err(owner_error)?,
+            selection
+                .selected_integrity_lease()
+                .map_err(owner_error)?
+                .map(|l| l.original()),
+        )?;
+        let mut entered = false;
+        let mut result = None;
+        selection
+            .with_borrowed_financial_secret(&mut |secret| {
+                if entered {
+                    return Err(
+                        crate::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity,
+                    );
+                }
+                entered = true;
+                result = Some((|| {
+                    let relation = derive_incoming_relation(selection, secret)?;
+                    let seed = ordinary_guard_seed(
+                        secret,
+                        original.challenge.operation_id,
+                        original.challenge.nonce,
+                        digests[2],
+                    )?;
+                    self.prove_shared_originals(
+                        &relation.0,
+                        &credential,
+                        &original,
+                        lease.as_ref(),
+                        selection
+                            .previous_app_attest_counter()
+                            .map_err(owner_error)?,
+                        digests,
+                        &seed,
+                    )
+                })());
+                Ok(())
+            })
+            .map_err(owner_error)?;
+        let raw =
+            result.ok_or_else(|| proving_error("ordinary incoming witness was not lent"))??;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        verify_ordinary_incoming_preparation_guard_v1(selection, &raw).map_err(owner_error)?;
         selection
             .recheck_selected_originals_and_current_custody()
             .map_err(owner_error)?;
@@ -624,6 +727,37 @@ pub(super) fn derive_cash_relation(
         &release,
         selection.selected_successor_state(),
         selection.normalized_guard_statement(),
+    )?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
+    relation.0.validate().map_err(ordinary_proving_error)?;
+    Ok(relation)
+}
+
+pub(super) fn derive_incoming_relation(
+    selection: &KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
+    secret: &[u8; 32],
+) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
+    selection
+        .recheck_selected_originals_and_current_custody()
+        .map_err(owner_error)?;
+    incoming_preparation_digests(selection).map_err(owner_error)?;
+    let credential = selection.credential().map_err(owner_error)?;
+    if super::super::super::device_authority_commitment_v1(*secret)
+        != credential.subject().financial_authority_commitment
+    {
+        return Err(proving_error(
+            "native incoming witness does not open the same enrolled authority",
+        ));
+    }
+    let release = selection.authenticated_release().map_err(owner_error)?;
+    let mut relation = HeldRelation(public_relation_for_selected_state(
+        credential,
+        &release,
+        selection.selected_successor_state().map_err(owner_error)?,
+        selection
+            .normalized_guard_statement()
+            .map_err(owner_error)?,
     )?);
     relation.0.predecessor_device_authority_secret = *secret;
     relation.0.successor_device_authority_secret = *secret;

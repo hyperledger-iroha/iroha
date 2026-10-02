@@ -5,7 +5,8 @@ package org.hyperledger.iroha.sdk.offline
 import android.content.Context
 import java.util.ServiceLoader
 
-/** Distinct ordinary app-key service. Only genuine enrollment and Bootstrap capture are exposed.
+/** Distinct ordinary app-key service bound to the installed Native W and activated member S.
+ * Retail signatures come only from the retained Native account/session custody.
  * Results are detached originals: State/Guard publication and monetary ownership stay in Native.
  * This service never implements the applet/OEM hardware-provider interface.
  */
@@ -36,27 +37,49 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
     }
     internal companion object {
         fun open(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-            accountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
-            walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
+            activatedSignatoryAccountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
+            selection: KagemushaNativeWalletAccountSelectionOriginalV1,
             requireOriginalOwner: () -> Unit): KagemushaAndroidOrdinaryHardwareServiceV1 {
-            requireOriginalAccount(coordinator, accountId, requireOriginalOwner)
+            val selected = requireOriginalNativeAccount(coordinator, activatedSignatoryAccountId, selection, requireOriginalOwner)
+            fun current() {
+                requireOriginalOwner()
+                selected.requireCurrent()
+                requireOriginalOwner()
+            }
             // Retain one original workflow through explicit retries. Native and the shared
             // platform adapters own alias/key attestation, PI, invocation fences and WAL.
             val workflow = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-                requireOriginalOwner()
-                KagemushaAndroidOrdinaryEnrollmentV1(context, coordinator, transport, walletSigner,
-                    requireOriginalOwner).also { requireOriginalOwner() }
+                current()
+                KagemushaAndroidOrdinaryEnrollmentV1(context, coordinator, transport, selected,
+                    ::current).also { current() }
             }
-            return KagemushaAndroidOrdinaryHardwareServiceV1(workflow, requireOriginalOwner)
+            return KagemushaAndroidOrdinaryHardwareServiceV1(workflow, ::current)
         }
-        fun requireOriginalAccount(coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-            accountId: String, requireOriginalOwner: () -> Unit) {
-            require(accountId.isNotBlank()) { "The original wallet account is required" }
+        /** Bind activated online S to actual Native S, then correlate the reservation with W.
+         * The retained selection is finite session data, never an account-custody constructor.
+         * Missing actual Native custody refuses before hardware collection or managed signing.
+         */
+        fun requireOriginalNativeAccount(coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
+            activatedSignatoryAccountId: String, selected: KagemushaNativeWalletAccountSelectionOriginalV1,
+            requireOriginalOwner: () -> Unit):
+            KagemushaNativeWalletAccountSelectionOriginalV1 {
+            require(activatedSignatoryAccountId.isNotBlank()) { "The original activated signatory is required" }
             requireOriginalOwner()
-            val selected = coordinator.appIdentityOperations().reserveOriginalIdentity()
+            val native = coordinator.appIdentityOperations()
+            native.requireCurrentWalletAccountSelection(selected)
             requireOriginalOwner()
-            check(selected.accountId() == accountId) { "The installed ordinary Native owner controls another account" }
+            check(selected.signatoryAccountId() == activatedSignatoryAccountId) {
+                "The installed ordinary Native owner controls another activated signatory"
+            }
             requireOriginalOwner()
+            val reserved = native.reserveOriginalIdentity()
+            requireOriginalOwner()
+            check(selected.walletAccountId() == reserved.accountId()) {
+                "The original reservation differs from the installed Native wallet W"
+            }
+            selected.requireCurrent()
+            requireOriginalOwner()
+            return selected
         }
     }
 }
@@ -64,8 +87,8 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
 /** Installed shared route, independent of historical applet capability discovery. */
 interface KagemushaAndroidOrdinaryHardwareServiceFactoryV1 {
     fun open(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-        accountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
-        walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
+        activatedSignatoryAccountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
+        selection: KagemushaNativeWalletAccountSelectionOriginalV1,
         requireOriginalOwner: () -> Unit): KagemushaAndroidOrdinaryHardwareServiceV1
 
     companion object {
@@ -92,9 +115,9 @@ interface KagemushaAndroidOrdinaryHardwareServiceFactoryV1 {
  */
 class KagemushaAndroidAppOwnedHardwareServiceFactoryV1 : KagemushaAndroidOrdinaryHardwareServiceFactoryV1 {
     override fun open(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-        accountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
-        walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
+        activatedSignatoryAccountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
+        selection: KagemushaNativeWalletAccountSelectionOriginalV1,
         requireOriginalOwner: () -> Unit): KagemushaAndroidOrdinaryHardwareServiceV1 =
-        KagemushaAndroidOrdinaryHardwareServiceV1.open(context, coordinator, accountId,
-            transport, walletSigner, requireOriginalOwner)
+        KagemushaAndroidOrdinaryHardwareServiceV1.open(context, coordinator, activatedSignatoryAccountId,
+            transport, selection, requireOriginalOwner)
 }

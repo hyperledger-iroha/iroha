@@ -49,7 +49,6 @@ pub use ordinary_app_identity::{
 pub use ordinary_native_startup::{
     KagemushaNativeOrdinaryRuntimeStartupV1, KagemushaOrdinaryNativeStartupRequestV1,
     KagemushaOrdinaryNativeStartupResponseV1, invoke_kagemusha_native_ordinary_runtime_startup_v1,
-    register_kagemusha_native_ordinary_runtime_startup_v1,
 };
 mod recovered_backend;
 #[cfg(test)]
@@ -796,6 +795,17 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
 fn require_app_attest_selection_subject_v1(
     selection: &[u8],
 ) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
+    require_app_attest_selection_subject_mode_v1(selection, false)
+}
+fn require_app_attest_preparation_subject_v1(
+    selection: &[u8],
+) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
+    require_app_attest_selection_subject_mode_v1(selection, true)
+}
+fn require_app_attest_selection_subject_mode_v1(
+    selection: &[u8],
+    preparation: bool,
+) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
     use KagemushaHardwareSelectionSigningLayoutV1 as S;
 
     if selection.len() != S::TOTAL_BYTES
@@ -843,8 +853,9 @@ fn require_app_attest_selection_subject_v1(
         before.checked_add(1) == Some(after)
     };
     if operation > 5
-        || nonzero(S::CANDIDATE_ENVELOPE_DIGEST) != outgoing
-        || nonzero(S::TERMINAL_BODY_COMMITMENT) != outgoing
+        || (preparation && !outgoing)
+        || nonzero(S::CANDIDATE_ENVELOPE_DIGEST) != (outgoing && !preparation)
+        || nonzero(S::TERMINAL_BODY_COMMITMENT) != (outgoing && !preparation)
         || !logical_indexes_valid
     {
         return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);

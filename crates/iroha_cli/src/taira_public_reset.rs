@@ -750,9 +750,12 @@ impl QualificationScopeV1 {
             })
     }
 
+    /// Required beacon funding, DKG phase advancement, installation, and activation only.
+    /// The durable `canary` phase identity is retained for bootstrap custody;
+    /// optional engineering canaries are not deployment prerequisites.
     const fn canary_kinds(self) -> &'static [&'static str] {
         match self {
-            Self::CoreTestnet => &[
+            Self::CoreTestnet | Self::FullInrou => &[
                 "onboarding",
                 "faucet",
                 "write_canary",
@@ -761,20 +764,6 @@ impl QualificationScopeV1 {
                 "beacon_provider_2",
                 "beacon_provider_3",
                 "beacon_provider_4",
-            ],
-            Self::FullInrou => &[
-                "onboarding",
-                "faucet",
-                "write_canary",
-                "beacon_install",
-                "beacon_provider_1",
-                "beacon_provider_2",
-                "beacon_provider_3",
-                "beacon_provider_4",
-                "inrou_bundle_pin",
-                "inrou_guest_pin",
-                "inrou_discovery_pin",
-                "inrou_canary",
             ],
         }
     }
@@ -1768,11 +1757,9 @@ where
         .and_then(|value| value.checked_add(timeouts.start_secs.checked_mul(4)?))
         // Three edge-stage actions, cutover, verify, and five seal dispatches.
         .and_then(|value| value.checked_add(timeouts.edge_secs.checked_mul(10)?))
-        // Initial doctor+convergence and four restart-wave convergences.
+        // Conservative lease capacity retained for bootstrap and convergence.
+        // These upper bounds do not schedule diagnostics or impose a wait.
         .and_then(|value| value.checked_add(timeouts.convergence_secs.checked_mul(6)?))
-        // Seven initial Canary children; RestartProof's four baselines, twelve
-        // write children, four wave checks, four final-validator sweeps, and
-        // final doctor; then EdgeVerify's doctor, three writes, and Inrou check.
         .and_then(|value| value.checked_add(timeouts.canary_secs.checked_mul(37)?))
         .and_then(|value| value.checked_add(timeouts.restart_secs.checked_mul(4)?))
         .and_then(|value| value.checked_add(timeouts.cleanup_secs.checked_mul(5)?))
@@ -5155,7 +5142,9 @@ mod executor_model {
         Cleanup,
     }
 
-    const FULL_INROU_EXECUTION_STEPS: [ExecutionStep; 15] = [
+    // Deployment schedules required bootstrap and live readiness, without
+    // automatically injecting diagnostic canaries or validator restart proofs.
+    const FULL_INROU_EXECUTION_STEPS: [ExecutionStep; 14] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
         ExecutionStep::Stop,
@@ -5165,7 +5154,6 @@ mod executor_model {
         ExecutionStep::Start,
         ExecutionStep::Canary,
         ExecutionStep::Convergence,
-        ExecutionStep::RestartProof,
         ExecutionStep::EdgeStage,
         ExecutionStep::EdgeCutover,
         ExecutionStep::EdgeVerify,
@@ -5173,7 +5161,7 @@ mod executor_model {
         ExecutionStep::Cleanup,
     ];
 
-    const CORE_TESTNET_EXECUTION_STEPS: [ExecutionStep; 14] = [
+    const CORE_TESTNET_EXECUTION_STEPS: [ExecutionStep; 13] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
         ExecutionStep::Stop,
@@ -5182,7 +5170,6 @@ mod executor_model {
         ExecutionStep::Start,
         ExecutionStep::Canary,
         ExecutionStep::Convergence,
-        ExecutionStep::RestartProof,
         ExecutionStep::EdgeStage,
         ExecutionStep::EdgeCutover,
         ExecutionStep::EdgeVerify,
@@ -5261,7 +5248,7 @@ mod executor_model {
         }
 
         pub(super) const fn supports_recovery(self) -> bool {
-            matches!(self, Self::Canary | Self::RestartProof | Self::EdgeVerify)
+            matches!(self, Self::Canary | Self::RestartProof)
         }
     }
 
@@ -6557,7 +6544,7 @@ mod executor_model {
                     inventory.inrou_stage_tree_sha256 = None;
                 }
                 let steps = execution_steps(scope);
-                assert_eq!(steps.len(), if scope.includes_inrou() { 15 } else { 14 });
+                assert_eq!(steps.len(), if scope.includes_inrou() { 14 } else { 13 });
                 assert_eq!(
                     steps.contains(&ExecutionStep::Preseed),
                     scope.includes_inrou()
@@ -7707,11 +7694,7 @@ mod executor_model {
 
         #[test]
         fn every_classifier_reachable_recovery_phase_reopens_with_exact_cursor() {
-            for step in [
-                ExecutionStep::Canary,
-                ExecutionStep::RestartProof,
-                ExecutionStep::EdgeVerify,
-            ] {
+            for step in [ExecutionStep::Canary] {
                 let directory = private_tempdir();
                 let canonical = directory.path().canonicalize().expect("canonical tempdir");
                 let admitted = admitted(sample_inventory());
@@ -8003,11 +7986,7 @@ mod executor_model {
             }
             let failures: [fn() -> Result<host::PreparedMutationOutcome>; 4] =
                 [timeout, lost_response, receipt_failure, pending];
-            for step in [
-                ExecutionStep::Canary,
-                ExecutionStep::RestartProof,
-                ExecutionStep::EdgeVerify,
-            ] {
+            for step in [ExecutionStep::Canary] {
                 for failure in failures {
                     let (inventory, mut journal) = journal(sample_inventory());
                     let mut transport = MockTransport {
@@ -8169,11 +8148,7 @@ mod executor_model {
                     "Rejected".to_owned(),
                 ))
             }
-            for step in [
-                ExecutionStep::Canary,
-                ExecutionStep::RestartProof,
-                ExecutionStep::EdgeVerify,
-            ] {
+            for step in [ExecutionStep::Canary] {
                 let (inventory, mut journal) = journal(sample_inventory());
                 let mut transport = MockTransport {
                     submitted_step: Some(step),
@@ -8301,11 +8276,7 @@ mod executor_model {
 
         #[test]
         fn recovered_partial_mutation_reopens_and_dispatches_only_prepared_suffix() {
-            for step in [
-                ExecutionStep::Canary,
-                ExecutionStep::RestartProof,
-                ExecutionStep::EdgeVerify,
-            ] {
+            for step in [ExecutionStep::Canary] {
                 let count = test_recovery_intent(step).mutations.len();
                 for submitted in 0..count - 1 {
                     let admitted = signed_admitted(sample_inventory(), 1_000_000);
@@ -9364,7 +9335,7 @@ mod executor_model {
         }
 
         #[test]
-        fn candidate_qualification_completes_before_public_cutover() {
+        fn required_bootstrap_and_readiness_complete_before_public_cutover() {
             let (inventory, mut journal) = journal(vacant_execution_fixture());
             let mut transport = MockTransport::default();
             execute_plan(&inventory, &mut transport, &mut journal).expect("vacant model completes");
@@ -9377,8 +9348,20 @@ mod executor_model {
             };
             assert!(at("start:taira-validator-4") < at("canary"));
             assert!(at("canary") < at("convergence"));
-            assert!(at("convergence") < at("restart_proof"));
-            assert!(at("restart_proof") < at("edge_stage"));
+            assert!(at("convergence") < at("edge_stage"));
+            assert!(
+                !transport
+                    .events
+                    .iter()
+                    .any(|event| event == "restart_proof")
+            );
+            assert!(
+                transport
+                    .mutation_dispatches
+                    .iter()
+                    .all(|(step, _)| *step == ExecutionStep::Canary),
+                "edge verification performs no diagnostic write mutations"
+            );
             assert!(at("edge_stage") < at("edge_cutover"));
             assert!(at("edge_cutover") < at("edge_verify"));
             assert!(journal.finished);
@@ -9386,7 +9369,7 @@ mod executor_model {
 
         #[test]
         fn candidate_failure_never_exposes_the_public_edge() {
-            for phase in ["convergence", "canary", "restart_proof"] {
+            for phase in ["convergence", "canary"] {
                 let (inventory, mut journal) = journal(vacant_execution_fixture());
                 let mut transport = MockTransport {
                     fail: Some(phase.to_owned()),
@@ -9582,6 +9565,9 @@ mod executor_model {
                     ]
                 );
                 assert!(ExecutionStep::Canary.supports_recovery());
+                assert!(!ExecutionStep::EdgeVerify.supports_recovery());
+                assert!(ExecutionStep::EdgeVerify.is_edge_step());
+                assert!(!steps.contains(&ExecutionStep::RestartProof));
                 let kinds = scope.canary_kinds();
                 assert_eq!(
                     &kinds[..8],
@@ -9596,7 +9582,7 @@ mod executor_model {
                         "beacon_provider_4"
                     ]
                 );
-                assert_eq!(kinds.len(), if scope.includes_inrou() { 12 } else { 8 });
+                assert_eq!(kinds.len(), 8);
                 assert!(!kinds.iter().any(|kind| kind.contains("epoch_supervisor")));
             }
         }

@@ -5,11 +5,12 @@ use super::*;
 use crate::kagemusha_v1_crypto::seal_kagemusha_credit_v1_with_rng;
 use iroha_crypto::kagemusha::kagemusha_x25519_public_key_v1;
 use iroha_data_model::kagemusha::{
-    KagemushaCreditOpeningV1, KagemushaOrdinaryFinancialHeadV1,
-    KagemushaOrdinaryMintApprovalChallengeV1, KagemushaOrdinaryMintApprovalV1,
-    KagemushaOrdinaryMintAuthorizationContextV1, KagemushaOrdinaryMintAuthorizationStatementV1,
-    KagemushaSignedOrdinaryCurrentControlV1, kagemusha_ciphertext_digest_v1,
-    kagemusha_mint_credit_opening_commitment_v1, kagemusha_recipient_credential_commitment_v1,
+    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KagemushaCreditOpeningV1,
+    KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryMintApprovalChallengeV1,
+    KagemushaOrdinaryMintApprovalV1, KagemushaOrdinaryMintAuthorizationContextV1,
+    KagemushaOrdinaryMintAuthorizationStatementV1, KagemushaSignedOrdinaryCurrentControlV1,
+    kagemusha_ciphertext_digest_v1, kagemusha_mint_credit_opening_commitment_v1,
+    kagemusha_recipient_credential_commitment_v1,
 };
 use rand::rand_core::{TryCryptoRng, TryRngCore};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -443,7 +444,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .recheck_originals(self, p.lease.as_deref(), p.retained.is_none())?;
             return Ok(p.originals.challenge.operation_id);
         }
-        if self.pending.is_some()
+        if self.pending_incoming.is_some()
+            || self.pending.is_some()
             || self.pending_receiver_request.is_some()
             || self.terminal.as_ref().is_none_or(|t| t.has_pending())
         {
@@ -686,6 +688,14 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .proven_request = Some(proved.request_original().to_vec());
         self.captured_mint_selection()?.recheck()
     }
+    pub(super) fn retained_predebit_request_original(
+        &self,
+    ) -> Result<&[u8], KagemushaStateErrorV1> {
+        self.pending_mint
+            .as_ref()
+            .and_then(|p| p.proven_request.as_deref())
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)
+    }
     /// Re-admit full retained proofs without a resolver/proving key or fresh randomized proof.
     pub(crate) fn verified_retained_mint_request(
         &self,
@@ -703,7 +713,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.captured_mint_selection()?.recheck()?;
         Ok(proved)
     }
-    fn readmit_selected_mint_request(
+    pub(super) fn readmit_selected_mint_request(
         &self,
         raw: &[u8],
     ) -> Result<
@@ -765,6 +775,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         match record {
             MintRecord::Reserve(originals) => {
                 if self.pending_mint.is_some()
+                    || self.pending_incoming.is_some()
                     || self.pending.is_some()
                     || self.pending_receiver_request.is_some()
                     || self.terminal.as_ref().is_none_or(|t| t.has_pending())
@@ -797,7 +808,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     fenced: false,
                     retained: None,
                     capture: None,
-                    proven_request: None,
                     proven_request: None,
                 });
             }
@@ -1249,5 +1259,22 @@ mod tests {
             norito::canonical_decode_limits(trailing.len()),
         );
         assert!(decoded.is_err() || decoded.unwrap().canonical_bytes().unwrap() != trailing);
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn retained_mint_source_control_identity(
+        &self,
+    ) -> Result<CapturedFinancialControlIdentity, KagemushaStateErrorV1> {
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if p.capture.is_none() || p.proven_request.is_none() {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        p.originals
+            .recheck_originals(self, p.lease.as_deref(), false)?;
+        Ok(p.originals.financial_control)
     }
 }

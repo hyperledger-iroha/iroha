@@ -191,6 +191,11 @@ mod tests {
         let binding = KagemushaOrdinaryGuardDataBindingV1 {
             digests: core::array::from_fn(|_| assigned_digest(ctx, 0x51)),
             account_binding: assigned_digest(ctx, 0x52),
+            financial_authority_commitment:
+                super::super::guard_bundle::device_authority_commitment_v1([0x41; 32]).map(|byte| {
+                    let cell = ctx.load_witness(F::from(u64::from(byte)));
+                    PastaSha256ByteV1::range_checked(ctx, &range, cell)
+                }),
             canonical_subject,
             approval_purpose: ctx.load_witness(F::from(
                 if matches!(mutation, Some(Mutation::Purpose)) {

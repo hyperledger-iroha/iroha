@@ -1203,3 +1203,10 @@ mod tests {
         assert!(substituted.verify_account_signature(&signature).is_err());
     }
 }
+
+#[path = "kagemusha_ordinary_mint_v1/canonical_stream.rs"]
+mod canonical_stream;
+pub use canonical_stream::{
+    KagemushaOrdinaryApprovalEvidenceStreamGrammarV1,
+    KagemushaOrdinaryCanonicalFieldStreamGrammarV1, KagemushaOrdinaryCanonicalFieldStreamV1,
+};

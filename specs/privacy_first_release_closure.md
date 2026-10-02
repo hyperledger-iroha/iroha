@@ -79,12 +79,17 @@ has a log-22 common domain and the accumulator pads its 104 active rows to
 and transition domains under one joined base root and one joined auxiliary root.
 Full current/next Fp4 DEEP constraints precede verification of the reduced
 current-row query wire. The private terminal repair retains 285 RFC base, 280
-auxiliary and 102 verifier-fixed columns, with 1,702 local degree-four constraints
-and a separate 192-equation MAIN endpoint plan. It removes 364 public scalars;
-384 MAIN and 108 accumulator scalars remain exposed. Canonical quotient chunks
+auxiliary and 102 verifier-fixed columns, with 1,618 local degree-four constraints,
+30 compressed lookup relations and a separate 192-equation MAIN endpoint plan.
+It removes 364 public scalars; 212 MAIN and 108 accumulator scalars remain
+exposed. Canonical quotient chunks
 use independent adjacent masks with 137 Fp4 coefficients and unchanged FRI caps.
-The revised codec arithmetic bounds combined X5S1 at 9,415,166 bytes; native
-profile regeneration passes, while the fixed-schedule repair and further source joins require another profile generation, proof generation and resource measurement.
+The revised codec arithmetic bounds combined X5S1 at 9,413,406 bytes. Canonical
+descriptors include the complete 17 key/digest and 20 quartic-union alpha phases.
+The final descriptor epoch requires fresh profile-pin and deterministic
+IO/Projection-golden regeneration and acceptance replay; earlier native profile
+passes do not qualify it. Further source joins and maximum-shape proof/resource
+qualification remain open.
 The historical 9,420,938-byte proof passes local verification and memory limits
 but exceeds the 300-second proving limit. Its acceptance does not establish the
 missing byte-source joins, full soundness, hiding or activation.

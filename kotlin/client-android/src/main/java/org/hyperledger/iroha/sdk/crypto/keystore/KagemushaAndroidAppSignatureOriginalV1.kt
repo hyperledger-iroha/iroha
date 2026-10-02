@@ -10,9 +10,11 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
+import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppApprovalV1
 
 /** Internal framing checks do not produce a native prepared capability or monetary authority. */
 internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, val bodyBytes: Int, val fields: Int, val signedPurpose: Int = 1) {
+    FIRST_DEVICE_HARDWARE_POSSESSION("iroha:kagemusha:v1:hardware-evidence-possession\u0000", 308, 7),
     OPERATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     ORDINARY_BOOTSTRAP_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     IDENTITY_ENROLLMENT_POSSESSION("iroha:kagemusha:v1:app-enrollment-possession\u0000", 371, 11),
@@ -36,10 +38,36 @@ internal fun requireAppPlatformSigningMessageV1(original: ByteArray, purpose: Ka
         require(!MessageDigest.isEqual(original.copyOfRange(body + 35, body + 67),
             original.copyOfRange(body + 67, body + 99))) { "Native enrollment nonces must differ" }
     }
-    val times = body + 3 + purpose.fields * 32
+    var times = body + 3 + purpose.fields * 32
+    if (purpose == KagemushaAndroidAppSignaturePurposeV1.FIRST_DEVICE_HARDWARE_POSSESSION) {
+        val point = original.copyOfRange(times, times + 65)
+        val keyId = original.copyOfRange(body + 3 + 5 * 32, body + 3 + 6 * 32)
+        requireOriginalAppKeyBindingV1(point, keyId, point, keyId)
+        times += 65
+    }
     val issued = reader.getLong(times).toULong()
     val expires = reader.getLong(times + 8).toULong()
-    require(issued != 0uL && expires > issued && expires - issued <= 120_000uL) { "Native app signing interval differs" }
+    val maximumLifetime = if (purpose == KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL) 10_000uL else 120_000uL
+    require(issued != 0uL && expires > issued && expires - issued <= maximumLifetime) { "Native app signing interval differs" }
+}
+
+/** Fixed purpose2 consumer for the opaque phase1 cash holder. The separate phase8 Bootstrap
+ * type cannot enter here. Shape checks precede the durable fence; unknown outcomes never reset it.
+ * This internal platform callback is shared with DATA-only unit controls, not an owner factory.
+ */
+internal fun approveNativeOrdinaryPreparationOriginalV1(prepared: KagemushaNativePreparedAppApprovalV1,
+    signOriginal: (String, ByteArray, ByteArray, ByteArray, ByteArray, KagemushaAndroidAppKeyHardwarePolicyV1,
+        KagemushaAndroidAppSignaturePurposeV1, () -> Unit) -> ByteArray): ByteArray {
+    val purpose = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL
+    val original = prepared.signingBytes()
+    try {
+        requireAppPlatformSigningMessageV1(original, purpose)
+        return prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->
+            requireAppPlatformSigningMessageV1(message, purpose)
+            check(MessageDigest.isEqual(original, message)) { "The Native-held preparation message changed" }
+            signOriginal(alias, generationChallenge, point, keyId, message, policy, purpose, guard)
+        }.copyOf()
+    } finally { original.fill(0) }
 }
 
 internal fun requireOriginalAppKeyBindingV1(point: ByteArray, keyId: ByteArray, expectedPoint: ByteArray, expectedKeyId: ByteArray) {

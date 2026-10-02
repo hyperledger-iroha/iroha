@@ -11,8 +11,7 @@ use crate::kagemusha_v1_recursion::{
     KagemushaOrdinaryLineageStateProofBundleV1, ordinary_cash_carrier_budget_v1,
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1,
-    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KagemushaAppOperationApprovalChallengeV1,
+    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1, KagemushaAppOperationApprovalChallengeV1,
     KagemushaAppOperationApprovalPurposeV1, KagemushaAppOperationApprovalV1,
     KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
     KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryLineageAnchorV1,
@@ -32,10 +31,17 @@ use send_credit::SendCreditOriginals;
 #[path = "ordinary_redeem_factory.rs"]
 mod redeem_credit;
 use redeem_credit::RedeemOriginals;
+#[path = "ordinary_incoming_owner.rs"]
+mod incoming;
+#[path = "ordinary_incoming_preparation.rs"]
+mod incoming_preparation;
+use incoming_preparation::IncomingApprovalRecord;
+pub(crate) use incoming_preparation::KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1;
 #[path = "ordinary_cash_lineage_transport.rs"]
 mod lineage_transport;
 #[path = "ordinary_mint_capture.rs"]
 mod mint_capture;
+use incoming::{IncomingIntentOriginals, PendingIncoming};
 #[path = "ordinary_cash_preparation_originals.rs"]
 mod preparation_originals;
 #[path = "ordinary_received_source_inbox.rs"]
@@ -46,6 +52,7 @@ pub(crate) use mint_capture::KagemushaAuthenticatedOrdinaryMintApprovalSelection
 use mint_capture::{MintRecord, PendingMint};
 #[path = "ordinary_cash_state_commit.rs"]
 mod state_commit;
+pub(crate) use received_source::KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1;
 use received_source::{ReceivedSourceAdmission, ReceivedSourceOriginals};
 use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
 pub(crate) use receiver_request::{
@@ -59,6 +66,10 @@ use state_commit::{
     RetainedStateAdvance, StateAdvanceAcknowledgment,
 };
 pub(crate) use terminal::KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1;
+
+#[path = "ordinary_cash_platform_preparation.rs"]
+mod platform_preparation;
+pub use platform_preparation::KagemushaNativeOrdinaryPreparedCashApprovalV1;
 
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "ordinary-cash.norito.wal",
@@ -145,6 +156,8 @@ enum Record {
     ReceiverCapture(CapturedReceiverRequestOriginals),
     Mint(MintRecord),
     ReceivedSource(ReceivedSourceOriginals),
+    IncomingIntent(IncomingIntentOriginals),
+    IncomingApproval(IncomingApprovalRecord),
     ReceiverCancel {
         request_id: DigestV1,
     },
@@ -251,6 +264,8 @@ pub struct KagemushaNativeOrdinaryCashOwnerV1 {
     counter_floor: Option<u32>,
     pending: Option<Pending>,
     pending_mint: Option<PendingMint>,
+    pending_incoming: Option<PendingIncoming>,
+    incoming_consumed: sparse_merkle::ExactConsumedCreditIndex,
     used_operations: BTreeSet<DigestV1>,
     pending_receiver_request: Option<PendingReceiverRequest>,
     retained_receiver_requests: BTreeMap<DigestV1, RetainedReceiverRequest>,
@@ -401,6 +416,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             counter_floor,
             pending: None,
             pending_mint: None,
+            pending_incoming: None,
+            incoming_consumed: sparse_merkle::ExactConsumedCreditIndex::empty(),
             used_operations: BTreeSet::new(),
             pending_receiver_request: None,
             retained_receiver_requests: BTreeMap::new(),
@@ -862,6 +879,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         }
         if self.pending.is_some()
             || self.pending_mint.is_some()
+            || self.pending_incoming.is_some()
             || self.terminal.as_ref().is_none_or(|t| t.has_pending())
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
@@ -1131,6 +1149,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .contains(&pending.originals.request_id())
                 || self.pending.is_some()
                 || self.pending_mint.is_some()
+                || self.pending_incoming.is_some()
                 || self.terminal.as_ref().is_none_or(|t| t.has_pending())
                 || pending.originals.original_counter_floor() != self.counter_floor
             {
@@ -1186,6 +1205,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.require_outbox_capacity_for_new_slot()?;
         if self.pending.is_some()
             || self.pending_mint.is_some()
+            || self.pending_incoming.is_some()
             || self.pending_receiver_request.is_some()
             || !matches!(
                 operation_kind,
@@ -1420,6 +1440,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             self.financial_journal_revision,
         )?;
         require_reserved_selection(pending, &statement, &successor)?;
+        self.require_native_preparation_derivation(operation, &statement, &successor, context)?;
         let normalized =
             KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
                 .map_err(material)?;
@@ -1439,7 +1460,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .map_err(material)?;
         let issued_at_ms = interval.lower_ms();
         let expires_at_ms = issued_at_ms
-            .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
+            .checked_add(platform_preparation::ORDINARY_PREPARATION_LIFETIME_MS)
             .ok_or(KagemushaStateErrorV1::InvalidTrustedCommitTime)?
             .min(floor.approval_valid_until_ms());
         interval
@@ -1630,7 +1651,11 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .pending
             .as_ref()
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if pending.operation != operation || pending.capture.is_some() {
+        if pending.operation != operation
+            || pending.fenced
+            || pending.retained.is_some()
+            || pending.capture.is_some()
+        {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         self.persist(&Record::Cancel { operation })?;
@@ -1669,6 +1694,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             &selected.statement,
             self.financial_journal_revision,
         )?;
+        self.recheck_native_preparation_derivation(operation)?;
         let interval = self
             .publication
             .cash_financial()
@@ -1731,6 +1757,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         match record {
             Record::Mint(record) => self.replay_mint(record, historical_leases)?,
             Record::ReceivedSource(originals) => self.replay_received_source(originals)?,
+            Record::IncomingIntent(originals) => self.replay_incoming_intent(originals)?,
+            Record::IncomingApproval(record) => {
+                self.replay_incoming_approval(record, historical_leases)?
+            }
             Record::PrepareCommit(originals) => self.replay_prepared_commit(originals)?,
             Record::StateAdvance {
                 prepared_original_sha256,
@@ -1762,6 +1792,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             } if self.anchor_request_sha256.is_some()
                 && self.pending.is_none()
                 && self.pending_mint.is_none()
+                && self.pending_incoming.is_none()
                 && self.pending_receiver_request.is_none()
                 && operation != [0; 32]
                 && nonce != [0; 32]
@@ -1915,6 +1946,13 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     self.financial_journal_revision,
                 )?;
                 require_reserved_selection(pending, &statement, &successor)?;
+                self.require_native_preparation_derivation(
+                    pending.operation,
+                    &statement,
+                    &successor,
+                    context,
+                )?;
+                platform_preparation::require_preparation_challenge_window(&challenge)?;
                 if KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
                     .map_err(material)?
                     != normalized
@@ -2055,15 +2093,20 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     .capture = Some((lower_at_ms, upper_at_ms, retained.2));
             }
             Record::Cancel { operation }
-                if self
-                    .pending
-                    .as_ref()
-                    .is_some_and(|p| p.operation == operation && p.capture.is_none()) =>
+                if self.pending.as_ref().is_some_and(|p| {
+                    p.operation == operation
+                        && !p.fenced
+                        && p.retained.is_none()
+                        && p.capture.is_none()
+                }) =>
             {
                 self.pending = None;
             }
             Record::Terminal(record) => {
-                if self.pending_receiver_request.is_some() || self.pending_mint.is_some() {
+                if self.pending_receiver_request.is_some()
+                    || self.pending_mint.is_some()
+                    || self.pending_incoming.is_some()
+                {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                 }
                 if let Some(selected_prefix) = record.preselection_prefix() {
@@ -2093,6 +2136,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             } => {
                 if self.pending.is_some()
                     || self.pending_mint.is_some()
+                    || self.pending_incoming.is_some()
                     || self.pending_receiver_request.is_some()
                     || self.terminal.as_ref().is_none_or(|t| t.has_pending())
                     || self.used_operations.contains(&originals.request_id())
@@ -2244,6 +2288,8 @@ impl KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_> {
             &selected.statement,
             self.owner.financial_journal_revision,
         )?;
+        self.owner
+            .recheck_native_preparation_derivation(pending.operation)?;
         approval.recheck_at_trusted_time(*lower).map_err(material)?;
         approval.recheck_at_trusted_time(*upper).map_err(material)?;
         Ok(())
@@ -2488,6 +2534,8 @@ fn preparation_subject(
         operation_kind: match statement.kind {
             KagemushaTransitionKindV1::SendSplit => KagemushaOperationKindV1::SendSplit,
             KagemushaTransitionKindV1::RedeemSplit => KagemushaOperationKindV1::RedeemSplit,
+            KagemushaTransitionKindV1::MintFold => KagemushaOperationKindV1::MintFold,
+            KagemushaTransitionKindV1::ReceiveFold => KagemushaOperationKindV1::ReceiveFold,
             _ => return Err(KagemushaStateErrorV1::InvalidCandidateStage),
         },
         transition_statement_digest: statement.digest()?,

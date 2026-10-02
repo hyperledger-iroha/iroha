@@ -488,7 +488,7 @@ def apply_plan(args):
         os.fchmod(out.fileno(), 0o600)
         os.fchmod(err.fileno(), 0o600)
         # Bound the complete guest operation beyond its individual preflight,
-        # stop/start, progress-bounded catch-up, doctor and final observation budgets.
+        # stop/start and progress-bounded catch-up/final observation budgets.
         try:
             with guest_update_heartbeat(args.output, started):
                 process = subprocess.run(argv, input=payload, stdout=out, stderr=err,

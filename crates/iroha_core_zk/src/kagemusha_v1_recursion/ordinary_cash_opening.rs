@@ -675,6 +675,11 @@ mod tests {
             ]
             .map(|raw| assigned(ctx, range, raw)),
             account_binding: assigned(ctx, range, d(32)),
+            financial_authority_commitment: assigned(
+                ctx,
+                range,
+                super::super::guard_bundle::device_authority_commitment_v1([0x41; 32]),
+            ),
             canonical_subject: core::array::from_fn(|_| ctx.load_witness(F::ZERO)),
             approval_purpose: ctx.load_witness(F::from(phase)),
             approval_operation_id: assigned(ctx, range, intent.native_operation_id),

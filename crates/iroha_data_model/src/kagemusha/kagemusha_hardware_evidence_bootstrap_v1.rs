@@ -17,8 +17,52 @@ pub const KAGEMUSHA_HARDWARE_EVIDENCE_POSSESSION_DOMAIN_V1: &[u8] =
 /// Sole fixed E308 body width.
 pub const KAGEMUSHA_HARDWARE_EVIDENCE_POSSESSION_BODY_BYTES_V1: usize = 308;
 
+/// Public semantic compile input, independently admitted by the artifact producer and copied
+/// into the measured JNI. It contains no JNI SHA or signed manifest, avoiding a self-hash cycle.
+/// Decoding alone grants no Native authority. The shipping producer must retain this complete
+/// original and its actual build recipe alongside the artifact signature.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema, iroha_schema::IntoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::HardwareEvidenceCompiledBindingOriginalV1")]
+pub struct KagemushaHardwareEvidenceCompiledBindingOriginalV1 {
+    /// Exactly one, first-device hardware evidence only.
+    pub version: u16,
+    /// Complete independently approved threshold release-authority policy original.
+    pub authority_policy_original: Vec<u8>,
+    /// Semantic source input, separately retained outside its compiled product.
+    pub app_source_sha256: [u8; 32],
+    /// Semantic source input, separately retained outside its compiled product.
+    pub sdk_source_sha256: [u8; 32],
+    /// Exact compiled Native ABI selected by the artifact producer.
+    pub native_abi: u32,
+}
+impl KagemushaHardwareEvidenceCompiledBindingOriginalV1 {
+    /// Require the sole complete canonical authority original and nonzero semantic bindings.
+    /// This performs shape validation; it does not independently approve a build input.
+    pub fn validate(&self) -> Result<KagemushaReleaseAuthorityPolicyV1, String> {
+        if self.version != 1
+            || self.native_abi == 0
+            || self.app_source_sha256 == [0; 32]
+            || self.sdk_source_sha256 == [0; 32]
+        {
+            return Err("hardware compiled binding rejected".into());
+        }
+        KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&self.authority_policy_original)
+            .map_err(|_| "hardware compiled authority rejected".into())
+    }
+}
+
 /// Independently approved artifact-phase selection. Its only purpose is hardware evidence.
 /// Exact SDK/JNI/package measurements come from the trusted startup factory, never the UI.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema, iroha_schema::IntoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::HardwareEvidenceJniArtifactV1")]
+pub struct KagemushaHardwareEvidenceJniArtifactV1 {
+    /// Exact Android packaging architecture, selected by the compiled Native target.
+    pub android_abi: String,
+    /// SHA256 of the complete genuine JNI artifact for this architecture.
+    pub sha256: [u8; 32],
+}
+
+/// Complete signed hardware-only release, shared by the application's ABI/config splits.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema, iroha_schema::IntoSchema)]
 #[norito_schema(name = "iroha_data_model::kagemusha::HardwareEvidenceBootstrapManifestV1")]
 /// Public complete hardware-evidence data original; decoding it grants no Native owner or money authority.
@@ -43,10 +87,14 @@ pub struct KagemushaHardwareEvidenceBootstrapManifestV1 {
     pub app_distribution_digest: [u8; 32],
     /// Independently measured application source binding.
     pub app_source_sha256: [u8; 32],
+    /// Exact ordered application DEX code digest measured from the installed APK; excludes
+    /// the external signed manifest and APK signing block, preventing a self-hash cycle.
+    pub app_code_sha256: [u8; 32],
     /// Independently measured SDK source binding.
     pub sdk_source_sha256: [u8; 32],
-    /// Independently measured JNI artifact binding; supplied outside its own binary to avoid self-hash cycles.
-    pub native_artifact_sha256: [u8; 32],
+    /// Strictly ordered unique actual JNI artifact originals. Native chooses its own compiled
+    /// architecture; the base AAB asset never accepts a managed architecture or digest selector.
+    pub jni_artifacts: Vec<KagemushaHardwareEvidenceJniArtifactV1>,
     /// Exact supported Native ABI binding; does not grant monetary operations.
     pub native_abi: u32,
     /// Ed25519 issuer independently authorized for this evidence-only release.
@@ -65,6 +113,9 @@ pub struct KagemushaHardwareEvidenceBootstrapManifestV1 {
     pub allowed_android_security_levels: Vec<KagemushaAppKeySecurityLevelV1>,
     /// Exact independently installed signed Native clock selection.
     pub native_clock_selection_digest: [u8; 32],
+    /// Exact four HTTPS validator base URLs in the same independently signed node order.
+    /// A managed endpoint or offered clock reply cannot replace these transport selections.
+    pub native_clock_base_urls: [String; 4],
     /// Nonzero approved bootstrap policy epoch.
     pub policy_epoch: u64,
     /// Lower admitted release validity bound, checked under actual Native time.
@@ -81,6 +132,19 @@ impl KagemushaHardwareEvidenceBootstrapManifestV1 {
             || self.purpose != 1
             || self.native_abi == 0
             || self.app_version_code == 0
+            || self.jni_artifacts.is_empty()
+            || self.jni_artifacts.len() > 4
+            || self.jni_artifacts.iter().any(|a| {
+                a.sha256 == [0; 32]
+                    || !matches!(
+                        a.android_abi.as_str(),
+                        "arm64-v8a" | "armeabi-v7a" | "x86" | "x86_64"
+                    )
+            })
+            || !self
+                .jni_artifacts
+                .windows(2)
+                .all(|a| a[0].android_abi < a[1].android_abi)
             || self.evidence_issuer.algorithm() != Algorithm::Ed25519
             || self.policy_epoch == 0
             || self.not_before_ms == 0
@@ -100,6 +164,10 @@ impl KagemushaHardwareEvidenceBootstrapManifestV1 {
                 .bytes()
                 .all(|b| b.is_ascii_graphic())
             || !valid_origin(&self.core_origin)
+            || self
+                .native_clock_base_urls
+                .iter()
+                .any(|base| !valid_clock_base_url(base))
             || self.app_package.is_empty()
             || self.app_package.len() > 128
             || !self.app_package.split('.').all(|part| {
@@ -124,8 +192,8 @@ impl KagemushaHardwareEvidenceBootstrapManifestV1 {
             self.app_signing_identity_digest,
             self.app_distribution_digest,
             self.app_source_sha256,
+            self.app_code_sha256,
             self.sdk_source_sha256,
-            self.native_artifact_sha256,
             self.raw_verifier_policy_digest,
             self.native_clock_selection_digest,
             self.play_integrity_policy.policy_digest,
@@ -606,6 +674,26 @@ pub fn kagemusha_hardware_evidence_google_owner_binding_v1(
     Ok(h.finalize().into())
 }
 
+fn valid_clock_base_url(value: &str) -> bool {
+    let Some(remainder) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((authority, path)) = remainder.split_once('/') else {
+        return false;
+    };
+    value.len() <= 2048
+        && valid_origin(&format!("https://{authority}"))
+        && (path.is_empty()
+            || (path.ends_with('/')
+                && path[..path.len() - 1].split('/').all(|part| {
+                    !part.is_empty()
+                        && part != "."
+                        && part != ".."
+                        && part
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                })))
+}
 fn valid_origin(origin: &str) -> bool {
     let Some(authority) = origin.strip_prefix("https://") else {
         return false;
@@ -664,8 +752,18 @@ mod tests {
             app_signing_identity_digest: [4; 32],
             app_distribution_digest: [5; 32],
             app_source_sha256: [6; 32],
+            app_code_sha256: [12; 32],
             sdk_source_sha256: [7; 32],
-            native_artifact_sha256: [8; 32],
+            jni_artifacts: vec![
+                KagemushaHardwareEvidenceJniArtifactV1 {
+                    android_abi: "arm64-v8a".into(),
+                    sha256: [8; 32],
+                },
+                KagemushaHardwareEvidenceJniArtifactV1 {
+                    android_abi: "x86_64".into(),
+                    sha256: [13; 32],
+                },
+            ],
             native_abi: 25,
             evidence_issuer: a.public_key().clone(),
             raw_verifier_policy_digest: [9; 32],
@@ -685,6 +783,9 @@ mod tests {
                 KagemushaAppKeySecurityLevelV1::StrongBox,
             ],
             native_clock_selection_digest: [11; 32],
+            native_clock_base_urls: std::array::from_fn(|i| {
+                format!("https://public-clock-{i}.example/role/{i}/")
+            }),
             policy_epoch: 1,
             not_before_ms: 1,
             expires_at_ms: 1000000,
@@ -757,13 +858,28 @@ mod tests {
             match tag {
                 0 => n.manifest.app_package = "other.package".into(),
                 1 => n.manifest.sdk_source_sha256 = [21; 32],
-                2 => n.manifest.native_artifact_sha256 = [22; 32],
+                2 => n.manifest.jni_artifacts[0].sha256 = [22; 32],
                 3 => n.manifest.native_clock_selection_digest = [23; 32],
                 4 => n.manifest.google_oauth_client_id = "other-audience".into(),
                 5 => n.manifest.core_origin = "https://other.example".into(),
                 _ => n.manifest.network_id = [24; 32],
             };
             assert!(n.authenticate(&p).is_err());
+        }
+    }
+    #[test]
+    fn complete_jni_inventory_rejects_absence_duplicates_order_and_foreign_architectures() {
+        let (_, m) = fixture();
+        for mutation in 0..5 {
+            let mut a = m.manifest.clone();
+            match mutation {
+                0 => a.jni_artifacts.clear(),
+                1 => a.jni_artifacts[1] = a.jni_artifacts[0].clone(),
+                2 => a.jni_artifacts.reverse(),
+                3 => a.jni_artifacts[0].android_abi = "offered-ui-architecture".into(),
+                _ => a.jni_artifacts[0].sha256 = [0; 32],
+            }
+            assert!(a.validate().is_err());
         }
     }
     #[test]

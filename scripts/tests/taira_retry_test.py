@@ -904,37 +904,32 @@ class RetryTests(unittest.TestCase):
         self.assertNotIn("MUST_NOT_LEAK", json.dumps(result))
         self.assertNotIn("SECRET_TEST_VALUE", json.dumps(result))
 
-    def test_public_validation_requires_same_source_network_and_curated_mcp(self):
+    def test_public_validation_requires_ready_source_network_and_mcp_without_doctor(self):
         _, binary, _ = artifact_receipts()
         seed = self.root / "seed"
         seed.mkdir()
         retry.write_public(
             seed / "seed-authority-receipt.json", {"network_id": "native-network"}
         )
-        for variant in ("valid", "full", "wrong-scope", "wrong-source", "wrong-network", "mcp-error"):
+        for variant in ("valid", "full", "not-ready", "wrong-source", "wrong-target",
+                        "empty-tip", "wrong-network", "mcp-error"):
             output = self.root / variant
             calls = []
-            scope = "full" if variant == "full" else "basic"
             inventory = {"qualification_scope": "full_inrou" if variant == "full" else "core_testnet"}
 
             def native(argv, directory, *, phase, env, **kwargs):
                 self.assertEqual(env, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
                 self.assertNotIn("--config", argv)
+                self.assertEqual(argv[0], "/usr/bin/curl")
                 directory.mkdir(mode=0o700)
                 calls.append(argv)
-                if argv[0] != "/usr/bin/curl":
-                    self.assertEqual(argv[argv.index("--scope") + 1], scope)
-                    retry.write_public(
-                        directory / "stdout",
-                        {
-                            "command": "taira_doctor",
-                            "scope": "full" if variant == "wrong-scope" else scope,
-                            "public_root": "https://taira.sora.org",
-                            "status": "ok",
-                            "failures": [],
-                            "checks": [{"ok": True}],
-                        },
-                    )
+                self.assertNotIn("doctor", argv)
+                if directory.name == "readiness":
+                    self.assertEqual(argv[-1], "https://taira.sora.org/readyz")
+                    self.assertIn("Accept: text/plain", argv)
+                    (directory / "stdout").write_bytes(
+                        b"503" if variant == "not-ready" else b"200")
+                    (directory / "body.json").write_bytes(b"Ready")
                     return
                 self.assertIn("--noproxy", argv)
                 response = {
@@ -943,10 +938,11 @@ class RetryTests(unittest.TestCase):
                             "git_commit_sha": "0" * 40
                             if variant == "wrong-source"
                             else binary["commit"],
-                            "target_triple": "aarch64-unknown-linux-gnu",
+                            "target_triple": "x86_64-unknown-linux-gnu"
+                            if variant == "wrong-target" else "aarch64-unknown-linux-gnu",
                         }
                     },
-                    "tip": 12,
+                    "tip": 0 if variant == "empty-tip" else 12,
                     "network": {
                         "network_id": "other"
                         if variant == "wrong-network"
@@ -980,12 +976,14 @@ class RetryTests(unittest.TestCase):
             ):
                 if variant in ("valid", "full"):
                     result = retry.public_validation(binary, inventory, output)
+                    self.assertTrue(result["public_readiness_passed"])
                     self.assertTrue(result["public_mcp_health_passed"])
+                    self.assertNotIn("same_revision_doctor_passed", result)
                     self.assertFalse(result["application_validation_completed"])
                 else:
                     with self.assertRaises(retry.RetryError):
                         retry.public_validation(binary, inventory, output)
-            self.assertEqual(len(calls), 1 if variant == "wrong-scope" else 5)
+            self.assertEqual(len(calls), 1 if variant == "not-ready" else 5)
         with mock.patch.object(retry, "run_native") as native:
             for scope in (None, "", "unknown"):
                 with self.assertRaises(retry.RetryError):

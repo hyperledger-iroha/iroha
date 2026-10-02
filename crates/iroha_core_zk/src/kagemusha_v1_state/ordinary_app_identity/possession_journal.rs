@@ -650,13 +650,16 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             evidence,
         }
         .authenticate(
-            &self.challenge,
-            &subject.app_public_key,
-            subject.platform_class,
-            subject.app_signing_identity_digest,
-            pending.preparation().app_authority().app_release_digest,
-            (subject.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest)
-                .then_some(0),
+            pending.preparation().retained_preparation(now)?,
+            &pending
+                .preparation()
+                .ordinary
+                .identity_policy()
+                .policy()
+                .enrollment_issuer_key,
+            &pending.preparation().preparation.challenge,
+            pending.raw_admission(),
+            pending.raw_attestation(),
             now,
         )
         .map_err(|_| Rejected)
@@ -753,6 +756,7 @@ mod tests {
             f.trust.clone(),
             f.app_authority.clone(),
             f.issuer_policy.clone(),
+            Arc::clone(&f.ordinary_policy),
             c.hardware_profile_id,
             c.client_nonce,
             c.financial_authority_commitment,
@@ -765,8 +769,9 @@ mod tests {
         let prepared = prepared_for_fixture(f);
         let c = &prepared.preparation.challenge;
         let app = f.selection.issuance.credential.subject;
-        // Synthetic full raw original isolates real issuer/key/signature/custody joins, not device qualification.
-        let raw = vec![23; 100];
+        // Exact maintained canonical platform carrier isolates real issuer/key/signature/custody
+        // joins; its inert DER/CBOR fixture grants no physical platform qualification.
+        let raw = f.proof.raw_attestation.clone();
         let subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
             version: 1,
             enrollment_challenge_digest: c.attestation_challenge().unwrap(),
@@ -815,6 +820,7 @@ mod tests {
                 native_owner,
                 f.release.clone(),
                 issuer_policy,
+                Arc::clone(&f.ordinary_policy),
                 f.trust.clone(),
                 f.app_authority.clone(),
                 f.selection.preparation.challenge.hardware_profile_id,
@@ -836,36 +842,32 @@ mod tests {
         KagemushaPreparedOrdinaryAppEnrollmentV1,
         Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
     ) {
-        use iroha_crypto::{Algorithm, KeyPair, Signature};
-        let mut native_owner = f.selection.owner.clone();
-        let mut issuer_policy = f.issuer_policy.clone();
-        let seed = match changed {
-            0 => {
-                native_owner.lane_id[0] ^= 1;
-                61
-            }
-            1 => 63,
+        let (namespace, core_seed, epoch) = match changed {
+            0 => ([84; 32], 63, 1),
+            1 => ([83; 32], 65, 1),
+            2 => ([83; 32], 63, 3),
             _ => panic!("unsupported public fixture mutation"),
         };
-        let issuer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        issuer_policy.issuer_public_key = issuer.public_key().clone();
-        let mut original = f.selection.preparation.clone();
-        original.challenge.enrollment_id = native_owner.enrollment_id().unwrap();
-        original.challenge.lane_id = native_owner.lane_id;
-        original.challenge.issuer_policy_digest =
-            kagemusha_ordinary_retail_issuer_policy_digest_v1(&issuer_policy).unwrap();
-        original.signature = Signature::new(
-            issuer.private_key(),
-            &original.challenge.canonical_signing_bytes().unwrap(),
+        let scope = Fixture::with_selected_scope(
+            f.selection.preparation.challenge.platform_class
+                == KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            f.selection
+                .preparation
+                .challenge
+                .financial_authority_commitment,
+            namespace,
+            core_seed,
+            epoch,
         );
-        let c = original.challenge;
+        let c = &scope.selection.preparation.challenge;
         let prepared = KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
-            original,
-            native_owner.clone(),
-            f.release.clone(),
-            f.trust.clone(),
-            f.app_authority.clone(),
-            issuer_policy.clone(),
+            scope.selection.preparation.clone(),
+            scope.selection.owner.clone(),
+            scope.release.clone(),
+            scope.trust.clone(),
+            scope.app_authority.clone(),
+            scope.issuer_policy.clone(),
+            Arc::clone(&scope.ordinary_policy),
             c.hardware_profile_id,
             c.client_nonce,
             c.financial_authority_commitment,
@@ -873,7 +875,7 @@ mod tests {
             300,
         )
         .unwrap();
-        (prepared, selected_scope(f, native_owner, issuer_policy))
+        (prepared, selected(&scope))
     }
 
     #[test]

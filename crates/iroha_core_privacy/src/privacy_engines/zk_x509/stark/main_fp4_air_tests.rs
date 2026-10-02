@@ -83,6 +83,39 @@ fn main_fp4_availability_tracks_each_complete_registration() {
 }
 
 #[test]
+fn main_descriptors_match_enforced_join_inventory_and_alpha_order() {
+    let profile =
+        core::str::from_utf8(super::super::super::profile::ZK_X509_STARK_PROFILE_DESCRIPTOR_V1)
+            .unwrap();
+    let segmented = core::str::from_utf8(ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1).unwrap();
+    let main = core::str::from_utf8(ZK_X509_MAIN_PROOF_DESCRIPTOR_V1).unwrap();
+    // These totals are the capacities sampled by the implemented join plans.
+    assert_eq!(main_key_joins::BLOCKS_V1, 12 + 5);
+    assert_eq!(main_sha_union::UNION_QUOTIENTS_V1, 16 + 4);
+    for descriptor in [profile, segmented, main] {
+        for inventory in [
+            "main-key-byte-joins=12-blocks647-equalities",
+            "main-sha-digest-joins=5-blocks40-u32-equalities",
+            "main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links",
+        ] {
+            assert_eq!(descriptor.matches(inventory).count(), 1, "{inventory}");
+        }
+    }
+    // Count-bearing phase descriptions must follow the prover/verifier order.
+    let key_alphas = main_key_joins::BLOCKS_V1;
+    let union_alphas = main_sha_union::UNION_QUOTIENTS_V1;
+    assert!(profile.contains(&format!(
+        "main-link-alpha-order=aux-roots+remaining-public-claims+local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+{key_alphas}-key-and-digest-join-descriptors+key-and-digest-alphas+{union_alphas}-private-sha-union-descriptors+sha-union-alphas"
+    )));
+    assert!(segmented.contains(&format!(
+        "all-aux-roots-and-X5M1-terminal-claims-before-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then{key_alphas}-key-and-digest-join-descriptors-and-fp4-alphas:then{union_alphas}-private-sha-union-descriptors-and-fp4-alphas"
+    )));
+    assert!(main.contains(&format!(
+        "aux-roots-then-remaining-public-claims-then-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-{key_alphas}-key-and-digest-join-descriptors-and-alphas-then-{union_alphas}-private-sha-union-descriptors-and-alphas"
+    )));
+}
+
+#[test]
 fn projection_fp4_capability_evaluates_its_complete_registration_and_rejects_wrong_shape() {
     let registration = AggregateProofLayoutV1::for_full_profile_v1()
         .unwrap()

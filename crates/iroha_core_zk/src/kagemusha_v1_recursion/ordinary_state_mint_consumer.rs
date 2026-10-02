@@ -12,6 +12,13 @@ use halo2_base::{
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 
+#[path = "ordinary_state_mint_active_bindings.rs"]
+mod active_bindings;
+pub(super) use active_bindings::{
+    OrdinaryMintStateBindingCellsV1, OrdinaryMintStateOpeningV1,
+    constrain_ordinary_mint_state_bindings_v1,
+};
+
 pub(super) fn inactive_column<F: KagemushaPoseidonFieldV1>(
     history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
 ) -> Vec<F> {

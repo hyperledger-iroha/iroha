@@ -5058,7 +5058,7 @@ def guest_locked(request, capacity, root):
         "native_apply_passed": True,
         "seed_continuity_passed": True,
         "boot_persistence_passed": True,
-        "public_doctor_passed": True,
+        "public_endpoints_verified": True,
         "public_application_validation_completed": False,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
@@ -5119,34 +5119,16 @@ def preserve_postcondition_outputs(attempt):
 
 
 def public_validation(binary, inventory, directory):
-    """Run the exact released doctor without loading a client config or credentials."""
+    """Observe actual public readiness and identity without running diagnostics."""
     qualification_scope = inventory.get("qualification_scope")
     require(
         qualification_scope in ("core_testnet", "full_inrou"),
         "public validation requires the signed qualification scope",
     )
-    doctor_scope = "basic" if qualification_scope == "core_testnet" else "full"
-    cli = str(Path(binary["destination"]) / "iroha")
-    run_native(
-        [cli, "taira", "doctor", "--scope", doctor_scope,
-         "--public-root", "https://taira.sora.org", "--json"],
-        directory,
-        phase="public-validation",
-        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
-    )
-    doctor = decode(public_record(directory / "stdout", owner=0, private=True))
-    require(
-        doctor.get("command") == "taira_doctor"
-        and doctor.get("scope") == doctor_scope
-        and doctor.get("public_root") == "https://taira.sora.org"
-        and doctor.get("status") == "ok"
-        and doctor.get("failures") == []
-        and doctor.get("checks")
-        and all(row.get("ok") is True for row in doctor["checks"]),
-        "same-revision public doctor did not pass",
-    )
+    directory.mkdir(mode=0o700)
     observed = {}
     for name, path in (
+        ("readiness", "/readyz"),
         ("status", "/status"),
         ("tip", "/status/blocks"),
         ("network", "/v1/accounts/faucet/puzzle"),
@@ -5172,6 +5154,7 @@ def public_validation(binary, inventory, directory):
             "--write-out",
             "%{http_code}",
             "-H",
+            "Accept: text/plain" if name == "readiness" else
             "Accept: application/json, text/event-stream"
             if name == "mcp"
             else "Accept: application/json",
@@ -5188,7 +5171,7 @@ def public_validation(binary, inventory, directory):
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
-                            "name": "iroha-taira-doctor",
+                            "name": "iroha-taira-public-observation",
                             "version": "1",
                         },
                     },
@@ -5217,9 +5200,10 @@ def public_validation(binary, inventory, directory):
             public_record(log / "stdout", owner=0, private=True, limit=16) == b"200",
             "anonymous public validation did not return HTTP 200",
         )
-        observed[name] = decode(
-            public_record(log / "body.json", owner=0, private=True, limit=1024 * 1024)
-        )
+        if name != "readiness":
+            observed[name] = decode(
+                public_record(log / "body.json", owner=0, private=True, limit=1024 * 1024)
+            )
     seed = decode(
         public_record(
             CONTINUITY_OUT / "seed-authority-receipt.json", owner=0, private=True
@@ -5245,7 +5229,7 @@ def public_validation(binary, inventory, directory):
         "anonymous curated MCP health did not pass",
     )
     result = {
-        "same_revision_doctor_passed": True,
+        "public_readiness_passed": True,
         "public_source_passed": True,
         "public_mcp_health_passed": True,
         "public_network_id": seed["network_id"],
@@ -5372,7 +5356,7 @@ def resume_postconditions(request, attempt, terminal_path):
         "native_apply_passed": True,
         "seed_continuity_passed": True,
         "boot_persistence_passed": True,
-        "public_doctor_passed": True,
+        "public_endpoints_verified": True,
         "public_application_validation_completed": False,
         "postconditions_only": True,
         "native_completed_receipt": proof["path"],

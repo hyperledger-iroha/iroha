@@ -13,6 +13,12 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
+#[path = "kagemusha_ordinary_incoming_v1/preparation.rs"]
+mod preparation;
+pub use preparation::{
+    KAGEMUSHA_ORDINARY_INCOMING_PREPARATION_BYTES_V1, KagemushaOrdinaryIncomingPreparationV1,
+};
+
 /// Immutable source selectors known before the incoming State proof. Future receiver State
 /// proofs and DATA results are deliberately excluded. Core must authenticate the source fully.
 #[allow(variant_size_differences)]
@@ -212,6 +218,11 @@ pub struct KagemushaOrdinaryIncomingReservationV1 {
     pub selection: KagemushaOrdinaryIncomingSelectionV1,
     /// SHA256 of complete finalized Mint funding original or complete received Commit envelope.
     pub finalized_source_original_sha256: [u8; 32],
+    /// SHA256 of the entire independently verified canonical MintCredit original for Mint,
+    /// including both genuine MintAuthority proofs and complete histories; for Receive, the
+    /// exact retained compact sender outgoing carrier. This later selector is excluded from
+    /// the pre-debit IncomingSelection and cannot change the deterministic credit identity.
+    pub source_proof_original_sha256: [u8; 32],
     /// Exact finalized Mint statement or sender output semantic digest from the genuine source.
     pub source_semantic_digest: [u8; 32],
 }
@@ -223,14 +234,18 @@ impl KagemushaOrdinaryIncomingReservationV1 {
         self.selection.validate_shape()?;
         nonzero(&[
             self.finalized_source_original_sha256,
+            self.source_proof_original_sha256,
             self.source_semantic_digest,
         ])?;
         if let KagemushaOrdinaryIncomingSourceSelectionV1::Receive {
             sender_commit_transport_original_sha256,
+            sender_outgoing_original_sha256,
             ..
         } = self.selection.source
         {
-            if sender_commit_transport_original_sha256 != self.finalized_source_original_sha256 {
+            if sender_commit_transport_original_sha256 != self.finalized_source_original_sha256
+                || sender_outgoing_original_sha256 != self.source_proof_original_sha256
+            {
                 return Err("ordinary incoming finalized receipt differs from exact source".into());
             }
         }
@@ -376,8 +391,27 @@ mod tests {
         KagemushaOrdinaryIncomingReservationV1 {
             selection: selection(mint),
             finalized_source_original_sha256: if mint { [52; 32] } else { [44; 32] },
+            source_proof_original_sha256: if mint { [61; 32] } else { [45; 32] },
             source_semantic_digest: [53; 32],
         }
+    }
+    #[test]
+    fn incoming_reservation_pins_full_current_source_proof_original_without_rekeying_credit() {
+        let original = reservation(true);
+        let key = original.selection.credit_id;
+        let selection = original.selection.digest().unwrap();
+        let digest = original.digest().unwrap();
+        let mut changed = original.clone();
+        changed.source_proof_original_sha256[0] ^= 1;
+        assert_eq!(changed.selection.credit_id, key);
+        assert_eq!(changed.selection.digest().unwrap(), selection);
+        assert_ne!(changed.digest().unwrap(), digest);
+        changed.source_proof_original_sha256 = [0; 32];
+        assert!(changed.digest().is_err());
+        let mut receive = reservation(false);
+        assert!(receive.validate_shape().is_ok());
+        receive.source_proof_original_sha256[0] ^= 1;
+        assert!(receive.validate_shape().is_err());
     }
     fn commit() -> KagemushaOrdinaryIncomingCommitV1 {
         let r = reservation(false);

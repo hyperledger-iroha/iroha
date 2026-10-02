@@ -11,6 +11,15 @@ enum KagemushaAppPlatformFrameV1 {
       guard f.count == 2, KagemushaAppPlatformPreparedProjectionV1.digest(f[1]) else {
         throw invalid("invalid original app operation identity")
       }
+    case 15:
+      guard method == .appOperationApproval, f.count == 3, f[1].count == 4 else {
+        throw invalid("invalid ordinary business preparation")
+      }
+      switch KagemushaAppPlatformPreparedProjectionV1.u32(f[1]) {
+      case 2: guard (1...4096).contains(f[2].count) else { throw invalid("invalid receiver request original") }
+      case 4: guard f[2].count == 16, KagemushaAppPlatformPreparedProjectionV1.nonzero(f[2]) else { throw invalid("invalid positive u128 amount") }
+      default: throw invalid("unknown ordinary business operation")
+      }
     case 2, 4, 5, 6, 7:
       guard f.count == 2, ticket(f[1]) else { throw invalid("invalid app platform ticket") }
     case 3:
@@ -61,6 +70,10 @@ enum KagemushaAppPlatformFrameV1 {
       } else {
         _ = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
           approvalID: nil, enrollmentChallengeHash: request[1])
+      }
+    case 15:
+      guard f.count == 1, KagemushaAppPlatformPreparedProjectionV1.digest(f[0]) else {
+        throw invalid("invalid Native reserved ordinary operation identity")
       }
     case 2, 5:
       guard f.count == 3, f[0].count == 1 else { throw invalid("invalid original recovery state") }

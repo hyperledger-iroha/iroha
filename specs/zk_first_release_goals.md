@@ -254,8 +254,12 @@ pass; all five exposed X509 fixture/shape failures are corrected and pass in the
 1,061-control pre-merge privacy run. The merged candidate and new maximum proof
 require fresh native validation.
 
-The new source retains 285 RFC base / 280 auxiliary / 102 fixed columns, with
-1,654 local degree-four constraints. Six composition chunks keep 137 independent
+The current source retains 285 RFC base / 280 auxiliary / 102 fixed columns, with
+1,618 local degree-four constraints and 30 compressed lookup relations. Its
+canonical descriptors are being corrected to include the complete 17 key/digest
+and 20 quartic-union alpha phases before composition. Profile and deterministic
+IO/Projection goldens require fresh regeneration for this final descriptor epoch;
+earlier pre-merge pin passes do not qualify it. Six composition chunks keep 137 independent
 Fp4 mask coefficients and unchanged FRI caps. The source-derived complete bound
 is 9,413,406 bytes, below the unchanged 9,437,184-byte cap. There remain 212 MAIN
 and 108 accumulator public scalars, so full terminal privacy is unfinished.

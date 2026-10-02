@@ -1,4 +1,4 @@
-//! Fail-closed KAGEMUSHA V1 command framing for the optional secure-device service.
+//! Fail-closed KAGEMUSHA V1 command framing for the required secure-device service.
 //!
 //! This module validates the complete outer command frame before dispatch. The
 //! stock bridge deliberately has no successful monetary engine: exact commands
@@ -150,7 +150,7 @@ pub(super) enum StockDeviceCommandDispositionV1 {
 pub(super) enum JniExecutionDispositionV1 {
     /// Exactly this many bounded bytes may be copied into a Java result array.
     Response(usize),
-    /// The complete optional hardware service is unavailable.
+    /// The complete required hardware service is unavailable.
     Unavailable,
     /// The caller supplied a malformed command.
     Malformed,

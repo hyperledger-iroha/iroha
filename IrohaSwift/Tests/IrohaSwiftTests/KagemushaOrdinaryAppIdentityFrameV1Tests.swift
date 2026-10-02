@@ -6,6 +6,42 @@ import XCTest
 /// Real Rust C bytes through structural parsers and finite native frame grammar.
 /// Scripted endpoint tests exercise correlation only; they establish no native, device or monetary authority.
 final class KagemushaOrdinaryAppIdentityFrameV1Tests:XCTestCase {
+  func testCurrentAccountPhase15IsInputFreeAndSeparateFromCashPreparation15() throws {
+    let q = [n(15)]
+    let session = Data([1] + [UInt8](repeating: 0, count: 7))
+    let fields = [session, Data("fixture-wallet".utf8), Data("fixture-member".utf8)]
+    try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, fields)
+    let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.preparedOrdinaryAppIdentity, fields: q)
+    let response = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.preparedOrdinaryAppIdentity,
+      requestFrame: request, fields: fields)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.preparedOrdinaryAppIdentity,
+      requestFrame: request, responseFrame: response), fields)
+    for wrong in [q + [session], q + [n(4), Data([1] + [UInt8](repeating: 0, count: 15))], [Data([15])]] {
+      XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateRequest(wrong))
+    }
+    let cash = [n(15), n(4), Data([1] + [UInt8](repeating: 0, count: 15))]
+    try KagemushaAppPlatformFrameV1.validateRequest(.appOperationApproval, cash)
+    XCTAssertThrowsError(try KagemushaAppPlatformFrameV1.validateRequest(.appOperationApproval, q))
+    XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateRequest(cash))
+    for wrong in [[Data](), Array(fields.dropLast()), fields + [Data()]] {
+      XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, wrong))
+    }
+    for wrong in [Data(), Data(repeating: 0, count: 8), Data(repeating: 1, count: 7), Data(repeating: 1, count: 9)] {
+      var bad = fields; bad[0] = wrong
+      XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, bad))
+    }
+    for index in 1...2 {
+      for wrong in [Data(), Data([0xc0, 0x80]), Data([0]), Data(repeating: 0x61, count: 2_049)] {
+        var bad = fields; bad[index] = wrong
+        XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, bad))
+      }
+      var boundary = fields; boundary[index] = Data(repeating: 0x61, count: 2_048)
+      try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, boundary)
+    }
+    var equal = fields; equal[2] = equal[1]
+    XCTAssertThrowsError(try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(q, equal))
+  }
+
   func testInputFreeSelectorIsClosedAndDoesNotGenerateCallerIdentity() throws {
     XCTAssertEqual(KagemushaCoreCoordinatorMethodV1.preparedOrdinaryAppIdentity.rawValue,21)
     let q=[n(11)],id=Data(repeating:0x44,count:32)

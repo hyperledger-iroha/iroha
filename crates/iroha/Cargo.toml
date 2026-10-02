@@ -125,3 +125,8 @@ path = "tests/tx_ttl.rs"
 name = "iroha_ordinary_native_inventory_assemble"
 path = "src/bin/ordinary_native_inventory_assemble.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "hardware_evidence_bootstrap_prepare"
+path = "src/bin/hardware_evidence_bootstrap_prepare.rs"
+required-features = ["dev-tools"]

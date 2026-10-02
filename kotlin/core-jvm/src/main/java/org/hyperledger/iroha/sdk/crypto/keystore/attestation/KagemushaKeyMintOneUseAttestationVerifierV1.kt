@@ -58,7 +58,14 @@ internal object KagemushaSelectionFrameV1 {
     private const val BEFORE = 428
     private const val AFTER = 444
 
-    private fun requireShape(frame: ByteArray, allowEnrollment: Boolean) {
+    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) =
+        requireSelection(frame, lane, before, after, preparation = false)
+
+    /** Exact purpose2 S: Send/Redeem, absent candidate/terminal, genuine exact-next indexes. */
+    fun requireOrdinaryPreparationExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) =
+        requireSelection(frame, lane, before, after, preparation = true)
+
+    private fun requireShape(frame: ByteArray, preparation: Boolean) {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -79,15 +86,16 @@ internal object KagemushaSelectionFrameV1 {
             frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
         ) { "Core S has a zero policy or hardware generation" }
         val operation = frame[OPERATION].toInt() and 0xff
-        require(operation in (if (allowEnrollment) 0..5 else 1..5)) { "Core S has an invalid monetary operation" }
+        require(operation in 1..5) { "Core S has an invalid monetary operation" }
         val outgoing = operation == 2 || operation == 4
-        require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
-            frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
+        require(!preparation || outgoing) { "Purpose2 preparation requires Send or Redeem" }
+        require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == (outgoing && !preparation) &&
+            frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == (outgoing && !preparation)
         ) { "Core S has the wrong outgoing commitment shape" }
     }
 
-    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
-        requireShape(frame, allowEnrollment = false)
+    private fun requireSelection(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray, preparation: Boolean) {
+        requireShape(frame, preparation)
         require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
             frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
             frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)

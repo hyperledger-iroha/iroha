@@ -41,10 +41,12 @@ class KagemushaOrdinaryBootstrapApprovalOriginalsV1 internal constructor(enrollm
 /** The shared Android enrollment workflow, backed by one already installed Native account/release owner.
  * Native selects and durably retains the financial secret, C challenge, platform key intent,
  * E possession invocation, wallet invocation and FI originals. The product supplies its protected
- * HTTP transport. Retail signing uses either its separately protected wallet signer or the
- * installed Native account/session custody. No applet or OEM provisioning is involved.
+ * HTTP transport. The public Android constructor uses only the installed Native
+ * account/session custody for retail signing. No applet or OEM provisioning is involved.
  * Keep this workflow for explicit retries; uncertain invocations require Native original recovery.
  */
+// The internal primary constructor is an inert workflow-test seam, never a product
+// constructor or a way to install a Native account/session from a managed signer.
 class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private val native: KagemushaNativeAppApprovalCoordinatorV1,
     private val transport: KagemushaOrdinaryIdentityOriginalTransportV1,
@@ -56,11 +58,6 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private val approveBootstrapOriginal: ((KagemushaNativePreparedOrdinaryBootstrapApprovalV1) -> ByteArray)? = null,
     private val nativeWalletSelection: KagemushaNativeWalletAccountSelectionOriginalV1? = null,
 ) {
-    constructor(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-        transport: KagemushaOrdinaryIdentityOriginalTransportV1, walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
-        requireOriginalOwner: () -> Unit) : this(coordinator.appIdentityOperations(), transport, walletSigner,
-            requireOriginalOwner, originalCollector(context), originalPossessionSigner(context),
-            KagemushaAndroidPlayIntegrityProviderV1(context.applicationContext), originalBootstrapSigner(context))
     /** Native-account path requiring the same opaque current session, with no managed signer fallback. */
     constructor(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
         transport: KagemushaOrdinaryIdentityOriginalTransportV1,

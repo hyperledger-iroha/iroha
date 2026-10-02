@@ -706,6 +706,7 @@ mod tests {
             f.trust.clone(),
             f.app_authority.clone(),
             f.issuer_policy.clone(),
+            Arc::clone(&f.ordinary_policy),
             c.hardware_profile_id,
             c.client_nonce,
             c.financial_authority_commitment,
@@ -729,6 +730,7 @@ mod tests {
                 native_owner,
                 f.release.clone(),
                 issuer_policy,
+                Arc::clone(&f.ordinary_policy),
                 f.trust.clone(),
                 f.app_authority.clone(),
                 f.selection.preparation.challenge.hardware_profile_id,
@@ -750,40 +752,32 @@ mod tests {
         KagemushaPreparedOrdinaryAppEnrollmentV1,
         Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
     ) {
-        use iroha_crypto::{Algorithm, KeyPair, Signature};
-        let mut native_owner = f.selection.owner.clone();
-        let mut issuer_policy = f.issuer_policy.clone();
-        let seed = match changed {
-            0 => {
-                native_owner.lane_id[0] ^= 1;
-                61
-            }
-            1 => 63,
-            2 => 61,
+        let (namespace, core_seed, epoch) = match changed {
+            0 => ([84; 32], 63, 1),
+            1 => ([83; 32], 65, 1),
+            2 => ([83; 32], 63, 3),
             _ => panic!("unsupported public fixture mutation"),
         };
-        let issuer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        issuer_policy.issuer_public_key = issuer.public_key().clone();
-        let mut original = f.selection.preparation.clone();
-        original.challenge.enrollment_id = native_owner.enrollment_id().unwrap();
-        original.challenge.lane_id = native_owner.lane_id;
-        if changed == 2 {
-            original.challenge.hardware_epoch = 3;
-        }
-        original.challenge.issuer_policy_digest =
-            kagemusha_ordinary_retail_issuer_policy_digest_v1(&issuer_policy).unwrap();
-        original.signature = Signature::new(
-            issuer.private_key(),
-            &original.challenge.canonical_signing_bytes().unwrap(),
+        let scope = Fixture::with_selected_scope(
+            f.selection.preparation.challenge.platform_class
+                == KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            f.selection
+                .preparation
+                .challenge
+                .financial_authority_commitment,
+            namespace,
+            core_seed,
+            epoch,
         );
-        let c = original.challenge;
+        let c = &scope.selection.preparation.challenge;
         let prepared = KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
-            original,
-            native_owner.clone(),
-            f.release.clone(),
-            f.trust.clone(),
-            f.app_authority.clone(),
-            issuer_policy.clone(),
+            scope.selection.preparation.clone(),
+            scope.selection.owner.clone(),
+            scope.release.clone(),
+            scope.trust.clone(),
+            scope.app_authority.clone(),
+            scope.issuer_policy.clone(),
+            Arc::clone(&scope.ordinary_policy),
             c.hardware_profile_id,
             c.client_nonce,
             c.financial_authority_commitment,
@@ -791,7 +785,7 @@ mod tests {
             300,
         )
         .unwrap();
-        (prepared, selected_scope(f, native_owner, issuer_policy))
+        (prepared, selected(&scope))
     }
 
     #[test]
@@ -959,6 +953,26 @@ mod tests {
         let mut joined = first[1].clone();
         joined.extend_from_slice(&second[1]);
         assert_eq!(joined, raw);
+        // The preceding full128KiB carrier proves both original chunk/custody controls,
+        // but arbitrary carrier bytes cannot pass the canonical platform admission boundary.
+        // Apple enrollment objects retain their actual16KiB bound; no owner or cap is reset.
+        assert!(KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(&raw).is_err());
+        drop(attempt);
+        // A distinct maintained canonical unit original and separate journal now exercise
+        // issuer admission/E/reopen. This never retries the prior frozen Native-shaped owner
+        // or claims that the fixture's inert Apple bytes passed a physical raw verifier.
+        let canonical_temp = tempfile::tempdir().unwrap();
+        let root = canonical_temp.path().canonicalize().unwrap();
+        let mut attempt =
+            KagemushaOrdinaryAppEnrollmentAttemptV1::create(&root, owner(&f), 300).unwrap();
+        attempt.fence_generation().unwrap();
+        attempt
+            .retain_key_reference(&STANDARD.encode(app.attested_key_id))
+            .unwrap();
+        attempt.fence_attestation().unwrap();
+        let raw = f.proof.raw_attestation.clone();
+        KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(&raw).unwrap();
+        attempt.retain_raw(app.app_public_key, &raw).unwrap();
         let c = &f.selection.preparation.challenge;
         let subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
             version: 1,

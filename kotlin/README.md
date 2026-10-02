@@ -500,7 +500,31 @@ reservation, authenticated signed preparation, persistent generated hardware
 P-256 key, raw admission, E20 possession, governed Play Integrity request and
 credential admission. Native C20 phases 9–14 then retain the FI challenge,
 wallet invocation and exact original wallet signature before the protected FI
-finish request. The wallet signer remains separate from the platform app key.
+finish request. The product constructor requires one opaque same-coordinator
+current Native wallet selection: activated protected HTTP signatory S matches
+selected S, and reserved wallet W matches selected W. Genuine W is distinct and
+contains exactly one S member, weight 1 and threshold 1. Native C20 phase 10
+supplies the retained account signature from its actual held member key; the
+superseded public managed-wallet-signer constructor is removed. Hardware P-256
+app approval and protected HTTP request custody remain separate.
+The Android HTTP store retains required stable W plus original S/device/runtime/
+request key/ID/kind/body/reply, checking that same private selection before commit,
+HTTP retries and cached exposure. A session handle is not persisted authority;
+missing or changed W refuses without rewriting, migrating or clearing old records.
+The app serializes one original Bootstrap publication/retirement handoff and marks
+completion only after the callback and owner checks return. Current-FI retries skip
+that completed Bootstrap and retain their original request/signature/body.
+All eight ordinary backend enrollment/Integrity routes now have the certified
+customer W/S join applied in source: the genuine current World must authenticate
+both exact account rows while HTTP/device recovery/CAS retain S. Backend
+library compilation and three focused cases passed on the original cut; its HTTP
+executable failed with eight errors before tests. Subsequent signed-policy joins
+were reviewed and the exact evidence-byte borrow repair is applied. A fresh
+preparation stopped before compilation on two changed Native test files. Current
+HTTP cases and genuine installed issuer/runtime validation remain pending.
+Genuine installed signed inputs and shipping Native account construction remain pending. Selected managed checks passed 58 SDK, 20 Core and
+7 app cases per variant across retained source cuts; these checks grant no Root,
+hardware, monetary, release or roster qualification.
 Explicit retries reuse the same complete Google and wallet originals; a retained
 wallet invocation without a signature requires Native recovery. The explicit
 Google invalid-provider error permits a new warmup only on the next user action.

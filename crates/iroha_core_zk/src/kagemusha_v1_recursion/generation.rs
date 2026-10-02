@@ -587,6 +587,31 @@ pub struct KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a> {
     /// Exact ordinary outgoing original and both complete sealed streams, absent otherwise.
     /// These data alone authorize no Native preparation, cash operation or proof publication.
     pub prepared: Option<KagemushaOrdinaryRecursivePreparedOpeningV1<'a>>,
+    /// Complete selected Mint source and distinct fresh incoming W2 originals, absent outside MintFold.
+    /// This mathematical witness supplies no Native or global DATA custody.
+    pub incoming_mint: Option<KagemushaOrdinaryRecursiveMintIncomingOpeningV1<'a>>,
+}
+
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    )
+))]
+/// Data-only exact finalized Mint source operands. A genuine Native captured incoming selection
+/// must lend these to the producer; no offered model or decoder creates its authority.
+#[derive(Clone, Copy)]
+pub struct KagemushaOrdinaryRecursiveMintIncomingOpeningV1<'a> {
+    /// Complete dedicated pre-debit original, including both current proofs and full histories.
+    pub authorization: &'a iroha_data_model::kagemusha::KagemushaOrdinaryMintAuthorizationV1,
+    /// Exact finalized source/head/value, separately authenticated by Core/Native.
+    pub reservation: &'a iroha_data_model::kagemusha::KagemushaOrdinaryIncomingReservationV1,
+    /// Independent fresh incoming W2 and full financial edge, not the pre-debit Mint approval.
+    pub preparation: &'a iroha_data_model::kagemusha::KagemushaOrdinaryIncomingPreparationV1,
+    /// Actual retained private recipient/credit/recovery openings from the same Native Mint capture.
+    pub credit_opening: &'a iroha_data_model::kagemusha::KagemushaCreditOpeningV1,
 }
 
 #[cfg(all(

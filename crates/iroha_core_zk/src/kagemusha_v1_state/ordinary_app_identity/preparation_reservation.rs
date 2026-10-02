@@ -43,6 +43,10 @@ pub(crate) use lineage_cas::{
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 
+#[path = "preparation_reservation/finalized_mint_source.rs"]
+mod finalized_mint_source;
+pub use finalized_mint_source::KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1;
+
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "ordinary-preparation.norito.wal",
     magic: b"KGMCINI1",
@@ -58,6 +62,7 @@ pub struct KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     world_schema_hash: Option<iroha_crypto::Hash>,
     governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+    ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
     core_authorization_key_reference: [u8; 32],
     clock_selection_digest: Option<[u8; 32]>,
     clock: SelectedClock,
@@ -85,6 +90,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         owner: KagemushaRetailEnrollmentOwnerV1,
         release: Arc<KagemushaAuthenticatedReleaseV1>,
         issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+        ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
         trust: KagemushaOrdinaryAppTrustPolicyV1,
         authority: KagemushaAppAttestationAuthorityPolicyV1,
         profile_id: [u8; 32],
@@ -105,6 +111,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             owner,
             governed,
             issuer,
+            ordinary,
             original_core_public_key,
             trusted_native_reference_ms,
         )
@@ -122,6 +129,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         owner: KagemushaRetailEnrollmentOwnerV1,
         governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
         issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+        ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
         original_core_public_key: &KagemushaDevicePublicKeyV1,
         trusted_native_reference_ms: u64,
     ) -> Result<Self> {
@@ -131,6 +139,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             world_schema_hash: None,
             governed,
             issuer,
+            ordinary,
             core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
                 original_core_public_key,
             ),
@@ -152,6 +161,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         owner: KagemushaRetailEnrollmentOwnerV1,
         governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
         issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+        ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
         original_core_public_key: &KagemushaDevicePublicKeyV1,
         clock: Arc<Mutex<KagemushaOrdinaryNativeClockOwnerV1>>,
         installed_clock_selection_digest: [u8; 32],
@@ -173,6 +183,7 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             world_schema_hash: Some(installed_world_schema_hash),
             governed,
             issuer,
+            ordinary,
             core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
                 original_core_public_key,
             ),
@@ -252,7 +263,11 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     }
     pub(super) fn preparation_issuer_key(&self) -> Result<&iroha_crypto::PublicKey> {
         self.trusted_time_ms()?;
-        Ok(&self.issuer.issuer_public_key)
+        Ok(&self
+            .ordinary
+            .identity_policy()
+            .policy()
+            .enrollment_issuer_key)
     }
 
     // Data projection for the separate issuer-side durable C owner. Current FI customer/request
@@ -279,8 +294,20 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             || carrier.release_id != self.governed.release().release_id()
             || carrier.hardware_profile_id != self.governed.profile_id()
             || carrier.lane_id != self.owner.lane_id
-            || issued_at_ms < self.issuer.valid_from_ms
-            || expires_at_ms > self.issuer.expires_at_ms
+            || issued_at_ms
+                < self
+                    .ordinary
+                    .identity_policy()
+                    .policy()
+                    .profile
+                    .valid_from_ms
+            || expires_at_ms
+                > self
+                    .ordinary
+                    .identity_policy()
+                    .policy()
+                    .profile
+                    .expires_at_ms
             || issued_at_ms < enabled.hardware_profile.valid_from_ms
             || expires_at_ms > enabled.hardware_profile.expires_at_ms
         {
@@ -309,11 +336,18 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
                 .canonical_digest()
                 .map_err(|_| Rejected)?,
             financial_authority_commitment: carrier.financial_authority_commitment,
-            issuer_policy_digest: kagemusha_ordinary_retail_issuer_policy_digest_v1(&self.issuer)
+            issuer_policy_digest: self
+                .ordinary
+                .issuer_policy()
+                .policy()
+                .canonical_digest()
                 .map_err(|_| Rejected)?,
             policy_epoch: enabled.policy_epoch,
-            // The existing shared first-enrollment reservation uses epoch1. Rotation is separate.
-            hardware_epoch: 1,
+            hardware_epoch: self
+                .ordinary
+                .issuer_policy()
+                .policy()
+                .planned_hardware_epoch,
             issued_at_ms,
             expires_at_ms,
         };
@@ -329,10 +363,22 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             .enabled_profile(self.governed.profile_id())
             .ok_or(Rejected)?;
         issued
-            .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
+            .checked_add(
+                self.ordinary
+                    .issuer_policy()
+                    .policy()
+                    .maximum_pending_lifetime_ms,
+            )
             .map(|end| {
-                end.min(self.issuer.expires_at_ms)
-                    .min(enabled.hardware_profile.expires_at_ms)
+                end.min(
+                    self.ordinary
+                        .identity_policy()
+                        .policy()
+                        .profile
+                        .expires_at_ms,
+                )
+                .min(self.issuer.expires_at_ms)
+                .min(enabled.hardware_profile.expires_at_ms)
             })
             .ok_or(Rejected)
     }
@@ -344,7 +390,9 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         &self,
         prepared: &KagemushaPreparedOrdinaryAppEnrollmentV1,
     ) -> Result<()> {
-        if prepared.owner != self.owner
+        if prepared.ordinary != self.ordinary
+            || prepared.issuer != self.issuer
+            || prepared.owner != self.owner
             || prepared.release.release_id() != self.governed.release().release_id()
             || prepared.release.network_id() != self.governed.release().network_id()
         {
@@ -364,16 +412,12 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             lane_id: c.lane_id,
             financial_authority_commitment: c.financial_authority_commitment,
         };
-        let mut expected = self.issuer_challenge_for_carrier(
+        let expected = self.issuer_challenge_for_carrier(
             &carrier,
             c.server_nonce,
             c.issued_at_ms,
             c.expires_at_ms,
         )?;
-        // Selected policy supplies no financial epoch. Preserve the original epoch already
-        // admitted with the signed C and independent Prepared financial reservation; this
-        // scope join must not turn the first issuer producer's epoch1 into a new policy rule.
-        expected.hardware_epoch = c.hardware_epoch;
         if expected != *c {
             return Err(Rejected);
         }
@@ -390,6 +434,16 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
         self.issuer.validate().map_err(|_| Rejected)?;
         self.governed.recheck()?;
+        self.ordinary
+            .require_owner_data(self.governed.release(), &self.owner, now)
+            .map_err(|_| Rejected)?;
+        if self.ordinary.retail_policy() != &self.issuer
+            || self.ordinary.identity_policy().policy().trust != *self.governed.trust()
+            || self.ordinary.identity_policy().policy().app_authority()
+                != *self.governed.authority()
+        {
+            return Err(Rejected);
+        }
         let enabled = self
             .governed
             .release()
@@ -557,19 +611,7 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             lane_id: selected.owner.lane_id,
             financial_authority_commitment: commitment,
         };
-        let expires = now
-            .checked_add(120_000)
-            .ok_or(Rejected)?
-            .min(selected.issuer.expires_at_ms)
-            .min(
-                selected
-                    .governed
-                    .release()
-                    .enabled_profile(selected.governed.profile_id())
-                    .ok_or(Rejected)?
-                    .hardware_profile
-                    .expires_at_ms,
-            );
+        let expires = selected.preparation_expiry_at(now)?;
         let initialize = encode(&Record::Initialize {
             ticket,
             enrollment_id: enrollment,
@@ -577,10 +619,12 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             release_id: carrier.release_id,
             profile_id: carrier.hardware_profile_id,
             lane_id: carrier.lane_id,
-            issuer_policy_digest: kagemusha_ordinary_retail_issuer_policy_digest_v1(
-                &selected.issuer,
-            )
-            .map_err(|_| Rejected)?,
+            issuer_policy_digest: selected
+                .ordinary
+                .issuer_policy()
+                .policy()
+                .canonical_digest()
+                .map_err(|_| Rejected)?,
             trust_policy_digest: selected
                 .governed
                 .trust()
@@ -595,7 +639,11 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             client_nonce,
             financial_secret: *secret,
             financial_authority_commitment: commitment,
-            hardware_epoch: 1,
+            hardware_epoch: selected
+                .ordinary
+                .issuer_policy()
+                .policy()
+                .planned_hardware_epoch,
             issued_at_ms: now,
             expires_at_ms: expires,
         })?;
@@ -700,7 +748,11 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             || *profile_id != selected.governed.profile_id()
             || *lane_id != selected.owner.lane_id
             || *issuer_policy_digest
-                != kagemusha_ordinary_retail_issuer_policy_digest_v1(&selected.issuer)
+                != selected
+                    .ordinary
+                    .issuer_policy()
+                    .policy()
+                    .canonical_digest()
                     .map_err(|_| Rejected)?
             || *trust_policy_digest
                 != selected
@@ -717,12 +769,29 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             || *core_authorization_key_reference != selected.core_authorization_key_reference
             || *client_nonce == [0; 32]
             || *financial_secret == [0; 32]
-            || *hardware_epoch != 1
+            || *hardware_epoch
+                != selected
+                    .ordinary
+                    .issuer_policy()
+                    .policy()
+                    .planned_hardware_epoch
             || *financial_authority_commitment
                 != crate::kagemusha_v1_recursion::device_authority_commitment_v1(*financial_secret)
             || now < *issued_at_ms
             || *expires_at_ms <= *issued_at_ms
-            || *expires_at_ms - *issued_at_ms > 120_000
+            || *expires_at_ms - *issued_at_ms
+                > selected
+                    .ordinary
+                    .issuer_policy()
+                    .policy()
+                    .maximum_pending_lifetime_ms
+            || *expires_at_ms
+                > selected
+                    .ordinary
+                    .identity_policy()
+                    .policy()
+                    .profile
+                    .expires_at_ms
         {
             return Err(Rejected);
         }
@@ -909,6 +978,7 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             self.selected.governed.trust().clone(),
             self.selected.governed.authority().clone(),
             self.selected.issuer.clone(),
+            Arc::clone(&self.selected.ordinary),
             self.selected.governed.profile_id(),
             self.carrier.client_nonce,
             self.carrier.financial_authority_commitment,
@@ -1453,6 +1523,7 @@ mod tests {
                 f.selection.owner.clone(),
                 f.release.clone(),
                 f.issuer_policy.clone(),
+                Arc::clone(&f.ordinary_policy),
                 f.trust.clone(),
                 f.app_authority.clone(),
                 f.selection.preparation.challenge.hardware_profile_id,
@@ -1485,6 +1556,7 @@ mod tests {
                 f.selection.owner.clone(),
                 governed(&f),
                 f.issuer_policy.clone(),
+                Arc::clone(&f.ordinary_policy),
                 &key,
                 300,
             )
@@ -1533,6 +1605,7 @@ mod tests {
                     owner,
                     governed(&f),
                     issuer,
+                    Arc::clone(&f.ordinary_policy),
                     &core_key(),
                     now,
                 )
@@ -1552,6 +1625,7 @@ mod tests {
                 f.selection.owner.clone(),
                 f.release.clone(),
                 f.issuer_policy.clone(),
+                Arc::clone(&f.ordinary_policy),
                 trust,
                 f.app_authority.clone(),
                 f.selection.preparation.challenge.hardware_profile_id,
@@ -1564,6 +1638,8 @@ mod tests {
 
     pub(super) fn bind(mut f: Fixture, carrier: &KagemushaOrdinaryPreparationCarrierV1) -> Fixture {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
+        let fi_issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let platform = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
         f.selection.preparation.challenge.client_nonce = carrier.client_nonce;
@@ -1573,9 +1649,11 @@ mod tests {
             .financial_authority_commitment = carrier.financial_authority_commitment;
         f.selection.preparation.challenge.issued_at_ms = 300;
         let c = f.selection.preparation.challenge;
-        f.selection.preparation.signature =
-            Signature::try_new(issuer.private_key(), &c.canonical_signing_bytes().unwrap())
-                .unwrap();
+        f.selection.preparation.signature = Signature::try_new(
+            core_issuer.private_key(),
+            &c.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
         let e = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &c,
             &f.selection.issuance.credential.subject.app_public_key,
@@ -1616,10 +1694,8 @@ mod tests {
             .issuance
             .credential
             .authenticate(
-                &f.release,
-                &f.trust,
-                &f.app_authority,
-                &c,
+                f.ordinary_policy.identity_policy(),
+                &f.checked_preparation().unwrap(),
                 &a.app_public_key,
                 600,
             )
@@ -1641,7 +1717,7 @@ mod tests {
         f.certificate.subject.ordinary_app_credential_digest = app.digest();
         f.certificate.subject.issued_at_ms = 600;
         f.certificate.signature = SignatureOf::try_new(
-            issuer.private_key(),
+            fi_issuer.private_key(),
             &f.certificate.subject.approval_payload().unwrap(),
         )
         .unwrap();

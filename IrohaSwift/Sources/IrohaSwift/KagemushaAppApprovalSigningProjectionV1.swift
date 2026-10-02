@@ -23,6 +23,12 @@ struct KagemushaAppApprovalSigningProjectionV1: Sendable {
   var issuedAtMS: UInt64 { wrapper.issuedAtMS }
   var expiresAtMS: UInt64 { wrapper.expiresAtMS }
 
+  /// Purpose2 ordinary preparation is separate from the terminal layout below.
+  init(nativePreparationSigningBytes: Data, nativeFinancialSubject: Data) throws {
+    wrapper = try KagemushaAppOperationApprovalWrapperV1(nativePreparationSigningBytes: nativePreparationSigningBytes,
+      nativeFinancialSubject: nativeFinancialSubject)
+  }
+
   init(nativeSigningBytes: Data, nativeFinancialSubject: Data) throws {
     let parsed = try KagemushaAppOperationApprovalWrapperV1(nativeSigningBytes: nativeSigningBytes,
       nativeFinancialSubject: nativeFinancialSubject)

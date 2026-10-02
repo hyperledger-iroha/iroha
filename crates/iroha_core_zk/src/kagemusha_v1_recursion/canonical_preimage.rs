@@ -26,6 +26,13 @@ use crate::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::Pasta
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
+#[path = "canonical_field_stream.rs"]
+pub(super) mod field_stream;
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[path = "canonical_selected_stream.rs"]
 pub(super) mod selected_stream;
 #[path = "canonical_preimage_stream.rs"]

@@ -32,13 +32,15 @@ pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
     KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaNativeOrdinaryCashOwnerV1,
-    KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaNativeOrdinaryPreparedCashApprovalV1, KagemushaOrdinaryLogicalApprovalJournalV1,
 };
 pub(crate) use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
     KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,

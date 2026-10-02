@@ -33,12 +33,23 @@ class KagemushaAndroidPlayIntegrityProviderV1 internal constructor(private val b
     internal fun invalidatedPreparedProviderOriginal(error: Throwable): Boolean = backend.invalidatesPreparedProvider(error)
 
     fun requestOriginal(cloudProjectNumber: Long, nativeRequestHash: ByteArray,
-        requireOriginal: () -> Unit): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> {
+        requireOriginal: () -> Unit): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> =
+        requestHeldOriginal(cloudProjectNumber, nativeRequestHash, requireOriginal, requireOriginal)
+
+    /** Separate first-device capability fences before Google and retains a matching eventual
+     * original after cancellation/deadline without starting another invocation or verdict.
+     */
+    internal fun requestHardwareBootstrapOriginal(cloudProjectNumber: Long, nativeRequestHash: ByteArray,
+        requireBeforeInvocation: () -> Unit, requireRetainedOriginal: () -> Unit): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> =
+        requestHeldOriginal(cloudProjectNumber, nativeRequestHash, requireBeforeInvocation, requireRetainedOriginal)
+
+    private fun requestHeldOriginal(cloudProjectNumber: Long, nativeRequestHash: ByteArray,
+        requireBeforeInvocation: () -> Unit, requireRetainedOriginal: () -> Unit): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> {
         require(cloudProjectNumber > 0 && nativeRequestHash.size == 32 && nativeRequestHash.any { it != 0.toByte() })
         val original = nativeRequestHash.copyOf()
         val result = CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1>()
         try {
-            requireOriginal()
+            requireBeforeInvocation()
             val warm = synchronized(lock) {
                 prepared?.takeIf { preparedProject == cloudProjectNumber } ?: backend.prepare(cloudProjectNumber).also {
                     preparedProject = cloudProjectNumber; prepared = it
@@ -49,25 +60,25 @@ class KagemushaAndroidPlayIntegrityProviderV1 internal constructor(private val b
             }
             warm.whenComplete { provider, preparationError ->
                 try {
-                    requireOriginal()
+                    requireBeforeInvocation()
                     if (preparationError != null) throw preparationError
                     if (!result.isCancelled) {
                         val hashText = Base64.getUrlEncoder().withoutPadding().encodeToString(original)
                         check(hashText.length == 43)
-                        requireOriginal()
+                        requireBeforeInvocation()
                         checkNotNull(provider).request(hashText).whenComplete { token, tokenError ->
                             if (tokenError != null && backend.invalidatesPreparedProvider(tokenError)) {
                                 synchronized(lock) { if (prepared === warm) { preparedProject = null; prepared = null } }
                             }
                             try {
-                                requireOriginal()
+                                requireRetainedOriginal()
                                 if (tokenError != null) throw tokenError
                                 val raw = checkNotNull(token)
                                 check(raw.isNotEmpty() && raw.length <= MAXIMUM_OPAQUE_TOKEN_BYTES && raw.all { it.code in 0x21..0x7e }) {
                                     "Original Google token is outside the supported bound"
                                 }
                                 val evidence = KagemushaAndroidPlayIntegrityTokenOriginalV1(cloudProjectNumber, original, raw)
-                                requireOriginal(); result.complete(evidence)
+                                requireRetainedOriginal(); result.complete(evidence)
                             } catch (error: Throwable) { result.completeExceptionally(error) }
                         }
                     }

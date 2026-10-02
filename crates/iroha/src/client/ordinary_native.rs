@@ -15,6 +15,10 @@ use iroha_data_model::kagemusha::KagemushaOrdinaryRetailEnrollmentChallengeV1;
 use iroha_primitives::time::NativeContinuousReading;
 use std::sync::Mutex;
 
+#[path = "ordinary_native/public_clock.rs"]
+mod public_clock;
+use public_clock::ClockNodes;
+
 mod current_wallet;
 mod inventory;
 pub use inventory::{
@@ -571,6 +575,46 @@ impl KagemushaNativeAccountCustodyV1 {
         Ok((signature, verified))
     }
 
+    /// Retain the exact HTTP original after the genuine four-node request read and existing
+    /// Native S signing. This borrow keeps the same finite account/read/clock owners alive;
+    /// no metadata, retail phase10 signature or offered DTO can manufacture the result.
+    /// There is no transport retry or renewed nonce, clock interval or startup lease.
+    /// # Errors
+    /// Refuses stale or foreign custody, substituted originals, changed certified prefix,
+    /// actual current-read failure or Native signing failure.
+    pub fn fetch_and_sign_current_enrollment_http_original(
+        &self,
+        prepared: KagemushaNativePreparedEnrollmentRequestV1,
+        inventory: Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>,
+    ) -> Result<KagemushaNativeSignedEnrollmentHttpOriginalV1<'_>> {
+        self.recheck()?;
+        let read = KagemushaNativeCurrentWalletReadV1::reserve_for_enrollment_request(
+            self.account.clone(),
+            inventory.clone(),
+            &prepared,
+        )?;
+        let height = read.height;
+        let clock = prepared.clock.clone();
+        let current = read.fetch_and_authenticate()?;
+        prepared.recheck(&self.account)?;
+        require_installed_request_clock(&inventory, &clock, Some(height))?;
+        let (signature, verified) =
+            self.sign_current_enrollment_request_originals(&prepared, current)?;
+        require_installed_request_clock(&inventory, &clock, Some(height))?;
+        verified.recheck()?;
+        self.recheck()?;
+        let original = KagemushaNativeSignedEnrollmentHttpOriginalV1 {
+            custody: self,
+            prepared,
+            inventory,
+            height,
+            signature,
+            verified,
+        };
+        original.recheck()?;
+        Ok(original)
+    }
+
     /// Sign the exact Native-prepared request with this real Native key, then consume only its
     /// matching current certified read. Another body/session/clock/account cannot reuse it.
     /// # Errors
@@ -578,6 +622,17 @@ impl KagemushaNativeAccountCustodyV1 {
     pub fn sign_current_enrollment_request(
         &self,
         prepared: KagemushaNativePreparedEnrollmentRequestV1,
+        current: VerifiedEnrollmentWalletSignatoryV1,
+    ) -> Result<(
+        iroha_crypto::Signature,
+        VerifiedParticipantEnrollmentRequestV1,
+    )> {
+        self.sign_current_enrollment_request_originals(&prepared, current)
+    }
+
+    fn sign_current_enrollment_request_originals(
+        &self,
+        prepared: &KagemushaNativePreparedEnrollmentRequestV1,
         current: VerifiedEnrollmentWalletSignatoryV1,
     ) -> Result<(
         iroha_crypto::Signature,
@@ -704,6 +759,60 @@ impl KagemushaNativePreparedEnrollmentRequestV1 {
     }
 }
 
+/// Move-only exact HTTP original retained by the real Native S signer. It borrows the
+/// original account custody and retains the original preparation, inventory and current read.
+/// This is transport custody, not FI customer/issuer/installation or monetary authority.
+/// No decoder, public constructor, clone or detached-signature callback is provided.
+pub struct KagemushaNativeSignedEnrollmentHttpOriginalV1<'a> {
+    custody: &'a KagemushaNativeAccountCustodyV1,
+    prepared: KagemushaNativePreparedEnrollmentRequestV1,
+    inventory: Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>,
+    height: u64,
+    signature: iroha_crypto::Signature,
+    verified: VerifiedParticipantEnrollmentRequestV1,
+}
+impl KagemushaNativeSignedEnrollmentHttpOriginalV1<'_> {
+    /// Recheck the same original finite custody and installed current prefix before every
+    /// actual request attempt and before exposing its response. This never renews old owners.
+    /// # Errors
+    /// Expired startup/read/preparation, changed clock/current prefix or original body.
+    pub fn recheck(&self) -> Result<()> {
+        self.custody.recheck()?;
+        self.prepared.recheck(&self.custody.account)?;
+        require_installed_request_clock(&self.inventory, &self.prepared.clock, Some(self.height))?;
+        self.verified.recheck()?;
+        self.verified
+            .verify_original_body(&self.prepared.context.body)?;
+        self.custody.recheck()
+    }
+    /// Exact fixed POST target selected before Native signing; no proxy reconstruction.
+    /// # Errors
+    /// The original custody, preparation or current cut is no longer usable.
+    pub fn target(&self) -> Result<&Url> {
+        self.recheck()?;
+        Ok(&self.prepared.context.target)
+    }
+    /// Borrow the exact original body, without JSON reserialization.
+    /// # Errors
+    /// The original custody, preparation or current cut is no longer usable.
+    pub fn original_body(&self) -> Result<&[u8]> {
+        self.recheck()?;
+        Ok(&self.prepared.context.body)
+    }
+    /// Exact purpose-specific HTTP header originals. Authorization remains runtime-only
+    /// and must equal the exact original session digest; never persist or log these values.
+    /// # Errors
+    /// Changed session, malformed signature or any expired/changed original owner.
+    pub fn headers(&self, authorization: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>> {
+        self.recheck()?;
+        let headers = crate::participant_enrollment_request::http::encode_participant_enrollment_http_headers_v1(
+            &self.prepared.request(), &self.signature, authorization,
+        )?;
+        self.recheck()?;
+        Ok(headers)
+    }
+}
+
 /// Closed progress result: this Native call fsynced genuine certified successors but could
 /// not reach the current tip within its finite work/time budget. Retry through a new Native
 /// request; the result carries no checkpoint, signed clock, session or monetary authority.
@@ -758,7 +867,7 @@ fn remaining_clock_budget(
 /// authorization; the CoreZK clock owner supplies the exact current height, pins and nonce.
 /// Every response is reverified and fsynced by that same actual clock owner before any time loan.
 pub struct KagemushaNativeClockTransportV1 {
-    nodes: [Client; 4],
+    nodes: ClockNodes,
 }
 impl KagemushaNativeClockTransportV1 {
     /// Retain four actual configured Native transports for the same independently selected network.
@@ -781,7 +890,33 @@ impl KagemushaNativeClockTransportV1 {
                 "native clock transport changed installed network or HTTPS endpoint"
             );
         }
-        Ok(Self { nodes })
+        Ok(Self {
+            nodes: ClockNodes::AccountContext(Box::new(nodes)),
+        })
+    }
+
+    /// Retain isolated unsigned transports for an independently authenticated first-device
+    /// package. The caller must authenticate all origins before this shape-only constructor.
+    /// There is no account key, wallet session, managed callback or root supplied by a reply.
+    /// # Errors
+    /// Refuses noncanonical HTTPS origins, network mismatch or unavailable default TLS transport.
+    pub fn from_public_node_base_urls(
+        origins: [String; 4],
+        network: NetworkId,
+        clock: &Mutex<KagemushaOrdinaryNativeClockOwnerV1>,
+    ) -> Result<Self> {
+        ensure!(
+            clock
+                .lock()
+                .map_err(|_| eyre!("Native clock lock unavailable"))?
+                .network_id()
+                .map_err(|_| eyre!("Native clock network unavailable"))?
+                == network,
+            "public clock network differs"
+        );
+        Ok(Self {
+            nodes: ClockNodes::public(origins, network)?,
+        })
     }
 
     /// Generate the real Native nonce, contact the four selected validators and consume only
@@ -807,7 +942,8 @@ impl KagemushaNativeClockTransportV1 {
                 .map_err(|_| eyre!("native clock reservation rejected"))?;
             let mut originals = Vec::with_capacity(4);
             let mut retry = false;
-            for (index, client) in self.nodes.iter().enumerate() {
+            for index in 0..4 {
+                let client = self.nodes.at(index);
                 let (height, nodes, read_budget) = clock
                     .lock()
                     .map_err(|_| eyre!("native clock owner lock unavailable"))?
@@ -1049,6 +1185,82 @@ mod tests {
         assert!(prepared.recheck(&context(&fixture)).is_err());
     }
     #[test]
+    fn native_enrollment_http_headers_preserve_actual_s_w_original_and_existing_signature() {
+        use crate::participant_enrollment_request::http::{
+            ParticipantEnrollmentHttpOwnerContextV1,
+            decode_participant_enrollment_http_original_v1,
+            encode_participant_enrollment_http_headers_v1,
+        };
+        use sha2::{Digest as _, Sha256};
+        let fixture = NativeCustodyFixture::new();
+        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        let authorization = b"unit-test-only-not-an-authenticated-session";
+        let mut context = request_context();
+        context.session_sha256 = Sha256::digest(authorization).into();
+        let prepared = custody.prepare_enrollment_request(context, clock).unwrap();
+        let challenge = prepared
+            .reserve_wallet_read_challenge(&custody.account)
+            .unwrap();
+        let current = fixture.current_for_challenge(challenge);
+        // Exercise the same genuine key/read signing helper used by the HTTP holder. This
+        // explicit synthetic fixture supplies no admitted inventory or installed HTTP caller.
+        let (signature, verified) = custody
+            .sign_current_enrollment_request_originals(&prepared, current)
+            .unwrap();
+        let request = prepared.request();
+        let headers =
+            encode_participant_enrollment_http_headers_v1(&request, &signature, authorization)
+                .unwrap();
+        let owner = ParticipantEnrollmentHttpOwnerContextV1 {
+            network_id: request.network_id,
+            authentication_namespace: request.authentication_namespace,
+            actor_id: request.actor_id,
+            operation: request.operation,
+            http_method: "POST",
+            request_target: request.target.path(),
+            target: request.target,
+        };
+        let received = decode_participant_enrollment_http_original_v1(
+            owner,
+            request.body,
+            headers
+                .iter()
+                .map(|(name, value)| (*name, value.as_slice())),
+        )
+        .unwrap();
+        assert_eq!(
+            received.request().signing_message().unwrap(),
+            request.signing_message().unwrap()
+        );
+        assert_eq!(received.signature().payload(), signature.payload());
+        verified
+            .verify_original_body(received.request().body)
+            .unwrap();
+        assert_eq!(verified.wallet(), received.request().wallet);
+        assert_eq!(verified.signatory(), received.request().signatory);
+        assert_ne!(received.request().wallet, received.request().signatory);
+        assert_eq!(verified.request_id(), received.request().request_id);
+        assert_eq!(
+            verified.idempotency_key(),
+            received.request().idempotency_key
+        );
+        assert!(
+            encode_participant_enrollment_http_headers_v1(
+                &request,
+                &signature,
+                b"substituted-test-only-session"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn request_bound_native_read_uses_original_four_statements_and_existing_signer() {
         let fixture = NativeCustodyFixture::new();
         let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
@@ -1092,14 +1304,14 @@ mod tests {
     #[test]
     fn request_bound_native_read_rejects_each_changed_fi_request_original() {
         let fixture = NativeCustodyFixture::new();
-        let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
-            context(&fixture),
-            initial_current(&fixture),
-        )
-        .unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
         for field in 0..10 {
+            let custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+                context(&fixture),
+                initial_current(&fixture),
+            )
+            .unwrap();
             let mut prepared = custody
                 .prepare_enrollment_request(request_context(), clock.clone())
                 .unwrap();

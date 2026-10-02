@@ -24,17 +24,27 @@ struct KagemushaAppOperationApprovalWrapperV1: Sendable {
   /// Called only while validating a native preparation projection. This initializer is
   /// deliberately internal, and its result is not a platform-signing capability.
   init(nativeSigningBytes: Data, nativeFinancialSubject: Data) throws {
+    try self.init(nativeSigningBytes: nativeSigningBytes, nativeFinancialSubject: nativeFinancialSubject, purpose: 1)
+  }
+
+  /// Distinct purpose2 preparation layout; no terminal/Bootstrap grammar is accepted here.
+  init(nativePreparationSigningBytes: Data, nativeFinancialSubject: Data) throws {
+    try self.init(nativeSigningBytes: nativePreparationSigningBytes, nativeFinancialSubject: nativeFinancialSubject, purpose: 2)
+  }
+
+  private init(nativeSigningBytes: Data, nativeFinancialSubject: Data, purpose: UInt8) throws {
     let wrapper = Data(nativeSigningBytes)
     let start = Self.signingDomain.count + 8
     guard wrapper.count == start + Self.bodyBytes,
       wrapper.starts(with: Self.signingDomain),
       Self.u64(wrapper, at: Self.signingDomain.count) == UInt64(Self.bodyBytes),
       wrapper[start] == 1, wrapper[start + 1] == 0,
-      wrapper[start + 2] == 1 else {
+      wrapper[start + 2] == purpose else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid app approval W layout or purpose")
     }
-    let subject = try KagemushaAppAttestTransitionBindingV1(
-      coreSelectionSigningBytes: nativeFinancialSubject).canonicalSelectionSigningBytes
+    let subject = try (purpose == 2
+      ? KagemushaAppAttestTransitionBindingV1(corePreparationSigningBytes: nativeFinancialSubject)
+      : KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: nativeFinancialSubject)).canonicalSelectionSigningBytes
     let fields = (0..<8).map { index in
       Data(wrapper[(start + 3 + index * 32)..<(start + 3 + (index + 1) * 32)])
     }
@@ -42,7 +52,7 @@ struct KagemushaAppOperationApprovalWrapperV1: Sendable {
     let expires = Self.u64(wrapper, at: start + 267)
     guard fields.allSatisfy({ $0.contains(where: { $0 != 0 }) }),
       fields[6] == Data(SHA256.hash(data: subject)), issued > 0, expires > issued,
-      expires - issued <= Self.maximumLifetimeMS else {
+      expires - issued <= (purpose == 2 ? 10_000 : Self.maximumLifetimeMS) else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid native app approval subject or interval")
     }
     canonicalSigningBytes = wrapper

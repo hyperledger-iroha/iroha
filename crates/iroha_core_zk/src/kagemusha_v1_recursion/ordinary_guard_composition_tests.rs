@@ -94,14 +94,12 @@ fn fixture_with_apple_release(apple: bool, version: Option<&str>) -> OriginalFix
         ),
     };
     let issuer_table = OrdinaryIssuerTableV1::from_release(&fixture.release).unwrap();
-    let preparation = fixture.selection.preparation.challenge;
+    let preparation = fixture.checked_preparation().unwrap();
     let credential = fixture.selection.issuance.credential.clone();
     // Exercise actual governed issuer verification with the separate financial commitment.
     let verified = credential
         .authenticate(
-            &fixture.release,
-            &fixture.trust,
-            &fixture.app_authority,
+            fixture.ordinary_policy.identity_policy(),
             &preparation,
             &credential.subject.app_public_key,
             300,

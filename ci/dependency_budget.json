@@ -555,7 +555,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:88adcace78d12ecc9edd735522c66ba6f5089d6212f5eaf9402b08014534f9d1",
+    "manifest_fingerprint": "sha256:a1548e9f9e79e30eec318f8499548b07fb45196651871ced98b75e836cca0145",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -682,18 +682,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1987,
-        "declared_external_dependency_edges": 1101,
+        "declared_dependency_edges": 2018,
+        "declared_external_dependency_edges": 1126,
         "declared_external_packages": 230,
-        "declared_local_packages": 115,
+        "declared_local_packages": 117,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 111,
-        "required_dependency_edges": 1817,
-        "required_external_dependency_edges": 970,
+        "declared_workspace_packages": 113,
+        "required_dependency_edges": 1848,
+        "required_external_dependency_edges": 995,
         "required_external_packages": 183,
-        "required_local_packages": 115,
+        "required_local_packages": 117,
         "required_path_packages": 4,
-        "required_workspace_packages": 111
+        "required_workspace_packages": 113
       },
       "roots": [
         "*"

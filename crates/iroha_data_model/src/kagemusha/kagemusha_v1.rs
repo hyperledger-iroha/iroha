@@ -2563,6 +2563,39 @@ pub fn kagemusha_canonical_mint_frame_prefix_v1<T: KagemushaCanonicalMintFrameV1
     Ok(KagemushaCanonicalFramePrefixV1 { bytes })
 }
 
+// Internal descriptor construction for the sealed ordinary struct inventory. This exposes no
+// standalone caller-selected template or monetary authority constructor.
+pub(super) fn ordinary_struct_frame_prefix_v1<T: norito::NoritoSerialize>(
+    value: &T,
+    payload: &[u8],
+) -> Result<KagemushaCanonicalFramePrefixV1, KagemushaValidationErrorV1> {
+    let frame = norito::encode_canonical(value)?;
+    let offset = frame
+        .len()
+        .checked_sub(payload.len())
+        .filter(|n| *n >= norito::core::Header::SIZE)
+        .ok_or_else(|| invalid("kagemusha.ordinary_struct.prefix"))?;
+    if frame.get(offset..) != Some(payload)
+        || frame[39] != norito::core::header_flags::COMPACT_LEN
+        || frame[40..offset].iter().any(|b| *b != 0)
+        || frame.get(23..31)
+            != Some(
+                &u64::try_from(payload.len())
+                    .map_err(|_| invalid("kagemusha.ordinary_struct.length"))?
+                    .to_le_bytes(),
+            )
+    {
+        return Err(invalid("kagemusha.ordinary_struct.prefix"));
+    }
+    let mut bytes = frame[..offset]
+        .iter()
+        .copied()
+        .map(Some)
+        .collect::<Vec<_>>();
+    bytes[23..39].fill(None);
+    Ok(KagemushaCanonicalFramePrefixV1 { bytes })
+}
+
 fn fixed_canonical_preimage_layout_v1<T: norito::NoritoSerialize, const N: usize>(
     preimage: &T,
     ranges: &[core::ops::Range<usize>],

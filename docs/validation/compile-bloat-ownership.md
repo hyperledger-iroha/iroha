@@ -62,9 +62,12 @@ The retained privacy acceptance run passes 136 selected controls. It selects non
 of the three failures in the earlier retained ordinary suite, which finishes with
 2,209 passed, three failed and 52 original ignored tests. The fresh harness
 registers 2,356 tests, including 56 ignored cases. Its composite-child control
-passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
-remain pending after a capacity preflight refused execution. That attempt ran no
-proofs. The original build capture remains unqualified because of
+passes with 447 scoped inputs unchanged. After a capacity preflight ran no proofs,
+the genuine deterministic IO proof passes verification and wire/query checks but
+fails its stale digest golden with all scoped inputs unchanged. Projection was
+not launched. The canonical profile descriptors require correction to the actual
+30 lookup relations and complete 17 key/digest plus 20 union alpha phases before
+independent profile and proof-golden regeneration. The original build capture remains unqualified because of
 two foreign CoreZK census races. An independent closure check supports the single
 composite result while preserving that failed capture; full ordinary-suite and
 merged-candidate qualification remain incomplete.

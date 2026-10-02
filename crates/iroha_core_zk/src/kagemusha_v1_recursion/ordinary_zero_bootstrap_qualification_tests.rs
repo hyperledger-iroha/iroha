@@ -348,6 +348,7 @@ fn qualify() {
                 integrity_lease: None,
                 previous_app_attest_counter: f.previous_counter,
                 prepared: None,
+                incoming_mint: None,
             }),
             eq_parent_protocol: &eq_parent,
             ep_parent_protocol: &ep_parent,

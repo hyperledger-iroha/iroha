@@ -5483,6 +5483,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_kagemusha_attested"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "norito",
+ "p256",
+ "sha2",
+]
+
+[[package]]
+name = "iroha_kagemusha_issuer"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "eyre",
+ "hex",
+ "http",
+ "http-body-util",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_kagemusha_attested",
+ "norito",
+ "p256",
+ "rand 0.9.4",
+ "reqwest",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_logger"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -11567,6 +11609,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "pin-project-lite",
  "tokio",
  "tower",

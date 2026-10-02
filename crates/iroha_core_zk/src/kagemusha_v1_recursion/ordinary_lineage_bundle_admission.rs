@@ -617,3 +617,38 @@ fn require_predecessor_material(
     }
     Ok(())
 }
+
+/// Immutable data from the actual installed ordinary monetary State verifier, not a new grant.
+pub(crate) fn ordinary_incoming_artifacts_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+) -> Result<(super::super::KagemushaRecursionArtifactsV1, DigestV1)> {
+    let release = verifier.monetary_release()?;
+    let material = verifier.state_checkpoint_material();
+    if release.release_id() != material.artifacts.release_id {
+        return reject();
+    }
+    Ok((material.artifacts, release.provider_policy_root()))
+}
+/// Verify both genuine current State proofs and full histories of the exact held public predecessor.
+/// The actual Native owner separately binds its private State/full head and financial sequence.
+pub(crate) fn require_ordinary_incoming_predecessor_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    predecessor_original: &[u8],
+    normalized: &KagemushaNormalizedGuardStatementV1,
+) -> Result<()> {
+    let before = KagemushaOrdinaryLineageStateOriginalV1::decode_original(predecessor_original)?;
+    if before.projection.digest(s::SUCCESSOR_OUTER_LO)? != normalized.predecessor_state_commitment
+        || !matches!(
+            normalized.operation,
+            KagemushaOperationV1::MintFold | KagemushaOperationV1::ReceiveFold
+        )
+    {
+        return reject();
+    }
+    let material = verifier.state_checkpoint_material();
+    require_predecessor_material(&before, &material, normalized)?;
+    let (mut eq, mut ep) = before.projection.fields()?;
+    append_history(&mut eq, &before.proof.eq_history)?;
+    append_history(&mut ep, &before.proof.ep_history)?;
+    verify_state_histories(&material, &before.proof, &eq, &ep)
+}

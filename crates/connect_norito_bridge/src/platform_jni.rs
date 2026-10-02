@@ -21,6 +21,8 @@ mod confidential_prover;
 mod gpu;
 mod kagemusha_signed_app_preparation;
 #[cfg(unix)]
+mod kagemusha_hardware_evidence;
+#[cfg(unix)]
 mod kagemusha_testnet_native_startup;
 mod kagemusha_testnet_observation;
 

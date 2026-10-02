@@ -8,6 +8,7 @@ pub use ordinary_native::{
     KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1,
     KagemushaNativeCurrentWalletReadV1, KagemushaNativeEnrollmentRequestContextV1,
     KagemushaNativeInstalledRuntimeAuthorityV1, KagemushaNativePreparedEnrollmentRequestV1,
+    KagemushaNativeSignedEnrollmentHttpOriginalV1,
     KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeCurrentWalletOriginalV1,
     KagemushaOrdinaryNativeInventoryV1, KagemushaOrdinaryNativeNodeTargetV1,
     KagemushaOrdinaryNativeOriginalDescriptorV1,
