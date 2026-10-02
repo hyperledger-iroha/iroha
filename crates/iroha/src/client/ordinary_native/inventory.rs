@@ -28,6 +28,26 @@ const MAX_ORIGINAL: usize = 16 * 1024 * 1024;
 const MAX_FILES: usize = 128;
 const MAX_TOTAL: u64 = 16 * 1024 * 1024 * 1024;
 
+// Structural DATA precheck shared by the existing FI and lineage transports. Only the
+// independently installed issuer original chooses this lane preimage. This constructs no
+// checked policy, Native session, live clock/FI loan or financial owner.
+fn require_installed_owner_lane_data(
+    issuer: &KagemushaOrdinaryEnrollmentIssuerPolicyV1,
+    runtime: &KagemushaRetailEnrollmentRuntimeV1,
+    owner: &KagemushaRetailEnrollmentOwnerV1,
+) -> Result<()> {
+    let lane = issuer
+        .derive_enrollment_lane(&runtime.fi_id, &owner.account_id)
+        .map_err(|_| eyre!("Native installed ordinary lane DATA rejected"))?;
+    ensure!(
+        issuer.network_id == *runtime.network_id.as_bytes()
+            && owner.runtime == *runtime
+            && owner.lane_id == lane,
+        "Native request changed installed issuer/runtime/wallet lane"
+    );
+    Ok(())
+}
+
 /// One exact public original relative to the installed package directory; never a key file.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha::client::KagemushaOrdinaryNativeOriginalDescriptorV1")]
@@ -81,6 +101,12 @@ pub struct KagemushaOrdinaryNativeInventoryV1 {
     pub fi_current_control_endpoint: String,
     /// Existing FI policy ID against which live native control must be joined.
     pub fi_issuer_policy_digest: [u8; 32],
+    /// Mandatory independently signed ordinary threshold policy identity.
+    pub ordinary_identity_policy_id: [u8; 32],
+    /// Mandatory complete Core issuer policy digest, distinct from the FI retail policy.
+    pub ordinary_core_issuer_policy_digest: [u8; 32],
+    /// Mandatory independently installed account/FI lane namespace.
+    pub ordinary_lane_namespace: [u8; 32],
     /// Exact integrity provider policy file when the selected ordinary trust requires PI.
     pub integrity_policy: Option<KagemushaOrdinaryNativeOriginalDescriptorV1>,
     /// Fixed complete set of public release/issuer/trust originals and release-bound artifact files.
@@ -306,6 +332,7 @@ pub struct KagemushaAdmittedOrdinaryNativeInventoryV1 {
     release: Arc<KagemushaAuthenticatedReleaseV1>,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
     lineage_issuer: KagemushaOrdinaryLineageIssuerPolicyV1,
+    identity_data: OrdinaryIdentityInstalledDataV1,
     checkpoint: SumeragiFinalityCheckpoint,
 }
 impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
@@ -355,6 +382,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             "Native inventory installed selection changed"
         );
         let (files, release, issuer, checkpoint, lineage_issuer) = admit_files(root, &body)?;
+        let identity_data = OrdinaryIdentityInstalledDataV1::read(&body, &files)?;
         let this = Self {
             authority,
             package,
@@ -366,6 +394,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             release,
             issuer,
             lineage_issuer,
+            identity_data,
             checkpoint,
         };
         this.recheck()?;
@@ -504,17 +533,32 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             temporary_digest == expected.selection_digest(),
             "Native clock differs from installed original selection"
         );
-        let mut lane = sha2::Sha256::new();
-        lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
-        lane.update(norito::encode_canonical(custody.wallet())?);
-        lane.update(norito::encode_canonical(&self.issuer.runtime)?);
+        // Actual held signed-clock interval supplies both threshold-policy endpoints.
+        // Intake above retained DATA only; no downloaded timestamp supplies this admission.
+        let interval = clock
+            .lock()
+            .map_err(|_| eyre!("Native clock owner unavailable"))?
+            .current_native_time_interval()
+            .map_err(|_| eyre!("Native current ordinary policy interval unavailable"))?;
+        let ordinary = Arc::new(self.identity_data.authenticate(
+            &self.body,
+            &self.release,
+            &self.issuer,
+            interval.lower_ms(),
+        )?);
+        ordinary
+            .recheck_current(&self.release, interval.upper_ms())
+            .map_err(|_| eyre!("Native ordinary threshold interval rejected"))?;
+        let lane = ordinary
+            .enrollment_lane(&self.release, custody.wallet(), interval.lower_ms())
+            .map_err(|_| eyre!("Native ordinary account/FI lane rejected"))?;
         let owner = KagemushaRetailEnrollmentOwnerV1 {
             account_id: custody.wallet().clone(),
             runtime: self.issuer.runtime.clone(),
-            lane_id: lane.finalize().into(),
+            lane_id: lane,
         };
         let selected=Arc::new(KagemushaOrdinaryPreparationSelectedOriginalsV1::from_governed_originals_with_native_clock(
-            owner,governed,self.issuer.clone(),&self.body.core_public_key,clock,temporary_digest,self.body.world_schema_hash,
+            owner,governed,self.issuer.clone(),ordinary,&self.body.core_public_key,clock,temporary_digest,self.body.world_schema_hash,
         ).map_err(|_|eyre!("Native ordinary account selection rejected"))?);
         custody.recheck()?;
         self.recheck()?;
@@ -528,14 +572,15 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         request
             .validate_shape()
             .map_err(|_| eyre!("Native current FI request shape rejected"))?;
-        let mut lane = sha2::Sha256::new();
-        lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
-        lane.update(norito::encode_canonical(&request.owner.account_id)?);
-        lane.update(norito::encode_canonical(&self.issuer.runtime)?);
+        // Structural DATA join only. Actual Current FI admission separately retains its
+        // genuine clock, short challenge and mandatory installed Native financial owner.
+        require_installed_owner_lane_data(
+            &self.identity_data.issuer,
+            &self.issuer.runtime,
+            &request.owner,
+        )?;
         ensure!(
-            request.owner.runtime == self.issuer.runtime
-                && request.issuer_policy_digest == self.body.fi_issuer_policy_digest
-                && request.owner.lane_id == <[u8; 32]>::from(lane.finalize()),
+            request.issuer_policy_digest == self.body.fi_issuer_policy_digest,
             "Native current FI request changed installed issuer/runtime/wallet lane"
         );
         self.recheck()
@@ -549,14 +594,9 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             .canonical_bytes()
             .map_err(|_| eyre!("Native lineage request shape rejected"))?;
         let owner = &request.operation.lineage().owner;
-        let mut lane = sha2::Sha256::new();
-        lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
-        lane.update(norito::encode_canonical(&owner.account_id)?);
-        lane.update(norito::encode_canonical(&self.issuer.runtime)?);
+        require_installed_owner_lane_data(&self.identity_data.issuer, &self.issuer.runtime, owner)?;
         ensure!(
-            owner.runtime == self.issuer.runtime
-                && request.issuer_policy_digest == self.lineage_issuer.issuer_policy_digest
-                && owner.lane_id == <[u8; 32]>::from(lane.finalize()),
+            request.issuer_policy_digest == self.lineage_issuer.issuer_policy_digest,
             "Native lineage request changed installed issuer/runtime/wallet lane"
         );
         self.recheck()
@@ -724,6 +764,94 @@ fn verify_packet<'a>(bytes: &'a [u8], key: &iroha_crypto::PublicKey) -> Result<&
     iroha_crypto::Signature::from_bytes(&bytes[76 + length..]).verify(key, &message)?;
     Ok(&bytes[76..76 + length])
 }
+// This object retains descriptor-authenticated public DATA. It grants no policy/current
+// admission until select_account obtains the actual held Native signed-clock interval.
+struct OrdinaryIdentityInstalledDataV1 {
+    roots: KagemushaOrdinaryAppIdentityAuthorityPolicyV1,
+    signed: KagemushaSignedOrdinaryAppIdentityPolicyV1,
+    issuer: KagemushaOrdinaryEnrollmentIssuerPolicyV1,
+}
+impl OrdinaryIdentityInstalledDataV1 {
+    fn read(
+        body: &KagemushaOrdinaryNativeInventoryV1,
+        files: &BTreeMap<String, HeldFile>,
+    ) -> Result<Self> {
+        let original = |name: &str| -> Result<Vec<u8>> {
+            files
+                .get(name)
+                .ok_or_else(|| eyre!("Native mandatory ordinary policy original absent"))?
+                .bytes(KAGEMUSHA_ORDINARY_APP_IDENTITY_POLICY_MAX_BYTES_V1)
+        };
+        let roots: KagemushaOrdinaryAppIdentityAuthorityPolicyV1 =
+            canonical(&original("originals/ordinary-identity-authority.norito")?)?;
+        roots
+            .validate()
+            .map_err(|_| eyre!("Native ordinary threshold roots DATA invalid"))?;
+        let signed = KagemushaSignedOrdinaryAppIdentityPolicyV1::decode_canonical_exact(&original(
+            "originals/ordinary-identity-policy.norito",
+        )?)
+        .map_err(|_| eyre!("Native ordinary threshold policy DATA invalid"))?;
+        let issuer = KagemushaOrdinaryEnrollmentIssuerPolicyV1::decode_canonical_exact(&original(
+            "originals/ordinary-core-issuer-policy.norito",
+        )?)
+        .map_err(|_| eyre!("Native ordinary Core issuer DATA invalid"))?;
+        ensure!(
+            roots.expected_identity_policy_id == body.ordinary_identity_policy_id
+                && signed
+                    .policy
+                    .canonical_digest()
+                    .map_err(|_| eyre!("Native ordinary policy DATA digest invalid"))?
+                    == body.ordinary_identity_policy_id
+                && issuer
+                    .canonical_digest()
+                    .map_err(|_| eyre!("Native ordinary issuer DATA digest invalid"))?
+                    == body.ordinary_core_issuer_policy_digest
+                && issuer.lane_namespace_id == body.ordinary_lane_namespace
+                && signed.policy.enrollment_issuer_policy_digest
+                    == body.ordinary_core_issuer_policy_digest
+                && signed.policy.profile.planned_release_id == body.release_id
+                && signed.policy.profile.planned_hardware_profile_id == body.profile_id,
+            "Native independently signed ordinary policy DATA pins differ"
+        );
+        Ok(Self {
+            roots,
+            signed,
+            issuer,
+        })
+    }
+    fn authenticate(
+        &self,
+        body: &KagemushaOrdinaryNativeInventoryV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        retail: &KagemushaRetailEnrollmentIssuerPolicyV1,
+        native_interval_lower_ms: u64,
+    ) -> Result<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1> {
+        let policy = Arc::new(
+            self.signed
+                .authenticate(&self.roots, native_interval_lower_ms)
+                .map_err(|_| eyre!("Native genuine threshold policy admission rejected"))?,
+        );
+        let issuer = Arc::new(
+            self.issuer
+                .authenticate_under_policy(
+                    &policy,
+                    body.ordinary_lane_namespace,
+                    native_interval_lower_ms,
+                )
+                .map_err(|_| eyre!("Native genuine complete Core issuer admission rejected"))?,
+        );
+        KagemushaOrdinaryRetailIdentityPolicyOriginalsV1::authenticate(
+            policy,
+            issuer,
+            body.ordinary_lane_namespace,
+            retail.clone(),
+            release,
+            body.profile_id,
+            native_interval_lower_ms,
+        )
+        .map_err(|_| eyre!("Native distinct Core/FI policy originals join rejected"))
+    }
+}
 fn admit_files(
     root: &Path,
     body: &KagemushaOrdinaryNativeInventoryV1,
@@ -741,6 +869,9 @@ fn admit_files(
             && body.sdk_release_sha256 != [0; 32]
             && body.release_id != [0; 32]
             && body.profile_id != [0; 32]
+            && body.ordinary_identity_policy_id != [0; 32]
+            && body.ordinary_core_issuer_policy_digest != [0; 32]
+            && body.ordinary_lane_namespace != [0; 32]
             && body.originals.len() >= 6
             && body.originals.len() <= MAX_FILES,
         "Native inventory shape rejected"
@@ -778,6 +909,9 @@ fn admit_files(
                 | "originals/validation-receipt.norito"
                 | "originals/release-attestation.norito"
                 | "originals/issuer-policy.norito"
+                | "originals/ordinary-identity-authority.norito"
+                | "originals/ordinary-identity-policy.norito"
+                | "originals/ordinary-core-issuer-policy.norito"
                 | "originals/ordinary-lineage-cas-policy.norito"
                 | "originals/ordinary-trust.norito"
                 | "originals/app-authority.bin"
@@ -922,6 +1056,9 @@ fn admit_files(
                     | "originals/validation-receipt.norito"
                     | "originals/release-attestation.norito"
                     | "originals/issuer-policy.norito"
+                    | "originals/ordinary-identity-authority.norito"
+                    | "originals/ordinary-identity-policy.norito"
+                    | "originals/ordinary-core-issuer-policy.norito"
                     | "originals/ordinary-lineage-cas-policy.norito"
                     | "originals/ordinary-trust.norito"
                     | "originals/app-authority.bin"
@@ -1181,6 +1318,9 @@ mod codec_tests {
             },
             fi_current_control_endpoint: "https://fi.example.invalid/".into(),
             fi_issuer_policy_digest: [8; 32],
+            ordinary_identity_policy_id: [11; 32],
+            ordinary_core_issuer_policy_digest: [12; 32],
+            ordinary_lane_namespace: [13; 32],
             integrity_policy: Some(descriptor("originals/integrity.norito", 9)),
             originals: vec![descriptor("originals/trust.norito", 10)],
         };
@@ -1255,5 +1395,51 @@ mod codec_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn current_and_lineage_lane_data_prechecks_refuse_retired_preimage_and_scope_substitution() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            account::AccountId,
+            testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture,
+        };
+        for apple in [false, true] {
+            let f = Fixture::with_single_member_wallet(apple, false, [19; 32]);
+            f.verify(300).unwrap();
+            let issuer = f.ordinary_policy.issuer_policy().policy();
+            let runtime = &f.issuer_policy.runtime;
+            let owner = &f.selection.owner;
+            require_installed_owner_lane_data(issuer, runtime, owner).unwrap();
+
+            let mut retired = owner.clone();
+            let mut hash = sha2::Sha256::new();
+            hash.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
+            hash.update(norito::encode_canonical(&owner.account_id).unwrap());
+            hash.update(norito::encode_canonical(runtime).unwrap());
+            retired.lane_id = hash.finalize().into();
+            assert_ne!(retired.lane_id, owner.lane_id);
+            assert!(require_installed_owner_lane_data(issuer, runtime, &retired).is_err());
+
+            let mut foreign_namespace = issuer.clone();
+            foreign_namespace.lane_namespace_id[0] ^= 1;
+            assert!(require_installed_owner_lane_data(&foreign_namespace, runtime, owner).is_err());
+            let mut foreign_network = issuer.clone();
+            foreign_network.network_id[0] ^= 1;
+            assert!(require_installed_owner_lane_data(&foreign_network, runtime, owner).is_err());
+
+            let mut foreign_wallet = owner.clone();
+            foreign_wallet.account_id = AccountId::new(
+                KeyPair::from_seed(vec![47; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            assert!(require_installed_owner_lane_data(issuer, runtime, &foreign_wallet).is_err());
+            let mut foreign_runtime = owner.clone();
+            foreign_runtime.runtime.scale += 1;
+            assert!(require_installed_owner_lane_data(issuer, runtime, &foreign_runtime).is_err());
+            // This uses the actual common DATA precheck only. No retained descriptor,
+            // AccountClient, Native session, hardware owner or current FI loan is made.
+        }
     }
 }

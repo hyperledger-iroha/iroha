@@ -197,15 +197,25 @@ pub use kagemusha_core_coordinator_v1::{
 };
 #[cfg(unix)]
 pub use kagemusha_core_coordinator_v1::{
-    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
-    KagemushaOrdinaryEnrollmentDispositionV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryRuntimeStartupV1,
+    KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
+    KagemushaOrdinaryNativeStartupRequestV1, KagemushaOrdinaryNativeStartupResponseV1,
+    bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
+    invoke_kagemusha_native_ordinary_runtime_startup_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,
     recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod kagemusha_device_bridge_v1;
 #[cfg(unix)]
+#[cfg(unix)]
+mod kagemusha_hardware_evidence_v1;
+#[cfg(unix)]
+pub use kagemusha_hardware_evidence_v1::{
+    KagemushaNativeHardwareEvidenceSourceV1, bootstrap_kagemusha_native_hardware_evidence_v1,
+    register_kagemusha_native_hardware_evidence_source_v1,
+};
 mod kagemusha_mobile_bootstrap_online_v1;
 mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
@@ -1653,7 +1663,7 @@ pub extern "C" fn connect_norito_kagemusha_core_coordinator_close_v1(handle: u64
     }
 }
 
-/// Query the optional audited KAGEMUSHA V1 device service.
+/// Query the required audited KAGEMUSHA V1 hardware device service.
 ///
 /// The generic bridge intentionally ships no software implementation. It returns unavailable
 /// unless a platform-qualified build replaces this symbol with its non-forking hardware service.
@@ -1672,7 +1682,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_capabilities_v1(
     ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
 }
 
-/// Execute one bounded command on the optional audited KAGEMUSHA V1 device service.
+/// Execute one bounded command on the required audited KAGEMUSHA V1 hardware device service.
 ///
 /// The generic bridge validates exact command framing and every closed operation payload, then
 /// returns unavailable. Malformed commands return `ERR_KAGEMUSHA_V1`; no result bytes or monetary

@@ -31,7 +31,7 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
       enrollmentChallengeHash: nil, bootstrapOperationID: operationID, bootstrapCredentialDigest: credentialDigest)
   }
 
-  /// Phase1 accepts only ordinary monetary W; Bootstrap has its own typed phase8 entry.
+  /// Phase1 accepts only purpose2 ordinary preparation W; Bootstrap has its own typed phase8 entry.
   static func validateApprovalTransport(_ fields: [Data], operationID: Data) throws {
     _ = try Self(nativeFields: fields, approvalID: operationID, enrollmentChallengeHash: nil)
   }
@@ -88,7 +88,7 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
           nativeFinancialSubject: f[13], credentialDigest: digest)
         bootstrapApproval = bootstrap; approval = nil; w = bootstrap.wrapper
       } else {
-        let ordinary = try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: f[1],
+        let ordinary = try KagemushaAppApprovalSigningProjectionV1(nativePreparationSigningBytes: f[1],
           nativeFinancialSubject: f[13])
         approval = ordinary; bootstrapApproval = nil; w = ordinary.wrapper
       }

@@ -14,7 +14,8 @@ ANDROID_PUBLISH_REPORT_DIR, MOBILE_SDK_SBOM_OUTPUT_DIR.
 ANDROID_PUBLISH_DRY_RUN=1 prints canonical tasks without changes.
 ANDROID_PUBLISH_SIGN=1 additionally signs published artifacts with cosign.
 Source/NDK/native provenance and signed SBOMs remain mandatory.
-Tests and lint are optional development diagnostics, outside publication.
+Required SDK unit suites precede signed SBOMs and publication.
+Lint remains an optional development diagnostic.
 Optional ANDROID_PUBLISH_REPO_URL selects the same three remote publications.
 ANDROID_PUBLISH_REPO_USERNAME/PASSWORD are a runtime-only complete pair.
 Skipped SBOM/sample quality policies are refused.

@@ -26,6 +26,7 @@ mod preparation_reservation;
 pub use preparation_reservation::{
     KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
     KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1,
     KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
     KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
     KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
@@ -70,6 +71,7 @@ pub struct KagemushaPreparedOrdinaryAppEnrollmentV1 {
     trust: KagemushaOrdinaryAppTrustPolicyV1,
     authority: KagemushaAppAttestationAuthorityPolicyV1,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+    ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
     allowed_levels_mask: u8,
     native_scope: [u8; 32],
     authenticated_at_ms: u64,
@@ -91,6 +93,7 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
         trust: KagemushaOrdinaryAppTrustPolicyV1,
         authority: KagemushaAppAttestationAuthorityPolicyV1,
         issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+        ordinary: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
         selected_profile_id: [u8; 32],
         reserved_client_nonce: [u8; 32],
         original_financial_authority_commitment: [u8; 32],
@@ -105,6 +108,15 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             .validate_for_profile(&enabled.hardware_profile, &authority)
             .map_err(|_| Rejected)?;
         issuer.validate().map_err(|_| Rejected)?;
+        ordinary
+            .require_owner_data(&release, &owner, trusted_native_reference_ms)
+            .map_err(|_| Rejected)?;
+        if ordinary.retail_policy() != &issuer
+            || ordinary.identity_policy().policy().trust != trust
+            || ordinary.identity_policy().policy().app_authority() != authority
+        {
+            return Err(Rejected);
+        }
         if release.purpose() != KagemushaReleasePurposeV1::Production
             || reserved_client_nonce == [0; 32]
             || original_financial_authority_commitment == [0; 32]
@@ -127,7 +139,10 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             || c.app_authority_policy_digest
                 != authority.canonical_digest().map_err(|_| Rejected)?
             || c.issuer_policy_digest
-                != kagemusha_ordinary_retail_issuer_policy_digest_v1(&issuer)
+                != ordinary
+                    .issuer_policy()
+                    .policy()
+                    .canonical_digest()
                     .map_err(|_| Rejected)?
             || issuer.runtime != owner.runtime
             || c.issued_at_ms < issuer.valid_from_ms
@@ -138,8 +153,8 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             return Err(Rejected);
         }
         // Scope validation does not call the financial hardware-qualification corridor.
-        preparation
-            .authenticate(&issuer.issuer_public_key, c, trusted_native_reference_ms)
+        ordinary
+            .authenticate_preparation(&release, &owner, &preparation, trusted_native_reference_ms)
             .map_err(|_| Rejected)?;
         let allowed_levels_mask = allowed_mask(&trust)?;
         let original = preparation.to_transport_bytes().map_err(|_| Rejected)?;
@@ -160,6 +175,7 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             trust,
             authority,
             issuer,
+            ordinary,
             allowed_levels_mask,
             native_scope: hash.finalize().into(),
             authenticated_at_ms: trusted_native_reference_ms,
@@ -174,8 +190,16 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
     pub fn recheck_retained_originals_at_trusted_time(&self, now: u64) -> Result<()> {
         let c = &self.preparation.challenge;
         self.issuer.validate().map_err(|_| Custody)?;
-        self.preparation
-            .authenticate(&self.issuer.issuer_public_key, c, self.authenticated_at_ms)
+        self.ordinary
+            .require_owner_data(&self.release, &self.owner, now)
+            .map_err(|_| Custody)?;
+        self.ordinary
+            .authenticate_preparation(
+                &self.release,
+                &self.owner,
+                &self.preparation,
+                self.authenticated_at_ms,
+            )
             .map_err(|_| Custody)?;
         let enabled = self
             .release
@@ -205,6 +229,25 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
         }
         Ok(())
     }
+    fn checked_preparation_original(
+        &self,
+        now: u64,
+    ) -> Result<KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1> {
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        let checked = self
+            .ordinary
+            .identity_policy()
+            .authenticate_preparation(
+                &self.preparation,
+                &self.preparation.challenge,
+                self.authenticated_at_ms,
+            )
+            .map_err(|_| Custody)?;
+        checked
+            .require_policy_original(self.ordinary.identity_policy(), now)
+            .map_err(|_| Custody)?;
+        Ok(checked)
+    }
     /// Require the original short C interval for every new hardware or issuer effect.
     /// # Errors
     /// Rejects expired C even when an old completed original remains recoverable.
@@ -212,7 +255,11 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
         self.recheck_retained_originals_at_trusted_time(now)?;
         self.preparation
             .authenticate(
-                &self.issuer.issuer_public_key,
+                &self
+                    .ordinary
+                    .identity_policy()
+                    .policy()
+                    .enrollment_issuer_key,
                 &self.preparation.challenge,
                 now,
             )
@@ -298,12 +345,12 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
         if raw_attestation.is_empty() || raw_attestation.len() > 128 * 1024 {
             return Err(Rejected);
         }
+        let checked_preparation = self.checked_preparation_original(trusted_native_reference_ms)?;
         let raw = admission
             .authenticate(
-                &self.release,
-                &self.trust,
-                &self.authority,
-                &self.preparation.challenge,
+                self.ordinary.identity_policy(),
+                &checked_preparation,
+                &raw_attestation,
                 trusted_native_reference_ms,
             )
             .map_err(|_| Rejected)?;
@@ -402,12 +449,11 @@ impl KagemushaPendingAppIdentityV1 {
         }
         let offered = KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(original)
             .map_err(|_| Rejected)?;
+        let checked_preparation = self.preparation.checked_preparation_original(now)?;
         let checked = offered
             .authenticate(
-                &self.preparation.release,
-                &self.preparation.trust,
-                &self.preparation.authority,
-                &self.preparation.preparation.challenge,
+                self.preparation.ordinary.identity_policy(),
+                &checked_preparation,
                 &self.raw.subject().app_public_key,
                 now,
             )
@@ -504,6 +550,7 @@ mod tests {
             f.trust.clone(),
             f.app_authority.clone(),
             f.issuer_policy.clone(),
+            Arc::clone(&f.ordinary_policy),
             c.hardware_profile_id,
             c.client_nonce,
             c.financial_authority_commitment,
@@ -559,6 +606,7 @@ mod tests {
                 f.trust.clone(),
                 f.app_authority.clone(),
                 f.issuer_policy.clone(),
+                Arc::clone(&f.ordinary_policy),
                 c.hardware_profile_id,
                 nonce,
                 c.financial_authority_commitment,
@@ -593,6 +641,7 @@ mod tests {
                 f.trust.clone(),
                 f.app_authority.clone(),
                 f.issuer_policy.clone(),
+                Arc::clone(&f.ordinary_policy),
                 c.hardware_profile_id,
                 c.client_nonce,
                 c.financial_authority_commitment,

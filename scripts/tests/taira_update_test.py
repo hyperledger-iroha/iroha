@@ -837,7 +837,7 @@ class CoordinatorTests(unittest.TestCase):
                       'lock': {'device': 1, 'inode': 9}},
             'automatic_restart_or_rollback_after_start': False,
             'remaining_actions': ['observe_cohort', 'verify_strict_restore',
-                                  'public_basic_doctor', 'publish_completion_receipts']})
+                                  'observe_final_cohort', 'publish_completion_receipts']})
         names = list(records)
         self.assertLess(names.index('start-intent.json'), names.index('cohort-observation-intent.json'))
         self.assertLess(names.index('cohort-observation-intent.json'), names.index('after.json'))
@@ -982,26 +982,20 @@ class CoordinatorTests(unittest.TestCase):
             props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
                      'MainPID': str(100 + index), 'InvocationID': str(index) * 32,
                      'NRestarts': '0', 'Job': ''}
-            if 'public-doctor' in events and role == guest.ROLES[2]:
-                if failure == 'post-doctor-invocation':
+            if 'checkpoint-restored' in events and role == guest.ROLES[2]:
+                if failure == 'final-observation-invocation':
                     props['InvocationID'] = 'b' * 32
-                if failure == 'post-doctor-pid':
+                if failure == 'final-observation-pid':
                     props['MainPID'] = '203'
             return props
 
         def native(argv, *, timeout=60, name=None):
             events.append(name or str(argv[0]))
-            if failure == 'failure-record' and name == 'public-doctor':
-                raise RuntimeError('injected public-doctor')
+            self.assertNotIn('doctor', argv, 'public doctor is not an update prerequisite')
             if failure is not None and name == failure:
                 raise RuntimeError('injected ' + str(name))
             if name == 'candidate-version':
                 return b'iroha3d 3.0.0\n'  # Real --version has no commit.
-            if name == 'public-doctor':
-                self.assertIn(deployment()['public_origin'], argv)
-                self.assertNotIn(deployment()['public_origin']+'/', argv)
-                return json.dumps({'command': 'taira_doctor', 'status': 'ok', 'scope': 'basic',
-                                   'checks': [{'ok': True}] * 10, 'failures': []}).encode()
             return b''
 
         def identity(row, *, after=False):
@@ -1020,7 +1014,8 @@ class CoordinatorTests(unittest.TestCase):
             if not after:
                 raise AssertionError('stopped predecessor has no live Torii observation')
             events.append('observe-' + row['role'])
-            if (failure == 'post-doctor-http' and 'public-doctor' in events
+            if (failure in ('final-observation-http', 'failure-record')
+                    and 'checkpoint-restored' in events
                     and row['role'] == guest.ROLES[2]):
                 raise RuntimeError('validator no longer answers HTTP')
             return identity(row, after=after)
@@ -1069,6 +1064,8 @@ class CoordinatorTests(unittest.TestCase):
                 if failure == 'failure-record' and name == 'failure.json':
                     raise OSError(28, 'No space left on device')
                 records[name] = value
+                if name == 'checkpoint-restored.json':
+                    events.append('checkpoint-restored')
             stack.enter_context(patch.object(guest, 'record', side_effect=record))
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
             stack.enter_context(patch.object(guest, 'public_probe', return_value=b'Ready'))
@@ -1126,7 +1123,7 @@ class CoordinatorTests(unittest.TestCase):
             def kura_hash(role, height):
                 events.append('hash-' + role)
                 self.assertEqual(height, 200)
-                return ('d' if failure == 'post-doctor-hash' and 'public-doctor' in events
+                return ('d' if failure == 'final-observation-hash' and 'checkpoint-restored' in events
                         and role == guest.ROLES[2] else 'c') * 64
             stack.enter_context(patch.object(guest, 'native_kura_hash', side_effect=kura_hash))
             stack.enter_context(patch.object(guest, 'verify_restored_checkpoint', side_effect=lambda row, cp:
@@ -1149,6 +1146,19 @@ class CoordinatorTests(unittest.TestCase):
             self.assertNotIn(event, events)
         self.assertFalse(any(event.startswith('install-') for event in events))
 
+    def test_healthy_update_completes_without_public_doctor_or_fabricated_diagnostic_claims(self):
+        # The command mock rejects every doctor invocation, even a renamed one.
+        events, records, _, _ = self.simulate()
+        self.assertNotIn('public-doctor', events)
+        self.assertNotIn('public_basic_doctor',
+                         records['cohort-observation-intent.json']['remaining_actions'])
+        result = records['result.json']
+        self.assertTrue(result['runtime_update_complete'])
+        self.assertTrue(result['cohort_processes_verified_after_final_observation'])
+        self.assertTrue(result['all_own_retained_tips_verified_after_final_observation'])
+        self.assertNotIn('cohort_processes_verified_after_public_doctor', result)
+        self.assertNotIn('all_own_retained_tips_verified_after_public_doctor', result)
+
     def test_full_cohort_is_stopped_before_any_unit_replacement_and_readbacks_precede_success(self):
         events, records, _, _ = self.simulate()
         self.assertLess(events.index('verify-units'), events.index('stop-all'))
@@ -1163,15 +1173,15 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(records['cohort-retained-tip.json'], {'height': 200, 'hash': 'c' * 64})
         self.assertEqual(records['cohort-ready.json']['retained_tip'], records['cohort-retained-tip.json'])
         self.assertTrue(records['cohort-ready.json']['startup_processes_unchanged'])
-        self.assertTrue(records['result.json']['cohort_processes_verified_after_public_doctor'])
-        self.assertTrue(records['result.json']['all_own_retained_tips_verified_after_public_doctor'])
+        self.assertTrue(records['result.json']['cohort_processes_verified_after_final_observation'])
+        self.assertTrue(records['result.json']['all_own_retained_tips_verified_after_final_observation'])
         self.assertEqual(records['result.json']['cohort_fresh_quorum_confirmations'], 2)
         self.assertEqual(len(records['cohort-initial-quorum.json']['samples']), 2)
         self.assertEqual(len(records['cohort-ready.json']['quorum_confirmations']), 2)
-        doctor = events.index('public-doctor')
+        restored = events.index('checkpoint-restored')
         for role in guest.ROLES:
             for event in ('observe-' + role, 'hash-' + role, 'systemd-iroha3d-' + role + '.service'):
-                self.assertIn(event, events[doctor + 1:])
+                self.assertIn(event, events[restored + 1:])
         self.assertFalse(records['result.json']['canary_applied_verified'])
         self.assertFalse(records['result.json']['application_ready'])
         self.assertNotIn('rollback-start', events)
@@ -1208,7 +1218,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(len(records['stopped.json']['observations']), 4)
 
     def test_failure_after_start_never_blindly_rolls_back_execution_rules(self):
-        events, records, _, _ = self.simulate('public-doctor')
+        events, records, _, _ = self.simulate('final-observation-http')
         self.assertIn('start', events)
         self.assertNotIn('rollback-start', events)
         self.assertTrue(records['failure.json']['new_start_attempted'])
@@ -1224,12 +1234,12 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn('result.json', records)
         self.assertNotIn('rollback-start', events)
 
-    def test_post_doctor_cohort_failures_cannot_report_success_or_restart_old_daemons(self):
-        for failure in ('post-doctor-invocation', 'post-doctor-pid',
-                        'post-doctor-http', 'post-doctor-hash'):
+    def test_final_cohort_failures_cannot_report_success_or_restart_old_daemons(self):
+        for failure in ('final-observation-invocation', 'final-observation-pid',
+                        'final-observation-http', 'final-observation-hash'):
             with self.subTest(failure=failure):
                 events, records, _, _ = self.simulate(failure)
-                self.assertIn('public-doctor', events)
+                self.assertIn('checkpoint-restored', events)
                 self.assertIn('after.json', records, 'retain the earlier startup observations')
                 self.assertIn('checkpoint-restored.json', records)
                 self.assertTrue(records['failure.json']['new_start_attempted'])
@@ -1239,8 +1249,8 @@ class CoordinatorTests(unittest.TestCase):
                 self.assertNotIn('rollback-start', events)
 
     def test_actual_late_failure_records_can_recover_without_promoting_partial_observations(self):
-        for failure in ('public-doctor', 'post-doctor-invocation', 'post-doctor-pid',
-                        'post-doctor-http', 'post-doctor-hash'):
+        for failure in ('final-observation-invocation', 'final-observation-pid',
+                        'final-observation-http', 'final-observation-hash'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 _, records, _, failed = self.simulate(failure)
                 root = Path(temporary).resolve()
@@ -1288,7 +1298,7 @@ class CoordinatorTests(unittest.TestCase):
                     stop.assert_not_called()
 
     def test_failed_start_recovery_keeps_historical_health_and_exact_rollback_boundary(self):
-        for failure in (None, 'partial-install', 'start', 'public-doctor'):
+        for failure in (None, 'partial-install', 'start', 'final-observation-http'):
             with self.subTest(failure=failure):
                 events, records, units, plan = self.simulate(failure, recovery=True)
                 for row in records['before.json']:

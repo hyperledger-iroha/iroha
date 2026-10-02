@@ -112,6 +112,15 @@ pub(super) fn validate_request(
             return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
         }
     }
+    if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval && phase == 15 {
+        count(f, 3)?;
+        return match number(&f[1])? {
+            2 => iroha_data_model::kagemusha::KagemushaOrdinaryPaymentRequestV1::decode_canonical_exact(&f[2])
+                .map(|_| ()).map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field),
+            4 => check(f[2].len() == 16 && f[2].iter().any(|b| *b != 0)),
+            _ => Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+        };
+    }
     // Method19 phase8 is the distinct zero-State bootstrap entry: [LE32(8), operationID32].
     // Its response uses a separate Bootstrap-only projection; ordinary phase1 stays cash-only.
     if phase == 1
@@ -246,6 +255,10 @@ pub(super) fn validate_response(
             }
             Ok(())
         }
+        15 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
+            count(r, 1)?;
+            digest(&r[0])
+        }
         1 => approval_projection(method, &q[1], r),
         8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
             bootstrap_approval_projection(&q[1], r)
@@ -307,11 +320,22 @@ fn approval_projection(
     if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval {
         digest(&r[8])?;
         let w = signing_body(&r[1], W_DOMAIN, 275)?;
-        check(w[2] == 1)?;
+        check(w[2] == 2)?;
         for i in 0..8 {
             digest(&w[3 + i * 32..3 + (i + 1) * 32])?;
         }
         interval(&w[259..275])?;
+        check(
+            u64::from_le_bytes(
+                w[267..275]
+                    .try_into()
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?,
+            ) - u64::from_le_bytes(
+                w[259..267]
+                    .try_into()
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?,
+            ) <= 10_000,
+        )?;
         check(
             &w[3..35] == id
                 && w[67..99] == c[99..131]
@@ -319,7 +343,7 @@ fn approval_projection(
                 && w[131..163] == r[6]
                 && w[163..195] == r[8],
         )?;
-        require_app_attest_selection_subject_v1(&r[13])?;
+        require_app_attest_preparation_subject_v1(&r[13])?;
         use KagemushaHardwareSelectionSigningLayoutV1 as S;
         check(
             r[13][S::OPERATION_TAG.start] != 0
@@ -765,13 +789,36 @@ mod tests {
             // A separately model-authenticated cash sample remains ordinary-only, even with
             // matching credential, W/S digest and original C scope. It is no financial owner.
             let mut cash = challenge;
-            cash.subject.operation_kind = KagemushaOperationKindV1::Rotate;
+            cash.purpose = iroha_data_model::kagemusha::KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
+            cash.subject.operation_kind = KagemushaOperationKindV1::SendSplit;
+            cash.expires_at_ms = cash.issued_at_ms + 1_000;
             cash.subject.secure_index_after = 1;
             cash.subject_signing_digest =
-                Sha256::digest(cash.canonical_subject_signing_bytes().unwrap()).into();
+                Sha256::digest(cash.subject.canonical_prepare_signing_bytes().unwrap()).into();
             let cash_projection = signed_approval_projection(&fixture, cash, apple);
             validate_response(method, &ordinary, &cash_projection).unwrap();
             assert!(validate_response(method, &q, &cash_projection).is_err());
+            for purpose in [1, 3] {
+                let mut changed = cash_projection.clone();
+                changed[1][W_DOMAIN.len() + 8 + 2] = purpose;
+                assert!(validate_response(method, &ordinary, &changed).is_err());
+            }
+            let mut too_long = cash_projection.clone();
+            let start = W_DOMAIN.len() + 8;
+            too_long[1][start + 267..start + 275]
+                .copy_from_slice(&(cash.issued_at_ms + 10_001).to_le_bytes());
+            assert!(validate_response(method, &ordinary, &too_long).is_err());
+            for slot in [
+                S::CANDIDATE_ENVELOPE_DIGEST,
+                S::TERMINAL_BODY_COMMITMENT,
+                S::SECURE_INDEX_AFTER,
+            ] {
+                let mut changed = cash_projection.clone();
+                changed[13][slot.start] ^= 1;
+                let hash = Sha256::digest(&changed[13]);
+                changed[1][start + 195..start + 227].copy_from_slice(&hash);
+                assert!(validate_response(method, &ordinary, &changed).is_err());
+            }
 
             // Rehashing S into W cannot hide mixed C scope or a nonzero bootstrap index.
             for range in [
@@ -1143,5 +1190,35 @@ mod tests {
         let offered = kagemusha_core_coordinator_encode_request_v1(&offered).unwrap();
         assert!(kagemusha_core_coordinator_validate_method_request_v1(method, &offered).is_err());
         // Caller cannot choose the current session; no mutation installs a Native owner.
+    }
+
+    #[test]
+    fn ordinary_business_intake_accepts_only_bounded_original_or_positive_exact_u128() {
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval;
+        let q = vec![
+            15u32.to_le_bytes().to_vec(),
+            4u32.to_le_bytes().to_vec(),
+            u128::MAX.to_le_bytes().to_vec(),
+        ];
+        validate_request(method, &q).unwrap();
+        validate_response(method, &q, &[vec![9; 32]]).unwrap();
+        for bad in [
+            vec![q[0].clone(), q[1].clone(), vec![0; 16]],
+            vec![q[0].clone(), q[1].clone(), vec![1; 15]],
+            vec![q[0].clone(), 1u32.to_le_bytes().to_vec(), q[2].clone()],
+            vec![q[0].clone(), 2u32.to_le_bytes().to_vec(), vec![1; 128]],
+            vec![q[0].clone(), q[1].clone(), q[2].clone(), vec![1; 32]],
+        ] {
+            assert!(validate_request(method, &bad).is_err());
+        }
+        assert!(
+            validate_request(
+                KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession,
+                &q
+            )
+            .is_err()
+        );
+        assert!(validate_response(method, &q, &[vec![0; 32]]).is_err());
+        assert!(validate_response(method, &q, &[vec![9; 32], vec![8; 32]]).is_err());
     }
 }

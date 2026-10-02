@@ -55,15 +55,17 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
-    KagemushaNativeOrdinaryCashOwnerV1, KagemushaOrdinaryLogicalApprovalJournalV1,
-    KagemushaOriginalOutgoingHardwareCommitV1,
+    KagemushaNativeOrdinaryCashOwnerV1, KagemushaNativeOrdinaryPreparedCashApprovalV1,
+    KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub(crate) use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
     KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
@@ -89,6 +91,7 @@ mod ordinary_app_identity;
 pub use ordinary_app_identity::{
     KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
     KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1,
     KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
     KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
@@ -5109,8 +5112,15 @@ fn captured_state_frame_owners() {
 
 #[path = "hardware_evidence_bootstrap.rs"]
 mod hardware_evidence_bootstrap;
-pub(crate) use hardware_evidence_bootstrap::KagemushaHardwareBootstrapArtifactMeasurementsV1;
+pub use hardware_evidence_bootstrap::KagemushaHardwareBootstrapArtifactMeasurementsV1;
 pub use hardware_evidence_bootstrap::{
     KagemushaCompiledHardwareBootstrapBindingV1, KagemushaFirstDeviceHardwareEvidenceOwnerV1,
     KagemushaHardwareEvidenceErrorV1,
+};
+
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_incoming_preview;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use ordinary_incoming_preview::{
+    OrdinaryIncomingMathSourceV1, OrdinaryIncomingPreviewV1, derive_ordinary_incoming_preview_v1,
 };

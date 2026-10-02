@@ -1145,7 +1145,7 @@ mod tests {
             issued_at_ms: 600,
             expires_at_ms: 1000,
         };
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let signed = KagemushaSignedOrdinaryCurrentControlV1 {
             signature: Signature::try_new(
                 issuer.private_key(),

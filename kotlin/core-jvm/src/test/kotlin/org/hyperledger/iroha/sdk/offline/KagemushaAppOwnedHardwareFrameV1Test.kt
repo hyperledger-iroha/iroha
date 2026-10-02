@@ -44,6 +44,21 @@ class KagemushaAppOwnedHardwareFrameV1Test {
         }
     }
 
+    @Test fun `ordinary business input has no State authority and accepts exact positive u128 only`() {
+        val method = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL
+        val fields = listOf(KagemushaCoreCoordinatorFrameV1.u32(15), KagemushaCoreCoordinatorFrameV1.u32(4), ByteArray(16) { 0xff.toByte() })
+        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
+        val response = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, listOf(bytes(7)))
+        assertContentEquals(bytes(7), KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, response)[0])
+        for (bad in listOf(fields.dropLast(1), fields + listOf(bytes(8)),
+            listOf(fields[0], fields[1], ByteArray(16)), listOf(fields[0], fields[1], ByteArray(15) { 1 }),
+            listOf(fields[0], KagemushaCoreCoordinatorFrameV1.u32(1), fields[2]))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(method, bad) }
+        }
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION, fields) }
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, listOf(ByteArray(32))) }
+    }
+
     private companion object {
         fun le64(value: Long) = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
         val ticket = le64(7)

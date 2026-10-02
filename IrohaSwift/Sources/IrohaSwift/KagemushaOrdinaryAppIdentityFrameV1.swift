@@ -6,7 +6,7 @@ enum KagemushaOrdinaryAppIdentityFrameV1 {
   static func validateRequest(_ f: [Data]) throws {
     guard !f.isEmpty else { throw invalid() }
     let phase=try number(f[0])
-    if phase == 11 || phase == 12 { guard f.count == 1 else { throw invalid() }; return }
+    if phase == 11 || phase == 12 || phase == 15 { guard f.count == 1 else { throw invalid() }; return }
     if phase == 1 { throw invalid() }
     guard f.count >= 2, f[1].count == 8, f[1].contains(where:{$0 != 0}) else { throw invalid() }
     switch phase {
@@ -28,6 +28,10 @@ enum KagemushaOrdinaryAppIdentityFrameV1 {
     switch try number(q[0]) {
     case 11: guard r.count == 1, digest(r[0]) else { throw invalid() }
     case 12: _ = try KagemushaOrdinaryAppIdentityReservationProjectionV1(r)
+    case 15:
+      guard r.count == 3, r[0].count == 8, r[0].contains(where: { $0 != 0 }),
+        r[1] != r[2] else { throw invalid() }
+      try accountText(r[1]); try accountText(r[2])
     case 13:
       let prepared = try KagemushaOrdinaryAppIdentityPreparedProjectionV1(r)
       guard prepared.signedChallenge == q[2] else { throw invalid() }
@@ -65,6 +69,10 @@ enum KagemushaOrdinaryAppIdentityFrameV1 {
     let length=try number(n)
     guard present ? (point(p) && digest(h) && length > 0 && length <= 131_072)
       : (p.isEmpty && h.isEmpty && length == 0) else { throw invalid() }
+  }
+  private static func accountText(_ data: Data) throws {
+    guard (1...2_048).contains(data.count), !data.contains(0),
+      String(data: data, encoding: .utf8) != nil else { throw invalid() }
   }
   private static func reference(_ data:Data) throws {
     guard (1...255).contains(data.count),!data.contains(0),String(data:data,encoding:.utf8) != nil else { throw invalid() }

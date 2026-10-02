@@ -39,18 +39,71 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
 const MAX_ROWS: usize = 16;
 
 /// Exact runtime observations lent only by the trusted Native startup measurement factory.
-/// Deliberately no public constructor, DTO decoder, clone or managed selector.
-pub(crate) struct KagemushaHardwareBootstrapArtifactMeasurementsV1 {
-    pub(crate) app_package: String,
-    pub(crate) app_version_code: u64,
-    pub(crate) app_signing_identity_digest: [u8; 32],
-    pub(crate) app_source_sha256: [u8; 32],
-    pub(crate) sdk_source_sha256: [u8; 32],
-    pub(crate) native_artifact_sha256: [u8; 32],
-    pub(crate) native_abi: u32,
+/// No DTO decoder, clone or managed selector. The Rust startup data constructor alone
+/// authenticates nothing; only the separately authenticated binding can create an owner.
+pub struct KagemushaHardwareBootstrapArtifactMeasurementsV1 {
+    app_package: String,
+    app_version_code: u64,
+    app_signing_identity_digest: [u8; 32],
+    app_source_sha256: [u8; 32],
+    app_code_sha256: [u8; 32],
+    sdk_source_sha256: [u8; 32],
+    android_abi: String,
+    native_artifact_sha256: [u8; 32],
+    native_abi: u32,
+}
+impl KagemushaHardwareBootstrapArtifactMeasurementsV1 {
+    /// Exact observations from the independently trusted Rust platform startup. This data value
+    /// alone grants no binding; the factory below additionally authenticates static admitted
+    /// authority/release originals and the actual installed signed Native clock. No C/JNI path
+    /// accepts these arguments. Source identities are semantic build inputs outside the binary;
+    /// native_artifact_sha256 is the measured loaded JNI file, avoiding a self-hash cycle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_native_startup_measurement(
+        app_package: String,
+        app_version_code: u64,
+        app_signing_identity_digest: [u8; 32],
+        app_source_sha256: [u8; 32],
+        app_code_sha256: [u8; 32],
+        sdk_source_sha256: [u8; 32],
+        android_abi: String,
+        native_artifact_sha256: [u8; 32],
+        native_abi: u32,
+    ) -> Result<Self> {
+        if app_package.is_empty()
+            || app_version_code == 0
+            || native_abi == 0
+            || !matches!(
+                android_abi.as_str(),
+                "arm64-v8a" | "armeabi-v7a" | "x86" | "x86_64"
+            )
+            || [
+                app_signing_identity_digest,
+                app_source_sha256,
+                app_code_sha256,
+                sdk_source_sha256,
+                native_artifact_sha256,
+            ]
+            .contains(&[0; 32])
+        {
+            return Err(Rejected);
+        }
+        Ok(Self {
+            app_package,
+            app_version_code,
+            app_signing_identity_digest,
+            app_source_sha256,
+            app_code_sha256,
+            sdk_source_sha256,
+            android_abi,
+            native_artifact_sha256,
+            native_abi,
+        })
+    }
 }
 /// Threshold-authenticated artifact purpose plus independently installed signed Native clock.
-/// Runtime activation requires real compiled release originals; this implementation creates none.
+/// Runtime activation requires a real independently signed external release and compiled
+/// authority-policy admission; this implementation creates neither original.
 pub struct KagemushaCompiledHardwareBootstrapBindingV1 {
     signed_original: Vec<u8>,
     manifest: KagemushaHardwareEvidenceBootstrapManifestV1,
@@ -58,21 +111,19 @@ pub struct KagemushaCompiledHardwareBootstrapBindingV1 {
     clock: Arc<Mutex<KagemushaOrdinaryNativeClockOwnerV1>>,
 }
 impl KagemushaCompiledHardwareBootstrapBindingV1 {
-    /// Native startup only. Expected hashes are compiled accepted release inputs, not a frame.
+    /// Native startup only. The authority policy digest is an independently compiled admission
+    /// input. The signed manifest stays outside this binary: it includes the measured JNI hash
+    /// and therefore cannot itself be embedded or hash-pinned inside the same JNI.
     /// Measurements come from actual package/code/JNI custody, not manifest echoes. This separate
     /// purpose uses the existing threshold release-authority verifier without a money receipt.
-    pub(crate) fn authenticate_compiled_originals(
-        signed_original: &'static [u8],
-        authority_original: &'static [u8],
-        compiled_signed_original_sha256: [u8; 32],
+    pub fn authenticate_compiled_originals(
+        signed_original: &[u8],
+        authority_original: &[u8],
         compiled_authority_policy_digest: [u8; 32],
         measured: KagemushaHardwareBootstrapArtifactMeasurementsV1,
         clock: Arc<Mutex<KagemushaOrdinaryNativeClockOwnerV1>>,
     ) -> Result<Self> {
-        if compiled_signed_original_sha256 == [0; 32]
-            || compiled_authority_policy_digest == [0; 32]
-            || sha(signed_original) != compiled_signed_original_sha256
-        {
+        if compiled_authority_policy_digest == [0; 32] {
             return Err(Rejected);
         }
         let authority =
@@ -88,8 +139,14 @@ impl KagemushaCompiledHardwareBootstrapBindingV1 {
             || m.app_version_code != measured.app_version_code
             || m.app_signing_identity_digest != measured.app_signing_identity_digest
             || m.app_source_sha256 != measured.app_source_sha256
+            || m.app_code_sha256 != measured.app_code_sha256
             || m.sdk_source_sha256 != measured.sdk_source_sha256
-            || m.native_artifact_sha256 != measured.native_artifact_sha256
+            || m.jni_artifacts
+                .binary_search_by(|a| a.android_abi.cmp(&measured.android_abi))
+                .ok()
+                .is_none_or(|index| {
+                    m.jni_artifacts[index].sha256 != measured.native_artifact_sha256
+                })
             || m.native_abi != measured.native_abi
         {
             return Err(Rejected);
@@ -592,6 +649,19 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
     pub fn original_receipt(&self) -> Result<Option<&[u8]>> {
         self.recheck_custody()?;
         Ok(self.receipt.as_deref())
+    }
+    /// Public route and OAuth selections from the same authenticated hardware-only manifest.
+    /// These are data originals, not wallet/session or financial authority.
+    ///
+    /// # Errors
+    /// Refuses unavailable journal or clock custody.
+    pub fn transport_scope(&self) -> Result<(&str, &str, &str)> {
+        self.recheck_custody()?;
+        Ok((
+            &self.binding.manifest.core_origin,
+            &self.binding.manifest.google_oauth_client_id,
+            &self.binding.manifest.google_oauth_issuer,
+        ))
     }
     /// Encode the same canonical reservation retained at journal creation.
     ///

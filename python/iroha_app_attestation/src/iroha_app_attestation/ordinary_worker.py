@@ -27,6 +27,7 @@ from .ordinary_provider import GovernedOrdinaryEvidenceProvider
 from .ordinary_service import OrdinaryCredentialService, PATH, RAW_PATH, REFRESH_PATH, MAX_BODY_BYTES
 from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
 from .play_integrity import GooglePlayIntegrityVerifier
+from .hardware_evidence_worker import NativeHardwareEvidenceVerifier
 from .service import _decode_base64, _decode_hex32
 from .private_process import (close_unrelated_worker_descriptors, disable_core_dumps,
                               protect_darwin_process, require_worker_role_originals)
@@ -144,17 +145,17 @@ def _command_path(command: dict) -> str:
     require(type(command) is dict
             and set(command)=={"schema","request_id","phase","body_base64"}
             and command["schema"]==REQUEST_SCHEMA
-            and command["phase"] in ("raw","credential","refresh"),
+            and command["phase"] in ("raw","credential","refresh","hardware_raw","hardware_integrity"),
             "Native worker request layout differs")
-    return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}[command["phase"]]
+    return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}.get(command["phase"])
 
 
 def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> None:
-    oauth=None;encoder=None;raw_encoder=None
+    oauth=None;encoder=None;raw_encoder=None;hardware=None
     try:
         startup=channel.receive()
         require(set(startup)=={"schema","version","request_id","projection_base64","projection_sha256",
-            "encoder_sha256","raw_encoder_sha256","authority_public_key","credential_owner_uid","google_credential_present","store_directory"}
+            "encoder_sha256","raw_encoder_sha256","authority_public_key","credential_owner_uid","google_credential_present","store_directory","hardware_projection"}
             and startup["schema"]==STARTUP_SCHEMA and type(startup["version"]) is int and startup["version"]==1
             and type(startup["credential_owner_uid"]) is int and startup["credential_owner_uid"]==0
             and type(startup["google_credential_present"]) is bool,
@@ -191,6 +192,9 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
         refresh=DurableOrdinaryIntegrityRefreshIssuer(issuer)
         service=OrdinaryCredentialService(issuer=issuer,refresh_issuer=refresh,
             authorize_core_call=lambda offered:offered is transport_owner)
+        if startup["hardware_projection"] is not None:
+            require(startup["google_credential_present"], "hardware Google credential custody absent")
+            hardware=NativeHardwareEvidenceVerifier(startup["hardware_projection"],channel,credential_fd=13)
         channel.recheck();channel.send({"kind":"ready","request_id":startup["request_id"],"projection_sha256":pin.hex()})
         while True:
             # An idle worker holds no current financial capability. Only an
@@ -201,9 +205,16 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
             channel.begin(command["request_id"],pin)
             body=_decode_base64(command["body_base64"],"Core original request",MAX_BODY_BYTES)
             channel.recheck();_store_directory(startup["store_directory"],17)
-            status,result=service.handle(method="POST",path=path,
-                                         body=body,content_type="application/json",
-                                         transport_context=transport_owner)
+            if path is None:
+                require(hardware is not None,"hardware issuer source absent")
+                try:
+                    result=hardware.handle(command["phase"],body);status=200
+                except AttestationRejected:
+                    status=400;result=b'{"error":"hardware evidence rejected"}'
+            else:
+                status,result=service.handle(method="POST",path=path,
+                                             body=body,content_type="application/json",
+                                             transport_context=transport_owner)
             channel.recheck();_store_directory(startup["store_directory"],17)
             channel.send({"kind":"result","request_id":command["request_id"],"status":status,
                           "body_base64":base64.b64encode(result).decode("ascii")})
@@ -211,6 +222,7 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
         if encoder is not None:encoder.close()
         if raw_encoder is not None:raw_encoder.close()
         if oauth is not None:oauth.close()
+        if hardware is not None:hardware.close()
 
 
 def main() -> int:

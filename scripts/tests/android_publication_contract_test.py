@@ -129,10 +129,11 @@ for module in ['core-jvm','client-android','kagemusha-wallet-android']:
         self.assertFalse(report["release_qualification"])
         self.assertEqual(report["version"], "1.2.3")
 
-    def test_sbom_generation_has_no_regression_publication_prerequisite(self):
+    def test_sbom_generation_requires_original_canonical_unit_suites(self):
         source = (ROOT / "scripts/android_sbom_provenance.sh").read_text()
         command = source.split('"$SDK_GRADLE_WRAPPER" -p', 1)[1].split("\ncollect_sbom_reports", 1)[0]
-        self.assertNotIn(":test", command)
+        for task in self.required_quality_tasks():
+            self.assertIn(task, command)
         self.assertNotIn(":lint", command)
         for module in ["core-jvm", "client-android", "kagemusha-wallet-android"]:
             self.assertIn(f":{module}:cyclonedxDirectBom", command)
@@ -207,6 +208,76 @@ for module in ['core-jvm','client-android','kagemusha-wallet-android']:
             self.assertIn('freeCompilerArgs.add("-Xjdk-release=8")', source)
             self.assertIn('name = "mobileSdk"', source)
             self.assertNotIn("irohaAndroidRepo", source)
+
+    @staticmethod
+    def required_quality_tasks():
+        return [":core-jvm:test", ":client-android:testDebugUnitTest",
+                ":client-android:testDebugHostNative",
+                ":kagemusha-wallet-android:testDebugUnitTest"]
+
+    def retain_actual_sbom_process_boundary(self):
+        # Execute the real SBOM shell and publisher; only Gradle, collection and
+        # signing are synthetic. This verifies gating, not SDK/native execution.
+        shutil.copy2(ROOT / "scripts/android_sbom_provenance.sh",
+                     self.repo / "scripts/android_sbom_provenance.sh")
+        body = self.gradle.read_text()
+        marker = "repo=pathlib.Path(next(value.split('=',1)[1] for value in args if value.startswith('-PirohaSdkRepoDir=')))"
+        boundary = r'''
+if any(value.endswith(':cyclonedxDirectBom') for value in args):
+ with (artifacts/'calls.jsonl').open('a') as log:
+  log.write(json.dumps({'args':args,'phase':'quality','remote':False})+'\n')
+ if os.environ.get('FIXTURE_QUALITY_FAIL') in args:sys.exit(74)
+ for module in ['core-jvm','client-android','kagemusha-wallet-android']:
+  bom=artifacts/'gradle-build/iroha_kotlin_sdk'/module/'reports/bom/bom.json';bom.parent.mkdir(parents=True,exist_ok=True)
+  bom.write_text(json.dumps({'bomFormat':'CycloneDX','metadata':{'component':{'group':'org.hyperledger.iroha.sdk','name':module,'version':version}},'components':[]}))
+ sys.exit(0)
+'''
+        self.assertEqual(body.count(marker), 1)
+        self.gradle.write_text(body.replace(marker, boundary + marker))
+        cosign = self.repo / "scripts/fixture_cosign.py"
+        cosign.write_text(r'''
+#!/usr/bin/env python3
+import os,pathlib,sys
+args=sys.argv[1:]
+with (pathlib.Path(os.environ['MOBILE_SDK_ANDROID_ARTIFACT_DIR'])/'signing.log').open('a') as log:log.write(args[-1]+'\n')
+pathlib.Path(args[args.index('--bundle')+1]).write_text('explicit synthetic signature fixture')
+'''.lstrip())
+        cosign.chmod(0o700)
+        self.git(["add", "."])
+        self.git(["commit", "-qm", "retain real SBOM gate with synthetic children"])
+        return str(cosign)
+
+    def test_each_required_unit_failure_prevents_signing_and_any_publication(self):
+        cosign = self.retain_actual_sbom_process_boundary()
+        for task in self.required_quality_tasks():
+            with self.subTest(task=task):
+                calls_path = self.artifacts / "calls.jsonl"
+                calls_path.unlink(missing_ok=True)
+                result = self.run_publisher("--repo-url", "https://maven.example.invalid/releases",
+                                            COSIGN=cosign, FIXTURE_QUALITY_FAIL=task)
+                self.assertEqual(result.returncode, 74, result.stderr)
+                calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0]["phase"], "quality")
+                self.assertTrue(all(required in calls[0]["args"]
+                                    for required in self.required_quality_tasks()))
+                for output in ["maven", "sbom-1.2.3", "publication-1.2.3", "signing.log"]:
+                    self.assertFalse((self.artifacts / output).exists(), output)
+
+    def test_actual_sbom_gate_precedes_signing_local_and_remote_publication(self):
+        cosign = self.retain_actual_sbom_process_boundary()
+        result = self.run_publisher("--repo-url", "https://maven.example.invalid/releases", COSIGN=cosign)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in (self.artifacts / "calls.jsonl").read_text().splitlines()]
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0]["phase"], "quality")
+        self.assertEqual([call["remote"] for call in calls], [False, False, True])
+        self.assertEqual([arg for arg in calls[0]["args"] if arg.startswith(":")],
+                         self.required_quality_tasks() +
+                         [f":{module}:cyclonedxDirectBom" for module in
+                          ["core-jvm", "client-android", "kagemusha-wallet-android"]])
+        self.assertEqual(len((self.artifacts / "signing.log").read_text().splitlines()), 3)
+        self.assertTrue((self.artifacts / "publication-1.2.3/publish_summary.json").is_file())
 
 if __name__ == "__main__":
     unittest.main()

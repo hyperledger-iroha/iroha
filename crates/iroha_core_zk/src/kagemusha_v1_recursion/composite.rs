@@ -258,6 +258,13 @@ const MINT_FINALITY_EQUATION_TAG: u32 = 4;
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+use sha2::Digest as _;
+
 const MINT_AUTHORIZATION_EQUATION_TAG: u32 = 5;
 #[cfg(any(
     test,
@@ -576,6 +583,7 @@ where
     ordinary_selection:
         Option<super::generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
+    mint_original_widths: [usize; 4],
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) parent_protocol: &'a PlonkProtocol<C>,
@@ -878,6 +886,8 @@ pub(super) enum RecursiveStateConstructionV1 {
     OrdinaryZeroBootstrapQualification,
     #[cfg(test)]
     OrdinaryOutgoingQualification,
+    #[cfg(test)]
+    OrdinaryMintIncomingQualification,
 }
 
 #[cfg(any(
@@ -928,6 +938,25 @@ impl RecursiveStateConstructionV1 {
                 return Err("ordinary outgoing qualification requires complete actual State/W2/Guard/prepared originals".into());
             }
         }
+        #[cfg(test)]
+        if self == Self::OrdinaryMintIncomingQualification {
+            if witness.state.operation != KagemushaOperationV1::MintFold
+                || witness.state.predecessor.is_none()
+                || witness.state.amount == 0
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.incoming_mint)
+                    .is_none()
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.prepared)
+                    .is_some()
+                || witness.hardware_selection.is_some()
+                || witness.mint_fold_opening.is_some()
+            {
+                return Err("ordinary Mint qualification requires complete real incoming source/W2/credit openings".into());
+            }
+        }
         let _ = witness;
         Ok(())
     }
@@ -956,90 +985,249 @@ pub(super) fn build_recursive_state_pair_impl_v1(
         validate_recursive_hash_claim_v1(claim)?;
     }
     witness.state.validate()?;
-    validate_mint_fold_opening_against_state_v1(&witness.state, witness.mint_fold_opening)?;
-    let authorization = witness.mint_authorization;
-    authorization
-        .validate_shape()
-        .map_err(|error| format!("invalid MintFold authorization/padding: {error}"))?;
-    witness
-        .mint_credit
-        .validate_shape_against_authorization(authorization)
-        .map_err(|error| format!("invalid MintFold credit/padding: {error}"))?;
-    if witness
-        .mint_fold_opening
-        .is_some_and(|opening| opening.authorization() != authorization)
-    {
-        return Err("MintFold authorization differs from the staged authorization".to_owned());
-    }
-    if witness
-        .mint_fold_opening
-        .is_some_and(|opening| opening.credit() != witness.mint_credit)
-    {
-        return Err("MintFold credit differs from the staged credit".to_owned());
-    }
-    let proof = &authorization.proof;
-    let eq_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
-        .eq_history
-        .as_slice()
-        .try_into()
-        .map_err(|_| "MintFold authorization Eq history has wrong width".to_owned())?;
-    let ep_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
-        .ep_history
-        .as_slice()
-        .try_into()
-        .map_err(|_| "MintFold authorization Ep history has wrong width".to_owned())?;
-    if witness.ordinary_selection.is_some() {
-        if witness.state.operation == KagemushaOperationV1::MintFold {
-            return Err("ordinary MintFold requires the distinct finalized-source/credit-opening State consumer".into());
+    let ordinary_mint = witness.ordinary_selection.and_then(|o| o.incoming_mint);
+    let ordinary = witness.ordinary_selection.is_some();
+    let mint_original_widths = [
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(
+            witness.eq_mint_authorization_protocol,
+        )?
+        .byte_len,
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(
+            witness.ep_mint_authorization_protocol,
+        )?
+        .byte_len,
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(witness.eq_mint_protocol)?.byte_len,
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(witness.ep_mint_protocol)?.byte_len,
+    ];
+    if ordinary {
+        if witness.state.operation == KagemushaOperationV1::ReceiveFold {
+            return Err(
+                "ordinary Receive requires its exact compact Wrapper83/source/opening consumer"
+                    .into(),
+            );
         }
-        if witness.eq_mint_authorization_protocol.num_instance
-            != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
-            || witness.ep_mint_authorization_protocol.num_instance
-                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+        if witness.mint_fold_opening.is_some()
+            || ordinary_mint.is_some()
+                != (witness.state.operation == KagemushaOperationV1::MintFold)
+        {
+            return Err(
+                "ordinary Mint requires its distinct full-source opening only on MintFold".into(),
+            );
+        }
+        if witness.eq_mint_authorization_protocol.num_instance != [113]
+            || witness.ep_mint_authorization_protocol.num_instance != [113]
         {
             return Err("ordinary State requires explicit MintAuthorization113 protocols".into());
         }
-        super::ordinary_state_mint_consumer::require_inactive_column(
-            witness.eq_mint_authorization_instances,
-            eq_authorization_history,
-        )?;
-        super::ordinary_state_mint_consumer::require_inactive_column(
-            witness.ep_mint_authorization_instances,
-            ep_authorization_history,
-        )?;
-        if witness.eq_mint_authorization_proof != proof.eq_proof
-            || witness.ep_mint_authorization_proof != proof.ep_proof
-            || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
-            || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
-        {
-            return Err("ordinary inactive Mint113 exact parser originals differ".into());
+        if let Some(m) = ordinary_mint {
+            m.authorization.validate_shape()?;
+            m.reservation.validate_shape()?;
+            m.preparation.validate_shape()?;
+            m.authorization
+                .statement
+                .context
+                .validate_credit_opening(m.credit_opening)?;
+            let request = iroha_data_model::kagemusha::KagemushaOrdinaryTopUpRequestV1 {
+                version: 1,
+                authorization: m.authorization.clone(),
+                encrypted_credit: witness.mint_credit.encrypted_credit.clone(),
+            };
+            m.reservation.selection.validate_against_topup(&request)?;
+            if m.authorization
+                .finalized_credit_statement(witness.mint_credit.statement.minted_at_ms)?
+                != witness.mint_credit.statement
+                || m.reservation.source_semantic_digest
+                    != witness
+                        .mint_credit
+                        .statement
+                        .canonical_digest()
+                        .map_err(|e| e.to_string())?
+                || m.reservation.source_proof_original_sha256
+                    != <[u8; 32]>::from(sha2::Sha256::digest(
+                        norito::encode_canonical(witness.mint_credit).map_err(|e| e.to_string())?,
+                    ))
+                || m.preparation.reservation_digest != m.reservation.digest()?
+                || m.preparation.transition_statement_digest
+                    != witness
+                        .state
+                        .public_inputs_v1()?
+                        .transition_statement_digest_v1()?
+                || m.preparation.operation_id != m.reservation.selection.operation_id
+            {
+                return Err("ordinary Mint exact source/preparation originals differ".into());
+            }
+            if witness.eq_mint_proof != witness.mint_credit.proof.eq_proof
+                || witness.ep_mint_proof != witness.mint_credit.proof.ep_proof
+                || witness.eq_mint_history.as_bytes().as_slice()
+                    != witness.mint_credit.proof.eq_history
+                || witness.ep_mint_history.as_bytes().as_slice()
+                    != witness.mint_credit.proof.ep_history
+                || m.authorization.proof.eq_protocol_digest
+                    != witness.state.mint_authorization_eq_protocol_digest
+                || m.authorization.proof.ep_protocol_digest
+                    != witness.state.mint_authorization_ep_protocol_digest
+            {
+                return Err(
+                    "ordinary Mint full recursive source/current/history protocol originals differ"
+                        .into(),
+                );
+            }
+            let before = witness
+                .state
+                .predecessor
+                .as_ref()
+                .ok_or("ordinary Mint predecessor absent")?;
+            if m.preparation.predecessor_state_commitment != before.state_commitment
+                || m.preparation.successor_state_commitment
+                    != witness.state.successor.state_commitment
+                || m.preparation.financial_index_before != before.secure_index
+                || m.preparation.financial_index_after != witness.state.successor.secure_index
+                || u128::from(m.preparation.logical_journal_sequence_before)
+                    != witness.state.journal_revision_before
+                || u128::from(m.preparation.logical_journal_sequence_after)
+                    != witness.state.journal_revision_after
+            {
+                return Err("ordinary Mint incoming preparation financial edge differs".into());
+            }
+            for (current, column, expected, carried, stored) in [(
+                witness.eq_mint_authorization_proof,
+                witness.eq_mint_authorization_instances,
+                m.authorization.proof.eq_proof.as_slice(),
+                witness.eq_mint_authorization_history.as_bytes(),
+                m.authorization.proof.eq_history.as_slice(),
+            )] {
+                if column.len() != 1
+                    || column[0].len() != 113
+                    || current != expected
+                    || carried.as_slice() != stored
+                {
+                    return Err("ordinary Mint Eq current/history originals differ".into());
+                }
+            }
+            if witness.ep_mint_authorization_instances.len() != 1
+                || witness.ep_mint_authorization_instances[0].len() != 113
+                || witness.ep_mint_authorization_proof != m.authorization.proof.ep_proof
+                || witness.ep_mint_authorization_history.as_bytes().as_slice()
+                    != m.authorization.proof.ep_history
+            {
+                return Err("ordinary Mint Ep current/history originals differ".into());
+            }
+        } else {
+            let proof = &witness.mint_authorization.proof;
+            let eq_history = proof
+                .eq_history
+                .as_slice()
+                .try_into()
+                .map_err(|_| "ordinary inactive Eq history width")?;
+            let ep_history = proof
+                .ep_history
+                .as_slice()
+                .try_into()
+                .map_err(|_| "ordinary inactive Ep history width")?;
+            super::ordinary_state_mint_consumer::require_inactive_column(
+                witness.eq_mint_authorization_instances,
+                eq_history,
+            )?;
+            super::ordinary_state_mint_consumer::require_inactive_column(
+                witness.ep_mint_authorization_instances,
+                ep_history,
+            )?;
+            if witness.eq_mint_authorization_proof != proof.eq_proof
+                || witness.ep_mint_authorization_proof != proof.ep_proof
+                || witness.eq_mint_authorization_history.as_bytes() != eq_history
+                || witness.ep_mint_authorization_history.as_bytes() != ep_history
+            {
+                return Err("ordinary inactive Mint113 exact parser originals differ".into());
+            }
         }
     } else {
-        let expected_eq = mint_authorization_public_instances_v1::<Fp>(
-            &authorization.statement,
-            proof.guard_ep_credential_audit,
-            proof.eq_deferred_audit,
-            proof.ep_deferred_audit,
-            eq_authorization_history,
-        )?;
-        let expected_ep = mint_authorization_public_instances_v1::<Fq>(
-            &authorization.statement,
-            proof.guard_ep_credential_audit,
-            proof.eq_deferred_audit,
-            proof.ep_deferred_audit,
-            ep_authorization_history,
-        )?;
-        if witness.eq_mint_authorization_instances != [expected_eq]
-            || witness.ep_mint_authorization_instances != [expected_ep]
-            || witness.eq_mint_authorization_proof != proof.eq_proof
-            || witness.ep_mint_authorization_proof != proof.ep_proof
-            || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
-            || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+        validate_mint_fold_opening_against_state_v1(&witness.state, witness.mint_fold_opening)?;
+        let authorization = witness.mint_authorization;
+        authorization
+            .validate_shape()
+            .map_err(|error| format!("invalid MintFold authorization/padding: {error}"))?;
+        witness
+            .mint_credit
+            .validate_shape_against_authorization(authorization)
+            .map_err(|error| format!("invalid MintFold credit/padding: {error}"))?;
+        if witness
+            .mint_fold_opening
+            .is_some_and(|opening| opening.authorization() != authorization)
         {
-            return Err(
-                "MintFold authorization witness is detached from the exact authorization"
-                    .to_owned(),
-            );
+            return Err("MintFold authorization differs from the staged authorization".to_owned());
+        }
+        if witness
+            .mint_fold_opening
+            .is_some_and(|opening| opening.credit() != witness.mint_credit)
+        {
+            return Err("MintFold credit differs from the staged credit".to_owned());
+        }
+        let proof = &authorization.proof;
+        let eq_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+            .eq_history
+            .as_slice()
+            .try_into()
+            .map_err(|_| "MintFold authorization Eq history has wrong width".to_owned())?;
+        let ep_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+            .ep_history
+            .as_slice()
+            .try_into()
+            .map_err(|_| "MintFold authorization Ep history has wrong width".to_owned())?;
+        if witness.ordinary_selection.is_some() {
+            if witness.state.operation == KagemushaOperationV1::MintFold {
+                return Err("ordinary MintFold requires the distinct finalized-source/credit-opening State consumer".into());
+            }
+            if witness.eq_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+                || witness.ep_mint_authorization_protocol.num_instance
+                    != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+            {
+                return Err(
+                    "ordinary State requires explicit MintAuthorization113 protocols".into(),
+                );
+            }
+            super::ordinary_state_mint_consumer::require_inactive_column(
+                witness.eq_mint_authorization_instances,
+                eq_authorization_history,
+            )?;
+            super::ordinary_state_mint_consumer::require_inactive_column(
+                witness.ep_mint_authorization_instances,
+                ep_authorization_history,
+            )?;
+            if witness.eq_mint_authorization_proof != proof.eq_proof
+                || witness.ep_mint_authorization_proof != proof.ep_proof
+                || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+                || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+            {
+                return Err("ordinary inactive Mint113 exact parser originals differ".into());
+            }
+        } else {
+            let expected_eq = mint_authorization_public_instances_v1::<Fp>(
+                &authorization.statement,
+                proof.guard_ep_credential_audit,
+                proof.eq_deferred_audit,
+                proof.ep_deferred_audit,
+                eq_authorization_history,
+            )?;
+            let expected_ep = mint_authorization_public_instances_v1::<Fq>(
+                &authorization.statement,
+                proof.guard_ep_credential_audit,
+                proof.eq_deferred_audit,
+                proof.ep_deferred_audit,
+                ep_authorization_history,
+            )?;
+            if witness.eq_mint_authorization_instances != [expected_eq]
+                || witness.ep_mint_authorization_instances != [expected_ep]
+                || witness.eq_mint_authorization_proof != proof.eq_proof
+                || witness.ep_mint_authorization_proof != proof.ep_proof
+                || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+                || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+            {
+                return Err(
+                    "MintFold authorization witness is detached from the exact authorization"
+                        .to_owned(),
+                );
+            }
         }
     }
     witness.guard_relation.validate()?;
@@ -1177,6 +1365,7 @@ pub(super) fn build_recursive_state_pair_impl_v1(
             hardware_selection: witness.hardware_selection,
             ordinary_selection: witness.ordinary_selection,
             mint_fold_opening: witness.mint_fold_opening,
+            mint_original_widths,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
             parent_protocol: witness.eq_parent_protocol,
@@ -1241,6 +1430,7 @@ pub(super) fn build_recursive_state_pair_impl_v1(
             hardware_selection: witness.hardware_selection,
             ordinary_selection: witness.ordinary_selection,
             mint_fold_opening: witness.mint_fold_opening,
+            mint_original_widths,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
             parent_protocol: witness.ep_parent_protocol,
@@ -1996,14 +2186,16 @@ where
         halo2_base::QuantumCell::Constant(C::ScalarExt::ONE),
     );
     let non_bootstrap = range.gate().not(builder.main(0), bootstrap);
-    constrain_mint_fold_opening_v1(
-        &mut builder,
-        &mut sha_jobs,
-        &assigned_state,
-        &state,
-        witness.mint_fold_opening,
-        mint,
-    )?;
+    if ordinary_data.is_none() {
+        constrain_mint_fold_opening_v1(
+            &mut builder,
+            &mut sha_jobs,
+            &assigned_state,
+            &state,
+            witness.mint_fold_opening,
+            mint,
+        )?;
+    }
     let native_parent_protocol_digest =
         native_parent_protocol_digest_v1(witness.parent_protocol, parity)?;
     let expected_native_protocol = match parity {
@@ -2312,17 +2504,61 @@ where
         .first()
         .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
     if ordinary_data.is_some() {
-        let range = loader.ecc_chip().range();
+        let chip = loader.ecc_chip();
         let mut context = loader.ctx_mut();
         let cells = authorization_column
             .iter()
             .map(|v| *v.assigned())
             .collect::<Vec<_>>();
-        super::ordinary_state_mint_consumer::constrain_inactive_column(
+        super::ordinary_state_mint_consumer::constrain_ordinary_mint_state_bindings_v1(
             context.main(),
-            range,
+            chip.range(),
+            &mut sha_jobs,
             &cells,
-            mint,
+            &super::ordinary_state_mint_consumer::OrdinaryMintStateBindingCellsV1 {
+                operation: assigned_state.operation,
+                amount: assigned_state.amount,
+                predecessor_outer: assigned_state.predecessor_outer,
+                predecessor_sequence: assigned_state.predecessor.sequence,
+                financial_epoch: assigned_state.successor.epoch_id,
+                release: assigned_state.successor.release_id,
+                suite: assigned_state.successor.suite_id,
+                vk: assigned_state.successor.vk_digest,
+                network: assigned_state.successor.network_id,
+                asset: assigned_state.successor.asset_id,
+                incarnation: assigned_state.successor.asset_incarnation,
+                pool: assigned_state.successor.liability_pool_id,
+                lane: assigned_state.successor.lane_id,
+                profile: assigned_state.successor.hardware_profile_id,
+                scale: assigned_state.successor.scale,
+                policy_epoch: assigned_state.successor.policy_epoch,
+                replay_credit_id: assigned_state.replay_credit_id,
+                credential: ordinary_data
+                    .as_ref()
+                    .ok_or("ordinary C binding absent")?
+                    .digests[1],
+                account_binding: ordinary_data
+                    .as_ref()
+                    .ok_or("ordinary account binding absent")?
+                    .account_binding,
+                financial_authority: ordinary_data
+                    .as_ref()
+                    .ok_or("ordinary financial binding absent")?
+                    .financial_authority_commitment,
+                provider_root: ordinary_data
+                    .as_ref()
+                    .ok_or("ordinary provider binding absent")?
+                    .digests[4],
+            },
+            witness
+                .ordinary_selection
+                .and_then(|o| o.incoming_mint)
+                .map(
+                    |m| super::ordinary_state_mint_consumer::OrdinaryMintStateOpeningV1 {
+                        credit: m.credit_opening,
+                        encrypted_credit: &witness.mint_credit.encrypted_credit,
+                    },
+                ),
         )?;
     } else {
         constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
@@ -2453,6 +2689,112 @@ where
         witness.mint_proof,
     )
     .map_err(|error| format!("failed to verify finalized-mint proof: {error:?}"))?;
+    if let Some(original) = &ordinary_data {
+        let incoming = witness.ordinary_selection.and_then(|o| o.incoming_mint);
+        let padding;
+        let authorization = if let Some(incoming) = incoming {
+            incoming.authorization
+        } else {
+            padding = ordinary_mint_codec_padding_v1(&state, witness.mint_authorization)?;
+            &padding
+        };
+        let authorization_cells = authorization_column
+            .iter()
+            .map(|v| *v.assigned())
+            .collect::<Vec<_>>();
+        let finalized_cells = mint_column
+            .iter()
+            .map(|v| *v.assigned())
+            .collect::<Vec<_>>();
+        let chip = loader.ecc_chip();
+        let mut context = loader.ctx_mut();
+        let ctx = context.main();
+        let originals = super::ordinary_mint_full_canonical_consumer::constrain_ordinary_mint_canonical_originals_v1(
+            ctx, chip.range(), &mut sha_jobs,
+            super::ordinary_mint_full_canonical_consumer::OrdinaryMintCanonicalProofSourcesV1 {
+                authorization_protocols: [
+                    [public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO], public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_HI]],
+                    [public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO], public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_HI]],
+                ],
+                authorization_column: &authorization_cells, finalized_column: &finalized_cells,
+                authorization_current_original: &authorization_current.canonical_bytes,
+                finalized_current_original: &mint_current.canonical_bytes,
+                parity, proof_widths: witness.mint_original_widths, enabled: mint,
+            }, authorization, witness.mint_credit,
+        )?;
+        let reservation_padding;
+        let reservation = if let Some(incoming) = incoming {
+            incoming.reservation
+        } else {
+            reservation_padding = iroha_data_model::kagemusha::KagemushaOrdinaryIncomingReservationV1 {
+                selection: iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSelectionV1 {
+                    version: 0, lineage: authorization.statement.context.lineage.clone(),
+                    operation_id: [0;32], predecessor: authorization.statement.context.predecessor,
+                    source: iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1::Mint { topup_request_original_sha256: [0;32] },
+                    credit_id: [0;32], amount: 0, scale: 0, recipient_app_credential_digest: [0;32],
+                    financial_control_original_sha256: [0;32], clock_context_digest: [0;32],
+                }, finalized_source_original_sha256: [0;32], source_proof_original_sha256: [0;32], source_semantic_digest: [0;32],
+            };
+            &reservation_padding
+        };
+        let finalized_source_sha = assign_bytes(
+            ctx,
+            chip.range(),
+            &reservation.finalized_source_original_sha256,
+        )
+        .try_into()
+        .map_err(|_| "ordinary finalized source SHA width")?;
+        let envelope = super::ordinary_mint_full_canonical_consumer::constrain_ordinary_mint_incoming_reservation_v1(
+            ctx, chip.range(), &mut sha_jobs, &authorization_cells, &originals, reservation,
+            &finalized_source_sha, assigned_state.replay_envelope_digest, mint,
+        )?;
+        constrain_digest_bytes_if_v1(
+            ctx,
+            chip.range().gate(),
+            &envelope,
+            assigned_state.transition_effect_digest,
+            mint,
+        );
+        let fresh_fi = assign_bytes(
+            ctx,
+            chip.range(),
+            &incoming.map_or([0; 32], |m| m.preparation.financial_control_original_sha256),
+        )
+        .try_into()
+        .map_err(|_| "ordinary fresh incoming FI SHA width")?;
+        let fresh_clock = assign_bytes(
+            ctx,
+            chip.range(),
+            &incoming.map_or([0; 32], |m| m.preparation.clock_context_digest),
+        )
+        .try_into()
+        .map_err(|_| "ordinary fresh incoming clock SHA width")?;
+        let envelope_cells = digest_limbs_assigned(ctx, &envelope);
+        super::ordinary_incoming_preparation_binding::constrain_ordinary_incoming_preparation_v1(
+            ctx,
+            chip.range(),
+            &mut sha_jobs,
+            super::ordinary_incoming_preparation_binding::OrdinaryIncomingPreparationCellsV1 {
+                operation: assigned_state.operation,
+                reservation_digest: envelope_cells,
+                operation_id: original.approval_operation_id,
+                approval_nonce: original.approval_nonce,
+                transition_statement_digest: transition_digest,
+                predecessor_state: assigned_state.predecessor_outer,
+                successor_state: assigned_state.successor_outer,
+                financial_control_original_sha256: fresh_fi,
+                clock_context_digest: fresh_clock,
+                financial_index_before: assigned_state.predecessor.secure_index,
+                financial_index_after: assigned_state.successor.secure_index,
+                journal_before: assigned_state.journal_revision_before,
+                journal_after: assigned_state.journal_revision_after,
+                approval_purpose: original.approval_purpose,
+                transition_effect: assigned_state.transition_effect_digest,
+                guard_intent: assigned_guard.transition_intent,
+                guard_recovery: assigned_guard.recovery_record,
+            },
+        )?;
+    }
     if ordinary_data.is_none() {
         constrain_exact_mint_envelope_v1(
             &loader,
@@ -6612,4 +6954,103 @@ mod tests {
             "incoming history starts immediately after the terminal-authorization public prefix",
         );
     }
+}
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+fn ordinary_mint_codec_padding_v1(
+    state: &KagemushaStateRelationWitnessV1,
+    parser: &KagemushaMintAuthorizationV1,
+) -> Result<iroha_data_model::kagemusha::KagemushaOrdinaryMintAuthorizationV1, String> {
+    use iroha_data_model::kagemusha::*;
+    let context = KagemushaOrdinaryMintAuthorizationContextV1 {
+        version: 0,
+        operation_id: [0; 32],
+        lineage: KagemushaOrdinaryFinancialLineageV1 {
+            version: 0,
+            owner: KagemushaRetailEnrollmentOwnerV1 {
+                account_id: parser.statement.context.recipient.clone(),
+                runtime: KagemushaRetailEnrollmentRuntimeV1 {
+                    fi_id: "inactive"
+                        .parse()
+                        .map_err(|e| format!("inactive FI codec: {e}"))?,
+                    ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(0),
+                    authentication_namespace: "inactive"
+                        .parse()
+                        .map_err(|e| format!("inactive namespace codec: {e}"))?,
+                    network_id: state.successor.lane.network_id,
+                    asset: state.successor.lane.asset.clone(),
+                    asset_incarnation: state.successor.asset_incarnation,
+                    scale: state.successor.lane.scale,
+                },
+                lane_id: [0; 32],
+            },
+            financial_epoch_id: [0; 32],
+            financial_authority_commitment: [0; 32],
+        },
+        predecessor: KagemushaOrdinaryFinancialHeadV1 {
+            state_commitment: [0; 32],
+            logical_sequence: 0,
+            state_original_sha256: [0; 32],
+        },
+        release_id: [0; 32],
+        suite_id: [0; 32],
+        vk_digest: [0; 32],
+        artifact_manifest_digest: [0; 32],
+        recipient_app_credential_digest: [0; 32],
+        app_credential_profile_id: [0; 32],
+        policy_epoch: 0,
+        amount: 0,
+        recipient_credential_commitment: [0; 32],
+        credit_commitment: [0; 32],
+        recipient_one_time_key: [0; 32],
+        clock_context: KagemushaOrdinaryCashClockContextV1 {
+            version: 0,
+            request_nonce: [0; 32],
+            signed_observations_original_digest: [0; 32],
+            lower_at_ms: 0,
+            upper_at_ms: 0,
+        },
+        financial_control_original_sha256: [0; 32],
+    };
+    Ok(KagemushaOrdinaryMintAuthorizationV1 {
+        version: 0,
+        statement: KagemushaOrdinaryMintAuthorizationStatementV1 {
+            version: 0,
+            context,
+            issuance_commitment: [0; 32],
+            credit_id: [0; 32],
+            ciphertext_digest: [0; 32],
+        },
+        approval: KagemushaOrdinaryMintApprovalV1 {
+            challenge: KagemushaOrdinaryMintApprovalChallengeV1 {
+                version: 0,
+                operation_id: [0; 32],
+                nonce: [0; 32],
+                credential_digest: [0; 32],
+                statement_digest: [0; 32],
+                clock_context_digest: [0; 32],
+                financial_control_original_sha256: [0; 32],
+                issued_at_ms: 0,
+                expires_at_ms: 0,
+            },
+            evidence: KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                signature_der: Vec::new(),
+            },
+        },
+        proof: KagemushaOrdinaryMintPairedProofV1 {
+            version: 0,
+            eq_protocol_digest: parser.proof.eq_protocol_digest,
+            ep_protocol_digest: parser.proof.ep_protocol_digest,
+            statement_digest: [0; 32],
+            approval_original_digest: [0; 32],
+            eq_proof: parser.proof.eq_proof.clone(),
+            ep_proof: parser.proof.ep_proof.clone(),
+            eq_history: parser.proof.eq_history.clone(),
+            ep_history: parser.proof.ep_history.clone(),
+        },
+    })
 }

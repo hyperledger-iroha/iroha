@@ -296,6 +296,11 @@ dynamic MAIN/CA/joint hash contexts and consumes a separate checked RNG prefix.
 Fixed schedule metadata stays unchanged. Its derived maximum is 9,412,944 bytes;
 this is not a native maximum result. Authentic profile/proof/pre-aux values are
 regenerated and independently checked, and the four primary diagnostics pass.
+The merged descriptors enumerate the current 192 endpoint, 17 key/digest,
+20 SHA-union and 108 CA-link alpha phases, retaining the claim-free joint wire
+and 39 RFC lookup relations. Their current profile pin and deterministic
+IO/Projection goldens bind the sole merged descriptor. Complete current-candidate
+qualification remains required; earlier descriptor passes do not qualify it.
 The expanded run exposed four additional fixture failures; their scoped DER and
 historical-profile repairs await native rerun. CPU/accelerator parity and a new
 maximum proof remain required.

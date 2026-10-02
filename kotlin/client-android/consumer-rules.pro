@@ -37,3 +37,10 @@
 # ServiceLoader's exact installed ordinary app-key route and SPI filename.
 -keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaAndroidOrdinaryHardwareServiceFactoryV1
 -keep class org.hyperledger.iroha.sdk.offline.KagemushaAndroidAppOwnedHardwareServiceFactoryV1 { public <init>(); }
+
+# Dedicated nonmonetary first-device JNI and its sole ordinary app-owned service SPI.
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaFirstDeviceHardwareEvidenceJniV1 {
+    native <methods>;
+}
+-keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaFirstDeviceHardwareEvidenceServiceFactoryV1
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaAndroidFirstDeviceHardwareEvidenceServiceFactoryV1 { public <init>(); }

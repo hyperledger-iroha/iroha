@@ -3,8 +3,8 @@
 
 Python3.12 standard library only. This helper does not build, sign, authenticate
 an operator or qualify a release. Called publication first preserves the existing
-source/native/NDK custody checks. Tests and lint are separate development
-diagnostics. Receipt outputs are exclusively created outside source; runtime Maven credentials are never arguments or receipt fields.
+source/native/NDK custody checks. Required SDK unit suites run before SBOM
+signing and publication; lint remains a separate development diagnostic. Receipt outputs are exclusively created outside source; runtime Maven credentials are never arguments or receipt fields.
 """
 from __future__ import annotations
 import argparse

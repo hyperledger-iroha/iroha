@@ -5,13 +5,15 @@ from iroha_app_attestation.ordinary_worker import _command_path, REQUEST_SCHEMA
 from iroha_app_attestation.ordinary_service import RAW_PATH, PATH, REFRESH_PATH
 
 class OrdinaryWorkerPurposeTests(unittest.TestCase):
-    def test_actual_called_phase_gate_selects_only_three_exact_routes(self):
+    def test_actual_called_phase_gate_separates_hardware_from_financial_routes(self):
         # These are untrusted syntax projections, not admitted parent packets.
         command={"schema":REQUEST_SCHEMA,"request_id":"11"*32,
                  "phase":"raw","body_base64":""}
         self.assertEqual(_command_path(command),RAW_PATH)
         self.assertEqual(_command_path(dict(command,phase="credential")),PATH)
         self.assertEqual(_command_path(dict(command,phase="refresh")),REFRESH_PATH)
+        self.assertIsNone(_command_path(dict(command,phase="hardware_raw")))
+        self.assertIsNone(_command_path(dict(command,phase="hardware_integrity")))
 
     def test_old_missing_unknown_and_path_substitution_are_rejected(self):
         command={"schema":REQUEST_SCHEMA,"request_id":"11"*32,

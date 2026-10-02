@@ -56,8 +56,11 @@ the actual boolean and request bytes. Retained `basic`, `full` and `build-only`
 scopes classify their evidence; neither transfer nor the same-revision
 owner-signed dispatcher transition requires regression success as deployment
 authority. Neither can convert a failed check into a pass. Native deployment
-preflight, canary, finality, readiness, restart, authorization and artifact/source
-custody remain mandatory.
+preflight, finality, readiness, authorization and artifact/source custody remain mandatory.
+Write canaries, restart rehearsals and broad public-doctor suites are optional engineering
+diagnostics, never signing, transfer or deployment prerequisites.
+Authenticated bootstrap transactions still advance the committed heights required by beacon
+installation; their actual Applied receipts are protocol state, not diagnostic verdicts.
 
 Source readers retain bounded lookahead across Git headers and adjacent pack
 objects. Pack inflation consumes each input byte once before the independent

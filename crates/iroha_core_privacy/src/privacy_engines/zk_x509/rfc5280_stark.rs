@@ -10355,6 +10355,29 @@ mod tests {
         assert_eq!(ZK_X509_RFC5280_STARK_BUS_LANES_V1, 4);
         assert_eq!(ZK_X509_RFC5280_STARK_RELATION_EVENT_BOUND_V1, 1 << 19);
         assert_eq!(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1, 39);
+        let profile =
+            core::str::from_utf8(super::super::profile::ZK_X509_STARK_PROFILE_DESCRIPTOR_V1)
+                .unwrap();
+        let temporal_air = profile
+            .split('|')
+            .find(|field| field.starts_with("rfc5280-temporal-air="))
+            .unwrap();
+        let declared_relations = temporal_air
+            .strip_suffix("-relations")
+            .unwrap()
+            .rsplit('-')
+            .next()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        assert_eq!(
+            declared_relations,
+            ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1
+        );
+        assert!(temporal_air.contains(&format!(
+            "-constraints{}-",
+            ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1
+        )));
         assert_eq!(ZK_X509_RFC5280_STARK_COPY_SOUNDNESS_BITS_V1, 170);
     }
     #[test]

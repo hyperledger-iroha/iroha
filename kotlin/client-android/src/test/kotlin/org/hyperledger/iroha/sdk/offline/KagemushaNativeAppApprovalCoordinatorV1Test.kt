@@ -11,6 +11,9 @@ import java.security.MessageDigest
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppKeyHardwarePolicyV1
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1
+import org.hyperledger.iroha.sdk.crypto.keystore.approveNativeOrdinaryPreparationOriginalV1
+import org.hyperledger.iroha.sdk.crypto.keystore.requireAppPlatformSigningMessageV1
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -19,6 +22,63 @@ import kotlin.test.assertNull
 
 /** Scripted ABI fixtures test JVM correlation/once-only control flow, not installed native authority. */
 class KagemushaNativeAppApprovalCoordinatorV1Test {
+    @Test fun `business preparation forwards only original request or exact amount then Native selector`() {
+        val send = Endpoint(); val raw = byteArrayOf(1, 2, 3) // Scripted carrier; Native validates real canonical originals.
+        facade(send).prepareOrdinarySendApproval(raw)
+        assertContentEquals(raw, send.businessInputs.single()[2]); raw.fill(0)
+        assertContentEquals(byteArrayOf(1,2,3), send.businessInputs.single()[2])
+        val redeem = Endpoint(); facade(redeem).prepareOrdinaryRedemptionApproval(BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE))
+        assertContentEquals(ByteArray(16) { 0xff.toByte() }, redeem.businessInputs.single()[2])
+        assertEquals(0, send.state); assertEquals(0, redeem.state)
+        for (bad in listOf(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(128))) {
+            assertFailsWith<IllegalArgumentException> { facade(Endpoint()).prepareOrdinaryRedemptionApproval(bad) }
+        }
+    }
+
+    @Test fun `phase one rejects terminal purpose outgoing commitments and extended W before signing`() {
+        val start = "iroha:kagemusha:v1:app-operation-approval\u0000".toByteArray(Charsets.US_ASCII).size + 8
+        for (change in listOf<(Endpoint) -> Unit>(
+            { it.fields[1][start + 2] = 1 },
+            { ByteBuffer.wrap(it.fields[1]).order(ByteOrder.LITTLE_ENDIAN).putLong(start + 267, 11001) },
+            { it.fields[13][364] = 1; sha(it.fields[13]).copyInto(it.fields[1], start + 195) },
+            { it.fields[13][396] = 1; sha(it.fields[13]).copyInto(it.fields[1], start + 195) },
+            { it.fields[13][331] = 1; sha(it.fields[13]).copyInto(it.fields[1], start + 195) })) {
+            val endpoint = Endpoint(); change(endpoint)
+            assertFailsWith<IllegalArgumentException> { facade(endpoint).prepareApproval(endpoint.id) }
+            assertEquals(0, endpoint.state)
+        }
+    }
+
+    @Test fun `real hardware consumer helper fixes purpose two and retained recovery never selects another kind`() {
+        val endpoint = Endpoint(); val prepared = facade(endpoint).prepareApproval(endpoint.id)
+        var calls = 0
+        val receipt = approveNativeOrdinaryPreparationOriginalV1(prepared) { _, _, _, _, message, _, purpose, guard ->
+            calls++; assertEquals(1, endpoint.state)
+            assertEquals(KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL, purpose)
+            assertContentEquals(endpoint.fields[1], message)
+            requireAppPlatformSigningMessageV1(message, purpose); guard(); der.copyOf()
+        }
+        assertEquals(1, calls); assertEquals(3, endpoint.state); assertContentEquals(der, endpoint.raw)
+        assertContentEquals(receipt, approveNativeOrdinaryPreparationOriginalV1(prepared) { _, _, _, _, _, _, _, _ -> error("Retained approval cannot sign again") })
+        assertEquals(1, calls)
+    }
+
+    @Test fun `real hardware consumer helper preserves a lost platform fence instead of changing signing purpose`() {
+        val endpoint = Endpoint(); val prepared = facade(endpoint).prepareApproval(endpoint.id)
+        var calls = 0
+        assertFailsWith<IllegalStateException> {
+            approveNativeOrdinaryPreparationOriginalV1(prepared) { _, _, _, _, _, _, purpose, _ ->
+                calls++; assertEquals(KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL, purpose)
+                error("Original platform outcome unknown")
+            }
+        }
+        assertEquals(1, endpoint.state)
+        assertFailsWith<IllegalStateException> {
+            approveNativeOrdinaryPreparationOriginalV1(prepared) { _, _, _, _, _, _, _, _ -> calls++; der.copyOf() }
+        }
+        assertEquals(1, calls)
+    }
+
     @Test fun `native fence precedes exactly one signing call and retries return retained receipt`() {
         val endpoint = Endpoint(); val prepared = facade(endpoint).prepareApproval(endpoint.id)
         var signs = 0
@@ -473,6 +533,7 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
 
     private class Endpoint(val enrollment: Boolean = false, val bootstrap: Boolean = false) : KagemushaCoreCoordinatorEndpointV1 {
         val fields = projection(enrollment, bootstrap).toMutableList()
+        val businessInputs = mutableListOf<List<ByteArray>>()
         var offeredId: ByteArray? = null
         val id: ByteArray get() = offeredId?.copyOf() ?: if (enrollment) sha(fields[7]) else bytes(0x11)
         var state = 0 // 0 uninvoked, 1 invoked/no original, 2 retained, 3 consumed
@@ -494,6 +555,7 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         override fun invoke(handle: Long, method: Int, request: Array<ByteArray>): Array<ByteArray>? {
             assertEquals(if (enrollment) 20 else 19, method)
             val phase = ByteBuffer.wrap(request[0]).order(ByteOrder.LITTLE_ENDIAN).int
+            if (phase == 15) { check(!enrollment && !bootstrap); businessInputs.add(request.map(ByteArray::copyOf)); return arrayOf(id) }
             if (phase != (if (bootstrap) 8 else 1)) assertContentEquals(fields[0], request[1])
             if (bootstrap && phase == 8) { assertContentEquals(id, request[1]); return fields.map(ByteArray::copyOf).toTypedArray() }
             return when (phase) {
@@ -570,14 +632,14 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
             val s = framed("iroha:kagemusha:v1:hardware-transition-selection", output {
                 write(byteArrayOf(1, 0)); write(cFields[6]); write(bytes(0x61)); write(bytes(0x62)); write(bytes(0x66))
                 write(cFields[4]); write(cFields[5]); write(cFields[7]); write(le64(1)); write(bytes(0x64)); write(le64(1))
-                write(byteArrayOf(if (bootstrap) 0 else 1)); write(bytes(0x65)); write(ByteArray(64)); write(le64(if (bootstrap) 0 else 7)); write(le64(0)); write(le64(if (bootstrap) 0 else 8)); write(le64(0))
+                write(byteArrayOf(if (bootstrap) 0 else 2)); write(bytes(0x65)); write(ByteArray(64)); write(le64(if (bootstrap) 0 else 7)); write(le64(0)); write(le64(if (bootstrap) 0 else 8)); write(le64(0))
             })
             val credential = bytes(0x66)
             val subjectFields = if (enrollment) listOf(sha(c), cFields[1], cFields[2], cFields[3], cFields[4],
                 cFields[10], cFields[6], cFields[7], cFields[5], key, bytes(0x77)) else listOf(bytes(0x11), bytes(0x22),
                 cFields[3], cFields[10], key, credential, sha(s), bytes(0x88))
             val message = framed(if (enrollment) "iroha:kagemusha:v1:app-enrollment-possession" else "iroha:kagemusha:v1:app-operation-approval", output {
-                write(byteArrayOf(1, 0, 1)); subjectFields.forEach { write(it) }; write(le64(1000)); write(le64(121000))
+                write(byteArrayOf(1, 0, if (enrollment || bootstrap) 1 else 2)); subjectFields.forEach { write(it) }; write(le64(1000)); write(le64(if (enrollment || bootstrap) 121000 else 11000))
             })
             return listOf(le64(7), message, byteArrayOf(5), KagemushaOrdinaryAppKeyAliasV1.originalAlias(c).toByteArray(Charsets.UTF_8), sha(c), point, key, c,
                 if (enrollment) byteArrayOf() else credential, bytes(0x99), byteArrayOf(), byteArrayOf(1), bytes(0xaa),

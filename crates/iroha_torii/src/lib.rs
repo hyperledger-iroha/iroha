@@ -19605,7 +19605,16 @@ fn torii_contract_target_read_route(
             .transpose()?
             .flatten(),
     };
-    Ok(dataspace_id.and_then(|id| resolve_torii_route_for_dataspace_id(app, id).ok()))
+    dataspace_id
+        .map(|id| {
+            resolve_torii_route_for_dataspace_id(app, id).map_err(|error| {
+                Error::AppServiceUnavailable {
+                    code: "route_unavailable",
+                    message: format!("failed to resolve target-contract route: {error}"),
+                }
+            })
+        })
+        .transpose()
 }
 #[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {

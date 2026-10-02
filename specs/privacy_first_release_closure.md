@@ -84,6 +84,13 @@ composition and FRI-mask roots precede the common DEEP point. All joint
 openings precede local mixing. Independent relation and transcript-hiding
 qualification remain required.
 
+The canonical descriptors bind the current 192 endpoint, 17 key/digest,
+20 SHA-union and 108 CA-link alpha phases after both original auxiliary roots.
+They retain the claim-free joint wire and the 39-relation RFC lookup inventory.
+The current profile pin and deterministic IO/Projection proof goldens bind this
+sole descriptor. Complete current-candidate qualification remains required;
+prior profile evidence does not qualify the merged descriptor.
+
 The source17 Linux maximum proof is 9,412,912 bytes and passes native and fresh
 verification, wrong-genesis rejection and tampering controls. Its proof and
 verifier children stay under the enforced 32 GiB address-space limit. Proving

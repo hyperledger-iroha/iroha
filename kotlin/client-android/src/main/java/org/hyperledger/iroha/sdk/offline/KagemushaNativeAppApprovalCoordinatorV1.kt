@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityTo
 import org.hyperledger.iroha.sdk.crypto.keystore.requireOriginalP256DerV1
 
 /**
- * Non-monetary app operations on the coordinator's already admitted original native owner.
+ * Ordinary preparation and enrollment approvals on the coordinator's admitted Native owner.
  * The caller supplies an actual operation/attempt identity, never a signing subject, key or policy.
  * Missing native support remains an error; a compatible frame or receipt is not StateGuard authority.
  */
@@ -54,6 +54,26 @@ class KagemushaNativeAppApprovalCoordinatorV1 internal constructor(
         val fields = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
             listOf(KagemushaCoreCoordinatorFrameV1.u32(1), id))
         return KagemushaNativePreparedAppApprovalV1.fromNative(bridge, id, fields)
+    }
+
+    /** Native authenticates this exact receiver request and derives the entire Send preparation. */
+    fun prepareOrdinarySendApproval(originalReceiverRequest: ByteArray): KagemushaNativePreparedAppApprovalV1 {
+        val id = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(15), KagemushaCoreCoordinatorFrameV1.u32(2),
+                originalReceiverRequest.copyOf())).single()
+        return prepareApproval(id)
+    }
+
+    /** Native subtracts from its actual held State and selects its own enrolled beneficiary. */
+    fun prepareOrdinaryRedemptionApproval(amount: java.math.BigInteger): KagemushaNativePreparedAppApprovalV1 {
+        require(amount.signum() > 0 && amount.bitLength() <= 128) { "Ordinary amount must fit positive u128" }
+        val bigEndian = amount.toByteArray()
+        val littleEndian = ByteArray(16) { index ->
+            if (index < bigEndian.size) bigEndian[bigEndian.lastIndex - index] else 0
+        }
+        val id = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(15), KagemushaCoreCoordinatorFrameV1.u32(4), littleEndian)).single()
+        return prepareApproval(id)
     }
 
     /** Separate Bootstrap capability tied to the same retained FI completion and C/key originals. */

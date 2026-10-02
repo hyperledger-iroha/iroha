@@ -20,6 +20,9 @@ mod issuer_dispatch_retention_tests;
 #[path = "../participant_enrollment_fi_read_tests.rs"]
 mod fi_current_receiving_tests;
 
+#[path = "../participant_enrollment_http_tests.rs"]
+mod http_original_tests;
+
 struct Fixture {
     signer: KeyPair,
     signatory: AccountId,

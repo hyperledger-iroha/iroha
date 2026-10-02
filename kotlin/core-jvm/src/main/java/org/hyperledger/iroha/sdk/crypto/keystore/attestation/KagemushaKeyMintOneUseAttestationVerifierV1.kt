@@ -58,15 +58,14 @@ internal object KagemushaSelectionFrameV1 {
     private const val BEFORE = 428
     private const val AFTER = 444
 
-    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
-        requireSubject(frame, allowEnrollment = false)
-        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
-            frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
-            frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
-        ) { "Core S differs from the selected lane or exact-next indices" }
-    }
+    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) =
+        requireSelection(frame, lane, before, after, preparation = false)
 
-    private fun requireSubject(frame: ByteArray, allowEnrollment: Boolean): Int {
+    /** Exact purpose2 S: Send/Redeem, absent candidate/terminal, genuine exact-next indexes. */
+    fun requireOrdinaryPreparationExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) =
+        requireSelection(frame, lane, before, after, preparation = true)
+
+    private fun requireSubject(frame: ByteArray, allowEnrollment: Boolean, preparation: Boolean = false): Int {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -91,10 +90,19 @@ internal object KagemushaSelectionFrameV1 {
             "Core S has an invalid operation"
         }
         val outgoing = operation == 2 || operation == 4
-        require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
-            frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
+        require(!preparation || outgoing) { "Purpose2 preparation requires Send or Redeem" }
+        require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == (outgoing && !preparation) &&
+            frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == (outgoing && !preparation)
         ) { "Core S has the wrong outgoing commitment shape" }
         return operation
+    }
+
+    private fun requireSelection(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray, preparation: Boolean) {
+        requireSubject(frame, allowEnrollment = false, preparation = preparation)
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
+            frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
+            frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
+        ) { "Core S differs from the selected lane or exact-next indices" }
     }
 
     /** Logical transition indices are independent of the Apple assertion counter. */

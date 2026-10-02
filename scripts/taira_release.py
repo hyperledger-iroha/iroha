@@ -14,7 +14,8 @@ and logs remain intact. Preparation records native_check_scope=build-only
 and checks.passed=false, without running native regression checks. Its signed
 source, pinned tools and captured release artifacts retain the same custody;
 it is unqualified build evidence, never a Basic or Full pass. Native deployment
-preflight, canary, finality, readiness and restart checks remain mandatory.
+preflight, finality, readiness and custody checks remain mandatory. Write-canary,
+restart and broad public-doctor diagnostics never gate signing, transfer or deployment.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable

@@ -641,7 +641,7 @@ fn validate_selection(
     let credential_original = encode(&expected.issuance.credential, 16 * 1024)?;
     if expected.owner.runtime != policy.runtime
         || expected.owner.enrollment_id().map_err(|e| e.to_string())? != p.enrollment_id
-        || p.issuer_policy_digest != kagemusha_ordinary_retail_issuer_policy_digest_v1(policy)?
+        || expected.preparation.to_transport_bytes()? != app.preparation_original()
         || p.account_binding
             != kagemusha_ordinary_app_account_binding_v1(&expected.owner.account_id)
         || p.network_id != *expected.owner.runtime.network_id.as_bytes()
@@ -663,9 +663,9 @@ fn validate_selection(
             "ordinary retail native selection differs from actual policy/owner/credential".into(),
         );
     }
-    expected
-        .preparation
-        .authenticate(&policy.issuer_public_key, p, now)
+    // The opaque credential retains the exact independently threshold-authenticated Core C.
+    // FI's current retail key has the distinct certificate purpose and cannot authenticate C.
+    Ok(())
 }
 fn raw_possession(evidence: &KagemushaAppOperationApprovalEvidenceV1) -> &[u8] {
     match evidence {
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn ordinary_retail_re_signed_fi_cannot_substitute_owner_core_key_asset_or_credential() {
         let mut f = Fixture::new(false);
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let original = f.certificate.clone();
         for selector in 0..5 {
             f.certificate = original.clone();

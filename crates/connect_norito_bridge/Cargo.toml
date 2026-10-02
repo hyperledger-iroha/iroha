@@ -1,6 +1,7 @@
 [package]
 name = "connect_norito_bridge"
 autobins = false
+build = "build.rs"
 version.workspace = true
 edition = "2024"
 

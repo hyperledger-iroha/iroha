@@ -18,6 +18,15 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
     fun requireRequest(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>) {
         when (phase(fields)) {
             1 -> { count(fields, 2); digest(fields[1]) }
+            15 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL)
+                count(fields, 3); require(fields[1].size == 4)
+                when (ByteBuffer.wrap(fields[1]).order(ByteOrder.LITTLE_ENDIAN).int) {
+                    2 -> require(fields[2].size in 1..4096)
+                    4 -> require(fields[2].size == 16 && fields[2].any { it != 0.toByte() })
+                    else -> throw IllegalArgumentException("Unknown ordinary cash business operation")
+                }
+            }
             2, 4, 5, 6, 7 -> { count(fields, 2); ticket(fields[1]) }
             3 -> { count(fields, 3); ticket(fields[1]); require(fields[2].size in 1..4096) }
             8 -> {
@@ -42,9 +51,10 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
     }
 
     fun requireResponse(method: KagemushaCoreCoordinatorMethodV1, request: List<ByteArray>, fields: List<ByteArray>) {
-        if (phase(request) >= 9) require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+        if (phase(request) in 9..14) require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
         when (phase(request)) {
             1 -> prepare(method, request[1], fields)
+            15 -> { require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL); count(fields, 1); digest(fields[0]) }
             2 -> state(fields, fenced = true, method = method, ticket = request[1])
             3 -> { count(fields, 1); digest(fields[0]); equal(fields[0], sha(request[2])) }
             4 -> { count(fields, 1); receiptShape(fields[0], method, request[1]) }
@@ -133,7 +143,7 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
             require(fields[10].size == 4 && fields[11].contentEquals(byteArrayOf(0)))
         }
         val w = method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL
-        val message = body(fields[1], if (w) wDomain else eDomain, if (w) 275 else 371, 1, if (w) 8 else 11)
+        val message = body(fields[1], if (w) wDomain else eDomain, if (w) 275 else 371, if (w && !ordinaryBootstrap) 2 else 1, if (w) 8 else 11)
         val selected = { index: Int -> message.copyOfRange(3 + index * 32, 35 + index * 32) }
         equal(selected(0), id)
         if (w) {
@@ -141,12 +151,13 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
             equal(selected(2), cField(3)); equal(selected(3), cField(10))
             equal(selected(4), fields[6]); equal(selected(5), fields[8]); equal(selected(6), sha(fields[13]))
             interval(message.copyOfRange(259, 267), message.copyOfRange(267, 275))
+            if (!ordinaryBootstrap) require(unsigned(message.copyOfRange(267, 275)) - unsigned(message.copyOfRange(259, 267)) <= BigInteger.valueOf(10_000))
             val s = fields[13]
             val before = s.copyOfRange(428, 444); val after = s.copyOfRange(444, 460)
             if (ordinaryBootstrap) KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(s, cField(5))
             else {
                 require(unsigned(after) == unsigned(before).add(BigInteger.ONE) && unsigned(after).bitLength() <= 128)
-                KagemushaSelectionFrameV1.requireExact(s, cField(5), before, after)
+                KagemushaSelectionFrameV1.requireOrdinaryPreparationExact(s, cField(5), before, after)
             }
             equal(s.copyOfRange(155, 187), fields[8])
             equal(s.copyOfRange(323, 331), c.copyOfRange(427, 435))

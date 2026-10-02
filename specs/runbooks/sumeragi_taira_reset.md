@@ -16,7 +16,9 @@ On-chain governance owns deployment policy for Taira and production (§13.5). Th
 mandatory regression suite, 24-hour fault test, fixed soak duration or soak-verdict prerequisite
 for a reset or deployment.
 The native reset still enforces signed control authority, authenticated genesis and committee,
-safety-record provenance and custody, and live readiness/write/restart checks.
+safety-record provenance and custody, and reports actual service readiness. Write, restart,
+pulse-crossing and epoch-boundary exercises are optional diagnostics, never reset or deployment
+prerequisites.
 
 Operators may run multi-process fault diagnostics with P2P loss/delay, crashes, restarts and
 disk exhaustion. Section 8 describes the optional harness and its O-AGR, O-SIGN, O-LIVE and

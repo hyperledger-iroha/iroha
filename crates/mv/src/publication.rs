@@ -294,10 +294,10 @@ impl Publication {
     /// true for a pure identity observation. Reader creation, collector pinning,
     /// reclamation and payload code must remain outside this short lock. A map
     /// reader brackets both physical reads with equal opaque observations.
-    pub(crate) fn try_capture_reads<E>(
+    pub(crate) fn try_capture_reads(
         &self,
         still_current: impl FnOnce() -> bool,
-    ) -> Result<CapturedPublication, PublicationPreparationError<E>> {
+    ) -> Result<CapturedPublication, PublicationPreparationError<std::convert::Infallible>> {
         let wait = self.released.observe();
         let version = match self.version.try_lock() {
             Ok(guard) => self.released.poisoning_guard(guard),

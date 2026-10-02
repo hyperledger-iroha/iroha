@@ -38,7 +38,7 @@ const BODY_BYTES: usize = 371;
 pub struct KagemushaAppEnrollmentPossessionChallengeV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// SHA-256 of the full original C signing message; distinct from the stable enrollment ID.
+    /// SHA256 of the complete original C signing message; distinct from its enrollment ID.
     pub enrollment_attempt_id: [u8; 32],
     /// Original client nonce from C.
     pub client_nonce: [u8; 32],
@@ -107,9 +107,47 @@ impl KagemushaAppEnrollmentPossessionChallengeV1 {
         bytes.extend_from_slice(&self.expires_at_ms.to_le_bytes());
         Ok(bytes)
     }
+    /// Parse the sole exact domain/length/purpose E signing message, without admitting its scope.
+    /// # Errors
+    /// Rejects an alternate domain, purpose, width, tail or malformed selector/interval.
+    pub fn from_signing_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let start = KAGEMUSHA_APP_ENROLLMENT_POSSESSION_DOMAIN_V1.len() + 8;
+        if bytes.len() != start + BODY_BYTES
+            || !bytes.starts_with(KAGEMUSHA_APP_ENROLLMENT_POSSESSION_DOMAIN_V1)
+            || bytes[start - 8..start] != (BODY_BYTES as u64).to_le_bytes()
+            || bytes[start..start + 3] != [1, 0, 1]
+        {
+            return Err("enrollment possession message layout differs".into());
+        }
+        let fields: [[u8; 32]; 11] = core::array::from_fn(|i| {
+            bytes[start + 3 + i * 32..start + 35 + i * 32]
+                .try_into()
+                .unwrap()
+        });
+        let value = Self {
+            version: 1,
+            enrollment_attempt_id: fields[0],
+            client_nonce: fields[1],
+            server_nonce: fields[2],
+            account_binding: fields[3],
+            network_id: fields[4],
+            app_authority_policy_digest: fields[5],
+            release_id: fields[6],
+            hardware_profile_id: fields[7],
+            lane_id: fields[8],
+            attested_key_id: fields[9],
+            raw_platform_evidence_digest: fields[10],
+            issued_at_ms: u64::from_le_bytes(bytes[start + 355..start + 363].try_into().unwrap()),
+            expires_at_ms: u64::from_le_bytes(bytes[start + 363..start + 371].try_into().unwrap()),
+        };
+        if value.canonical_signing_bytes()? != bytes {
+            return Err("enrollment possession message is not canonical".into());
+        }
+        Ok(value)
+    }
 }
 
-/// Exact E and platform original. The native expected E is an independent argument.
+/// Exact E and platform original. Expected E is derived from authenticated C and raw admission.
 #[derive(
     Debug,
     Clone,
@@ -134,7 +172,17 @@ pub struct KagemushaAppEnrollmentPossessionV1 {
 /// Non-cloneable checked cryptographic original; it is not a native identity or monetary owner.
 pub struct KagemushaVerifiedAppEnrollmentPossessionV1 {
     challenge: KagemushaAppEnrollmentPossessionChallengeV1,
+    identity_policy_id: [u8; 32],
+    identity_policy_original: Vec<u8>,
+    identity_authority_original: Vec<u8>,
     original: Vec<u8>,
+    preparation_original: Vec<u8>,
+    raw_admission_original: Vec<u8>,
+    raw_attestation_original: Vec<u8>,
+    enrollment_challenge: super::KagemushaOrdinaryAppEnrollmentChallengeV1,
+    platform_evidence_digest: [u8; 32],
+    raw_subject: super::KagemushaRawAppAttestationAdmissionSubjectV1,
+    authenticated_at_ms: u64,
     digest: [u8; 32],
     app_attest_counter: Option<u32>,
     app_attest_release_measurement: Option<super::KagemushaAppAttestReleaseMeasurementV1>,
@@ -167,42 +215,134 @@ impl KagemushaVerifiedAppEnrollmentPossessionV1 {
     ) -> Option<super::KagemushaAppAttestReleaseMeasurementV1> {
         self.app_attest_release_measurement
     }
+    /// Retained exact independently verified Core-signed C transport.
+    #[must_use]
+    pub fn preparation_original(&self) -> &[u8] {
+        &self.preparation_original
+    }
+    /// Retained governed issuer raw-attestation admission original.
+    #[must_use]
+    pub fn raw_admission_original(&self) -> &[u8] {
+        &self.raw_admission_original
+    }
+    /// Retained raw bytes whose SHA256 is signed in E and authenticated by the raw issuer.
+    #[must_use]
+    pub fn raw_attestation_original(&self) -> &[u8] {
+        &self.raw_attestation_original
+    }
+    /// Commitment of complete original attestation and unmodified original possession bytes.
+    #[must_use]
+    pub const fn platform_evidence_digest(&self) -> [u8; 32] {
+        self.platform_evidence_digest
+    }
+    /// Check the exact original interval and reject time regression; no lease renewal occurs.
+    /// # Errors
+    /// Rejects an observation before authentication or at/after original expiry.
+    pub fn recheck_at_trusted_time(&self, now: u64) -> Result<(), String> {
+        if now < self.authenticated_at_ms
+            || now < self.challenge.issued_at_ms
+            || now >= self.challenge.expires_at_ms
+        {
+            return Err("enrollment possession original interval expired".into());
+        }
+        Ok(())
+    }
+    /// Bind a separately issuer-authenticated final credential to these exact originals.
+    /// Native pending consumption/current qualification remains mandatory and is not performed here.
+    /// # Errors
+    /// Rejects any complete-C scope/key/evidence or original platform-counter substitution.
+    pub fn bind_credential(
+        &self,
+        credential: &super::KagemushaVerifiedOrdinaryAppCredentialV1,
+        now: u64,
+    ) -> Result<(), String> {
+        self.recheck_at_trusted_time(now)?;
+        credential.recheck_at_trusted_time(now)?;
+        let s = credential.subject();
+        let c = &self.enrollment_challenge;
+        if credential.identity_policy_id() != self.identity_policy_id
+            || credential.identity_policy_original() != self.identity_policy_original
+            || credential.identity_authority_original() != self.identity_authority_original
+            || credential.preparation_original() != self.preparation_original
+            || s.platform_class != c.platform_class
+            || s.enrollment_id != c.enrollment_id
+            || s.client_nonce != c.client_nonce
+            || s.server_nonce != c.server_nonce
+            || s.account_binding != c.account_binding
+            || s.network_id != c.network_id
+            || s.lane_id != c.lane_id
+            || s.release_id != c.release_id
+            || s.hardware_profile_id != c.hardware_profile_id
+            || s.suite_id != c.suite_id
+            || s.trust_policy_digest != c.trust_policy_digest
+            || s.app_authority_policy_digest != c.app_authority_policy_digest
+            || s.financial_authority_commitment != c.financial_authority_commitment
+            || s.policy_epoch != c.policy_epoch
+            || s.hardware_epoch != c.hardware_epoch
+            || s.enrollment_challenge_digest != c.attestation_challenge()?
+            || s.app_public_key != self.raw_subject.app_public_key
+            || s.app_signing_identity_digest != self.raw_subject.app_signing_identity_digest
+            || s.security_level != self.raw_subject.security_level
+            || s.attested_key_id != self.challenge.attested_key_id
+            || s.platform_evidence_digest != self.platform_evidence_digest
+            || match self.app_attest_counter {
+                Some(counter) => s.app_attest_counter_floor != counter,
+                None => s.app_attest_counter_floor != 0,
+            }
+        {
+            return Err("ordinary credential differs from joined possession originals".into());
+        }
+        Ok(())
+    }
 }
 impl KagemushaAppEnrollmentPossessionV1 {
-    /// Authenticate E under independently held pending enrollment selectors.
-    ///
-    /// Expected scope/key/platform/RP/floor/time must come from actual admitted issuer originals,
-    /// not this archive. This method verifies crypto only. Native durable consumption and identity
-    /// activation remain separate, and no financial capability is returned.
+    /// Verify the original platform signature only after authenticating exact signed C and
+    /// joining its governed raw-attestation admission to the retained actual raw bytes.
+    /// The independent issuer key, expected C and opaque raw admission must be held by the
+    /// native pending owner. No native owner, durable consumption or financial grant is returned.
     /// # Errors
-    /// Rejects changed E, key, purpose, platform equation, counter, application or expiry.
+    /// Rejects changed C/issuer/key/raw evidence/purpose/interval/platform originals.
     #[allow(clippy::too_many_arguments)]
     pub fn authenticate(
         &self,
-        expected: &KagemushaAppEnrollmentPossessionChallengeV1,
-        original_key: &KagemushaDevicePublicKeyV1,
-        platform: KagemushaHardwarePlatformClassV1,
-        app_signing_identity_digest: [u8; 32],
-        app_release_digest: [u8; 32],
-        original_apple_counter_floor: Option<u32>,
+        preparation: &super::KagemushaSignedOrdinaryAppEnrollmentChallengeV1,
+        core_issuer_key: &iroha_crypto::PublicKey,
+        expected_c: &super::KagemushaOrdinaryAppEnrollmentChallengeV1,
+        raw_admission: &super::KagemushaVerifiedRawAppAttestationAdmissionV1,
+        raw_attestation: &[u8],
         trusted_now_ms: u64,
     ) -> Result<KagemushaVerifiedAppEnrollmentPossessionV1, String> {
-        let message = self.challenge.canonical_signing_bytes()?;
-        if self.challenge != *expected
-            || trusted_now_ms < expected.issued_at_ms
-            || trusted_now_ms >= expected.expires_at_ms
-            || app_signing_identity_digest == [0; 32]
-            || expected.attested_key_id
-                != <[u8; 32]>::from(Sha256::digest(original_key.as_sec1_bytes()))
+        if core_issuer_key != raw_admission.enrollment_issuer_key()
+            || preparation.to_transport_bytes()? != raw_admission.preparation_original()
         {
-            return Err("app enrollment possession original binding differs".into());
+            return Err("possession differs from independently admitted Core preparation".into());
         }
+        preparation.authenticate(core_issuer_key, expected_c, trusted_now_ms)?;
+        raw_admission.recheck_at_trusted_time(trusted_now_ms)?;
+        if raw_attestation != raw_admission.platform_original_bytes()
+            || raw_admission.subject().enrollment_challenge_digest
+                != expected_c.attestation_challenge()?
+        {
+            return Err("possession differs from complete original platform evidence or C".into());
+        }
+        let message = super::kagemusha_ordinary_app_enrollment_possession_message_v1(
+            expected_c,
+            &raw_admission.subject().app_public_key,
+            raw_admission.subject().raw_platform_evidence_digest,
+        )?;
+        let raw = raw_admission.subject();
+        let expected = KagemushaAppEnrollmentPossessionChallengeV1::from_signing_bytes(&message)?;
+        if self.challenge != expected {
+            return Err("enrollment possession original E differs".into());
+        }
+        let floor = (raw.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest)
+            .then_some(raw.original_app_attest_counter);
         let (counter, release_measurement) = self.evidence.authenticate_signature(
-            platform,
-            original_key,
-            app_signing_identity_digest,
-            app_release_digest,
-            original_apple_counter_floor,
+            raw.platform_class,
+            &raw.app_public_key,
+            raw.app_signing_identity_digest,
+            raw_admission.app_release_digest(),
+            floor,
             &message,
         )?;
         let original =
@@ -210,17 +350,58 @@ impl KagemushaAppEnrollmentPossessionV1 {
         if original.len() > KAGEMUSHA_APP_ENROLLMENT_POSSESSION_MAX_BYTES_V1 + 1024 {
             return Err("possession archive oversized".into());
         }
+        let raw_possession = match &self.evidence {
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
+                signature_der.as_slice()
+            }
+            KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
+                raw_assertion.as_slice()
+            }
+        };
+        let platform_evidence_digest = super::kagemusha_ordinary_app_enrollment_evidence_digest_v1(
+            raw_attestation,
+            raw_possession,
+        )?;
         let mut digest = Sha256::new();
         digest.update(b"iroha:kagemusha:v1:app-enrollment-possession-original\0");
         digest.update((original.len() as u64).to_le_bytes());
         digest.update(&original);
         Ok(KagemushaVerifiedAppEnrollmentPossessionV1 {
-            challenge: self.challenge,
+            challenge: expected,
+            identity_policy_id: raw_admission.identity_policy_id(),
+            identity_policy_original: raw_admission.identity_policy_original().to_vec(),
+            identity_authority_original: raw_admission.identity_authority_original().to_vec(),
             original,
+            preparation_original: preparation.to_transport_bytes()?,
+            raw_admission_original: raw_admission.original().to_vec(),
+            raw_attestation_original: raw_attestation.to_vec(),
+            enrollment_challenge: *expected_c,
+            platform_evidence_digest,
+            raw_subject: *raw,
+            authenticated_at_ms: trusted_now_ms,
             digest: digest.finalize().into(),
             app_attest_counter: counter,
             app_attest_release_measurement: release_measurement,
         })
+    }
+    /// Decode a single exact bounded canonical archive; no tail or alternate framing is admitted.
+    /// Decoding grants no original-owner or platform authority.
+    /// # Errors
+    /// Rejects bound, decoding or exact re-encoding mismatch.
+    pub fn decode_canonical_exact(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.is_empty() || bytes.len() > KAGEMUSHA_APP_ENROLLMENT_POSSESSION_MAX_BYTES_V1 + 1024
+        {
+            return Err("possession archive bound differs".into());
+        }
+        let value: Self =
+            norito::decode_from_bytes(bytes).map_err(|_| "possession archive decode failed")?;
+        value.challenge.canonical_signing_bytes()?;
+        let canonical =
+            norito::encode_canonical(&value).map_err(|_| "possession archive encode failed")?;
+        if canonical != bytes {
+            return Err("possession archive is not exact canonical".into());
+        }
+        Ok(value)
     }
 }
 
@@ -304,6 +485,57 @@ mod tests {
             expires_at_ms: 121000,
         }
     }
+    fn joined_fixture(
+        apple: bool,
+    ) -> (
+        crate::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1,
+        super::super::KagemushaVerifiedRawAppAttestationAdmissionV1,
+        KagemushaAppEnrollmentPossessionV1,
+    ) {
+        use iroha_crypto::{Algorithm, KeyPair, Signature};
+        let f = crate::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+        let c = &f.selection.preparation.challenge;
+        let app = &f.selection.issuance.credential.subject;
+        let subject = super::super::KagemushaRawAppAttestationAdmissionSubjectV1 {
+            version: 1,
+            enrollment_challenge_digest: c.attestation_challenge().unwrap(),
+            authority_policy_digest: c.app_authority_policy_digest,
+            platform_class: c.platform_class,
+            security_level: app.security_level,
+            app_public_key: app.app_public_key,
+            attested_key_id: app.attested_key_id,
+            raw_platform_evidence_digest: Sha256::digest(&f.proof.raw_attestation).into(),
+            app_signing_identity_digest: f.app_authority.app_signing_identity_digest,
+            original_app_attest_counter: 0,
+            issued_at_ms: c.issued_at_ms,
+            expires_at_ms: c.expires_at_ms,
+        };
+        let raw = super::super::KagemushaRawAppAttestationAdmissionV1 {
+            subject,
+            signature: Signature::try_new(
+                KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519).private_key(),
+                &subject.canonical_signing_bytes().unwrap(),
+            )
+            .unwrap(),
+        }
+        .authenticate(
+            f.ordinary_policy.identity_policy(),
+            &f.checked_preparation().unwrap(),
+            &f.proof.raw_attestation,
+            300,
+        )
+        .unwrap();
+        let proof = KagemushaAppEnrollmentPossessionV1 {
+            challenge: KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
+                c,
+                &app.app_public_key,
+                subject.raw_platform_evidence_digest,
+            )
+            .unwrap(),
+            evidence: f.proof.app_possession.clone(),
+        };
+        (f, raw, proof)
+    }
     #[test]
     fn possession_exact_body_and_purpose_are_not_financial_approval() {
         let signing = SigningKey::from_bytes((&[17; 32]).into()).unwrap();
@@ -331,183 +563,112 @@ mod tests {
     }
     #[test]
     fn possession_android_keeps_raw_signature_and_rejects_substitution_and_expiry() {
-        let signing = SigningKey::from_bytes((&[17; 32]).into()).unwrap();
-        let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            signing.verifying_key().to_encoded_point(false).as_bytes(),
-        )
-        .unwrap();
-        let c = challenge(&key);
-        let signature: p256::ecdsa::Signature = signing.sign(&c.canonical_signing_bytes().unwrap());
-        let proof = KagemushaAppEnrollmentPossessionV1 {
-            challenge: c,
-            evidence: KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
-                signature_der: signature.to_der().as_bytes().to_vec(),
-            },
-        };
-        let checked = proof
-            .authenticate(
-                &c,
-                &key,
-                KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-                [12; 32],
-                [13; 32],
-                None,
-                1000,
+        let (f, raw, proof) = joined_fixture(false);
+        let c = &f.selection.preparation.challenge;
+        let check = |proof: &KagemushaAppEnrollmentPossessionV1,
+                     expected: &super::super::KagemushaOrdinaryAppEnrollmentChallengeV1,
+                     original: &[u8],
+                     now| {
+            proof.authenticate(
+                &f.selection.preparation,
+                &f.ordinary_policy
+                    .identity_policy()
+                    .policy()
+                    .enrollment_issuer_key,
+                expected,
+                &raw,
+                original,
+                now,
             )
-            .unwrap();
+        };
+        let checked = check(&proof, c, &f.proof.raw_attestation, 300).unwrap();
         assert_eq!(
             checked.original(),
             norito::encode_canonical(&proof).unwrap()
         );
         assert_eq!(checked.app_attest_counter(), None);
-        assert!(
-            proof
-                .authenticate(
-                    &c,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-                    [12; 32],
-                    [13; 32],
-                    None,
-                    121000
-                )
-                .is_err()
-        );
-        let mut wrong = c;
-        wrong.server_nonce = [13; 32];
-        assert!(
-            proof
-                .authenticate(
-                    &wrong,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-                    [12; 32],
-                    [13; 32],
-                    None,
-                    1000
-                )
-                .is_err()
-        );
-        assert!(
-            proof
-                .authenticate(
-                    &c,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-                    [12; 32],
-                    [13; 32],
-                    Some(0),
-                    1000
-                )
-                .is_err()
-        );
+        assert_eq!(checked.app_attest_release_measurement(), None);
+        assert!(check(&proof, c, &f.proof.raw_attestation, c.expires_at_ms).is_err());
+        let mut wrong = *c;
+        wrong.server_nonce[0] ^= 1;
+        assert!(check(&proof, &wrong, &f.proof.raw_attestation, 300).is_err());
+        let mut original = f.proof.raw_attestation.clone();
+        original[0] ^= 1;
+        assert!(check(&proof, c, &original, 300).is_err());
+        let mut wrong = proof.clone();
+        wrong.evidence = KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+            raw_assertion: vec![0; 37],
+        };
+        assert!(check(&wrong, c, &f.proof.raw_attestation, 300).is_err());
     }
     #[test]
     fn possession_apple_uses_exact_e_and_original_counter_and_rp() {
-        let signing = SigningKey::from_bytes((&[17; 32]).into()).unwrap();
-        let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            signing.verifying_key().to_encoded_point(false).as_bytes(),
-        )
-        .unwrap();
-        let c = challenge(&key);
-        let mut authenticator = vec![12; 32];
-        authenticator.push(0x40);
-        authenticator.extend_from_slice(&1u32.to_be_bytes());
-        let mut hash = Sha256::new();
-        hash.update(&authenticator);
-        hash.update(Sha256::digest(c.canonical_signing_bytes().unwrap()));
-        let nonce: [u8; 32] = hash.finalize().into();
-        let signature: p256::ecdsa::Signature = signing.sign(&nonce);
-        let der = signature.to_der();
-        let mut raw = vec![0xa2, 0x71];
-        raw.extend_from_slice(b"authenticatorData");
-        raw.extend_from_slice(&[0x58, 37]);
-        raw.extend_from_slice(&authenticator);
-        raw.push(0x69);
-        raw.extend_from_slice(b"signature");
-        raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
-        raw.extend_from_slice(der.as_bytes());
-        let proof = KagemushaAppEnrollmentPossessionV1 {
-            challenge: c,
-            evidence: KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
-                raw_assertion: raw,
-            },
-        };
-        let checked = proof
-            .authenticate(
-                &c,
-                &key,
-                KagemushaHardwarePlatformClassV1::AppleAppAttest,
-                [12; 32],
-                [13; 32],
-                Some(0),
-                1000,
+        let (f, raw, proof) = joined_fixture(true);
+        let c = &f.selection.preparation.challenge;
+        let check = |proof: &KagemushaAppEnrollmentPossessionV1| {
+            proof.authenticate(
+                &f.selection.preparation,
+                &f.ordinary_policy
+                    .identity_policy()
+                    .policy()
+                    .enrollment_issuer_key,
+                c,
+                &raw,
+                &f.proof.raw_attestation,
+                300,
             )
-            .unwrap();
-        assert_eq!(checked.app_attest_counter(), Some(1));
+        };
+        let checked = check(&proof).unwrap();
+        assert_eq!(checked.app_attest_counter(), Some(11));
+        assert_eq!(
+            checked.app_attest_release_measurement(),
+            Some(super::super::KagemushaAppAttestReleaseMeasurementV1::Unavailable)
+        );
         assert_eq!(
             checked.original(),
             norito::encode_canonical(&proof).unwrap()
         );
-        for (rp, floor) in [([13; 32], Some(0)), ([12; 32], Some(1)), ([12; 32], None)] {
-            assert!(
-                proof
-                    .authenticate(
-                        &c,
-                        &key,
-                        KagemushaHardwarePlatformClassV1::AppleAppAttest,
-                        rp,
-                        [13; 32],
-                        floor,
-                        1000
-                    )
-                    .is_err()
-            );
+        // Re-sign wrong RP and non-increasing counter to isolate actual verifier selectors.
+        let signing = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+        for (rp, counter) in [([13; 32], 11u32), ([2; 32], 0u32)] {
+            let mut auth = rp.to_vec();
+            auth.push(0x40);
+            auth.extend_from_slice(&counter.to_be_bytes());
+            let mut nonce = Sha256::new();
+            nonce.update(&auth);
+            nonce.update(Sha256::digest(
+                proof.challenge.canonical_signing_bytes().unwrap(),
+            ));
+            let sig: p256::ecdsa::Signature = signing.sign(&nonce.finalize());
+            let der = sig.to_der();
+            let mut assertion = vec![0xa2, 0x71];
+            assertion.extend_from_slice(b"authenticatorData");
+            assertion.extend_from_slice(&[0x58, 37]);
+            assertion.extend_from_slice(&auth);
+            assertion.push(0x69);
+            assertion.extend_from_slice(b"signature");
+            assertion.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+            assertion.extend_from_slice(der.as_bytes());
+            let changed = KagemushaAppEnrollmentPossessionV1 {
+                challenge: proof.challenge,
+                evidence: KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+                    raw_assertion: assertion,
+                },
+            };
+            assert!(check(&changed).is_err());
         }
         let mut changed = proof.clone();
-        changed.challenge.raw_platform_evidence_digest = [14; 32];
-        assert!(
-            changed
-                .authenticate(
-                    &changed.challenge,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AppleAppAttest,
-                    [12; 32],
-                    [13; 32],
-                    Some(0),
-                    1000
-                )
-                .is_err()
-        );
+        changed.challenge.raw_platform_evidence_digest[0] ^= 1;
+        assert!(check(&changed).is_err());
+        changed = proof.clone();
         changed.evidence = KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
             raw_assertion: vec![0; KAGEMUSHA_APP_ENROLLMENT_POSSESSION_MAX_BYTES_V1 + 1],
         };
-        assert!(
-            changed
-                .authenticate(
-                    &changed.challenge,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AppleAppAttest,
-                    [12; 32],
-                    [13; 32],
-                    Some(0),
-                    1000
-                )
-                .is_err()
-        );
-        assert!(
-            proof
-                .authenticate(
-                    &c,
-                    &key,
-                    KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-                    [12; 32],
-                    [13; 32],
-                    None,
-                    1000
-                )
-                .is_err()
-        );
+        assert!(check(&changed).is_err());
+        changed.evidence = KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+            signature_der: vec![0; 64],
+        };
+        assert!(check(&changed).is_err());
     }
 
     #[test]

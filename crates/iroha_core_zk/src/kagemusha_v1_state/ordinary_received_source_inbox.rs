@@ -28,6 +28,111 @@ pub(super) struct ReceivedSourceAdmission {
     admitted: KagemushaVerifiedOrdinaryReceivedCashOutputV1,
 }
 
+/// Proof-only borrow of complete source evidence and the actual Main-owned request key.
+/// Constructing it requires current FI custody. Its historical source getters do not create
+/// an incoming State, financial approval, replay insertion or global credit-consumption grant.
+pub(crate) struct KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'owner> {
+    owner: &'owner KagemushaNativeOrdinaryCashOwnerV1,
+    request_id: DigestV1,
+    prefix: KagemushaRecoveryJournalPrefixV1,
+}
+
+impl KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_> {
+    fn source(&self) -> Result<&ReceivedSourceAdmission, KagemushaStateErrorV1> {
+        self.owner
+            .received_sources
+            .get(&self.request_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)
+    }
+
+    /// Recheck held complete source/proof/request/C/FI/clock originals and the same Main prefix.
+    /// This is historical proof custody; monetary effects require independently fresh authority.
+    pub(crate) fn recheck_source_custody(&self) -> Result<(), KagemushaStateErrorV1> {
+        if self.owner.recovery_failed
+            || self.owner.recovery_catalog.is_some()
+            || self.owner.prefix != self.prefix
+            || self.owner.journal.recovery_prefix().map_err(storage)? != self.prefix
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.owner.journal.check_owned().map_err(storage)?;
+        self.owner.publication.recheck_historical_cash_custody()?;
+        self.owner.recheck_lineage_retained_custody()?;
+        let source = self.source()?;
+        if source.originals.request_id != self.request_id
+            || !self
+                .owner
+                .used_operations
+                .contains(&source.originals.operation_id)
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        source
+            .originals
+            .require_admitted(self.owner, &source.admitted)?;
+        receiver_request::loan_main_request_historical(self.owner, self.request_id)?
+            .recheck_historical_custody()?;
+        self.owner.journal.check_owned().map_err(storage)
+    }
+
+    /// Actual owned closed Wrapper admission, independently reconstructed on cold Main replay.
+    pub(crate) fn received_source(
+        &self,
+    ) -> Result<&KagemushaVerifiedOrdinaryReceivedCashOutputV1, KagemushaStateErrorV1> {
+        self.recheck_source_custody()?;
+        Ok(&self.source()?.admitted)
+    }
+
+    /// Full immutable receipt envelope, including signature, exact DATA and genuine finality.
+    pub(crate) fn received_assertion_original(&self) -> Result<&[u8], KagemushaStateErrorV1> {
+        self.recheck_source_custody()?;
+        Ok(&self.source()?.originals.received_assertion_original)
+    }
+
+    /// Native operation identity already retained before any incoming head selection.
+    pub(crate) fn operation_id(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
+        self.recheck_source_custody()?;
+        Ok(self.source()?.originals.operation_id)
+    }
+
+    /// Lend the real AEAD opening only inside a higher-ranked proof-witness construction call.
+    /// The key never leaves Main. This source opening is not an incoming financial approval.
+    pub(crate) fn with_borrowed_received_credit_opening(
+        &self,
+        visitor: &mut dyn for<'secret> FnMut(
+            &'secret KagemushaCreditOpeningV1,
+        ) -> Result<(), KagemushaStateErrorV1>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_source_custody()?;
+        let source = self.source()?;
+        let financial = self.owner.publication.cash_financial();
+        let identity = source.originals.financial_control;
+        let captured = self
+            .owner
+            .control
+            .borrow_captured_proof_decision(
+                financial,
+                identity.original_sha256,
+                identity.lower_ms,
+                identity.upper_ms,
+            )
+            .map_err(material)?;
+        let assertion = self
+            .owner
+            .lineage_cas
+            .readmit_received_commit_assertion_for_captured_control(
+                financial,
+                &captured,
+                &source.originals.received_assertion_original,
+            )
+            .map_err(material)?;
+        let request = receiver_request::loan_main_request_historical(self.owner, self.request_id)?;
+        let opening = request.open_received(&source.admitted, &assertion)?;
+        opening.with_borrowed_credit_opening(visitor)?;
+        self.recheck_source_custody()
+    }
+}
+
 impl ReceivedSourceOriginals {
     fn encoded(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         let raw = norito::encode_canonical(self).map_err(material)?;
@@ -161,6 +266,45 @@ impl ReceivedSourceOriginals {
 }
 
 impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn retained_incoming_received_source(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<(DigestV1, &KagemushaVerifiedOrdinaryReceivedCashOutputV1), KagemushaStateErrorV1>
+    {
+        self.publication.recheck_historical_cash_custody()?;
+        self.journal.check_owned().map_err(storage)?;
+        let source = self
+            .received_sources
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        source.originals.require_admitted(self, &source.admitted)?;
+        if source.originals.request_id != request_id
+            || !self
+                .used_operations
+                .contains(&source.originals.operation_id)
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok((source.originals.operation_id, &source.admitted))
+    }
+    /// Borrow actual retained source evidence under the same current Native financial holder.
+    /// The borrower cannot replace the receipt/proof/private request key or alter State.
+    pub(crate) fn received_source_custody(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_>, KagemushaStateErrorV1>
+    {
+        self.require_current_financial_control()?;
+        let loan = KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1 {
+            owner: self,
+            request_id,
+            prefix: self.prefix,
+        };
+        loan.recheck_source_custody()?;
+        self.require_current_financial_control()?;
+        Ok(loan)
+    }
+
     /// Retain a full immutable source after real Wrapper, Node receipt, clock and AEAD admission.
     /// Exact retry reuses the original operation. This neither consumes a key nor changes funds.
     pub(crate) fn retain_received_source(
@@ -282,6 +426,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     fn require_received_source_idle(&self) -> Result<(), KagemushaStateErrorV1> {
         if self.pending.is_some()
             || self.pending_mint.is_some()
+            || self.pending_incoming.is_some()
             || self.pending_receiver_request.is_some()
             || self.terminal.as_ref().is_none_or(|t| t.has_pending())
         {
@@ -348,5 +493,22 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         Ok(total)
+    }
+}
+
+// Actual Main-only historical proof custody; no current FI, funds or platform grant.
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn historical_received_source_custody(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_>, KagemushaStateErrorV1>
+    {
+        let loan = KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1 {
+            owner: self,
+            request_id,
+            prefix: self.prefix,
+        };
+        loan.recheck_source_custody()?;
+        Ok(loan)
     }
 }

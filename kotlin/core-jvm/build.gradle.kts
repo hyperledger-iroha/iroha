@@ -90,6 +90,7 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_archives_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_ordinary_app_enrollment_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/kagemusha/participant_enrollment_http_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_app_platform_messages_v1.tsv"))
     inputs.file(
         rootProject.layout.projectDirectory

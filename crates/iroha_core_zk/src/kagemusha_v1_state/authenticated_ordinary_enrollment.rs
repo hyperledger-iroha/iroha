@@ -20,15 +20,19 @@ pub use current_publication::KagemushaAuthenticatedOrdinaryCurrentPublicationV1;
 
 #[path = "authenticated_ordinary_cash_owner.rs"]
 mod cash_owner;
-pub use cash_owner::KagemushaNativeOrdinaryCashOwnerV1;
 pub(crate) use cash_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
     KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
+};
+pub use cash_owner::{
+    KagemushaNativeOrdinaryCashOwnerV1, KagemushaNativeOrdinaryPreparedCashApprovalV1,
 };
 
 #[path = "authenticated_ordinary_logical_journal.rs"]

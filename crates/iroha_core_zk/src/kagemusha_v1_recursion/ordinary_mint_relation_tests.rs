@@ -323,7 +323,7 @@ fn genuine_ordinary_mint113_keys_and_actual_both_parity_proofs() {
         || {
             let f = originals(false);
             let seed =
-                crate::kagemusha_v1_state::KagemushaRecoverySeedV1::from_unsealed([0xa7; 32])
+                iroha_crypto::kagemusha::KagemushaRecoverySeedV1::from_unsealed([0xa7; 32])
                     .unwrap();
             let pair=super::super::super::generation::ordinary_mint_generation::generate_ordinary_mint_pair_v1(witness(&f),f.enrollment.release.provider_policy_root(),&f.table,&seed).unwrap();
             assert_eq!(pair.eq.instances.len(), 113);

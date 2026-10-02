@@ -232,6 +232,25 @@ class KagemushaAndroidAppSignatureOriginalV1Test {
         }
     }
 
+    @Test fun ordinaryPreparationRequiresExactTenSecondWindowAndBootstrapKeepsDistinctPurposeOne() {
+        val (original, _) = ordinaryPreparationSpecimen()
+        val preparation = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL
+        val bootstrap = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL
+        fun interval(message: ByteArray, issued: Long, expires: Long) = message.copyOf().also {
+            ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putLong(309, issued).putLong(317, expires)
+        }
+        val fullWindow = interval(original, 1000, 11000)
+        requireAppPlatformSigningMessageV1(fullWindow, preparation)
+        assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(interval(original, 1000, 11001), preparation) }
+        assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(fullWindow, bootstrap) }
+        val purposeOne = vector("w_send_split_9") // Shape specimen, never an opaque Bootstrap owner.
+        requireAppPlatformSigningMessageV1(interval(purposeOne, 1000, 121000), bootstrap)
+        assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(purposeOne, preparation) }
+        assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(interval(purposeOne, 1000, 121001), bootstrap) }
+        val changedPurpose = fullWindow.copyOf().also { it[52] = 1 }
+        assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(changedPurpose, preparation) }
+    }
+
     @Test fun teeOnlyNativePolicyDoesNotBroadenToStrongBoxOrSoftware() {
         fun admitted(level: Int, policy: KagemushaAndroidAppKeyHardwarePolicyV1) =
             requirePersistentHardwareAppKeyV1(level, KeyProperties.ORIGIN_GENERATED, KeyProperties.PURPOSE_SIGN,

@@ -196,6 +196,80 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1Test {
         assertEquals(1, substituted.closes)
     }
 
+    /** Inert Native-custody branch projections only, not authenticated account or FI authority. */
+    @Test fun nativeCustodyReturnsRetainedOriginalWithoutManagedSignatureIntake() {
+        val endpoint = Endpoint().apply { nativeCustody = true }
+        val (holder, selected) = nativeOwner(endpoint)
+        val raw = holder.signOriginalNativeAccount(selected)
+        assertContentEquals(endpoint.expectedSignature, raw)
+        raw.fill(0)
+        assertContentEquals(endpoint.expectedSignature, holder.signOriginalNativeAccount(selected))
+        assertEquals(1, endpoint.nativeSignatures)
+        assertEquals(0, endpoint.retains)
+    }
+    @Test fun foreignNativeCoordinatorSelectionIsRefusedBeforeRetailFence() {
+        val original = Endpoint().apply { nativeCustody = true }
+        val (holder, _) = nativeOwner(original)
+        val (_, foreign) = nativeOwner(Endpoint().apply { nativeCustody = true })
+        assertFailsWith<IllegalStateException> { holder.signOriginalNativeAccount(foreign) }
+        assertEquals(0, original.nativeFenceCalls)
+        assertEquals(0, original.nativeSignatures)
+        assertEquals(0, original.retains)
+    }
+    @Test fun replacedNativeSessionCannotSignTheRetainedRetailOperation() {
+        val endpoint = Endpoint().apply { nativeCustody = true }
+        val (holder, selected) = nativeOwner(endpoint)
+        endpoint.selection[0] = ByteArray(8) { 9 }
+        assertFailsWith<IllegalStateException> { holder.signOriginalNativeAccount(selected) }
+        assertEquals(0, endpoint.nativeFenceCalls)
+        assertEquals(0, endpoint.nativeSignatures)
+        assertEquals(1, endpoint.closes)
+    }
+    @Test fun nativeFenceWithoutRetainedSignatureCannotFallBackToManagedSigning() {
+        val endpoint = Endpoint()
+        val (holder, selected) = nativeOwner(endpoint)
+        assertFailsWith<KagemushaNativeRetailSigningUnknownOutcomeExceptionV1> {
+            holder.signOriginalNativeAccount(selected)
+        }
+        val fences = endpoint.nativeFenceCalls
+        assertFailsWith<IllegalStateException> { holder.signOriginalNativeAccount(selected) }
+        assertEquals(fences, endpoint.nativeFenceCalls)
+        assertEquals(1, endpoint.state)
+        assertEquals(0, endpoint.nativeSignatures)
+        assertEquals(0, endpoint.retains)
+    }
+    @Test fun uncertainNativeSigningReturnCannotRequestAnotherSignature() {
+        val endpoint = Endpoint().apply { nativeCustody = true; loseNativeSigningReturn = true }
+        val (holder, selected) = nativeOwner(endpoint)
+        assertFailsWith<KagemushaNativeRetailSigningUnknownOutcomeExceptionV1> {
+            holder.signOriginalNativeAccount(selected)
+        }
+        assertEquals(2, endpoint.state)
+        assertEquals(1, endpoint.closes)
+        assertContentEquals(endpoint.expectedSignature, endpoint.signature)
+        assertFailsWith<IllegalStateException> { holder.signOriginalNativeAccount(selected) }
+        assertEquals(1, endpoint.nativeFenceCalls)
+        assertEquals(1, endpoint.nativeSignatures)
+        assertEquals(0, endpoint.retains)
+    }
+    @Test fun absentCurrentNativeSessionStopsBeforeRetailSigningFence() {
+        val endpoint = Endpoint().apply { nativeCustody = true }
+        val (holder, selected) = nativeOwner(endpoint)
+        endpoint.selectionUnavailable = true
+        assertFailsWith<IllegalStateException> { holder.signOriginalNativeAccount(selected) }
+        assertEquals(0, endpoint.nativeFenceCalls)
+        assertEquals(0, endpoint.nativeSignatures)
+        assertEquals(1, endpoint.closes)
+    }
+    private fun nativeOwner(endpoint: Endpoint):
+        Pair<KagemushaNativeOrdinaryRetailEnrollmentV1, KagemushaNativeWalletAccountSelectionOriginalV1> {
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/test/native-retail-original", endpoint)
+        val selected = KagemushaNativeAppApprovalCoordinatorV1(bridge).currentWalletAccountSelection()
+        val holder = KagemushaNativeOrdinaryRetailEnrollmentV1.fromNative(
+            bridge, endpoint.id, endpoint.fields(), endpoint.scope, endpoint.credentialDigest) {}
+        return holder to selected
+    }
+
     private fun owner(endpoint: Endpoint, fields: List<ByteArray> = endpoint.fields(), guard: () -> Unit = {}) =
         KagemushaNativeOrdinaryRetailEnrollmentV1.fromNative(
             KagemushaCoreCoordinatorBridgeV1.openEndpoint("/test/retail-original", endpoint),
@@ -219,17 +293,33 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1Test {
         var loseRetainReturn = false
         var substituteId = false
         var substituteScope = false
+        var nativeCustody = false
+        var nativeSignatures = 0
+        var nativeFenceCalls = 0
+        var loseNativeSigningReturn = false
+        var selectionUnavailable = false
+        val selection = arrayOf(ByteArray(8) { 7 }, "original-native-W".toByteArray(), "original-native-S".toByteArray())
         fun fields() = listOf(ticket, byteArrayOf(10, 11), message, scope, credentialDigest).map(ByteArray::copyOf)
         override fun contract() = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
         override fun close(handle: Long): Int { closes++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {
+            if (method == 21) {
+                assertContentEquals(KagemushaCoreCoordinatorFrameV1.u32(15), fields.single())
+                return if (selectionUnavailable) null else selection.map(ByteArray::copyOf).toTypedArray()
+            }
             assertEquals(20, method)
             assertContentEquals(ticket, fields[1])
             return when (fields[0][0].toInt()) {
-                10 -> if (state in 2..3) arrayOf(byteArrayOf(2), signature.copyOf())
-                    else { check(state == 0); state = 1; arrayOf(byteArrayOf(1), byteArrayOf()) }
+                10 -> {
+                    nativeFenceCalls++
+                    if (state in 2..3) arrayOf(byteArrayOf(2), signature.copyOf())
+                    else if (nativeCustody) {
+                        check(state == 0); nativeSignatures++; signature = expectedSignature.copyOf(); state = 2
+                        if (loseNativeSigningReturn) null else arrayOf(byteArrayOf(2), signature.copyOf())
+                    } else { check(state == 0); state = 1; arrayOf(byteArrayOf(1), byteArrayOf()) }
+                }
                 11 -> { check(state == 1); retains++; signature = fields[2].copyOf(); state = 2
                     if (loseRetainReturn) null else arrayOf(sha(signature)) }
                 12 -> { check(state == 2); assertContentEquals(certificate, fields[2]); admissions++; state = 3

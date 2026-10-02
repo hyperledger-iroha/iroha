@@ -114,6 +114,24 @@ public struct KagemushaNativeAppApprovalReceiptV1: Sendable {
 }
 
 extension KagemushaCoreCoordinatorBridgeV1 {
+  /// Native authenticates this exact request under its independently held receiver originals.
+  /// It derives State, statement, reservation and W; this business carrier grants no authority.
+  public func prepareOrdinarySendApproval(originalReceiverRequest: Data) throws
+    -> KagemushaNativePreparedAppApprovalV1 {
+    let id = try invoke(.appOperationApproval, fields: [KagemushaCoreCoordinatorFrameV1.u32(15),
+      KagemushaCoreCoordinatorFrameV1.u32(2), Data(originalReceiverRequest)])[0]
+    return try KagemushaNativePreparedAppApprovalV1.prepare(bridge: self, id: id)
+  }
+
+  /// Exact positive LE128 business amount. Native selects its own enrolled beneficiary,
+  /// authentic held balance, release, successor and original ten-second W.
+  public func prepareOrdinaryRedemptionApproval(amountLittleEndian: Data) throws
+    -> KagemushaNativePreparedAppApprovalV1 {
+    let id = try invoke(.appOperationApproval, fields: [KagemushaCoreCoordinatorFrameV1.u32(15),
+      KagemushaCoreCoordinatorFrameV1.u32(4), Data(amountLittleEndian)])[0]
+    return try KagemushaNativePreparedAppApprovalV1.prepare(bridge: self, id: id)
+  }
+
   /// Select an existing original native financial operation; no caller constructs S/W.
   /// Missing original owner, credential, proof input or current scope remains unavailable.
   public func prepareAppApproval(originalOperationID: Data) throws

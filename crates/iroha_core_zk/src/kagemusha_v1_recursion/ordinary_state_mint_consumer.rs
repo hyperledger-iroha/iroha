@@ -9,7 +9,14 @@ use super::{
 use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128};
 use halo2_base::{
     AssignedValue, Context,
-    gates::{GateInstructions as _, RangeChip},
+    gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
+};
+
+#[path = "ordinary_state_mint_active_bindings.rs"]
+mod active_bindings;
+pub(super) use active_bindings::{
+    OrdinaryMintStateBindingCellsV1, OrdinaryMintStateOpeningV1,
+    constrain_ordinary_mint_state_bindings_v1,
 };
 
 pub(super) fn inactive_column<F: KagemushaPoseidonFieldV1>(

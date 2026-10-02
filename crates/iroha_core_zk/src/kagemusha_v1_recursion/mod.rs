@@ -75,8 +75,23 @@ pub(crate) use ordinary_cash_terminal_verifier::{
 };
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_circuit;
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+mod ordinary_incoming_preparation_binding;
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_mint_circuit;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    )
+))]
+mod ordinary_mint_full_canonical_consumer;
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_mint_public;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
@@ -132,10 +147,11 @@ mod ordinary_state_reserved;
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1,
     KagemushaAuthenticatedOrdinaryPreparationGuardV1,
     KagemushaAuthenticatedOrdinaryTerminalGuardV1, verify_ordinary_bootstrap_guard_historical_v1,
-    verify_ordinary_bootstrap_guard_v1, verify_ordinary_preparation_guard_v1,
-    verify_ordinary_terminal_guard_v1,
+    verify_ordinary_bootstrap_guard_v1, verify_ordinary_incoming_preparation_guard_v1,
+    verify_ordinary_preparation_guard_v1, verify_ordinary_terminal_guard_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1;
@@ -2832,6 +2848,7 @@ const _: () = {
 };
 
 pub(crate) use ordinary_lineage_proof_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
-    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1, ordinary_incoming_artifacts_v1,
+    readmit_historical_ordinary_received_cash_output_v1, require_ordinary_incoming_predecessor_v1,
+    verify_ordinary_received_cash_output_v1,
 };

@@ -2,6 +2,7 @@
 //! The application frame supplies only raw original current-cut evidence and lifecycle selectors.
 use super::{
     KagemushaCoreCoordinatorBackendErrorV1 as Error,
+    kagemusha_core_coordinator_validate_storage_path_v1,
     native_deadline::NativeDeadlineV1,
     ordinary_app_identity::{
         KagemushaNativeOrdinaryAppIdentitySourceV1 as Source,
@@ -88,6 +89,7 @@ pub struct KagemushaNativeOrdinaryRuntimeStartupV1 {
     owner: Arc<Mutex<Owner>>,
     registry: SessionRegistry<AccountId, Owner, Pending>,
     active: Mutex<Option<u64>>,
+    initial_acquisition: Mutex<InitialAcquisition>,
     storage: PathBuf,
     preparation: Disposition,
     platform: Disposition,
@@ -104,7 +106,10 @@ pub struct KagemushaNativeOrdinaryRuntimeStartupV1 {
     integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
 }
 impl KagemushaNativeOrdinaryRuntimeStartupV1 {
-    /// Actual startup producer: authenticate the installed public package, load its real released
+    /// Authenticate and register the sole installed Native account/runtime producer.
+    /// Registration is part of construction: a second or uncertain construction is refused
+    /// before another clock journal or released-key load can be attempted.
+    /// Authenticate the installed public package, load its real released
     /// proof keys, recover/create its sole clock journal, retain the actual AccountClient and
     /// start the private session kernel. A fresh four-node read is performed when phase 1 starts.
     /// The authority/account and recovery choices are independent Native owner inputs; C/JNI
@@ -134,59 +139,93 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         capacity: KagemushaDurableCapacityV1,
         integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
     ) -> Result<Arc<Self>, Error> {
-        let inventory = Arc::new(
-            Inventory::intake(authority, package_path, package_sha256, original_root)
-                .map_err(|_| Error::Rejected)?,
-        );
-        let verifier = inventory
-            .load_recursive_verifier(profile.clone())
-            .map_err(|_| Error::Rejected)?;
-        capacity.validate().map_err(|_| Error::Rejected)?;
-        if cash_integrity_leases.len() > 1024
-            || cash_receivers.len() > 1024
-            || (cash == Disposition::Fresh
-                && (!cash_integrity_leases.is_empty() || !cash_receivers.is_empty()))
+        let mut registration = REGISTRATION.lock().map_err(|_| Error::Rejected)?;
+        registration.install(
+            || {
+                kagemusha_core_coordinator_validate_storage_path_v1(
+                    storage.to_str().ok_or(Error::Rejected)?.as_bytes(),
+                )
+                .map_err(|_| Error::Rejected)?;
+                let inventory = Arc::new(
+                    Inventory::intake(authority, package_path, package_sha256, original_root)
+                        .map_err(|_| Error::Rejected)?,
+                );
+                let verifier = inventory
+                    .load_recursive_verifier(profile.clone())
+                    .map_err(|_| Error::Rejected)?;
+                capacity.validate().map_err(|_| Error::Rejected)?;
+                if cash_integrity_leases.len() > 1024
+                    || cash_receivers.len() > 1024
+                    || (cash == Disposition::Fresh
+                        && (!cash_integrity_leases.is_empty() || !cash_receivers.is_empty()))
+                {
+                    return Err(Error::Rejected);
+                }
+                let resolver: Arc<dyn KagemushaArtifactByteResolverV1> =
+                    Arc::new(ArtifactResolver(inventory.clone()));
+                let selected = inventory.clock_originals().map_err(|_| Error::Rejected)?;
+                let clock = Arc::new(Mutex::new(
+                    match clock_disposition {
+                        Disposition::Fresh => Clock::create(&storage, selected),
+                        Disposition::Recover => Clock::open_existing(&storage, selected),
+                    }
+                    .map_err(|_| Error::Rejected)?,
+                ));
+                inventory
+                    .clock_transport(&account, &clock)
+                    .map_err(|_| Error::Rejected)?;
+                Ok(Arc::new(Self {
+                    inventory,
+                    clock,
+                    owner: Arc::new(Mutex::new(Owner {
+                        account,
+                        custody: None,
+                        source_installed: false,
+                        pending_source: None,
+                        installation_failed: false,
+                    })),
+                    registry: SessionRegistry::new(),
+                    active: Mutex::new(None),
+                    initial_acquisition: Mutex::new(InitialAcquisition::new()),
+                    storage,
+                    preparation,
+                    platform,
+                    bootstrap,
+                    cash,
+                    cash_integrity_leases,
+                    cash_receivers,
+                    verifier,
+                    profile,
+                    resolver,
+                    capacity,
+                    integrity_leases,
+                }))
+            },
+            |startup| STARTUP.set(startup).map_err(|_| Error::Rejected),
+        )
+    }
+    fn acquire_before_install(self: &Arc<Self>, path: &str) -> Result<(), Error> {
+        let requested = Path::new(path);
+        if requested != self.storage
+            || requested.canonicalize().map_err(|_| Error::Rejected)? != self.storage
         {
             return Err(Error::Rejected);
         }
-        let resolver: Arc<dyn KagemushaArtifactByteResolverV1> =
-            Arc::new(ArtifactResolver(inventory.clone()));
-        let selected = inventory.clock_originals().map_err(|_| Error::Rejected)?;
-        let clock = Arc::new(Mutex::new(
-            match clock_disposition {
-                Disposition::Fresh => Clock::create(&storage, selected),
-                Disposition::Recover => Clock::open_existing(&storage, selected),
-            }
-            .map_err(|_| Error::Rejected)?,
-        ));
-        inventory
-            .clock_transport(&account, &clock)
+        self.inventory.recheck().map_err(|_| Error::Rejected)?;
+        let mut acquisition = self
+            .initial_acquisition
+            .lock()
             .map_err(|_| Error::Rejected)?;
-        Ok(Arc::new(Self {
-            inventory,
-            clock,
-            owner: Arc::new(Mutex::new(Owner {
-                account,
-                custody: None,
-                source_installed: false,
-                pending_source: None,
-                installation_failed: false,
-            })),
-            registry: SessionRegistry::new(),
-            active: Mutex::new(None),
-            storage,
-            preparation,
-            platform,
-            bootstrap,
-            cash,
-            cash_integrity_leases,
-            cash_receivers,
-            verifier,
-            profile,
-            resolver,
-            capacity,
-            integrity_leases,
-        }))
+        acquisition.acquire(
+            || self.require_current(),
+            || {
+                // The same actual clock/AccountClient owns both phases; no managed CURRENT
+                // status or already-open coordinator is an input to initial acquisition.
+                let (id, _) = self.begin()?;
+                self.finish(id, None)?;
+                self.require_current()
+            },
+        )
     }
     fn begin(&self) -> Result<(u64, Vec<Vec<u8>>), Error> {
         let deadline =
@@ -360,6 +399,12 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
     /// # Errors
     /// Rejects unknown versions/phases, caller root fields, foreign IDs, noncanonical data or expiry.
     pub fn invoke(self: &Arc<Self>, frame: &[u8]) -> Result<Vec<u8>, Error> {
+        // Initial acquisition runs under its actual Native parent, before managed open. A
+        // concurrent or unknown acquisition cannot be bypassed with another lifecycle frame.
+        self.initial_acquisition
+            .try_lock()
+            .map_err(|_| Error::Rejected)?
+            .require_callable()?;
         if frame.is_empty() || frame.len() > MAX {
             return Err(Error::Rejected);
         }
@@ -645,14 +690,79 @@ impl BoundNativeAccountSessionV1 {
     }
 }
 static STARTUP: OnceLock<Arc<KagemushaNativeOrdinaryRuntimeStartupV1>> = OnceLock::new();
-/// Install the actual Native runtime/account startup producer once, before managed startup.
-/// It must originate from `from_installed_runtime_and_native_account`; app frames cannot create it.
-/// # Errors
-/// Rejects replacing an installed Native authority/account producer.
-pub fn register_kagemusha_native_ordinary_runtime_startup_v1(
-    startup: Arc<KagemushaNativeOrdinaryRuntimeStartupV1>,
-) -> Result<(), Error> {
-    STARTUP.set(startup).map_err(|_| Error::Rejected)
+// These private state owners only order real construction/acquisition. Their scripted unit
+// controls establish one-use control flow, never Native custody or financial qualification.
+struct StartupRegistration {
+    attempted: bool,
+}
+impl StartupRegistration {
+    const fn new() -> Self {
+        Self { attempted: false }
+    }
+    fn install<T>(
+        &mut self,
+        construct: impl FnOnce() -> Result<Arc<T>, Error>,
+        publish: impl FnOnce(Arc<T>) -> Result<(), Error>,
+    ) -> Result<Arc<T>, Error> {
+        if self.attempted {
+            return Err(Error::Rejected);
+        }
+        self.attempted = true;
+        let startup = construct()?;
+        publish(Arc::clone(&startup))?;
+        Ok(startup)
+    }
+}
+static REGISTRATION: Mutex<StartupRegistration> = Mutex::new(StartupRegistration::new());
+
+struct InitialAcquisition {
+    attempted: bool,
+    complete: bool,
+}
+impl InitialAcquisition {
+    const fn new() -> Self {
+        Self {
+            attempted: false,
+            complete: false,
+        }
+    }
+    fn require_callable(&self) -> Result<(), Error> {
+        if self.attempted && !self.complete {
+            Err(Error::Rejected)
+        } else {
+            Ok(())
+        }
+    }
+    fn acquire(
+        &mut self,
+        require_current: impl FnOnce() -> Result<(), Error>,
+        original_acquisition: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if self.complete {
+            return require_current();
+        }
+        if self.attempted {
+            return Err(Error::Rejected);
+        }
+        // A transport/signing/fsync/publication error or lost result must not choose another
+        // initial read or recreate the original Native enrollment/cash journals.
+        self.attempted = true;
+        original_acquisition()?;
+        self.complete = true;
+        Ok(())
+    }
+}
+
+pub(super) fn has_registered_runtime() -> bool {
+    STARTUP.get().is_some()
+}
+// Invoked by the real native installer before the managed bridge obtains its coordinator.
+// Only the storage selector crosses C/JNI; the installed owner supplies every original.
+pub(super) fn acquire_registered_runtime_before_install(path: &str) -> Result<(), Error> {
+    STARTUP
+        .get()
+        .ok_or(Error::Unavailable)?
+        .acquire_before_install(path)
 }
 /// Dedicated bounded managed entry. The request carries no authority/key/time/root constructor.
 /// # Errors
@@ -772,3 +882,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryR
         _ => std::ptr::null_mut(),
     }
 }
+
+#[cfg(test)]
+#[path = "ordinary_native_startup/tests.rs"]
+mod tests;

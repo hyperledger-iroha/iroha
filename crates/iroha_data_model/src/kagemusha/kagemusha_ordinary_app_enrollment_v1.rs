@@ -7,8 +7,10 @@
 
 use super::{
     KagemushaAppAttestationAuthorityPolicyV1, KagemushaAppOperationApprovalChallengeV1,
-    KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1,
-    KagemushaHardwareProfileV1, kagemusha_device_key_reference_v1,
+    KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1, KagemushaAuthenticatedReleaseV1,
+    KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
+    KagemushaOrdinaryAppIdentityProfileV1, KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1,
+    kagemusha_device_key_reference_v1,
 };
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, PublicKey, Signature};
@@ -256,6 +258,66 @@ pub struct KagemushaPlayIntegrityPolicyV1 {
     pub minimum_device_integrity: u8,
 }
 
+/// Exact Apple attestation environment checked by the independent original verifier.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(
+    tag = "environment",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryAppAppleEnvironmentV1")]
+pub enum KagemushaOrdinaryAppAppleEnvironmentV1 {
+    /// Development App Attest identity; never a production identity.
+    Development,
+    /// Production App Attest identity.
+    Production,
+}
+
+/// Governed distribution identity, distinct from platform key security level.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(
+    tag = "distribution",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryAppDistributionV1")]
+pub enum KagemushaOrdinaryAppDistributionV1 {
+    /// Explicit development authority and application identity.
+    Development,
+    /// Google Play distribution app-signing certificate; not its upload certificate.
+    GooglePlay,
+    /// Approved Apple production distribution policy.
+    AppleProduction,
+    /// Independently approved Android distribution outside Play.
+    AndroidOtherApproved,
+}
+
 /// Exact public policy original pinned by the enabled profile's policy digest.
 #[derive(
     Debug,
@@ -278,6 +340,15 @@ pub struct KagemushaOrdinaryAppTrustPolicyV1 {
     pub app_authority_policy_digest: [u8; 32],
     /// Exact ordinary platform class; OEM compact credentials use another format.
     pub platform_class: KagemushaHardwarePlatformClassV1,
+    /// Exact independently governed distribution identity.
+    pub distribution: KagemushaOrdinaryAppDistributionV1,
+    /// Required Apple environment; absent only for Android.
+    pub apple_environment: Option<KagemushaOrdinaryAppAppleEnvironmentV1>,
+    /// Exact independently selected platform root set, also pinned by the selected profile.
+    pub platform_trust_roots_digest: [u8; 32],
+    /// Exact fresh revocation/evaluation policy selected by the independent raw verifier.
+    /// Apple policy explicitly states applicable certificate/risk handling, not Android CRL semantics.
+    pub platform_revocation_policy_digest: [u8; 32],
     /// Sorted unique accepted Android levels; Apple requires an empty list.
     pub allowed_android_security_levels: Vec<KagemushaAppKeySecurityLevelV1>,
     /// Separate enrollment/refresh policy; explicit None is permitted only when governed.
@@ -292,17 +363,22 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1
             || self.app_authority_policy_digest == [0; 32]
+            || self.platform_trust_roots_digest == [0; 32]
+            || self.platform_revocation_policy_digest == [0; 32]
             || self.maximum_credential_lifetime_ms == 0
         {
             return Err("ordinary app trust policy incomplete".into());
         }
         match self.platform_class {
             KagemushaHardwarePlatformClassV1::AndroidKeyMint => {
-                if self.allowed_android_security_levels.is_empty()
+                if self.apple_environment.is_some()
+                    || self.distribution == KagemushaOrdinaryAppDistributionV1::AppleProduction
+                    || self.allowed_android_security_levels.is_empty()
                     || self.allowed_android_security_levels.len() > 2
                     || self
                         .allowed_android_security_levels
-                        .contains(&KagemushaAppKeySecurityLevelV1::AppleAppAttest)
+                        .iter()
+                        .any(|level| *level == KagemushaAppKeySecurityLevelV1::AppleAppAttest)
                     || !self
                         .allowed_android_security_levels
                         .windows(2)
@@ -312,7 +388,18 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
                 }
             }
             KagemushaHardwarePlatformClassV1::AppleAppAttest => {
-                if !self.allowed_android_security_levels.is_empty()
+                let environment_matches = matches!(
+                    (self.distribution, self.apple_environment),
+                    (
+                        KagemushaOrdinaryAppDistributionV1::Development,
+                        Some(KagemushaOrdinaryAppAppleEnvironmentV1::Development)
+                    ) | (
+                        KagemushaOrdinaryAppDistributionV1::AppleProduction,
+                        Some(KagemushaOrdinaryAppAppleEnvironmentV1::Production)
+                    )
+                );
+                if !environment_matches
+                    || !self.allowed_android_security_levels.is_empty()
                     || self.play_integrity_policy.is_some()
                 {
                     return Err("ordinary Apple policy contains Android selectors".into());
@@ -320,13 +407,23 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
             }
             _ => return Err("ordinary app policy is not an ordinary platform".into()),
         }
-        if let Some(policy) = self.play_integrity_policy
-            && (policy.policy_digest == [0; 32]
+        if self.distribution == KagemushaOrdinaryAppDistributionV1::GooglePlay
+            && !self
+                .play_integrity_policy
+                .is_some_and(|policy| policy.require_play_recognized)
+        {
+            return Err(
+                "Play distribution requires distinct recognized-app Integrity policy".into(),
+            );
+        }
+        if let Some(policy) = self.play_integrity_policy {
+            if policy.policy_digest == [0; 32]
                 || policy.maximum_evidence_age_ms == 0
                 || policy.maximum_refresh_interval_ms == 0
-                || !matches!(policy.minimum_device_integrity, 1 | 2))
-        {
-            return Err("Play Integrity policy incomplete".into());
+                || !matches!(policy.minimum_device_integrity, 1 | 2)
+            {
+                return Err("Play Integrity policy incomplete".into());
+            }
         }
         Ok(())
     }
@@ -339,6 +436,29 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
         Ok(digest_original(POLICY_DOMAIN, &bounded_encode(self)?))
     }
 
+    /// Match independently governed ordinary identity profile and app-authority originals.
+    /// No financial qualification, one-use mask or monetary catalog is consulted.
+    /// # Errors
+    /// Rejects any policy, class, issuer, app or lifetime substitution.
+    pub fn validate_for_identity_profile(
+        &self,
+        profile: &KagemushaOrdinaryAppIdentityProfileV1,
+        authority: &KagemushaAppAttestationAuthorityPolicyV1,
+    ) -> Result<(), String> {
+        self.validate()?;
+        profile.validate()?;
+        if profile.platform_class != self.platform_class
+            || profile.platform_trust_roots_digest != self.platform_trust_roots_digest
+            || authority.platform_class != self.platform_class
+            || profile.trust_policy_digest != self.canonical_digest()?
+            || profile.app_authority_policy_digest != self.app_authority_policy_digest
+            || self.app_authority_policy_digest != authority.canonical_digest()?
+            || self.maximum_credential_lifetime_ms > authority.maximum_lifetime_ms
+        {
+            return Err("ordinary app policy differs from governed originals".into());
+        }
+        Ok(())
+    }
     /// Match the policy to independently selected enabled-profile and app-authority originals.
     /// # Errors
     /// Rejects any policy, class, issuer, app or lifetime substitution.
@@ -349,6 +469,7 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
     ) -> Result<(), String> {
         self.validate()?;
         if profile.platform_class != self.platform_class
+            || profile.attestation_trust_roots_digest != self.platform_trust_roots_digest
             || authority.platform_class != self.platform_class
             || profile.firmware_policy_digest != self.canonical_digest()?
             || profile.app_attestation_authority_policy_digest != self.app_authority_policy_digest
@@ -1036,12 +1157,38 @@ struct CredentialEdOriginal {
 /// Actual checked ordinary credential originals. No decoder, clone or public constructor exists.
 pub struct KagemushaVerifiedOrdinaryAppCredentialV1 {
     subject: KagemushaOrdinaryAppCredentialSubjectV1,
+    identity_policy_id: [u8; 32],
+    preparation_original: Vec<u8>,
+    identity_policy_original: Vec<u8>,
+    identity_authority_original: Vec<u8>,
     original: Vec<u8>,
     digest: [u8; 32],
     static_binding_digest: [u8; 32],
     circuit_admission: super::KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1,
 }
 impl KagemushaVerifiedOrdinaryAppCredentialV1 {
+    /// Complete issuer-authenticated original preparation retained with this credential.
+    #[must_use]
+    pub fn preparation_original(&self) -> &[u8] {
+        &self.preparation_original
+    }
+
+    /// Exact independent ordinary policy admitting this credential, not a monetary release.
+    #[must_use]
+    pub const fn identity_policy_id(&self) -> [u8; 32] {
+        self.identity_policy_id
+    }
+    /// Complete original threshold-admitted policy retained with this credential.
+    #[must_use]
+    pub fn identity_policy_original(&self) -> &[u8] {
+        &self.identity_policy_original
+    }
+    /// Original independently held governance/genesis anchors; no response-derived trust.
+    #[must_use]
+    pub fn identity_authority_original(&self) -> &[u8] {
+        &self.identity_authority_original
+    }
+
     /// Borrow the genuine independent governed P256 issuer admission.
     #[must_use]
     pub const fn circuit_admission(
@@ -1126,6 +1273,105 @@ pub(crate) fn sole_changed_raw_position(
         return Err("ordinary credential raw field byte layout differs".into());
     }
     Ok(position)
+}
+
+impl KagemushaOrdinaryAppCredentialSubjectV1 {
+    // Sole original checked scope/Play validator shared by unsigned builder and signature admission.
+    pub(super) fn validate_checked_originals(
+        &self,
+        policy: &KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
+        preparation: &KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1,
+        expected_key: &KagemushaDevicePublicKeyV1,
+        trusted_now_ms: u64,
+    ) -> Result<(), String> {
+        preparation.require_policy_original(policy, trusted_now_ms)?;
+        let original = policy.policy();
+        let profile = &original.profile;
+        let trust = &original.trust;
+        let authority = original.app_authority();
+        let expected = preparation.challenge();
+        trust.validate_for_identity_profile(profile, &authority)?;
+        let s = self;
+        s.canonical_signing_bytes()?;
+        if expected.hardware_profile_id != profile.planned_hardware_profile_id
+            || expected.release_id != profile.planned_release_id
+            || expected.suite_id != profile.planned_suite_id
+            || s.platform_class != expected.platform_class
+            || s.platform_class != profile.platform_class
+            || s.enrollment_id != expected.enrollment_id
+            || s.client_nonce != expected.client_nonce
+            || s.server_nonce != expected.server_nonce
+            || s.account_binding != expected.account_binding
+            || s.network_id != expected.network_id
+            || s.lane_id != expected.lane_id
+            || s.release_id != expected.release_id
+            || s.hardware_profile_id != expected.hardware_profile_id
+            || s.suite_id != expected.suite_id
+            || s.policy_epoch != expected.policy_epoch
+            || s.policy_epoch != profile.policy_epoch
+            || s.hardware_epoch != expected.hardware_epoch
+            || s.trust_policy_digest != expected.trust_policy_digest
+            || s.trust_policy_digest != trust.canonical_digest()?
+            || s.app_authority_policy_digest != expected.app_authority_policy_digest
+            || s.app_authority_policy_digest != authority.canonical_digest()?
+            || s.financial_authority_commitment != expected.financial_authority_commitment
+            || s.enrollment_challenge_digest != expected.attestation_challenge()?
+            || s.app_public_key != *expected_key
+            || s.app_signing_identity_digest != authority.app_signing_identity_digest
+            || s.app_release_digest != authority.app_release_digest
+            || s.issued_at_ms < expected.issued_at_ms
+            || s.issued_at_ms >= expected.expires_at_ms
+            || s.issued_at_ms < profile.valid_from_ms
+            || s.expires_at_ms > profile.expires_at_ms
+            || s.expires_at_ms - s.issued_at_ms > trust.maximum_credential_lifetime_ms
+        {
+            return Err("ordinary credential scope differs from original selection".into());
+        }
+        match s.platform_class {
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint => {
+                if s.app_attest_counter_floor != 0
+                    || !trust
+                        .allowed_android_security_levels
+                        .contains(&s.security_level)
+                {
+                    return Err("ordinary Android level or counter invalid".into());
+                }
+            }
+            KagemushaHardwarePlatformClassV1::AppleAppAttest => {
+                if s.security_level != KagemushaAppKeySecurityLevelV1::AppleAppAttest
+                    || s.play_integrity.is_some()
+                {
+                    return Err("ordinary Apple platform evidence invalid".into());
+                }
+            }
+            _ => return Err("ordinary credential cannot replace OEM compact credential".into()),
+        }
+        match (trust.play_integrity_policy, s.play_integrity) {
+            (None, None) => (),
+            (Some(policy), Some(binding)) => {
+                nonzero(&[
+                    binding.request_hash,
+                    binding.evidence_digest,
+                    binding.policy_digest,
+                ])?;
+                if binding.request_hash
+                    != expected.play_integrity_request_hash(s.attested_key_id)?
+                    || binding.policy_digest != policy.policy_digest
+                    || binding.verified_at_ms < expected.issued_at_ms
+                    || binding.verified_at_ms > s.issued_at_ms
+                    || s.issued_at_ms - binding.verified_at_ms > policy.maximum_evidence_age_ms
+                    || binding.refresh_before_ms <= binding.verified_at_ms
+                    || binding.refresh_before_ms > s.expires_at_ms
+                    || binding.refresh_before_ms - binding.verified_at_ms
+                        > policy.maximum_refresh_interval_ms
+                {
+                    return Err("ordinary Play Integrity binding differs".into());
+                }
+            }
+            _ => return Err("ordinary Play Integrity required or unsolicited".into()),
+        }
+        Ok(())
+    }
 }
 
 impl KagemushaOrdinaryAppCredentialV1 {
@@ -1264,132 +1510,35 @@ impl KagemushaOrdinaryAppCredentialV1 {
         )
     }
 
-    /// Authenticate actual issuer, policy, release, original preparation and independently held key.
+    /// Authenticate identity under independently threshold-admitted policy and checked full C.
+    /// Planned financial coordinates are correlation only; genuine qualified monetary owners
+    /// remain separately required before any W307 approval can grant a spending capability.
     /// # Errors
-    /// Rejects substituted key roles, signer, policy, release, challenge, scope, Integrity or time.
+    /// Rejects policy/C/key/issuer/platform/Integrity/time substitutions.
     pub fn authenticate(
         &self,
-        release: &KagemushaAuthenticatedReleaseV1,
-        trust: &KagemushaOrdinaryAppTrustPolicyV1,
-        authority: &KagemushaAppAttestationAuthorityPolicyV1,
-        expected: &KagemushaOrdinaryAppEnrollmentChallengeV1,
+        policy: &KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
+        preparation: &KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1,
         expected_key: &KagemushaDevicePublicKeyV1,
         trusted_now_ms: u64,
     ) -> Result<KagemushaVerifiedOrdinaryAppCredentialV1, String> {
-        let enabled = release
-            .enabled_profile(expected.hardware_profile_id)
-            .ok_or("ordinary credential profile unavailable")?;
-        if expected.release_id != release.release_id()
-            || expected.network_id != *release.network_id().as_bytes()
-            || expected.suite_id != enabled.suite_id
-            || expected.policy_epoch != enabled.policy_epoch
-        {
-            return Err("ordinary credential differs from actual release".into());
-        }
-        self.authenticate_originals(
-            &enabled.hardware_profile,
-            trust,
-            authority,
-            expected,
+        self.subject.validate_checked_originals(
+            policy,
+            preparation,
             expected_key,
             trusted_now_ms,
-        )
-    }
-
-    fn authenticate_originals(
-        &self,
-        profile: &KagemushaHardwareProfileV1,
-        trust: &KagemushaOrdinaryAppTrustPolicyV1,
-        authority: &KagemushaAppAttestationAuthorityPolicyV1,
-        expected: &KagemushaOrdinaryAppEnrollmentChallengeV1,
-        expected_key: &KagemushaDevicePublicKeyV1,
-        now: u64,
-    ) -> Result<KagemushaVerifiedOrdinaryAppCredentialV1, String> {
-        trust.validate_for_profile(profile, authority)?;
+        )?;
+        let authority = policy.policy().app_authority();
         let s = &self.subject;
+        let now = trusted_now_ms;
         let message = s.canonical_signing_bytes()?;
-        let issued_during_challenge =
-            (expected.issued_at_ms..expected.expires_at_ms).contains(&s.issued_at_ms);
-        let lifetime_within_profile = (profile.valid_from_ms..).contains(&s.issued_at_ms)
-            && (..=profile.expires_at_ms).contains(&s.expires_at_ms);
-        if s.platform_class != expected.platform_class
-            || s.platform_class != profile.platform_class
-            || s.enrollment_id != expected.enrollment_id
-            || s.client_nonce != expected.client_nonce
-            || s.server_nonce != expected.server_nonce
-            || s.account_binding != expected.account_binding
-            || s.network_id != expected.network_id
-            || s.lane_id != expected.lane_id
-            || s.release_id != expected.release_id
-            || s.hardware_profile_id != expected.hardware_profile_id
-            || s.suite_id != expected.suite_id
-            || s.policy_epoch != expected.policy_epoch
-            || s.policy_epoch != profile.policy_epoch
-            || s.hardware_epoch != expected.hardware_epoch
-            || s.trust_policy_digest != expected.trust_policy_digest
-            || s.trust_policy_digest != trust.canonical_digest()?
-            || s.app_authority_policy_digest != expected.app_authority_policy_digest
-            || s.app_authority_policy_digest != authority.canonical_digest()?
-            || s.financial_authority_commitment != expected.financial_authority_commitment
-            || s.enrollment_challenge_digest != expected.attestation_challenge()?
-            || s.app_public_key != *expected_key
-            || s.app_signing_identity_digest != authority.app_signing_identity_digest
-            || s.app_release_digest != authority.app_release_digest
-            || !issued_during_challenge
-            || !lifetime_within_profile
-            || s.expires_at_ms - s.issued_at_ms > trust.maximum_credential_lifetime_ms
-        {
-            return Err("ordinary credential scope differs from original selection".into());
-        }
-        match s.platform_class {
-            KagemushaHardwarePlatformClassV1::AndroidKeyMint => {
-                if s.app_attest_counter_floor != 0
-                    || !trust
-                        .allowed_android_security_levels
-                        .contains(&s.security_level)
-                {
-                    return Err("ordinary Android level or counter invalid".into());
-                }
-            }
-            KagemushaHardwarePlatformClassV1::AppleAppAttest => {
-                if s.security_level != KagemushaAppKeySecurityLevelV1::AppleAppAttest
-                    || s.play_integrity.is_some()
-                {
-                    return Err("ordinary Apple platform evidence invalid".into());
-                }
-            }
-            _ => return Err("ordinary credential cannot replace OEM compact credential".into()),
-        }
-        match (trust.play_integrity_policy, s.play_integrity) {
-            (None, None) => (),
-            (Some(policy), Some(binding)) => {
-                nonzero(&[
-                    binding.request_hash,
-                    binding.evidence_digest,
-                    binding.policy_digest,
-                ])?;
-                if binding.request_hash
-                    != expected.play_integrity_request_hash(s.attested_key_id)?
-                    || binding.policy_digest != policy.policy_digest
-                    || binding.verified_at_ms < expected.issued_at_ms
-                    || binding.verified_at_ms > s.issued_at_ms
-                    || s.issued_at_ms - binding.verified_at_ms > policy.maximum_evidence_age_ms
-                    || binding.refresh_before_ms <= binding.verified_at_ms
-                    || binding.refresh_before_ms > s.expires_at_ms
-                    || binding.refresh_before_ms - binding.verified_at_ms
-                        > policy.maximum_refresh_interval_ms
-                {
-                    return Err("ordinary Play Integrity binding differs".into());
-                }
-            }
-            _ => return Err("ordinary Play Integrity required or unsolicited".into()),
-        }
         self.signature
             .verify(&authority.authority_key, &message)
             .map_err(|_| "ordinary credential Ed authority signature rejected")?;
-        let circuit_admission = self.circuit_admission.authenticate_for_profile(
+        let circuit_admission = self.circuit_admission.authenticate_under_identity_policy(
             &Self::circuit_admission_subject_for(s, &self.signature)?,
-            profile,
+            policy,
+            trusted_now_ms,
         )?;
         let original = self.canonical_bytes()?;
         let mut static_body = Vec::new();
@@ -1413,6 +1562,10 @@ impl KagemushaOrdinaryAppCredentialV1 {
         let checked = KagemushaVerifiedOrdinaryAppCredentialV1 {
             circuit_admission,
             subject: *s,
+            identity_policy_id: policy.policy_id(),
+            preparation_original: preparation.original().to_vec(),
+            identity_policy_original: policy.original().to_vec(),
+            identity_authority_original: policy.authority_original().to_vec(),
             digest: digest_original(CREDENTIAL_DIGEST_DOMAIN, &original),
             original,
             static_binding_digest: digest_original(STATIC_BINDING_DOMAIN, &static_body),
@@ -1859,7 +2012,7 @@ mod tests {
             let request = f
                 .preparation
                 .challenge
-                .to_signing_request(f.issuer.public_key())
+                .to_signing_request(f.core_issuer.public_key())
                 .unwrap();
             assert_eq!(
                 request.len(),
@@ -1868,11 +2021,11 @@ mod tests {
             let (parsed, pin) =
                 KagemushaOrdinaryAppEnrollmentChallengeV1::from_signing_request(&request).unwrap();
             assert_eq!(parsed, f.preparation.challenge);
-            assert_eq!(pin.as_slice(), f.issuer.public_key().to_bytes().1);
+            assert_eq!(pin.as_slice(), f.core_issuer.public_key().to_bytes().1);
             let original = f.preparation.to_transport_bytes().unwrap();
             assert_eq!(&request[5..456], &original[..451]);
             f.preparation
-                .authenticate(f.issuer.public_key(), &parsed, parsed.issued_at_ms)
+                .authenticate(f.core_issuer.public_key(), &parsed, parsed.issued_at_ms)
                 .unwrap();
         }
     }
@@ -1883,7 +2036,7 @@ mod tests {
         let request = f
             .preparation
             .challenge
-            .to_signing_request(f.issuer.public_key())
+            .to_signing_request(f.core_issuer.public_key())
             .unwrap();
         let other_algorithm = KeyPair::from_seed(vec![7; 32], Algorithm::Secp256k1);
         assert!(
@@ -1922,10 +2075,12 @@ mod tests {
         preparation: KagemushaSignedOrdinaryAppEnrollmentChallengeV1,
         certificate: KagemushaOrdinaryAppCredentialV1,
         issuer: KeyPair,
+        core_issuer: KeyPair,
         app: SigningKey,
     }
     fn fixture(apple: bool) -> Fixture {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
         let app = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
         let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
             app.verifying_key().to_encoded_point(false).as_bytes(),
@@ -1947,6 +2102,10 @@ mod tests {
             version: 1,
             app_authority_policy_digest: authority.canonical_digest().unwrap(),
             platform_class: class,
+            distribution: KagemushaOrdinaryAppDistributionV1::Development,
+            apple_environment: apple.then_some(KagemushaOrdinaryAppAppleEnvironmentV1::Development),
+            platform_trust_roots_digest: [7; 32],
+            platform_revocation_policy_digest: [31; 32],
             allowed_android_security_levels: if apple {
                 vec![]
             } else {
@@ -2006,7 +2165,7 @@ mod tests {
         let preparation = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
             challenge,
             signature: Signature::try_new(
-                issuer.private_key(),
+                core_issuer.private_key(),
                 &challenge.canonical_signing_bytes().unwrap(),
             )
             .unwrap(),
@@ -2070,15 +2229,35 @@ mod tests {
             preparation,
             certificate,
             issuer,
+            core_issuer,
             app,
         }
     }
     fn admit(f: &Fixture, now: u64) -> Result<KagemushaVerifiedOrdinaryAppCredentialV1, String> {
-        f.certificate.authenticate_originals(
-            &f.profile,
-            &f.trust,
-            &f.authority,
+        admit_credential(f, &f.certificate, now)
+    }
+    fn admit_credential(
+        f: &Fixture,
+        credential: &KagemushaOrdinaryAppCredentialV1,
+        now: u64,
+    ) -> Result<KagemushaVerifiedOrdinaryAppCredentialV1, String> {
+        let policy =
+            super::super::kagemusha_ordinary_app_identity_policy_v1::identity_fixture_policy(
+                &f.profile,
+                &f.trust,
+                &f.authority,
+                &f.preparation.challenge,
+                f.core_issuer.public_key(),
+                f.preparation.challenge.issued_at_ms,
+            )?;
+        let preparation = policy.authenticate_preparation(
+            &f.preparation,
             &f.preparation.challenge,
+            f.preparation.challenge.issued_at_ms,
+        )?;
+        credential.authenticate(
+            &policy,
+            &preparation,
             &f.certificate.subject.app_public_key,
             now,
         )
@@ -2143,7 +2322,7 @@ mod tests {
         f.certificate.subject.financial_authority_commitment = [87; 32];
         f.preparation.challenge.financial_authority_commitment = [87; 32];
         f.preparation.signature = Signature::new(
-            f.issuer.private_key(),
+            f.core_issuer.private_key(),
             &f.preparation.challenge.canonical_signing_bytes().unwrap(),
         );
         f.certificate.subject.enrollment_challenge_digest =
@@ -2156,7 +2335,7 @@ mod tests {
             admit(&f, 300)
                 .err()
                 .expect("forged issuer original must be rejected"),
-            "ordinary issuer original/profile differs"
+            "ordinary issuer exact admission/identity policy differs"
         );
         resign(&mut f);
         admit(&f, 300).unwrap();
@@ -2174,7 +2353,7 @@ mod tests {
             admit(&f, 300)
                 .err()
                 .expect("wrong circuit issuer signature must be rejected"),
-            "ordinary circuit issuer signature rejected"
+            "ordinary circuit issuer identity-policy signature rejected"
         );
     }
     #[test]
@@ -2264,18 +2443,7 @@ mod tests {
                             KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&frame)
                                 .is_err()
                         );
-                        assert!(
-                            specimen
-                                .authenticate_originals(
-                                    &f.profile,
-                                    &f.trust,
-                                    &f.authority,
-                                    &f.preparation.challenge,
-                                    &f.certificate.subject.app_public_key,
-                                    300,
-                                )
-                                .is_err()
-                        );
+                        assert!(admit_credential(&f, &specimen, 300).is_err());
                     }
                     assert_eq!(f.certificate.canonical_bytes().unwrap(), original);
                 }
@@ -2357,7 +2525,7 @@ mod tests {
             KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&bytes).unwrap();
         assert_eq!(parsed, f.preparation);
         parsed
-            .authenticate(f.issuer.public_key(), &f.preparation.challenge, 200)
+            .authenticate(f.core_issuer.public_key(), &f.preparation.challenge, 200)
             .unwrap();
         let mut trailing = bytes;
         trailing.push(0);
@@ -2452,6 +2620,17 @@ mod tests {
             verified_at_ms: 190,
             refresh_before_ms: 690,
         });
+        assert_eq!(
+            admit(&f, 300)
+                .err()
+                .expect("changed preparation must retain its Core signature"),
+            "ordinary enrollment preparation signature rejected"
+        );
+        f.preparation.signature = Signature::try_new(
+            f.core_issuer.private_key(),
+            &f.preparation.challenge.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
         resign(&mut f);
         let verified = admit(&f, 300).unwrap();
         assert!(verified.recheck_at_trusted_time(689).is_ok());
