@@ -30,7 +30,6 @@ fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
         };
     assert!(substituted.validate_for(&request, &intent).is_err());
 }
-#[cfg(unix)]
 #[test]
 fn retry_and_receipt_substitution_never_advance_the_journal() {
     let temp = tempdir().expect("state root");
@@ -103,7 +102,6 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
     assert_eq!(unchanged.revision, 2);
     assert!(unchanged.staging_receipt.is_none());
 }
-#[cfg(unix)]
 #[test]
 fn future_issued_receipt_waits_within_service_skew_before_registration() {
     let within = tempdir().expect("within-skew state root");
@@ -170,7 +168,6 @@ fn future_issued_receipt_waits_within_service_skew_before_registration() {
         1
     );
 }
-#[cfg(unix)]
 #[test]
 fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
     let beyond = tempdir().expect("beyond-skew state root");
@@ -210,7 +207,6 @@ fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
     assert!(rejected.archive_registration_attempts.is_empty());
     assert_eq!(beyond_backend.prepare_calls, 0);
 }
-#[cfg(unix)]
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -323,7 +319,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
         PublicationAdvanceV1::Progressed(PublicationPhaseV1::Replication)
     );
 }
-#[cfg(unix)]
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -456,7 +451,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     );
     assert!(replacement.archive_location_attempts[1].terminal.is_none());
 }
-#[cfg(unix)]
 #[test]
 fn retirement_is_rechecked_before_replication_and_readback() {
     for (script, expected_phase) in [
@@ -501,7 +495,6 @@ fn retirement_is_rechecked_before_replication_and_readback() {
         assert!(retired.submission.is_none());
     }
 }
-#[cfg(unix)]
 #[test]
 fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
     let temp = tempdir().expect("state root");
@@ -583,7 +576,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_submissions, 0);
 }
-#[cfg(unix)]
 #[test]
 fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     let temp = tempdir().expect("state root");
@@ -635,7 +627,6 @@ fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     assert_eq!(backend.release_intents.len(), 2);
     assert_eq!(backend.release_intents[0], backend.release_intents[1]);
 }
-#[cfg(unix)]
 #[test]
 fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction() {
     let temp = tempdir().expect("state root");
@@ -688,7 +679,6 @@ fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction()
     assert_eq!(backend.release_submissions, 1);
     assert_eq!(backend.release_intents, vec![digest, digest, digest]);
 }
-#[cfg(unix)]
 #[test]
 fn lost_release_response_restarts_from_the_same_journaled_transaction() {
     let temp = tempdir().expect("state root");
@@ -743,7 +733,6 @@ fn lost_release_response_restarts_from_the_same_journaled_transaction() {
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_intents, vec![exact_digest, exact_digest]);
 }
-#[cfg(unix)]
 #[test]
 fn stale_retirement_is_pending_in_readback() {
     for (script, guarded_phase) in [(
@@ -822,7 +811,6 @@ fn stale_retirement_is_pending_in_readback() {
         ));
     }
 }
-#[cfg(unix)]
 #[test]
 fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
     let temp = tempdir().expect("state root");
@@ -888,7 +876,6 @@ fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
     );
     assert_eq!(backend.release_submissions, 1);
 }
-#[cfg(unix)]
 #[test]
 fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
     let temp = tempdir().expect("state root");
@@ -968,7 +955,6 @@ fn checkpoint_allows_higher_target_revision_at_equal_location_height_on_a_newer_
         PublicationLocationProgressV1::Current
     );
 }
-#[cfg(unix)]
 #[test]
 fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
     let temp = tempdir().expect("state root");
@@ -1015,7 +1001,6 @@ fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
     assert!(retired.submission.is_none());
     assert!(retired.readbacks.is_empty());
 }
-#[cfg(unix)]
 #[test]
 fn expired_receipt_is_refreshed_only_before_registration_intent() {
     let temp = tempdir().expect("state root");
@@ -1063,7 +1048,6 @@ fn expired_receipt_is_refreshed_only_before_registration_intent() {
     assert_eq!(backend.staged_receipts.len(), 2);
     assert_eq!(backend.prepare_calls, 1);
 }
-#[cfg(unix)]
 #[test]
 fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence() {
     let temp = tempdir().expect("state root");
@@ -1147,7 +1131,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
     assert_eq!(backend.staged_receipts.len(), 2);
     assert_eq!(backend.prepare_calls, 2);
 }
-#[cfg(unix)]
 #[test]
 fn unknown_or_pending_application_state_never_rotates_the_exact_intent() {
     let temp = tempdir().expect("state root");
@@ -1191,7 +1174,6 @@ fn unknown_or_pending_application_state_never_rotates_the_exact_intent() {
     assert_eq!(backend.staged_receipts.len(), 1);
     assert_eq!(backend.prepare_calls, 1);
 }
-#[cfg(unix)]
 #[test]
 fn archive_registration_attempt_generation_is_strictly_bounded() {
     let temp = tempdir().expect("state root");
@@ -1270,7 +1252,6 @@ fn archive_registration_attempt_generation_is_strictly_bounded() {
             if reason.contains("attempt bound")
     ));
 }
-#[cfg(unix)]
 #[test]
 fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limit() {
     let temp = tempdir().expect("state root");
@@ -1357,7 +1338,6 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
             if reason.contains("archive-location attempt bound")
     ));
 }
-#[cfg(unix)]
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -1554,7 +1534,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             if reason.contains("regressed prior terminal finality")
     ));
 }
-#[cfg(unix)]
 #[test]
 fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
     let temp = tempdir().expect("state root");
@@ -1603,7 +1582,6 @@ fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
     assert!(unchanged.registered_archive.is_none());
     assert_eq!(backend.pin_calls, 0);
 }
-#[cfg(unix)]
 #[test]
 fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
     let temp = tempdir().expect("state root");
@@ -1657,7 +1635,6 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
     ));
     assert_eq!(backend.submissions, 1);
 }
-#[cfg(unix)]
 #[test]
 fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
     let temp = tempdir().expect("state root");
@@ -1702,7 +1679,6 @@ fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
     );
     journal.validate().expect("fallback journal remains valid");
 }
-#[cfg(unix)]
 #[test]
 fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutation() {
     let temp = tempdir().expect("state root");
@@ -1762,7 +1738,6 @@ fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutatio
     );
     assert_eq!(backend.submissions, 0);
 }
-#[cfg(unix)]
 #[test]
 fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
     for (class, code) in [
@@ -1822,7 +1797,6 @@ fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
             .expect("failed readbacks leave a valid journal");
     }
 }
-#[cfg(unix)]
 #[test]
 fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
     let temp = tempdir().expect("state root");

@@ -20,34 +20,41 @@ static ARTIFACT: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn staged32(kernel: Kernel, name: &str, left: &[u32], right: &[u32]) -> Option<HostOutput<u32>> {
+fn staged32(
+    kernel: Kernel,
+    name: &str,
+    left: &[u32],
+    right: &[u32],
+) -> Result<HostOutput<u32>, CudaFailure> {
     let result = crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
         // SAFETY: this module binds the embedded artifact to the existing vector
         // ABI; launch validates lengths and selects only its fixed u32 symbols.
         unsafe { launch::launch_u32_output(device, ARTIFACT, name, left, right) }
-    })?;
+    });
     complete_attempt(result)
 }
 
-fn staged64(left: &[u64], right: &[u64]) -> Option<HostOutput<u64>> {
+fn staged64(left: &[u64], right: &[u64]) -> Result<HostOutput<u64>, CudaFailure> {
     let result = crate::cuda_dispatch::with_selected(Kernel::Add64, ARTIFACT, |device| {
         // SAFETY: the exact embedded artifact supplies the fixed vadd64 ABI.
         unsafe { launch::launch_u64_output(device, ARTIFACT, left, right) }
-    })?;
+    });
     complete_attempt(result)
 }
 
-fn complete_attempt<T>(result: Result<HostOutput<T>, CudaFailure>) -> Option<HostOutput<T>> {
+fn complete_attempt<T>(
+    result: Result<HostOutput<T>, CudaFailure>,
+) -> Result<HostOutput<T>, CudaFailure> {
     match result {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if failure_quarantines(error) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -67,21 +74,20 @@ fn failure_quarantines(error: CudaFailure) -> bool {
 pub(super) fn admit(kernel: Kernel) -> bool {
     crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         if kernel == Kernel::Add64 {
             return staged64(&[u64::MAX, 1 << 48, 1 << 63], &[2, 1 << 48, 1 << 63])
-                .is_some_and(|out| out.as_slice() == [1, 1 << 49, 0]);
+                .map(|out| out.as_slice() == [1, 1 << 49, 0]);
         }
         let (name, expected) = match kernel {
             Kernel::Add32 => ("vadd32", [0, 5, 7]),
             Kernel::And => ("vand", [1, 2, 0]),
             Kernel::Xor => ("vxor", [u32::MAX - 1, 1, 7]),
             Kernel::Or => ("vor", [u32::MAX, 3, 7]),
-            _ => return false,
+            _ => return Ok(false),
         };
-        staged32(kernel, name, &[u32::MAX, 2, 3], &[1, 3, 4])
-            .is_some_and(|out| out.as_slice() == expected)
+        staged32(kernel, name, &[u32::MAX, 2, 3], &[1, 3, 4]).map(|out| out.as_slice() == expected)
     })
 }
 
@@ -104,7 +110,7 @@ fn into32(
         if !super::imp::ensure_cuda_kernel(kernel) {
             return false;
         }
-        let Some(output) = staged32(kernel, name, left, right) else {
+        let Ok(output) = staged32(kernel, name, left, right) else {
             return false;
         };
         if output.len() != destination.len() {
@@ -147,7 +153,7 @@ pub fn vadd64_cuda_into(left: &[u64], right: &[u64], destination: &mut [u64]) ->
         if !super::imp::ensure_cuda_kernel(Kernel::Add64) {
             return false;
         }
-        let Some(output) = staged64(left, right) else {
+        let Ok(output) = staged64(left, right) else {
             return false;
         };
         if output.len() != destination.len() {

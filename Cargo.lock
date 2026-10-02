@@ -6113,6 +6113,7 @@ dependencies = [
  "reqwest",
  "scrypt",
  "sha2",
+ "sorafs_manifest",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "url",

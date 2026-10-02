@@ -1,6 +1,7 @@
 //! Original private scalar/branch reads, tags, writes, comparisons and shifts.
 //! Total NOT/NEG reuse the ALU; signed MIN/MAX select full original words.
 //! Four multiply variants reuse the exact full-width product/correction bank.
+//! GETGAS reads the original post-debit control word and always writes a public tag.
 //!
 //! This bank consumes the enclosing dispatcher's private canonical fetch cells
 //! and its sole original packet array. It has no independent instruction list,
@@ -70,8 +71,19 @@ pub(super) fn is_rotate(instruction: u32) -> bool {
     matches!(shift_kind(instruction), Some(3 | 4))
 }
 
+fn is_getgas(instruction: u32) -> bool {
+    wide::opcode(instruction) == wide::system::GETGAS
+}
+
+fn reads_left(instruction: u32) -> bool {
+    !is_getgas(instruction)
+}
+
 fn right_immediate(instruction: u32) -> Option<u64> {
     match wide::opcode(instruction) {
+        // GETGAS has no register sources. Its result is linked directly to the
+        // original gas-debit port; unused arithmetic workspaces stay canonical.
+        wide::system::GETGAS => return Some(0),
         // Unary instructions never read the encoded rs2 byte. NEG routes the
         // original rs1 packet into the right arithmetic operand separately.
         wide::arithmetic::NEG
@@ -169,7 +181,8 @@ pub(super) fn branch_taken(row: &[F; super::WIDTH]) -> F {
 }
 
 pub(super) fn is_supported(instruction: u32) -> bool {
-    is_alu(instruction)
+    is_getgas(instruction)
+        || is_alu(instruction)
         || comparison_predicate(instruction).is_some()
         || shift_kind(instruction).is_some()
         || is_multiply(instruction)
@@ -199,7 +212,7 @@ pub(super) fn append_residues(
             })
     };
     let select = |predicate: &dyn Fn(u32) -> bool| weighted(&|w| F(u64::from(predicate(w))));
-    let active = select(&|_| true);
+    let register_left = select(&|w| reads_left(w));
     let move_selected = select(&|w| is_conditional_move(w));
     let register_move = select(&|w| wide::opcode(w) == wide::arithmetic::CMOV);
     let move_taken = F::ONE.sub(row[SCALAR + MOVE_ZERO]);
@@ -212,8 +225,14 @@ pub(super) fn append_residues(
     for (slot, index, enabled, write) in [
         (
             SCALAR_LEFT,
-            weighted(&|w| F(left_register(w) as u64)),
-            active,
+            weighted(&|w| {
+                if reads_left(w) {
+                    F(left_register(w) as u64)
+                } else {
+                    F::ZERO
+                }
+            }),
+            register_left,
             F::ZERO,
         ),
         (
@@ -419,6 +438,7 @@ pub(super) fn append_residues(
     shift::append_bank_residues(out, shifts, source, kinds);
     let shift_destination = select(&|w| shift_kind(w).is_some() && has_destination(w));
     let alu_destination = select(&|w| is_alu(w) && wide::rd(w) != 0);
+    let gas_destination = select(&|w| is_getgas(w) && has_destination(w));
     let minimum_destination =
         select(&|w| wide::opcode(w) == wide::arithmetic::MIN && has_destination(w));
     let maximum_destination =
@@ -457,6 +477,10 @@ pub(super) fn append_residues(
         });
         out.push(
             p[SCALAR_DESTINATION][AFTER + limb]
+                // The same original port is range-constrained and debited by
+                // the dispatcher, and retained in its mandatory history join.
+                // Do not accept a second supplied gas value or the pre-debit word.
+                .sub(gas_destination.mul(p[GAS_DEBIT][AFTER + limb]))
                 .sub(multiplied)
                 .sub(move_destination.mul(source.limb(1, limb)))
                 .sub(if limb == 0 {
@@ -476,6 +500,8 @@ pub(super) fn append_residues(
     let moved_tag = select(&|w| wide::opcode(w) == wide::arithmetic::CMOV && has_destination(w))
         .mul(move_taken)
         .mul(p[SCALAR_RIGHT][BEFORE_TAG]);
+    // GETGAS has a disabled (zero) left packet, so its output tag is public
+    // regardless of the overwritten register's old tag or unused encoding bytes.
     out.push(
         p[SCALAR_DESTINATION][AFTER_TAG]
             .sub(ordinary_destination.mul(p[SCALAR_LEFT][BEFORE_TAG]))

@@ -29,6 +29,15 @@ canonical ABI V1 artifact set, including four-validator execution, restart and
 installed native artifacts. The [native publication contract](../docs/norito_bridge_release.md)
 owns release source and artifact provenance requirements.
 
+## Private sum payload addressing
+
+`Option<T>` and `Result<T, E>` carry one heap handle through the V1 call table.
+Their allocation holds the tag and the larger flattened payload; only the active
+payload is written or read. Private product payloads can cross the 32 KiB signed
+instruction-offset boundary: lowering computes the full address before the same
+checked load/store. This does not change the 8,192-word call-table limit or the
+existing public record, schema-node and schema-depth limits.
+
 ## Bounded live scan contract
 
 `STATE_SCAN = 0x010038` consumes `r10` canonical NoritoBytes(StatePath map),

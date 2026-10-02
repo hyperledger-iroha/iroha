@@ -18,18 +18,18 @@ static ARTIFACT: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn stage(hi: &[u64], lo: &[u64]) -> Option<launch::Sorted> {
+fn stage(hi: &[u64], lo: &[u64]) -> Result<launch::Sorted, CudaFailure> {
     match crate::cuda_dispatch::with_selected(Kernel::Bitonic, ARTIFACT, |device| {
         // SAFETY: this module owns the exact artifact and checked paired arrays.
         unsafe { launch::output(device, ARTIFACT, hi, lo) }
-    })? {
+    }) {
         Ok(result) if result.hi.len() == hi.len() && result.lo.len() == lo.len() => {
             super::imp::record_completed_cuda_dispatch();
-            Some(result)
+            Ok(result)
         }
         Ok(_) => {
             crate::cuda_dispatch::quarantine_current_kernel();
-            None
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -38,7 +38,7 @@ fn stage(hi: &[u64], lo: &[u64]) -> Option<launch::Sorted> {
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -46,11 +46,11 @@ fn stage(hi: &[u64], lo: &[u64]) -> Option<launch::Sorted> {
 pub(super) fn admit() -> bool {
     crate::cuda_dispatch::admit_kernel(Kernel::Bitonic, ARTIFACT, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         let hi = [u64::MAX, 2, 1, 2, 0];
         let lo = [u64::MAX, 7, 9, 3, u64::MAX];
-        stage(&hi, &lo).is_some_and(|result| {
+        stage(&hi, &lo).map(|result| {
             result.hi.as_slice() == [0, 1, 2, 2, u64::MAX]
                 && result.lo.as_slice() == [u64::MAX, 9, 3, 7, u64::MAX]
         })
@@ -75,7 +75,7 @@ pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
         if !super::imp::ensure_cuda_kernel(Kernel::Bitonic) {
             return None;
         }
-        let result = stage(hi, lo)?;
+        let result = stage(hi, lo).ok()?;
         hi.copy_from_slice(&result.hi);
         lo.copy_from_slice(&result.lo);
         Some(())

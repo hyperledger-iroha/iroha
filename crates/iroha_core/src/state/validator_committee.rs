@@ -295,6 +295,13 @@ fn validate_current_beacon(
         .get(&session_id)
         .ok_or("committee authorization lacks its exact beacon session")?;
     record.validate().map_err(|error| error.to_string())?;
+    // The same ordered BLS roster may serve several generations. Its actual DKG
+    // transcript must name the generation authorized at this restore cut.
+    if !cfg!(all(test, sumeragi_core_mutation = "HC54"))
+        && record.session.adaptive_dkg.session.authority_generation != authority.generation
+    {
+        return Err("active beacon differs from the authorized signing generation".to_owned());
+    }
     if record.session.network_id != authority.network_id
         || transcript_hash.is_some_and(|hash| hash != record.session.transcript_hash)
         || record
@@ -648,6 +655,13 @@ fn validate_beacon_preparation(
             return Err(
                 "only the authenticated genesis authority may bootstrap a beacon".to_owned(),
             );
+        }
+        // A genuine transcript for another generation is not bootstrap custody,
+        // even when every participant and public possession proof is valid.
+        if !cfg!(all(test, sumeragi_core_mutation = "HC54"))
+            && record.session.adaptive_dkg.session.authority_generation != authority.generation
+        {
+            return Err("bootstrap beacon differs from the genesis signing generation".to_owned());
         }
         authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)
             .map_err(|error| error.to_string())?;

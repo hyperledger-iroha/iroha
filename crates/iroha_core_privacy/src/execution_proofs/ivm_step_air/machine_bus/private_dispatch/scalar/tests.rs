@@ -112,7 +112,7 @@ impl ScalarFixture {
             );
         }
         for (slot, register, enabled, write) in [
-            (SCALAR_LEFT, left, true, false),
+            (SCALAR_LEFT, left, reads_left(instruction), false),
             (
                 SCALAR_RIGHT,
                 right,
@@ -148,7 +148,11 @@ impl ScalarFixture {
                 );
             }
         }
-        let left = record.before.registers[left];
+        let left = if reads_left(instruction) {
+            record.before.registers[left]
+        } else {
+            0
+        };
         let right = right_immediate(instruction).unwrap_or(if taken {
             record.before.registers[right]
         } else {
@@ -492,6 +496,7 @@ fn composed_private_scalar_polynomials_have_degree_four() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let artifact = contract(
         &[
+            enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::CMOV, 4, 2, 3),
             enc::encode_ri(wide::arithmetic::CMOVI, 4, 2, -1),
             enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
@@ -700,6 +705,15 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         });
         original.append_history_residues(&mut residues, &windows, &challenges);
         residues.iter().all(|value| *value == F::ZERO)
+    }
+    let (_, gas) = native(
+        enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
+        &[(2, u64::MAX, true), (3, 23, true), (4, 19, true)],
+    );
+    assert!(accepts(&gas, None));
+    for slot in [GAS_DEBIT, SCALAR_DESTINATION] {
+        assert!(!accepts(&gas, Some((slot, false))));
+        assert!(!accepts(&gas, Some((slot, true))));
     }
     for opcode in [
         wide::arithmetic::ADD,
@@ -960,3 +974,4 @@ mod unary_select;
 mod bit_counts;
 
 mod conditional_moves;
+mod getgas;

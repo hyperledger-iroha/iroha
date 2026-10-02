@@ -16,22 +16,26 @@ static ARTIFACT: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn stage(kernel: Kernel, states: &[[u8; 16]], keys: &[[u8; 16]]) -> Option<HostOutput<[u8; 16]>> {
+fn stage(
+    kernel: Kernel,
+    states: &[[u8; 16]],
+    keys: &[[u8; 16]],
+) -> Result<HostOutput<[u8; 16]>, CudaFailure> {
     let (decrypt, fused) = match kernel {
         Kernel::AesEnc => (false, false),
         Kernel::AesDec => (true, false),
         Kernel::AesEncFused => (false, true),
         Kernel::AesDecFused => (true, true),
-        _ => return None,
+        _ => return Err(CudaFailure::InvalidRequest),
     };
     match crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
         // SAFETY: the exact artifact, fixed symbols and public checked geometry
         // are owned here. Input and key arrays stay unchanged through completion.
         unsafe { launch::aes_output(device, ARTIFACT, decrypt, fused, states, keys) }
-    })? {
+    }) {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if !matches!(
@@ -40,7 +44,7 @@ fn stage(kernel: Kernel, states: &[[u8; 16]], keys: &[[u8; 16]]) -> Option<HostO
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -48,7 +52,7 @@ fn stage(kernel: Kernel, states: &[[u8; 16]], keys: &[[u8; 16]]) -> Option<HostO
 pub(super) fn admit(kernel: Kernel) -> bool {
     crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         let states = [[0; 16], [0xff; 16]];
         let keys = [[0x3c; 16], [0xc3; 16]];
@@ -57,7 +61,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
             Kernel::AesDec => (true, 1),
             Kernel::AesEncFused => (false, 2),
             Kernel::AesDecFused => (true, 2),
-            _ => return false,
+            _ => return Ok(false),
         };
         let mut expected = states;
         for key in &keys[..rounds] {
@@ -69,7 +73,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
                 };
             }
         }
-        stage(kernel, &states, &keys[..rounds]).is_some_and(|output| output.as_slice() == expected)
+        stage(kernel, &states, &keys[..rounds]).map(|output| output.as_slice() == expected)
     })
 }
 
@@ -90,7 +94,7 @@ pub(crate) fn attempt(
         if !super::imp::ensure_cuda_kernel(kernel) {
             return None;
         }
-        stage(kernel, states, keys)
+        stage(kernel, states, keys).ok()
     })
 }
 

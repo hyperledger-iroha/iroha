@@ -1167,13 +1167,17 @@ from that same image. Recovery never submits a mutation or advances publication;
 the user subsequently invokes `--resume`. An advanced journal,
 substituted workspace, stale revision, or mismatched existing sidecar fails
 closed. Normal resume never reconstructs unpublished workspace state.
-On qualified Unix targets, journal, staged-CAR, plan, and operation-lock reads
-use architecture-specific no-follow plus nonblocking opens before descriptor
-metadata is trusted. Immutable readback and directory synchronization use the
-same policy, so a post-inspection FIFO or device substitution fails instead of
-blocking the publisher. Windows and other non-Unix targets return the exact
-unsupported-platform error before metadata access to journal roots, staged
-CARs, plans, or operation locks.
+Journal, staged-CAR, plan, and operation-lock custody uses the shared native
+`iroha_fs` owner on Unix and Windows. The journal directory is private from
+creation, and recovery retains ancestors, checks owner access and rejects links
+and changed object identities. Unix reads use no-follow and nonblocking opens,
+so a substituted FIFO or device cannot block the publisher. Windows uses
+protected owner DACLs, reparse rejection and retained non-delete-sharing handles
+on NTFS. CAR reads remain streaming and validate their original snapshot at the
+exact committed length; plan reconstruction validates the length before allocating.
+Journal publication uses native atomic replacement and durability boundaries,
+with the same exclusive operation lock and revision CAS on both platforms.
+Native Windows execution and signed release qualification remain outstanding.
 
 The server counterpart is a transport-independent, closed three-route core.
 It accepts only exact `POST` routes and canonical bounded Norito authorization

@@ -160,7 +160,7 @@ pub(crate) fn usable_device_count() -> usize {
 pub(crate) fn admit_kernel(
     kernel: Kernel,
     artifact: PtxArtifact,
-    validate: impl Fn() -> bool,
+    validate: impl Fn() -> Result<bool, CudaFailure>,
 ) -> bool {
     if !ENABLED.load(Ordering::Acquire) {
         return false;
@@ -223,36 +223,37 @@ pub(crate) fn admit_kernel(
 pub(crate) fn with_selected<T>(
     kernel: Kernel,
     artifact: PtxArtifact,
-    call: impl FnOnce(&CudaDevice<'static>) -> T,
-) -> Option<T> {
+    call: impl FnOnce(&CudaDevice<'static>) -> Result<T, CudaFailure>,
+) -> Result<T, CudaFailure> {
     if !ENABLED.load(Ordering::Acquire) {
-        return None;
+        return Err(CudaFailure::Unavailable);
     }
     ACTIVE.with(|slot| {
-        let active = slot.borrow().clone()?;
-        let cap = DEVICE_CAP.try_lock()?;
+        let active = slot.borrow().clone().ok_or(CudaFailure::Unavailable)?;
+        let cap = DEVICE_CAP.try_lock().ok_or(CudaFailure::Busy)?;
         if cap.is_some_and(|limit| active.index >= limit) {
-            return None;
+            return Err(CudaFailure::Unavailable);
         }
         drop(cap);
-        if active.kernel != kernel
-            || active.artifact != artifact
-            || !active.device.usable()
-            || !(active.policy.kernels[kernel as usize].admitted(artifact)
-                || (active.qualifying
-                    && active.policy.kernels[kernel as usize].can_attempt(artifact)))
+        if active.kernel != kernel || active.artifact != artifact {
+            return Err(CudaFailure::InvalidRequest);
+        }
+        if !active.device.usable() || !active.policy.kernels[kernel as usize].can_attempt(artifact)
         {
-            return None;
+            return Err(CudaFailure::Quarantined);
+        }
+        if !(active.policy.kernels[kernel as usize].admitted(artifact) || active.qualifying) {
+            return Err(CudaFailure::Unavailable);
         }
         let result = call(&active.device);
         // Native children are reclaimed inside the operation closure. A checked
         // free/destroy error can quarantine after download produced host staging;
         // that staging must be discarded before reaching a caller destination.
-        (active.device.usable()
-            && (active.policy.kernels[kernel as usize].admitted(artifact)
-                || (active.qualifying
-                    && active.policy.kernels[kernel as usize].can_attempt(artifact))))
-        .then_some(result)
+        if !active.device.usable() || !active.policy.kernels[kernel as usize].can_attempt(artifact)
+        {
+            return Err(CudaFailure::Quarantined);
+        }
+        result
     })
 }
 

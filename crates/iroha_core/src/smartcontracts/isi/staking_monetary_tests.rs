@@ -517,3 +517,200 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     .execute(&validator, &mut stx)
     .unwrap();
 }
+
+#[test]
+fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
+    let state = setup_state();
+    let lane = LaneId::new(42);
+    let request_id = Hash::new(b"unbond-share-identity");
+    let (validator, delegator, request, nexus) = {
+        let mut block = state.block(block_header_with_height(1));
+        let mut stx = block.transaction_for_callback_testing();
+        let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+        stx.nexus.staking.unbonding_delay = Duration::ZERO;
+        RegisterPublicLaneValidator::new(
+            lane,
+            validator.clone(),
+            validator_peer_id(&validator),
+            validator.clone(),
+            1_000_u64.into(),
+            Metadata::default(),
+            fixture_registration_plan(&stx, lane, &validator, &1_000_u64.into()),
+        )
+        .execute(&validator, &mut stx)
+        .unwrap();
+        SchedulePublicLaneUnbond {
+            lane_id: lane,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            request_id,
+            amount: 100_u64.into(),
+            release_at_ms: stx.block_unix_timestamp_ms(),
+        }
+        .execute(&validator, &mut stx)
+        .unwrap();
+        let request = stx
+            .world
+            .public_lane_stake_shares
+            .get(&stake_key(lane, &validator, &validator))
+            .unwrap()
+            .pending_unbonds[&request_id]
+            .clone();
+        let nexus = stx.nexus.clone();
+        stx.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+        (validator, delegator, request, nexus)
+    };
+    let block =
+        new_block_with_height_and_time(request.liability_release_height, request.release_at_ms);
+    let mut state_block = state.block(block.as_ref().header());
+    let share_key = stake_key(lane, &validator, &validator);
+    let validator_key = validator_storage_key(lane, &validator);
+    let (plan, share_before, validator_before, custody_before, reserve_before, balances_before) = {
+        let mut stx = state_block.transaction_for_callback_testing();
+        stx.nexus = nexus.clone();
+        let plan = fixture_unbond_plan(&stx, lane, &validator, &validator, &request_id);
+        let balances = (
+            stx.world.assets.get(&plan.source_asset).cloned(),
+            stx.world.assets.get(&plan.destination_asset).cloned(),
+        );
+        (
+            plan.clone(),
+            stx.world
+                .public_lane_stake_shares
+                .get(&share_key)
+                .unwrap()
+                .clone(),
+            stx.world
+                .public_lane_validators
+                .get(&validator_key)
+                .cloned(),
+            stx.world
+                .public_lane_stake_custody
+                .get(&validator_key)
+                .cloned(),
+            stx.world
+                .public_lane_stake_reserves
+                .get(&plan.source_asset)
+                .cloned(),
+            balances,
+        )
+    };
+    for changed_identity in 0..3 {
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xE4; Hash::LENGTH]));
+        stx.nexus = nexus.clone();
+        let mut malformed = share_before.clone();
+        match changed_identity {
+            0 => malformed.lane_id = LaneId::new(43),
+            1 => malformed.validator = delegator.clone(),
+            _ => malformed.staker = delegator.clone(),
+        }
+        stx.world
+            .public_lane_stake_shares
+            .insert(share_key.clone(), malformed.clone());
+        let error = FinalizePublicLaneUnbond {
+            lane_id: lane,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            request_id,
+            monetary_plan: plan.clone(),
+        }
+        .execute(&validator, &mut stx)
+        .expect_err("a different share identity cannot authorize a withdrawal");
+        assert!(
+            error
+                .to_string()
+                .contains("stake share does not match its storage key")
+        );
+        assert_eq!(
+            stx.world.public_lane_stake_shares.get(&share_key),
+            Some(&malformed)
+        );
+        assert_eq!(
+            stx.world.public_lane_stake_custody.get(&validator_key),
+            custody_before.as_ref()
+        );
+        assert_eq!(
+            stx.world.public_lane_stake_reserves.get(&plan.source_asset),
+            reserve_before.as_ref()
+        );
+        assert_eq!(
+            (
+                stx.world.assets.get(&plan.source_asset).cloned(),
+                stx.world.assets.get(&plan.destination_asset).cloned()
+            ),
+            balances_before,
+        );
+        // Reject the whole transaction, including any lifecycle work performed
+        // before validation. Reopening it must recover the exact preimages.
+        drop(stx);
+        let reopened = state_block.transaction_for_callback_testing();
+        assert_eq!(
+            reopened.world.public_lane_stake_shares.get(&share_key),
+            Some(&share_before)
+        );
+        assert_eq!(
+            reopened.world.public_lane_validators.get(&validator_key),
+            validator_before.as_ref()
+        );
+        assert_eq!(
+            reopened.world.public_lane_stake_custody.get(&validator_key),
+            custody_before.as_ref()
+        );
+        assert_eq!(
+            reopened
+                .world
+                .public_lane_stake_reserves
+                .get(&plan.source_asset),
+            reserve_before.as_ref()
+        );
+        assert_eq!(
+            (
+                reopened.world.assets.get(&plan.source_asset).cloned(),
+                reopened.world.assets.get(&plan.destination_asset).cloned()
+            ),
+            balances_before,
+        );
+    }
+
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xE5; Hash::LENGTH]));
+    stx.nexus = nexus;
+    FinalizePublicLaneUnbond {
+        lane_id: lane,
+        validator: validator.clone(),
+        staker: validator.clone(),
+        request_id,
+        monetary_plan: plan.clone(),
+    }
+    .execute(&validator, &mut stx)
+    .expect("the canonical matured share remains withdrawable");
+    assert!(
+        !stx.world
+            .public_lane_stake_shares
+            .get(&share_key)
+            .unwrap()
+            .pending_unbonds
+            .contains_key(&request_id)
+    );
+    assert_eq!(
+        stx.world.public_lane_stake_reserves.get(&plan.source_asset),
+        Some(&quantity_sub(reserve_before.unwrap(), request.amount.clone()).unwrap()),
+    );
+    assert_eq!(
+        stx.world.assets.get(&plan.source_asset).unwrap().as_ref(),
+        &quantity_sub(
+            balances_before.0.unwrap().as_ref().clone(),
+            request.amount.clone()
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&plan.destination_asset)
+            .unwrap()
+            .as_ref(),
+        &quantity_add(balances_before.1.unwrap().as_ref().clone(), request.amount).unwrap(),
+    );
+}

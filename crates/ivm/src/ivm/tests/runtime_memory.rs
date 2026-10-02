@@ -209,7 +209,7 @@ fn runtime_template_copies_private_ranges_without_changing_the_source() {
     assert!(!template.data().private_memory_bytes.is_empty());
 }
 #[test]
-fn private_range_template_reset_refuses_before_memory_mutation() {
+fn private_range_template_reset_growth_refuses_before_memory_mutation() {
     let program = program_with_imm(7);
     let mut vm = quiet_vm(1_000);
     vm.load_program(&program).unwrap();
@@ -220,19 +220,82 @@ fn private_range_template_reset_refuses_before_memory_mutation() {
     let template = vm.try_runtime_template().unwrap();
     vm.memory.store_u64(start, 0x1234).unwrap();
     let before = vm.memory.load_u64(start).unwrap();
-    PrivateMemoryRanges::refuse_next_copy_for_testing();
+    // Exercise a reset destination with no retained interval capacity.
+    vm.private_memory_bytes = PrivateMemoryRanges::default();
+    crate::cache_memory::refuse_next_owned_vec_growth_for_test();
+    let gas = vm.remaining_gas();
+    let pc = vm.pc;
     let refused = vm.reset_from_runtime_template(&template).unwrap_err();
     assert_eq!(
         refused.kind,
         RuntimeTemplateResetErrorKind::AllocationUnavailable
     );
     assert_eq!(vm.memory.load_u64(start).unwrap(), before);
+    assert!(vm.private_memory_bytes.is_empty());
+    assert_eq!(vm.remaining_gas(), gas);
+    assert_eq!(vm.pc, pc);
+    vm.reset_from_runtime_template(&template).unwrap();
+    assert_eq!(vm.memory.load_u64(start).unwrap(), 0);
     assert_eq!(
         vm.private_memory_bytes,
         template.data().private_memory_bytes
     );
+}
+
+#[test]
+fn funded_private_interval_reset_reuses_capacity_after_original_pool_shrinks() {
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
+    vm.load_program(&program_with_imm(7)).unwrap();
+    let start = Memory::STACK_START;
+    vm.private_memory_bytes
+        .try_insert(start..start + 8)
+        .unwrap();
+    let template = vm.try_runtime_template().unwrap();
+    vm.memory.store_u64(start, 0x1234).unwrap();
+    vm.private_memory_bytes.clear();
+    let ranges = vm.private_memory_bytes.pairs_for_testing().as_ptr();
+    budget.set_limit_bytes(0);
     vm.reset_from_runtime_template(&template).unwrap();
-    assert_eq!(vm.memory.load_u64(start).unwrap(), 0);
+    assert_eq!(vm.private_memory_bytes.pairs_for_testing().as_ptr(), ranges);
+    assert_eq!(
+        vm.private_memory_bytes,
+        template.data().private_memory_bytes
+    );
+    assert_eq!(vm.memory.inspect_region(start, 8).unwrap(), &[0; 8]);
+    assert_eq!(vm.remaining_gas(), 1_000);
+    drop(vm);
+    drop(template);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn funded_private_tlv_interval_refusal_preserves_heap_and_guest_state() {
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
+    vm.set_zk_mode(true).unwrap();
+    let heap = vm.memory.heap_allocated_len();
+    let gas = vm.remaining_gas();
+    let pc = vm.pc;
+    let reserved = budget.reserved_bytes();
+    budget.set_limit_bytes(0);
+    assert!(matches!(
+        vm.alloc_host_private_tlv(&[1, 2, 3]),
+        Err(VMError::AllocationDeferred(_))
+    ));
+    assert_eq!(vm.memory.heap_allocated_len(), heap);
+    assert_eq!(vm.remaining_gas(), gas);
+    assert_eq!(vm.pc, pc);
+    assert!(vm.private_memory_bytes.is_empty());
+    assert_eq!(budget.reserved_bytes(), reserved);
+    budget.set_limit_bytes(64 * 1024 * 1024);
+    let address = vm.alloc_host_private_tlv(&[1, 2, 3]).unwrap();
+    assert_eq!(address, Memory::HEAP_START + heap);
+    assert_eq!(
+        vm.private_memory_bytes.pairs_for_testing(),
+        &[(address, address + 3)]
+    );
+    assert_eq!(vm.remaining_gas(), gas);
 }
 #[test]
 fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas() {
