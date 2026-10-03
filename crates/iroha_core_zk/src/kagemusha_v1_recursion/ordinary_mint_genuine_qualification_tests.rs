@@ -413,6 +413,14 @@ fn qualify() {
             &generated.ep.proof,
             &ep_column[..84]
         ));
+        #[cfg(unix)]
+        super::ordinary_mint_public_artifact_tests::export_from_environment(
+            &generated,
+            provider,
+            &f.enrollment.issuer_table,
+            apple,
+        )
+        .expect("export and replay exact public mathematical Mint artifacts");
         drop(generated);
         halo2_proofs::release_allocator_slack();
     }
@@ -464,5 +472,6 @@ fn verify_platform(
 #[path = "ordinary_active_state_qualification_tests.rs"]
 mod active_state;
 
+#[cfg(unix)]
 #[path = "ordinary_active_mint_state_tests.rs"]
 pub(super) mod active_mint_state;

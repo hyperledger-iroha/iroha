@@ -4793,6 +4793,13 @@ export interface ToriiGovernanceKagemushaVerifierReleaseActivateProposal {
   successor_release_id: ToriiGovernanceKagemushaBytes32V1;
 }
 
+export interface ToriiGovernanceKagemushaVerifierReleaseRetireProposal {
+  proposal_operator: string;
+  network_id: string;
+  expected_predecessor: ToriiGovernanceKagemushaGovernedVerifierRegistryV1;
+  standby_release_id: ToriiGovernanceKagemushaBytes32V1;
+}
+
 export interface ToriiGovernanceKagemushaVerifierPolicyInstallProposal {
   proposal_operator: string;
   network_id: string;
@@ -4898,6 +4905,10 @@ export type ToriiGovernanceProposalKind =
   | Readonly<{
       variant: "KagemushaVerifierReleaseActivate";
       kagemusha_verifier_release_activate: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
+    }>
+  | Readonly<{
+      variant: "KagemushaVerifierReleaseRetire";
+      kagemusha_verifier_release_retire: ToriiGovernanceKagemushaVerifierReleaseRetireProposal;
     }>;
 
 export interface ToriiGovernanceProposalRecord {
@@ -5088,7 +5099,8 @@ export type ParliamentProposalTagV1 =
   | "GlobalDataTriggerPermissionGovernance"
   | "KagemushaVerifierPolicyInstall"
   | "KagemushaVerifierReleaseInstall"
-  | "KagemushaVerifierReleaseActivate";
+  | "KagemushaVerifierReleaseActivate"
+  | "KagemushaVerifierReleaseRetire";
 
 export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
@@ -5318,6 +5330,10 @@ export type ParliamentProposalV1 =
   | Readonly<{
       kind: "KagemushaVerifierReleaseActivate";
       payload: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
+    }>
+  | Readonly<{
+      kind: "KagemushaVerifierReleaseRetire";
+      payload: ToriiGovernanceKagemushaVerifierReleaseRetireProposal;
     }>;
 
 export type ParliamentLifecycleTransitionV1 =

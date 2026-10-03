@@ -3452,7 +3452,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    let torii = Torii::new_with_handle(
+    let _torii = Torii::new_with_handle(
         ChainId::from("alias-route-registration-test"),
         signed_query_test_network_id(),
         kiso,
@@ -3478,7 +3478,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
         compiled_route_features(),
     )
     .expect("alias catalog is valid");
-    torii.add_alias_routes(&mut builder);
+    Torii::add_alias_routes(&mut builder);
     let (router, manifest) = builder
         .finish()
         .expect("every production alias route must match its authenticated catalog");

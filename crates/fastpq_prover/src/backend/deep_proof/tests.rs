@@ -24,7 +24,9 @@ fn maximal_queries() -> Vec<usize> {
 
 fn fixture(queries: &[usize]) -> DeepProof {
     let plans = OpeningPlans::new(queries).unwrap();
-    let digest = Digest::from_bytes(core::array::from_fn(|i| i as u8));
+    let digest = Digest::from_bytes(core::array::from_fn(|i| {
+        u8::try_from(i).expect("32-byte digest index")
+    }));
     DeepProof {
         row_root: digest,
         quotient_root: digest,

@@ -13,6 +13,7 @@ public enum KagemushaOrdinaryIncomingPhaseV1: UInt8, CaseIterable, Sendable {
   case retainTerminalAssertion = 10, recoverTerminal = 11, proveCommit = 12
   case commitTransport = 13, advanceState = 14, acknowledge = 15
   case refreshAccountClock = 16, prepareReceive = 17, originalPlatformCounter = 18
+  case originalPlatformSigning = 19
 }
 
 /// The sole first-release Norito transport for the ordinary incoming lifecycle.
@@ -83,7 +84,7 @@ enum KagemushaOrdinaryIncomingFrameV1 {
   private static func vector(_ bytes: Data) throws -> [Data] {
     var reader = CanonicalNoritoReader(data: bytes)
     let count = try reader.readUInt64LE()
-    guard count <= 5 else { throw invalid("ordinary incoming field count exceeds phase grammar") }
+    guard count <= 11 else { throw invalid("ordinary incoming field count exceeds phase grammar") }
     var result: [Data] = []
     for _ in 0..<count {
       var element = CanonicalNoritoReader(data: try reader.readCompactField())
@@ -96,9 +97,13 @@ enum KagemushaOrdinaryIncomingFrameV1 {
     return result
   }
 
-  private static func requireRequest(_ phase: KagemushaOrdinaryIncomingPhaseV1,
+  static func requireRequest(_ phase: KagemushaOrdinaryIncomingPhaseV1,
     handle: UInt64, originals: [Data]) throws {
     guard handle != 0 else { throw invalid("zero ordinary incoming handle") }
+    try requireOriginals(phase, originals: originals)
+  }
+
+  static func requireOriginals(_ phase: KagemushaOrdinaryIncomingPhaseV1, originals: [Data]) throws {
     let valid: Bool
     switch phase {
     case .prepareFinalizedMint:
@@ -107,7 +112,7 @@ enum KagemushaOrdinaryIncomingFrameV1 {
     case .prepareReceive:
       valid = originals.count == 3 && nonzeroDigest(originals[0])
         && bounded(originals[1], outgoingMaximum) && bounded(originals[2], receivedMaximum)
-    case .originalPlatformCounter:
+    case .originalPlatformCounter, .originalPlatformSigning:
       valid = originals.count == 2 && nonzeroDigest(originals[0])
         && [Data([1]), Data([2])].contains(originals[1])
     case .retainPreparationAssertion, .retainTerminalAssertion:
@@ -122,7 +127,7 @@ enum KagemushaOrdinaryIncomingFrameV1 {
     guard valid else { throw invalid("ordinary incoming request phase originals differ") }
   }
 
-  private static func requireResponse(_ phase: KagemushaOrdinaryIncomingPhaseV1,
+  static func requireResponse(_ phase: KagemushaOrdinaryIncomingPhaseV1,
     fields: [Data]) throws {
     let valid: Bool
     switch phase {
@@ -145,6 +150,9 @@ enum KagemushaOrdinaryIncomingFrameV1 {
     case .originalPlatformCounter:
       valid = fields.count == 2 && ((fields[0] == Data([5]) && fields[1].isEmpty)
         || (fields[0] == Data([4]) && fields[1].count == 4))
+    case .originalPlatformSigning:
+      _ = try KagemushaOrdinaryIncomingSigningProjectionV1(fields)
+      return
     case .advanceState, .acknowledge, .refreshAccountClock: valid = fields.isEmpty
     }
     guard valid else { throw invalid("ordinary incoming response phase originals differ") }

@@ -1,6 +1,6 @@
 // Post-repair regression for the original non-key coherent-shadow diagnostic.
 // The earlier accepted shadow and native logs remain in the remediation artifacts.
-// TODO: complete Name uniqueness/string-policy constraints; this rejects an
+// Complete Name census and string policy have separate controls; this rejects an
 // unbound output replacement, not every malformed RFC 5280 document.
 
 #[test]

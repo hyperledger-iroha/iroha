@@ -252,13 +252,19 @@ impl MainBoundedTransformPolicyV1 {
         }
         let width = self.columns_v1(rows);
         if width == 0 {
+            // Bounded columns own CPU parallelism; each column retains the
+            // shared FFT's exact public windows without nested Rayon work.
             columns.par_iter_mut().try_for_each(|column| {
                 match direction {
                     Direction::Forward => {
-                        crate::privacy_engines::transparent_stark::goldilocks_fft_v1(column, root)
+                        crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_v1(
+                            column, root,
+                        )
                     }
                     Direction::Inverse => {
-                        crate::privacy_engines::transparent_stark::goldilocks_ifft_v1(column, root)
+                        crate::privacy_engines::transparent_stark::goldilocks_ifft_coarse_v1(
+                            column, root,
+                        )
                     }
                 }
                 .map_err(map_transparent_error_v1)
@@ -516,3 +522,7 @@ fn allocate_words_with_v1(
 #[cfg(test)]
 #[path = "main_bounded_transform_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "main_fft_scheduler_tests.rs"]
+mod scheduler_tests;

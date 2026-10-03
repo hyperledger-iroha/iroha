@@ -3,6 +3,7 @@
 use super::*;
 use crate::{id::NetworkId, kagemusha::*};
 use iroha_crypto::{Hash, HashOf, KeyPair};
+use std::fmt::Write as _;
 fn sign_snapshot(s: &mut KagemushaGovernedPlatformOriginalsV1) {
     let m = s.subject.approval_signing_bytes().unwrap();
     s.approvals = [81, 82]
@@ -21,8 +22,10 @@ fn android_evaluation() -> KagemushaPlatformEvaluationOriginalsV1 {
     let payload = b"{\"entries\":{}}".to_vec();
     let h = Sha256::digest(&payload)
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+        .fold(String::new(), |mut encoded, byte| {
+            write!(&mut encoded, "{byte:02x}").expect("write hexadecimal digest");
+            encoded
+        });
     KagemushaPlatformEvaluationOriginalsV1::AndroidRevocation{canonical_snapshot_original:format!("iroha.android.attestation.revocation.snapshot.v1\npayload_sha256={h}\nresponse_date_ms=1000\nlast_modified_ms=-\ncache_max_age_seconds=10\nserial_count=2\nserial=1\nserial=a\ntbs_sha256_count=1\ntbs_sha256={}\n","12".repeat(32)).into_bytes(),original_status_payload:payload}
 }
 fn fixture(
@@ -55,7 +58,7 @@ fn fixture(
     let risk = KagemushaAppleReceiptRiskPolicyV1 {
         version: 1,
         app_id_utf8: b"ABCDEFGHIJ.example.ordinary".to_vec(),
-        maximum_creation_age_ms: 300000,
+        maximum_creation_age_ms: 300_000,
         maximum_risk_metric: 5,
     };
     let app_id = if apple {
@@ -107,7 +110,7 @@ fn fixture(
         app_authority_policy_digest: app_authority.canonical_digest().unwrap(),
         platform_trust_roots_digest: roots.canonical_digest().unwrap(),
         valid_from_ms: 100,
-        expires_at_ms: 500000,
+        expires_at_ms: 500_000,
     }
     .seal_identity_profile_id()
     .unwrap();
@@ -254,7 +257,7 @@ fn governed_ordered_full_der_mutation_and_resigned_swaps_do_not_match_policy() {
             0 => bad.subject.roots.platform_roots_der[0][2] ^= 1,
             1 => bad.subject.roots.platform_roots_der.reverse(),
             _ => bad.subject.roots.platform_roots_der[0].push(0),
-        };
+        }
         sign_snapshot(&mut bad);
         assert!(bad.authenticate(&p, 2000).is_err());
     }
@@ -314,7 +317,7 @@ fn governed_snapshot_network_set_platform_and_original_intervals_reject() {
             2 => bad.subject.valid_from_ms = 2001,
             3 => bad.subject.expires_at_ms = 2000,
             _ => bad.subject.version = 2,
-        };
+        }
         if bad.subject.approval_signing_bytes().is_ok() {
             sign_snapshot(&mut bad);
         }
@@ -329,7 +332,7 @@ fn governed_current_rechecks_do_not_cache_time_or_extend_android_original_status
     v.recheck_current(&p, 10999).unwrap();
     assert!(v.recheck_current(&p, 11000).is_err());
     assert!(v.recheck_current(&p, 20000).is_err());
-    assert!(v.recheck_current(&p, 500000).is_err());
+    assert!(v.recheck_current(&p, 500_000).is_err());
 }
 #[test]
 fn governed_android_reuses_exact_existing_snapshot_digest_preimage() {
@@ -350,8 +353,10 @@ fn governed_android_reuses_exact_existing_snapshot_digest_preimage() {
             .canonical_digest()
             .unwrap()
             .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
+            .fold(String::new(), |mut encoded, byte| {
+                write!(&mut encoded, "{byte:02x}").expect("write hexadecimal digest");
+                encoded
+            }),
         "f7b1197d0e47393f90de5348adffdb3f56a8947117bcfa0ba9a4c9fd563b0a3a"
     );
 }
@@ -429,6 +434,6 @@ fn governed_apple_risk_policy_requires_actual_app_id_and_bounded_creation_age() 
     else {
         unreachable!()
     };
-    r.maximum_creation_age_ms = 300001;
+    r.maximum_creation_age_ms = 300_001;
     assert!(s.subject.approval_signing_bytes().is_err());
 }

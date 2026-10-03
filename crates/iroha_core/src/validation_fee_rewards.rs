@@ -1861,7 +1861,9 @@ mod tests {
                 .expect("independent native historical source snapshot");
             assert_eq!(source.0.key, service_key(b, period).unwrap());
             assert_eq!(source.1.service_blocks, weights);
-            let component_claim_hash = stx.tx_call_hash.expect("retained component execution identity");
+            let component_claim_hash = stx
+                .tx_call_hash
+                .expect("retained component execution identity");
             let transcript_count = stx.retail_fee_transcripts_for_test().len();
             claim_fee_rewards(stx, &claimant, b.validator_lane_id).unwrap();
             let claim_transcripts = &stx.retail_fee_transcripts_for_test()[transcript_count..];

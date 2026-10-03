@@ -1,5 +1,11 @@
 # Pixel 6 internal eSE service conformance contract
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this contract. Pixel 6 uses the stock-phone software provider; no eSE applet,
+> OMAPI access rule or qualification report is required for use or integration.
+> The text below is retained as optional hardware research only.
+
 Pixel 6 is a required phone profile. Its observed Android Keystore one-use
 restriction is software-enforced, so a KAGEMUSHA V1 monetary profile on this
 device requires a separately provisioned **internal** eSE service. The stock

@@ -23,7 +23,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
             val path = directory.resolve("fixtures/offline/kagemusha_app_platform_messages_v1.tsv")
             if (Files.isRegularFile(path)) {
                 selection = hex(Files.readAllLines(path, Charsets.UTF_8)
-                    .single { it.startsWith("s_mint_fold_9\t") }.split('\t')[1])
+                    // The generic exact-next selector uses the outgoing grammar.
+                    .single { it.startsWith("s_send_split_9\t") }.split('\t')[1])
                 break
             }
             directory = directory.parent

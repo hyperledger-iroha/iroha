@@ -6,12 +6,11 @@ use crate::kagemusha_v1_crypto::seal_kagemusha_credit_v1_with_rng;
 use iroha_crypto::kagemusha::kagemusha_x25519_public_key_v1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KagemushaCreditOpeningV1,
-    KagemushaHardwarePlatformClassV1,
-    KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryMintApprovalChallengeV1,
-    KagemushaOrdinaryMintApprovalV1, KagemushaOrdinaryMintAuthorizationContextV1,
-    KagemushaOrdinaryMintAuthorizationStatementV1, KagemushaSignedOrdinaryCurrentControlV1,
-    kagemusha_ciphertext_digest_v1, kagemusha_mint_credit_opening_commitment_v1,
-    kagemusha_recipient_credential_commitment_v1,
+    KagemushaHardwarePlatformClassV1, KagemushaOrdinaryFinancialHeadV1,
+    KagemushaOrdinaryMintApprovalChallengeV1, KagemushaOrdinaryMintApprovalV1,
+    KagemushaOrdinaryMintAuthorizationContextV1, KagemushaOrdinaryMintAuthorizationStatementV1,
+    KagemushaSignedOrdinaryCurrentControlV1, kagemusha_ciphertext_digest_v1,
+    kagemusha_mint_credit_opening_commitment_v1, kagemusha_recipient_credential_commitment_v1,
 };
 use rand::rand_core::{TryCryptoRng, TryRngCore};
 use zeroize::{Zeroize as _, Zeroizing};

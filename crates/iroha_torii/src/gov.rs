@@ -691,7 +691,7 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
-const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 13] = [
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 14] = [
     "DEPLOY_CONTRACT",
     "RUNTIME_UPGRADE",
     "SCCP_ROUTE_GOVERNANCE",
@@ -705,6 +705,7 @@ const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 13] = [
     "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
     "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
     "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
+    "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
 ];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///

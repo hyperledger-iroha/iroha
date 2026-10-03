@@ -151,6 +151,62 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         Ok(fields)
     }
 
+    /// Read the complete original signing projection for this exact incoming W2 or W1.
+    /// Every field comes from the retained Cash/credential owner; caller selectors cannot
+    /// install a key, App ID, counter, subject, FI certificate or signing permission.
+    /// # Errors
+    /// Refuses a different operation/purpose, stale custody or inconsistent enrolled originals.
+    ///
+    /// TODO: qualify both projections through a genuine complete W2/W1 Cash-owner lifecycle;
+    /// codec and scripted workflow controls do not establish that execution evidence.
+    pub fn incoming_platform_signing_original(
+        &self,
+        terminal: bool,
+        operation: DigestV1,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        let (challenge, _, _, _) = self.incoming_platform_state(terminal)?;
+        let counter = self.incoming_platform_counter_original(terminal, operation)?;
+        let financial = self.publication.cash_financial();
+        let metadata = financial
+            .retained_completed_app_key_fields()
+            .map_err(material)?;
+        let credential = financial.enrollment().app_credential();
+        let subject = credential.subject();
+        let mut fields = self.incoming_platform_fields(terminal)?;
+        if metadata.len() != 9
+            || challenge.operation_id != operation
+            || challenge.attested_key_id != subject.attested_key_id
+            || challenge.enrollment_digest != credential.digest()
+            || metadata[3] != subject.app_public_key.as_sec1_bytes()
+            || metadata[4] != subject.attested_key_id
+            || metadata[6] != credential.original()
+            || metadata[7] != fields[3]
+            || metadata[8] != credential.digest()
+            || subject.app_signing_identity_digest == [0; 32]
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        fields.extend([
+            counter[0].clone(),
+            metadata[1].clone(),
+            metadata[3].clone(),
+            metadata[4].clone(),
+            metadata[8].clone(),
+            subject.app_signing_identity_digest.to_vec(),
+            counter[1].clone(),
+        ]);
+        if self.incoming_platform_state(terminal)?.0 != challenge
+            || self.incoming_platform_counter_original(terminal, operation)? != counter
+            || financial
+                .retained_completed_app_key_fields()
+                .map_err(material)?
+                != metadata
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(fields)
+    }
+
     /// Fsync actual one-use platform fence before authorizing exactly one OS call.
     /// # Errors
     /// An uncertain fence never authorizes another call; exact retained evidence is recovered.

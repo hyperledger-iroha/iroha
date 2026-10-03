@@ -408,7 +408,7 @@ fn four_validator_fastpq_transcripts_bind_finality_and_survive_restart() -> Resu
             asset.clone(),
             "finalized transcript custody",
             AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         );
         let source_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
         let setup: Vec<InstructionBox> = vec![

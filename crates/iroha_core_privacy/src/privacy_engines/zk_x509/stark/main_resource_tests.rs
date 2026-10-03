@@ -136,6 +136,7 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
 fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    eprintln!("MAIN current owner plan before original pins: {plan:?}");
     assert_eq!(plan.masks, 84_422_208);
     let cut_payload = aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(
         layout.common_lde_size(),
@@ -207,17 +208,16 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
     );
-    // The maximum RFC registration also charges 102 Vec headers (2,448),
-    // eight borrowed column targets (128), fixed replay scratch (2,272),
-    // and the one-entry public denominator owner (48): 4,896 additional bytes.
-    // The larger FRI stage still dominates. Adjacent-chunk blinding retains
-    // one additional Fp4 mask scratch element; all caps/reserves stay fixed.
+    // The current RFC stripe is the largest registration phase. It retains
+    // the full 147-column fixed stripe, all quotient originals and the outer
+    // chunks; interpolation and incoming chunks are charged in their own phase.
+    // The unchanged FRI envelope still dominates the global arithmetic bound.
     assert_eq!(core::mem::size_of::<E>(), 32);
     assert_eq!(
         super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
         core::mem::size_of::<E>()
     );
-    assert_eq!(plan.quotient_stage, 3_158_315_808);
+    assert_eq!(plan.quotient_stage, 3_166_719_416);
     assert_eq!(
         plan.maximum_live_buffers,
         3_697_993_152 + core::mem::size_of::<E>()
@@ -643,32 +643,37 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         fixed_recovery_butterflies +=
             fixed * (stripes - 1) * (stripe_rows / 2) * u64::from(stripe_rows.ilog2());
     }
+    eprintln!(
+        "MAIN current work before original pins: columns={columns}, native_cells={native_cells}, masked_cells={masked_cells}, quotient_rows={quotient_rows}, residues={residues}, cached_columns={cached_columns}, quotient_native_iffts={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_iffts={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}"
+    );
     assert_eq!(SECURITY_LANES, 1);
     assert_eq!(layout.registered_segments.len(), 49);
     assert_eq!(columns, 5_811);
     assert_eq!(native_cells, 2_116_723_200);
     assert_eq!(masked_cells, 2_127_275_976);
     assert_eq!(quotient_rows, 53_215_232);
-    // Exact local registration census after private endpoint equations
-    // replaced public claims and six metadata plus23 key-source RFC equations
-    // were added: 23 *2^21 =48,234,496 extra local residue evaluations.
-    // The RFC private-output slice then removes 24 local constraints, saving
-    // 24 * 2^21 = 50,331,648 evaluations. Joined-link replay work has its
-    // separate source-bound owner census.
-    // Four SHA registrations each remove eight unconsumed public endpoint
-    // constraints, saving 4 * 8 * 2^22 = 134,217,728 evaluations.
-    // Replacing 24 raw aggregate constraints by 16 bridge constraints, and
-    // removing 16 RFC and 64 SHA public scalar bindings, removes a further
-    // 24 * 2^21 + 4 * 16 * 2^22 local evaluations. The 20 new private
-    // quotient terms and 32 original-column replays are counted separately.
-    // The final original-polynomial CA joins retire 208 further scalar
-    // constraints per SHA registration and four RFC root-SPKI constraints.
-    // Their 108 private joint quotients have a separate original-owner census.
+    // Per-adapter local residue work from the complete 49-registration census:
+    // reduction, low-S, scalar-bit, projection, window, value, byte-memory,
+    // strict-DER, RFC5280, SHA-call and P-256 arithmetic, in that order.
     assert_eq!(
-        28_245_204_992_u64 - 4 * 208 * (1 << 22) - 4 * (1 << 21),
-        24_747_155_456
+        [
+            11_796_480_u64,
+            770_048,
+            2_744_320,
+            39_190_528,
+            367_001_600,
+            2_803_630_080,
+            95_420_416,
+            3_732_930_560,
+            4_070_572_032,
+            9_462_349_824,
+            4_771_020_800,
+        ]
+        .into_iter()
+        .sum::<u64>(),
+        25_357_426_688
     );
-    assert_eq!(residues, 24_747_155_456);
+    assert_eq!(residues, 25_357_426_688);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
@@ -678,19 +683,18 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         buffers.remaining_source_and_runtime_envelope,
         9_186_908_736 - core::mem::size_of::<E>()
     );
-    // Both level-four cut owners remain live in every registration. The exact
-    // 25,165,984-byte charge removes six cached columns from each of five
-    // arithmetic registrations and from RFC: 36 fewer retained columns.
-    // Each has four stripes, so this adds 36 * (4 - 1) = 108 native IFFTs.
-    assert_eq!(cached_columns, 3_400);
-    assert_eq!(quotient_native_iffts, 7_512);
-    assert_eq!(quotient_native_butterflies, 28_489_527_808);
-    assert_eq!(quotient_forward_butterflies, 138_440_286_208);
+    // Both cut owners remain live. Phase-specific accounting admits all 283
+    // P-256 arithmetic columns in each of five registrations, while the RFC
+    // registration retains only its first 26 base columns across four stripes.
+    assert_eq!(cached_columns, 3_428);
+    assert_eq!(quotient_native_iffts, 7_428);
+    assert_eq!(quotient_native_butterflies, 28_071_145_984);
+    assert_eq!(quotient_forward_butterflies, 139_336_818_688);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_069_183_488);
-    assert_eq!(fixed_native_butterflies, 8_223_168_960);
-    assert_eq!(fixed_recovery_iffts, 6_535);
-    assert_eq!(fixed_recovery_butterflies, 32_549_109_760);
+    assert_eq!(fixed_native_butterflies, 8_447_302_080);
+    assert_eq!(fixed_recovery_iffts, 6_670);
+    assert_eq!(fixed_recovery_butterflies, 33_221_509_120);
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
     assert_eq!(commitment_forward_butterflies, 536_208_211_968);
@@ -733,4 +737,113 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
     eprintln!(
         "MAIN DEEP synthetic-division recurrence steps: original={original_division_steps}, grouped={grouped_division_steps}; each individual claim remains checked, base-field weighted sums remain"
     );
+}
+
+#[test]
+fn registration_quotient_phase_ledger_retains_originals_chunks_and_growth() {
+    use main_resources::MainRegistrationQuotientPayloadV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    let mut saw_fixed_growth = false;
+    for registration in &layout.registered_segments {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+        let stripe_rows = plan.quotient_coset_rows.min(1 << 19);
+        let actual =
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, cap).unwrap();
+        let width = segment.base_width + segment.aux_width + segment.fixed_width;
+        let metadata = width * core::mem::size_of::<Vec<F>>()
+            + SECURITY_LANES * core::mem::size_of::<Vec<E>>()
+            + 2 * SECURITY_LANES * core::mem::size_of::<Vec<Vec<E>>>()
+            + 2 * SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * core::mem::size_of::<Vec<E>>()
+            + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<&mut [F]>()
+            + 2 * super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 * core::mem::size_of::<F>()
+            + 16 * core::mem::size_of::<usize>()
+            + main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
+                segment.trace_log2,
+                main_quotient_stripes::MainQuotientStripeV1::new_v1(segment.trace_log2, plan.quotient_coset_log2, 0).unwrap(),
+            ).unwrap();
+        let quotients = SECURITY_LANES * plan.quotient_coset_rows * core::mem::size_of::<E>();
+        let copy = plan.quotient_coset_rows * core::mem::size_of::<E>();
+        let chunks = SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * cap * core::mem::size_of::<E>();
+        let growth = if stripe_rows > segment.trace_size() {
+            saw_fixed_growth = true;
+            segment.trace_size() * core::mem::size_of::<F>()
+        } else {
+            0
+        };
+        assert_eq!(
+            actual.stripe,
+            metadata
+                + width * stripe_rows * core::mem::size_of::<F>()
+                + growth
+                + quotients
+                + chunks
+        );
+        assert_eq!(
+            actual.interpolation,
+            metadata + quotients + copy + 2 * chunks
+        );
+        assert_eq!(
+            actual.accumulation,
+            metadata + 2 * chunks + cap * core::mem::size_of::<E>()
+        );
+        assert_eq!(
+            actual.maximum_v1(),
+            [actual.stripe, actual.interpolation, actual.accumulation]
+                .into_iter()
+                .max()
+                .unwrap()
+        );
+        assert!(
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, usize::MAX).is_err()
+        );
+    }
+    assert!(saw_fixed_growth);
+}
+
+#[test]
+fn current_registration_resource_owner_plan_diagnostic() {
+    use main_resources::MainRegistrationQuotientPayloadV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    eprintln!("MAIN current owner-plan diagnostic: {plan:?}; joint={joint:?}");
+    let mut maximum = 0;
+    for (index, registration) in layout.registered_segments.iter().enumerate() {
+        let phases =
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, cap).unwrap();
+        let ordinary = plan.quotient_cache_plan_v1(&layout, *registration).unwrap();
+        let joint_cache = joint
+            .quotient_cache_plan_v1(&layout, *registration)
+            .unwrap();
+        maximum = maximum.max(phases.maximum_v1());
+        eprintln!(
+            "MAIN current registration-owner diagnostic: index={index}, registration={registration:?}, phases={phases:?}, ordinary_cache={ordinary:?}, joint_cache={joint_cache:?}"
+        );
+    }
+    assert_eq!(maximum, plan.quotient_stage);
+    for phase in [
+        main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
+        main_ca_resources::MainCaBufferPhaseV1::Registration,
+        main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+        main_ca_resources::MainCaBufferPhaseV1::Finalization,
+    ] {
+        eprintln!(
+            "MAIN current joint-phase diagnostic: phase={phase:?}, required={}",
+            joint.required_v1(phase).unwrap()
+        );
+    }
+    // This is source-derived allocation arithmetic only. Original numeric pins,
+    // complete native proof/RSS and all external limits remain separate gates.
+    assert_eq!(plan.maximum_live_buffers, 3_697_993_184);
 }

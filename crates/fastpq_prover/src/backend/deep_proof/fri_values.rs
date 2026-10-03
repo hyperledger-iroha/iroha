@@ -170,7 +170,7 @@ mod tests {
             for omitted in 0..arity {
                 let values = values(arity);
                 let fiber = FriValues::omit(&values, omitted).unwrap();
-                let mut expected = vec![arity as u8];
+                let mut expected = vec![u8::try_from(arity).expect("fixed FRI arity")];
                 for (i, value) in values.iter().enumerate() {
                     if i != omitted {
                         expected.extend_from_slice(&value.to_le_bytes());
@@ -206,8 +206,16 @@ mod tests {
             let fiber = FriValues::omit(&values(arity), 0).unwrap();
             assert!(fiber.expand(arity, Fp4::ZERO).is_err());
             let raw = norito::codec::encode_with_header_flags(&fiber).0;
-            for tag in [0, 1, 2, 3, 5, 8 + (arity as u8), 32] {
-                if tag != arity as u8 {
+            for tag in [
+                0,
+                1,
+                2,
+                3,
+                5,
+                8 + (u8::try_from(arity).expect("fixed FRI arity")),
+                32,
+            ] {
+                if tag != u8::try_from(arity).expect("fixed FRI arity") {
                     let mut changed = raw.clone();
                     changed[0] = tag;
                     assert!(norito::core::decode_field_canonical::<FriValues>(&changed).is_err());
@@ -226,7 +234,7 @@ mod tests {
                     assert!(norito::core::decode_field_canonical::<FriValues>(&changed).is_err());
                 }
             }
-            let mut full = vec![arity as u8];
+            let mut full = vec![u8::try_from(arity).expect("fixed FRI arity")];
             for value in values(arity) {
                 full.extend_from_slice(&value.to_le_bytes());
             }

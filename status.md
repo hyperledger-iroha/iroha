@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-02. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-03. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -21,7 +21,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Current-owner financial control, complete recursive monetary proofs, funded State transitions, settlement, recovery and physical-device evidence. |
+| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Stock-OS journal/marker Advance, complete recursive monetary proofs, funded State transitions, ledger load/unload and device recovery measurements. |
 | Petal Stream | `iroha_petal` implements the [Petal Stream](specs/petal_stream.md) animated optical transport (`天` orientation field, katakana, tile polarity and ring dots as three Reed–Solomon lanes under a rateless fountain) with decoder, renderer, camera simulator and `iroha offline petal`. A gain-free tile read keeps lanes `P` and `K` alive under over-exposure, veiling light and shadows. Swift, Kotlin/JVM, JavaScript, Python and C# ports reproduce the shared fixtures and decode the golden captures to the recorded lanes. Simulated reads complete the largest 7,552-byte payment in 8.6 s (34 s from lanes `P` and `D` alone). | All evidence is simulated: physical-camera reads on the governed Android/iOS device matrix, lane `K` at 480p or soft focus, field tuning (three-finger fallback, pose tracking) and the public guides in `iroha-docs`. |
 
 ## Immediate blockers
@@ -123,64 +123,101 @@ transforms take 639.87 seconds and are the largest measured performance target.
 The retained run is `dist/zk-remediation/2026-09-30/epoch19-linux-source17-maximum`.
 Activation remains unavailable.
 
-Fresh normal Rust compilation now emits all twelve selected Core/Kagami/IVM/
-storage/FASTPQ test harnesses. The actual host bridge passes ABI-25, loaded-image
-and required-symbol checks; genuine quantity and IVM captures match across paired
-runs. Fresh issuer-key and quota-ownership regressions pass, including all 109
-FASTPQ source-inventory controls. The broader selection remains incomplete.
-Mint tests exposed a production mismatch between the 327-byte canonical envelope
-and the 384-byte transport maximum; the model and recursive-consumer repairs are
-applied. The remaining 66 groups execute 2,870 passes and five known fixture
-failures with no skips. The fresh rerun passes the available CoreZk controls,
-both private-export fee fixtures and mint geometry. It exposes two proof-helper
-lookup configurations, an ineffective X25519 entropy mutation and an allocating
-provider-validation length check; reviewed follow-up repairs are applied. Both
-complete active/inactive mint binding controls pass, but the full mint relation
-exceeds the unchanged production SHA row capacity at K=16. The Musubi original-State
-source and final three semantic table readers are applied; native compilation
-exposes a read-trait mismatch and test callback error, both repaired. The next
-catalog enum-size lint is repaired; native rerunning waits for the separately
-owned merge to finish. Full-State capture still rejects its unresolved verifier schema.
-All nine crypto admission controls pass, including 44 fresh-process checks across
-all 11 algorithms with no Rust allocation requests. Ongoing unrelated
-edits mean these are artifact diagnostics,
-not qualification of one fixed source candidate.
+The repaired sixteen-target Core/Kagami compilation passes with stock Rust
+1.93.1 after fixing the typed proposal-ID fixture. Its immutable native artifacts
+are retained; fresh selected controls and the lifetime doctest remain required.
+Unrelated document edits fail the wrapper's source guard after Cargo succeeds;
+that failure remains separate from the compiler outcome.
+The preceding fixed candidate builds all sixteen selected Core/Kagami targets
+with stock Rust 1.93.1 and passes the original lifetime compile-fail test. Its
+3,520 planned executions end with 3,393 passes, 32 fixture failures and 70 controls
+left unexecuted by a default-stack overflow. All 757 selected bridge controls
+pass. The reviewed fixture and lifetime repairs are applied; fresh native
+validation remains required. Complete Mint/Guard/receiver and genuine proof/export
+qualification remain open; full-State capture still rejects its unresolved
+runtime-verifier schema. Governed standby retirement has paired native public
+fixtures and an exact current inventory of 105 codec owners and 1,555 nominal
+identities. New ordinary and reduced-feature checks, SDK consumption and native
+publication validation remain required.
 
-Fresh Linux privacy builds pass. All 54 private-dispatch controls and the four
-full-domain X509 oracles pass. The obsolete composite-test expectation is repaired
-and its rerun passes. The five-channel SPKI source repair passes all six native
-controls. All eight TBS/CRL/signature controls and complete source-lookup replay
-pass after the length-endianness correction. All six serial controls pass;
-all five selected-disclosure controls pass. Its full RFC namespace has 119 passes
-and four stale profile/descriptor/histogram failures. Complete Name OID census and
-uniqueness are applied but await native validation; full value/string policy
-remains open. Corrected private multiply fixtures now
-pass all four controls. All eight public bit-count controls pass, including the
-maximum proof; the run's late merge-state guard fails and that overall failure
-is retained. Conditional moves await native validation. The zero-suffix FFT repair passes native parity, but its measured
-large-domain gains do not establish the complete proof's time target.
-Current complete proof, resource and cryptographic qualification remain unavailable.
+An earlier fixed candidate passes all 78 private-dispatch controls, including signed
+MEAN, and all seven shared public MEAN controls. It also passes 137 ordinary RFC
+controls, both actual ignored RFC auxiliary oracles, and the current X509 profile,
+geometry and degree checks. The preceding private namespace records 86 passes and
+three fixture failures: two stale opcode inventories and a padding mutation that
+left an existing one unchanged. Their repairs are applied. All 144 preceding RFC
+controls, five inverse-window controls, two temporal controls and both ignored
+RFC auxiliary oracles pass. The complete 210-record
+inverse-window experiment preserves every column but runs 1.535 times slower
+than the former scalar path, so it remains test-only; the fixed-work successor
+needs a fresh comparison.
+Two public MEAN controls initially fail resource observation despite native
+success; exact repeats pass the unchanged observer, preserving the original failures.
+The batch FFT experiment passes its native oracles and emits all 156 measurements;
+its corrected parser preserves the original incomplete-inventory failure. A shared
+coarse CPU scheduler is applied but still needs integrated native validation.
+The first fixed-work inverse retains a compiled private-gate branch. Its reviewed
+successor is applied and masks before validation; integrated AArch64 inspection
+confirms the helper repair. Surrounding recurrences and whole-prover side-channel
+qualification remain open. The repaired inverse-window collector passes all ten
+native prerequisites and the complete 210-record parity/resource benchmark; the
+sum of per-span medians improves by 1.958 times. Integrated AArch64 inspection
+covers that collector. The bounded production route is now selected in source;
+fresh production controls and the complete proof still need validation.
+All 97 private-dispatch controls pass on the rebuilt artifact. Newly applied
+successful LOAD64/STORE64 relations preserve original memory/control/history
+ports and reject other running opcodes; their native controls remain pending.
+The phase-aware X509 resource repair compiles. Its native producer records 22
+passes, four stale assertion failures and one resource-observer failure despite
+native success. The numeric and digest fixtures are updated from actual native
+emissions, with all limits unchanged. Fresh complete controls and a bounded
+maximum proof remain required.
+Earlier immutable full-suite processes finish naturally; source changes are
+recorded rather than inherited as current-candidate qualification. Complete IVM
+execution/finalized-State binding and RAM-LFE encryption remain unavailable.
 
-The exact native export inventory is repaired and SDK source contracts pass.
-The latest Apple retry stops after three compiled slices because Cargo.lock
-changed; it publishes no package. Authentic Kotlin fixtures are refreshed; the
-isolated core run passes all 1,766 cases. Exact report reconciliation and the
-remaining diagnostic now pass: tooling, Android managed and actual host-JNI
-consumers, plus the real redemption example. Four Android test files needed a
-JUnit 5 import correction. Full Swift packaging and physical devices remain pending. Fifty local FASTPQ hardware controls pass, including
-required Metal and NEON cleanup; the full hardware and side-channel matrix is open.
-Vega timing requires an uncontended host and remains unqualified.
+Maximum FASTPQ ordinary and AXT production plus fresh verifier replays pass on
+the preceding fixed candidate, within unchanged proof/payload/work limits. The
+available M1 Ultra passes all 52 selected native/SIMD/Metal controls and 13 entropy,
+preflight and owned-erasure controls. Conditional adaptive-QROM hiding review now
+has explicit public/conditional samplers and conflict accounting; concrete hash,
+side-channel, remaining hardware and finalized-source network qualification stay
+open.
 
-Fresh canonical fixture generation, native SDK consumers, Swift/Android packages,
-workspace checks and four-validator tests still require one integrated candidate.
-Fresh network artifacts compile, but all four selected scenarios fail Torii
-startup on an alias-index authentication-marker mismatch. The correction preserves
-the existing required signature policy and passes all ten native alias-route
-controls. The next daemon build finds a missing type qualification in account
-removal; its one-line repair is applied. Fresh daemon/harness and four-validator
-reruns remain required.
-Complete cryptographic/side-channel, physical-device and signed release evidence
-remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact boundaries.
+The recorded script selection passes 718 tests and 163 subtests; typed workflows
+pass 58 controls. The preceding Kotlin/JNI run records 1,824 passes and one stale
+bootstrap fixture failure among 1,825 tests, including six passing maximum-tree
+controls. Android client managed tests record 421 passes and one signing-vector
+fixture failure; both corrections are applied. Actual Android client host JNI
+passes 95 controls, wallet host JNI passes one, and wallet managed tests pass 91.
+JVM tools pass 30 controls and the native example passes. The compiled JNI census
+also rejects four Android-only methods absent from the Darwin library; correct
+target-specific native coverage remains to be established. The preceding host
+library loads as ABI-25 with all 120 required symbols; all ten genuine generator
+modes pass twice with identical paired outputs. Paired Kagami, quantity, IVM and
+public-codec producers and selected consumers pass on their recorded source.
+The possession-journal directory and Swift test-endpoint conformance repairs are
+applied. Fresh complete consumers, Apple packaging, full Swift host tests,
+physical devices, the complete Cash-owner lifecycle and signed releases remain open.
+
+The preceding whole-workspace all-target check ends with six Torii test API
+errors; strict all-target Clippy finds 43 diagnostics. Their reviewed corrections
+are applied and need native replay. The daemon, CLI and three integration
+harnesses build. Four-validator transaction commitment passes. The lane restart
+scenario stalls after lane height 1 commits while global height remains 3; an
+unchanged-source repeat reproduces it. The assembler now includes a nonempty
+merge section's time floor before its first build, avoiding duplicate parent
+authentication while retaining canonical-time validation. Native wire-parity and
+build-count controls plus the original network scenario remain required.
+FASTPQ and wallet network scenarios fail
+before their proof assertions on asset-domain and initial-executor admission;
+reviewed repairs preserve proof checks and need fresh network validation.
+The merge is committed as `ab6d83b7216f4e8ec00b29a31baeed0637929600` on
+`optimizations`. It changed checkout identity during the producer's terminal
+check without changing source bytes; that failed validation remains recorded.
+The authored OpenAPI copies now include the same retirement schema and require
+fresh source guards and native route checks. The [ZK goals](specs/zk_first_release_goals.md)
+distinguish recorded outcomes from the follow-up repairs' pending validation.
 
 KAGEMUSHA component coverage includes journal recovery, issuer-key and
 enrollment-floor controls, expired-preparation custody, Guard-generation and
@@ -253,25 +290,29 @@ passes.
 - **Privacy/crypto:** the source17 joint X509 maximum proof passes native and fresh
   verification, proof size and enforced address space. The 300-second limit fails;
   RSS readings need observer reconciliation. Complete relation, adaptive transcript/hiding and
-  side-channel qualification remain open. Historical q77 ordinary/AXT maximum
-  proofs pass on their recorded source; finalized-source, hardware and network
-  qualification remain. RAM-LFE secure encryption/full execution, IVM native
+  side-channel qualification remain open. Maximum q77 ordinary/AXT proofs and local
+  M1 Ultra controls pass on their recorded candidate; finalized-source, remaining
+  hardware and network qualification remain. RAM-LFE secure encryption/full execution, IVM native
   execution/finalized-State binding and signed release evidence remain open under
   the [ZK goals](specs/zk_first_release_goals.md).
 
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.
-- **Offline money/devices:** the ordinary app profile uses an attested persistent
-  hardware key, genuine platform admission and independent Native financial
-  custody. Recursive proofs, current-owner integration, mint/redemption,
-  adversarial recovery and signed physical qualification remain open. Ordinary
-  key signatures do not establish a non-forking journal or hardware clock.
+- **Offline money/devices:** the [single KAGEMUSHA target](specs/kagemusha_single_design_proposal.md)
+  uses a released wallet on a stock uncompromised OS, hardware-backed keys,
+  a durable software provider and recursive proofs. Its Send is irreversible;
+  recovery replays exact Payment bytes to the receiver, with no refund path.
+  Existing ordinary code still has per-operation online-control dependencies.
+  Complete proofs, provider
+  integration, mint/redemption and device recovery measurements remain open.
+  The [checklist](specs/kagemusha_evidence_gate.md) records verification without
+  an approval gate; software markers claim no protection against OS takeover.
 
 First-release contracts remain canonical APIs, domainless `AccountId`, Norito
 wire formats and deterministic ABI V1. Sumeragi uses exact `3f + 1` global
 committees, exactly `n - f` votes, signed RS16 availability and work-driven blocks.
 Ordinary signing supports authenticated software custody. The first production
-KAGEMUSHA app profile requires governed app-key admission, genuine monetary
-proofs and exact current-owner/replay authority; it has no custom applet or
-one-use-key prerequisite.
+KAGEMUSHA target requires platform enrollment, genuine monetary proofs and
+durable local state/replay authority under its stock-OS assumption; it has no
+custom applet or one-use-key prerequisite.

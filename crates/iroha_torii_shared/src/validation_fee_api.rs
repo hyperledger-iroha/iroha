@@ -776,10 +776,6 @@ impl norito::json::JsonDeserialize for ValidationFeeProposalDetailQueryV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(tag = "kind", content = "payload", rename_all = "SCREAMING_SNAKE_CASE")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "boxing one payload would change the canonical public V1 enum construction and wire shape"
-)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftPayloadV1"
@@ -898,7 +894,6 @@ fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::governance::types::{
         BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
         GovernanceAttemptId, GovernanceCertificateId, GovernanceExpectedHeadPresentV1,
@@ -912,13 +907,6 @@ mod tests {
             iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive deterministic validation-fee fixture account");
         AccountId::new(key_pair.public_key().clone())
-    }
-    fn fixture_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::from_uuid_bytes([
-            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
-            0xcd, 0x2f,
-        ])
-        .expect("valid deterministic validation-fee fixture asset")
     }
     fn parliament_authorization(
         proposal_fingerprint: [u8; 32],

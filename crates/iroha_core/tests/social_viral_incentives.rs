@@ -1,4 +1,6 @@
-//! Viral incentive contract flows (SOC-2): follow rewards, escrows, caps, and governance controls.
+//! Viral incentive component flows (SOC-2): rewards, escrows, caps, and controls.
+//! The explicit finite protocol pool is fixture custody, not an authenticated
+//! Network input, retained finality source, or block publication capability.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::parameters::{actual::ViralIncentives, defaults};
 use iroha_core::{
@@ -411,7 +413,7 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     });
     let binding_hash = twitter_binding(b"user-viral");
     let mut block = state.block(header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     // Before binding is claimed, send funds to Twitter (escrow path) and record binding.
     SendToTwitter {
@@ -508,7 +510,7 @@ fn viral_reward_respects_halt_and_deny_lists() {
     });
     let binding_hash = twitter_binding(b"user-viral-deny");
     let mut block = state.block(header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     let feed_id = feed_cfg.feed_id.clone();
     let attestation = twitter_binding_attestation(&feed_cfg, &uaid, binding_hash.clone(), 8, 2_000);
@@ -582,7 +584,7 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     });
     let binding_hash = twitter_binding(b"user-viral-send");
     let mut block = state.block(header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     record_follow_binding(
         &mut tx,
@@ -677,7 +679,7 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
     let binding_b = twitter_binding(b"user-viral-cap-b");
     // Block 1: record both bindings and claim the first one.
     let mut block = state.block(header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     record_follow_binding(
         &mut tx,
@@ -714,7 +716,7 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
         .expect("commit first block");
     // Block 2: second claim for the same UAID should hit the daily cap.
     let mut block = state.block(header(2));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let err = ClaimTwitterFollowReward {
         binding_hash: binding_b.clone(),
     }
@@ -784,7 +786,7 @@ fn viral_reward_enforces_budget_limit() {
         b"user-viral-budget",
     );
     let mut block = state.block(header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
     RegisterOracleFeed {
         feed: feed_cfg.clone(),
@@ -859,7 +861,7 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
         b"user-viral-promo",
     );
     let mut block = state.block(header_at(1, 500));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
     RegisterOracleFeed {
         feed: feed_cfg.clone(),
@@ -934,7 +936,7 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
         b"user-viral-flow",
     );
     let mut block = state.block(header_at(1, 1_200));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
     RegisterOracleFeed {
         feed: feed_cfg.clone(),
@@ -1020,7 +1022,7 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
     let binding_hash = twitter_binding(b"user-viral-cap-1");
     let binding_hash_second = twitter_binding(b"user-viral-cap-2");
     let mut block = state.block(header_at(1, 1_500));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     record_follow_binding(
         &mut tx,
@@ -1073,4 +1075,38 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
         format!("{capped_err:?}").contains("campaign budget"),
         "campaign cap should prevent additional payouts once exhausted"
     );
+}
+
+#[test]
+fn social_movement_without_component_or_native_owner_is_rejected() {
+    let def_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-unowned-social"));
+    let (state, _, _) = setup_viral_state(&def_id, uaid, |viral| {
+        viral.incentive_pool_account = ALICE_ID.clone();
+        viral.escrow_account = BOB_ID.clone();
+        viral.reward_asset_definition_id = def_id.clone();
+    });
+    let binding = twitter_binding(b"unowned-social");
+    let mut block = state.block(header(1));
+    let mut tx = block.transaction();
+    let alice_asset = AssetId::new(def_id.clone(), ALICE_ID.clone());
+    let bob_asset = AssetId::new(def_id, BOB_ID.clone());
+    let before_alice = tx.world.assets().get(&alice_asset).unwrap().clone();
+    let before_bob = tx.world.assets().get(&bob_asset).unwrap().clone();
+    let err = SendToTwitter {
+        binding_hash: binding.clone(),
+        amount: Quantity::from(1_u32),
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect_err("raw transaction cannot acquire a protocol source owner");
+    assert!(
+        err.to_string()
+            .contains("protocol source has no authenticated mandatory owner")
+    );
+    assert_eq!(tx.world.assets().get(&alice_asset), Some(&before_alice));
+    assert_eq!(tx.world.assets().get(&bob_asset), Some(&before_bob));
+    assert!(tx.world.viral_escrows().get(&binding.digest).is_none());
 }

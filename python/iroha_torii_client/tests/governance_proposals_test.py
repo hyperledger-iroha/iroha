@@ -20,6 +20,7 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalKagemushaVerifierPolicyInstall,
     GovernanceProposalKagemushaVerifierReleaseActivate,
     GovernanceProposalKagemushaVerifierReleaseInstall,
+    GovernanceProposalKagemushaVerifierReleaseRetire,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
     GovernanceProposalMusubiRegistryGovernance,
@@ -71,6 +72,16 @@ def _release_activate_fixture() -> dict[str, object]:
         / "fixtures"
         / "governance"
         / "kagemusha_verifier_release_activate_v1.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _release_retire_fixture() -> dict[str, object]:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "kagemusha_verifier_release_retire_v1.json"
     )
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -332,6 +343,11 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
             "KagemushaVerifierReleaseActivate",
             _release_activate_fixture()["payload"],
             GovernanceProposalKagemushaVerifierReleaseActivate,
+        ),
+        (
+            "KagemushaVerifierReleaseRetire",
+            _release_retire_fixture()["payload"],
+            GovernanceProposalKagemushaVerifierReleaseRetire,
         ),
     ]
 
@@ -977,3 +993,42 @@ def test_fee_activation_requires_the_model_next_month_endpoint() -> None:
     policy["effective_from_ms"] = (date(9999, 12, 1) - date(1970, 1, 1)).days * 86_400_000 - 39_600_000
     with pytest.raises(TypeError, match="supported calendar"):
         GovernanceProposalValidationFeePolicy.from_payload({"proposal_operator": CANONICAL_OWNER, "policy": policy})
+
+
+def test_kagemusha_release_retire_accepts_authentic_fixture_and_freezes_predecessor() -> None:
+    original = _release_retire_fixture()
+    proposal = GovernanceProposalKind.from_payload(original)
+    assert isinstance(proposal.payload, GovernanceProposalKagemushaVerifierReleaseRetire)
+    assert [row["status"] for row in proposal.payload.expected_predecessor["releases"]].count(2) == 1
+    assert {row["status"] for row in proposal.payload.expected_predecessor["releases"]} == {1, 2, 3}
+    selected = proposal.payload.standby_release_id
+    original["payload"]["standby_release_id"][0] ^= 1
+    assert proposal.payload.standby_release_id == selected
+    with pytest.raises(TypeError):
+        proposal.payload.expected_predecessor["releases"][0]["status"] = 2
+    with pytest.raises(TypeError, match="retained proposer"):
+        GovernanceProposalRecord.from_payload({
+            "proposer": OTHER_PROPOSER, "kind": _release_retire_fixture(),
+            "created_height": 1, "status": "Proposed",
+        })
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda p: p.pop("standby_release_id"),
+    lambda p: p.update({"retired_alias": True}),
+    lambda p: p.update({"standby_release_id": [1] * 31}),
+    lambda p: p.update({"standby_release_id": [0] * 32}),
+    lambda p: p.update({"standby_release_id": next(row["release_id"] for row in p["expected_predecessor"]["releases"] if row["status"] == 1)}),
+    lambda p: p.update({"standby_release_id": next(row["release_id"] for row in p["expected_predecessor"]["releases"] if row["status"] == 3)}),
+    lambda p: p["expected_predecessor"].update({"authority_policy": None}),
+    lambda p: p["expected_predecessor"].update({"active_release_id": None}),
+    lambda p: p["expected_predecessor"]["releases"].reverse(),
+    lambda p: p["expected_predecessor"]["releases"].append(copy.deepcopy(p["expected_predecessor"]["releases"][-1])),
+    lambda p: p["expected_predecessor"]["releases"][0].update({"profile_digest": [0] * 32}),
+    lambda p: p["expected_predecessor"].update({"releases": [row for row in p["expected_predecessor"]["releases"] if row["status"] != 2]}),
+])
+def test_kagemusha_release_retire_rejects_nonstandby_or_malformed_predecessor(mutation: object) -> None:
+    proposal = _release_retire_fixture()
+    mutation(proposal["payload"])
+    with pytest.raises(TypeError):
+        GovernanceProposalKind.from_payload(proposal)

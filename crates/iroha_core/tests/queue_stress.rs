@@ -2,10 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     queue::Queue,
     state::{State, World},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -21,9 +20,13 @@ fn checked_random_queue_stress_keypair() -> KeyPair {
 fn queue_stress_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_queue_stress_keypair();
 }
-fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
+fn build_state() -> (
+    Arc<State>,
+    NetworkId,
+    AccountId,
+    KeyPair,
+    CertifiedTestChain,
+) {
     let key_pair = checked_random_queue_stress_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
@@ -32,10 +35,14 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
-    let chain_id = ChainId::from("queue-stress-chain");
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
+    // Queue fee admission reads the immutable root installed by actual signed genesis.
+    let mut config = TestChainConfig::new(world, 0);
+    config.chain_id = ChainId::from("queue-stress-chain");
+    let chain = CertifiedTestChain::start(config).expect("signed queue fixture genesis");
+    let state = Arc::clone(chain.state());
     let network_id = *state.network_id_ref();
-    (state, network_id, account_id, key_pair)
+    // Retain the original executor, event receiver and signed-chain custody for the test.
+    (state, network_id, account_id, key_pair, chain)
 }
 fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
     QueueConfig {
@@ -64,7 +71,7 @@ fn make_transaction(
 }
 #[test]
 fn expired_transactions_drain_without_panic() {
-    let (state, chain_id, authority, key_pair) = build_state();
+    let (state, chain_id, authority, key_pair, _chain) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Arc::new(Queue::from_config(
         queue_config(4, Duration::from_secs(1)),

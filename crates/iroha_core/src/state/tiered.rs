@@ -3623,6 +3623,9 @@ mod measured_bytes_impls {
                 ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
                     total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
+                ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
             }
             total
         }

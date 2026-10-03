@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Hyperledger.Iroha.Address;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -24,7 +25,7 @@ public abstract class KagemushaReleaseProposalV1
     /// <summary>Complete, schema-checked predecessor registry.</summary>
     public JsonElement ExpectedPredecessor { get; }
 
-    /// <summary>Parse one release-install or first-activation proposal JSON object.</summary>
+    /// <summary>Parse one release-install, first-activation, or unused standby-retirement proposal.</summary>
     /// <exception cref="JsonException">The proposal is malformed or outside the closed V1 shape.</exception>
     public static KagemushaReleaseProposalV1 Parse(ReadOnlySpan<byte> utf8Json) =>
         KagemushaReleaseGovernanceJsonV1.Parse(utf8Json);
@@ -74,6 +75,20 @@ public sealed class KagemushaReleaseActivateProposalV1 : KagemushaReleaseProposa
     public byte[] SuccessorReleaseId => (byte[])successorReleaseId.Clone();
 }
 
+/// <summary>One exact retirement of an unused governed standby release.</summary>
+public sealed class KagemushaReleaseRetireProposalV1 : KagemushaReleaseProposalV1
+{
+    private readonly byte[] standbyReleaseId;
+
+    internal KagemushaReleaseRetireProposalV1(
+        string operatorId, NetworkId networkId, JsonElement predecessor, byte[] standbyReleaseId)
+        : base(operatorId, networkId, predecessor) =>
+        this.standbyReleaseId = (byte[])standbyReleaseId.Clone();
+
+    /// <summary>Defensive copy of the selected unused standby release identifier.</summary>
+    public byte[] StandbyReleaseId => (byte[])standbyReleaseId.Clone();
+}
+
 internal static class KagemushaReleaseGovernanceJsonV1
 {
     private const int MaximumJsonBytes = 16 * 1024 * 1024;
@@ -107,6 +122,10 @@ internal static class KagemushaReleaseGovernanceJsonV1
             {
                 "proposal_operator", "network_id", "expected_predecessor", "successor_release_id",
             },
+            "KagemushaVerifierReleaseRetire" => new[]
+            {
+                "proposal_operator", "network_id", "expected_predecessor", "standby_release_id",
+            },
             _ => throw new JsonException("Unsupported KAGEMUSHA release proposal kind."),
         };
         payload = ExactObject(payload, fields, $"{kind}.payload");
@@ -136,6 +155,54 @@ internal static class KagemushaReleaseGovernanceJsonV1
                 operatorId, networkId, predecessor, manifest, receipt, attestation);
         }
 
+        if (kind == "KagemushaVerifierReleaseRetire")
+        {
+            ValidateRetirementSignerPolicy(predecessor.GetProperty("authority_policy"));
+            var retired = Bytes32(payload.GetProperty("standby_release_id"), "standby_release_id");
+            if (retired.All(static value => value == 0))
+            {
+                throw new JsonException("Retirement requires a nonzero standby release id.");
+            }
+            byte[]? previous = null;
+            var active = new List<string>();
+            var selectedStandby = false;
+            var rows = predecessor.GetProperty("releases");
+            var pointer = predecessor.GetProperty("active_release_id");
+            foreach (var row in rows.EnumerateArray())
+            {
+                var identity = Bytes32(row.GetProperty("release_id"), "release_id");
+                if (previous is not null && previous.AsSpan().SequenceCompareTo(identity) >= 0)
+                {
+                    throw new JsonException("Retirement releases must be strictly ordered and unique.");
+                }
+                previous = identity;
+                foreach (var field in row.EnumerateObject())
+                {
+                    if (field.Name != "status" && Bytes32(field.Value, field.Name).All(static value => value == 0))
+                    {
+                        throw new JsonException("Retirement releases require nonzero identities.");
+                    }
+                }
+                var status = Unsigned(row.GetProperty("status"), "release.status");
+                if (status == 1) active.Add(Convert.ToHexString(identity));
+                if (pointer.ValueKind == JsonValueKind.Null && status != 2)
+                {
+                    throw new JsonException("Inactive retirement predecessor contains a non-standby release.");
+                }
+                selectedStandby |= status == 2 && identity.AsSpan().SequenceEqual(retired);
+            }
+            if (active.Count != (pointer.ValueKind == JsonValueKind.Null ? 0 : 1)
+                || (pointer.ValueKind != JsonValueKind.Null && active[0] != pointer.GetString()))
+            {
+                throw new JsonException("Retirement active pointer must select the unique active release.");
+            }
+            if (!selectedStandby)
+            {
+                throw new JsonException("Retirement id must select an unused standby release.");
+            }
+            return new KagemushaReleaseRetireProposalV1(operatorId, networkId, predecessor, retired);
+        }
+
         var selected = payload.GetProperty("successor_release_id");
         ValidateSchema("GovernanceKagemushaBytes32V1", selected);
         var selectedId = Bytes32(selected, "successor_release_id");
@@ -155,6 +222,94 @@ internal static class KagemushaReleaseGovernanceJsonV1
             throw new JsonException("Successor id must select the sole standby release.");
         }
         return new KagemushaReleaseActivateProposalV1(operatorId, networkId, predecessor, selectedId);
+    }
+
+    private static void ValidateRetirementSignerPolicy(JsonElement policy)
+    {
+        var signers = policy.GetProperty("authorized_signers");
+        var threshold = Unsigned(policy.GetProperty("threshold"), "authority_policy.threshold");
+        if (threshold > (ulong)signers.GetArrayLength())
+        {
+            throw new JsonException("Retirement signer threshold exceeds its signer count.");
+        }
+        (int Ordinal, byte[] Payload)? previous = null;
+        foreach (var signer in signers.EnumerateArray())
+        {
+            var current = RetirementSignerPublicKey(Text(signer, "authority_policy.authorized_signers"));
+            if (previous is { } prior && (prior.Ordinal > current.Ordinal
+                || prior.Ordinal == current.Ordinal && prior.Payload.AsSpan().SequenceCompareTo(current.Payload) >= 0))
+            {
+                throw new JsonException("Retirement signer keys must be strictly ordered and unique.");
+            }
+            previous = current;
+        }
+    }
+
+    private static (int Ordinal, byte[] Payload) RetirementSignerPublicKey(string literal)
+    {
+        if (literal.Length == 0 || literal.Length > 2 * (ushort.MaxValue + 6) || literal.Length % 2 != 0)
+        {
+            throw new JsonException("Retirement signer must be a bounded canonical public-key multihash.");
+        }
+        try
+        {
+            var bytes = Convert.FromHexString(literal);
+            var position = 0;
+            var code = ReadPublicKeyVarint(bytes, ref position);
+            var length = ReadPublicKeyVarint(bytes, ref position);
+            if (length == 0 || length != bytes.Length - position)
+            {
+                throw new JsonException("Retirement signer multihash length differs.");
+            }
+            var (ordinal, curve) = code switch
+            {
+                0xed => (0, CurveId.Ed25519),
+                0xe7 => (1, CurveId.Secp256k1),
+                0xea => (2, CurveId.BlsNormal),
+                0xeb => (3, CurveId.BlsSmall),
+                0xee => (4, CurveId.MlDsa),
+                0x1200 => (5, CurveId.Gost256A),
+                0x1201 => (6, CurveId.Gost256B),
+                0x1202 => (7, CurveId.Gost256C),
+                0x1203 => (8, CurveId.Gost512A),
+                0x1204 => (9, CurveId.Gost512B),
+                0x1306 => (10, CurveId.Sm2),
+                _ => throw new JsonException("Retirement signer has an unsupported public-key algorithm."),
+            };
+            var payload = bytes.AsSpan(position);
+            if (literal != Convert.ToHexString(bytes.AsSpan(0, position)).ToLowerInvariant() + Convert.ToHexString(payload))
+            {
+                throw new JsonException("Retirement signer multihash spelling is noncanonical.");
+            }
+            // Reuse the mandatory original native public-key/controller validator;
+            // this does not authenticate a governance signature or registry digest.
+            AccountAddress.FromPublicKey(payload, curve);
+            return (ordinal, payload.ToArray());
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException("Retirement signer public key is malformed.", error);
+        }
+    }
+
+    private static int ReadPublicKeyVarint(ReadOnlySpan<byte> bytes, ref int position)
+    {
+        var start = position;
+        var value = 0;
+        for (var shift = 0; shift <= 14 && position < bytes.Length; shift += 7)
+        {
+            var part = bytes[position++];
+            value |= (part & 0x7f) << shift;
+            if ((part & 0x80) == 0)
+            {
+                if (position - start > 1 && part == 0)
+                {
+                    throw new JsonException("Retirement signer multihash varint is nonminimal.");
+                }
+                return value;
+            }
+        }
+        throw new JsonException("Retirement signer multihash varint is truncated or oversized.");
     }
 
     internal static void ValidateSchema(string name, JsonElement value)

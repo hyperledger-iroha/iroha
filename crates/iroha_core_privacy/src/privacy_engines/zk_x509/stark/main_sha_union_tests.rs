@@ -144,18 +144,27 @@ fn union_openings_reject_wrong_counts_noncanonical_missing_and_singular_values()
         );
     }
     let mut malformed = alphas;
-    malformed[19] = E::from_base(F(u64::MAX));
+    malformed[19] = E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
     assert!(
         plan.evaluate_with_v1(z, &malformed, |_| Ok(E::ONE))
             .is_err()
     );
     assert!(
-        plan.evaluate_with_v1(E::from_base(F(u64::MAX)), &alphas, |_| Ok(E::ONE))
-            .is_err()
+        plan.evaluate_with_v1(
+            E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]),
+            &alphas,
+            |_| Ok(E::ONE)
+        )
+        .is_err()
     );
     assert!(
-        plan.evaluate_with_v1(z, &alphas, |_| Ok(E::from_base(F(u64::MAX))))
-            .is_err()
+        plan.evaluate_with_v1(z, &alphas, |_| Ok(E::from_raw_coefficients_for_testing([
+            F(u64::MAX),
+            F::ZERO,
+            F::ZERO,
+            F::ZERO
+        ])))
+        .is_err()
     );
     assert!(plan.evaluate_v1(&[], z, &alphas).is_err());
     for point in plan.points {
@@ -500,7 +509,12 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
         );
         let before = accumulator.clone();
         let mut bad_chunks = chunks;
-        bad_chunks[COMPOSITION_DEGREE_CHUNKS - 1] = vec![E::from_base(F(u64::MAX))];
+        bad_chunks[COMPOSITION_DEGREE_CHUNKS - 1] = vec![E::from_raw_coefficients_for_testing([
+            F(u64::MAX),
+            F::ZERO,
+            F::ZERO,
+            F::ZERO,
+        ])];
         assert!(
             add_main_composition_coefficient_chunks_v1(&mut accumulator, &[bad_chunks], cap)
                 .is_err()

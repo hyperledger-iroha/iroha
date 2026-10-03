@@ -521,6 +521,7 @@ fn product_limb_equations_match_wide_integer_oracle_for_seeded_inputs() {
                 multiply: F::ONE,
                 division: F::ZERO,
                 square: F::ZERO,
+                other: F::ZERO,
                 signed: F::ZERO,
                 success: F::ZERO,
                 quotient: [F::ZERO; 4],

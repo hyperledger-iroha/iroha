@@ -194,7 +194,7 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
         (REPO_ROOT / "fixtures/governance/parliament_api_v1.json").read_bytes()
     )
     assert kinds == fixture["proposal_kinds"]
-    assert len(kinds) == len(set(kinds)) == 13
+    assert len(kinds) == len(set(kinds)) == 14
 
     validator = Draft202012Validator(
         {"$ref": "#/components/schemas/GovernanceParliamentProposalKindV1",
@@ -291,6 +291,14 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
     }
     assert set(activation_payload["properties"]) == set(activation_payload["required"])
     assert_typed({"$ref": f"#/components/schemas/{activation_schema_name}"})
+    retirement_schema_name = "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1"
+    retirement_payload = schemas[retirement_schema_name]
+    assert set(retirement_payload["required"]) == {
+        "proposal_operator", "network_id", "expected_predecessor", "standby_release_id",
+    }
+    assert set(retirement_payload["properties"]) == set(retirement_payload["required"])
+    assert_typed({"$ref": f"#/components/schemas/{retirement_schema_name}"})
+
 
     # The matching data-model test pins this JSON to the canonical Norito
     # instruction fixture, so this checks the real complete serialized value.
@@ -389,6 +397,20 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
     mutated = copy.deepcopy(activation)
     mutated["payload"]["successor_release_id"] = "abc"
     assert not validator.is_valid(mutated)
+
+    retirement = json.loads(
+        (REPO_ROOT / "fixtures/governance/kagemusha_verifier_release_retire_v1.json").read_bytes()
+    )
+    assert retirement["kind"] == "KagemushaVerifierReleaseRetire"
+    assert validator.is_valid(retirement)
+    for member in retirement_payload["required"]:
+        mutated = copy.deepcopy(retirement)
+        del mutated["payload"][member]
+        assert not validator.is_valid(mutated), member
+    for member, value in [("standby_release_id", "abc"), ("unexpected", None), ("successor_release_id", retirement["payload"]["standby_release_id"])]:
+        mutated = copy.deepcopy(retirement)
+        mutated["payload"][member] = value
+        assert not validator.is_valid(mutated), member
 
 
 def test_openapi_authority_parser_rejects_duplicate_members() -> None:

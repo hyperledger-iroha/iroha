@@ -777,15 +777,18 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
     /// Refuses changed installed originals or an invalid canonical signed HTTPS directory.
     pub fn fi_http_endpoint_originals(&self) -> Result<(String, String)> {
         self.recheck()?;
-        let endpoint = super::endpoint::require_https_directory_base(
-            &self.body.fi_current_control_endpoint,
-        )?;
+        let endpoint =
+            super::endpoint::require_https_directory_base(&self.body.fi_current_control_endpoint)?;
         let origin = endpoint.origin().ascii_serialization();
-        let prefix = endpoint.path().strip_suffix('/')
+        let prefix = endpoint
+            .path()
+            .strip_suffix('/')
             .ok_or_else(|| eyre!("Native signed FI directory rejected"))?
             .to_owned();
-        ensure!(format!("{origin}{prefix}/") == self.body.fi_current_control_endpoint,
-            "Native FI routing differs from signed original");
+        ensure!(
+            format!("{origin}{prefix}/") == self.body.fi_current_control_endpoint,
+            "Native FI routing differs from signed original"
+        );
         self.recheck()?;
         Ok((origin, prefix))
     }

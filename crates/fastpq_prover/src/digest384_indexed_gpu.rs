@@ -7,10 +7,10 @@ use fastpq_isi::poseidon_digest384::GoldilocksDigest384IndexedPredicateV1;
 use fastpq_isi::{GoldilocksDigest384FrameV1, GoldilocksDigestDomainV1};
 use zeroize::Zeroizing;
 
-pub(crate) struct StagedDigest384IndexedV1 {
-    pub(crate) words: Zeroizing<Vec<u64>>,
-    pub(crate) start: u64,
-    pub(crate) count: usize,
+pub struct StagedDigest384IndexedV1 {
+    pub words: Zeroizing<Vec<u64>>,
+    pub start: u64,
+    pub count: usize,
 }
 fn validate_geometry_v1(
     predicate: &GoldilocksDigest384IndexedPredicateV1<'_>,
@@ -61,7 +61,7 @@ impl StagedDigest384IndexedV1 {
     }
 }
 
-pub(crate) fn try_indexed_coordinates_v1(
+pub fn try_indexed_coordinates_v1(
     backend: Digest384GpuBackendV1,
     predicate: &GoldilocksDigest384IndexedPredicateV1<'_>,
     start: u64,
@@ -177,9 +177,9 @@ mod tests {
     #[ignore = "requires real Metal indexed execution; never substitutes CPU output"]
     fn indexed_metal_matches_complete_scalar_hashes_at_nonce_boundaries() {
         let _gpu_lane = crate::backend::acquire_gpu_lane();
-        for length in [0, 6, 7, 8, 256] {
+        for length in [0_usize, 6, 7, 8, 256] {
             let payload: Vec<u8> = (0..length)
-                .map(|i| ((i * 73 + length) & 255) as u8)
+                .map(|i| (i * 73 + length).to_le_bytes()[0])
                 .collect();
             let fields: &[&[u8]] = &[b"indexed-public-boundary", &payload, b""];
             let domain = kat_domain_v1(0);

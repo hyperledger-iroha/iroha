@@ -31,11 +31,33 @@ fn evaluate_with_v1(
     selected: &[usize],
     after_scale: impl FnOnce(&[F]),
 ) -> Result<Column, AggregateStarkErrorV1> {
-    evaluate_scheduled_with_v1::<true>(coefficients, native_log, common_log, selected, after_scale)
+    if use_coarse_inner_schedule_v1(native_log, common_log) {
+        evaluate_scheduled_with_v1::<false>(
+            coefficients,
+            native_log,
+            common_log,
+            selected,
+            after_scale,
+        )
+    } else {
+        evaluate_scheduled_with_v1::<true>(
+            coefficients,
+            native_log,
+            common_log,
+            selected,
+            after_scale,
+        )
+    }
 }
 
-// Only tests instantiate INNER_PARALLEL=false. Public zero-suffix pruning
-// preserves input validation, allocation extents and erasure owners.
+/// Keep the outer column batch parallel and serialize inner work at the measured
+/// registered common22 geometries. Only public domain sizes select this policy.
+fn use_coarse_inner_schedule_v1(native_log: u8, common_log: u8) -> bool {
+    common_log == 22 && matches!(native_log, 15 | 16 | 18 | 19)
+}
+
+// Both schedules use the same public butterfly windows and root powers.
+// Public zero-suffix pruning preserves validation, allocation and erasure owners.
 fn evaluate_scheduled_with_v1<const INNER_PARALLEL: bool>(
     coefficients: &[F],
     native_log: u8,

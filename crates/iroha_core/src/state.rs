@@ -348,7 +348,7 @@ pub(crate) use output_capacity::{
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
-pub(crate) use fastpq_quantity_capture::QuantityCaptureIssue;
+pub(crate) use fastpq_quantity_capture::{QuantityCaptureIssue, QuantityRetirementInvocation};
 mod fastpq_quantity_storage;
 mod fastpq_quantity_write_plan;
 mod fastpq_rejection_tail;
@@ -7742,7 +7742,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.asset_definitions.get(definition_id).is_some() {
             self.quantity_mutation_observation.changed();
         }
-        let removed = self.asset_definitions.remove(definition_id.clone());
+        let removed = self.remove_quantity_definition(definition_id);
         if let Some(definition) = removed.as_ref() {
             self.axt_asset_incarnations.remove(definition_id.clone());
             if let Some(transition) = definition.confidential_policy().pending_transition() {
@@ -10386,7 +10386,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -10410,7 +10411,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the SCCP v1 governance proposal when the proposal represents SCCP governance.
@@ -10434,7 +10436,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -10458,7 +10461,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -10482,7 +10486,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -10506,7 +10511,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -10530,7 +10536,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
 }
@@ -12101,6 +12108,8 @@ pub struct State {
     /// Keeping public query traffic separate prevents an untrusted stream of
     /// distinct contracts from evicting consensus-path trigger runtimes.
     contract_query_ivm_cache: parking_lot::Mutex<IvmCache>,
+    /// Original allocation pool retained independently of replaceable local caches.
+    ivm_execution_pool: iroha_allocation::AllocationBudget,
     /// Process-persistent immutable artifacts and runtimes shared by pipeline workers.
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
@@ -27768,6 +27777,7 @@ impl State {
                     pipeline_cache_size, execution_budget.clone(),
                 ),
             )),
+            ivm_execution_pool: execution_budget.clone(),
             pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
                 PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget),
             ),
@@ -37387,10 +37397,11 @@ impl<'state> StateBlock<'state> {
     }
     /// Component-only scope over the same finite mandatory pool used by the real sweep.
     /// It grants no retained-custody, complete-inventory or carrier publication authority.
-    #[cfg(test)]
-    pub(crate) fn transaction_for_fastpq_protocol_testing(
-        &mut self,
-    ) -> StateTransaction<'_, 'state> {
+    ///
+    /// # Panics
+    /// Panics when an admitted carrier already owns this block's execution.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn transaction_for_fastpq_protocol_testing(&mut self) -> StateTransaction<'_, 'state> {
         assert!(
             self.execution_output_plan.is_none(),
             "component purpose fixture cannot replace a carrier owner"
@@ -39814,6 +39825,7 @@ mod tiered_snapshot_diff_tests {
             .expect("high-water zero inventory digest must fail");
         assert!(error.to_string().contains("musubi_pin_outbox_high_waters"));
     }
+    #[test]
     fn isolated_zk_prevalidation_install_preserves_process_gas_schedule() {
         let _gas_guard = crate::gas::lock_confidential_gas_for_tests();
         let mut state = State::new_with_chain(

@@ -22,6 +22,9 @@ pub(super) enum QuantityWriteKey {
     Balance(AssetId),
     /// Canonical aggregate-supply definition key.
     Supply(AssetDefinitionId),
+    /// Actual definition/incarnation erasure; the quantity projection is its zero supply.
+    /// Presence and exact incarnation are checked separately before releasing this port.
+    Retire(FastpqExecutionAssetV1),
 }
 
 /// An exact storage projection transition expected by one prepared operation.
@@ -224,6 +227,7 @@ impl<K, Q> std::fmt::Debug for QuantityWritePlan<K, Q> {
 enum PortKey<'a> {
     Balance(&'a FastpqExecutionBalanceV1),
     Supply(&'a FastpqExecutionAssetV1),
+    Retire(&'a FastpqExecutionAssetV1),
 }
 
 fn visit_ports(
@@ -232,6 +236,10 @@ fn visit_ports(
 ) -> Result<(), QuantityWritePlanError> {
     for effect in effects {
         match &effect.kind {
+            FastpqExecutionEffectKindV1::Retire(asset) => {
+                let zero = Quantity::zero();
+                visit(PortKey::Retire(asset), &zero, &zero)?;
+            }
             FastpqExecutionEffectKindV1::Transfer(value) if value.source == value.destination => {
                 visit(
                     PortKey::Balance(&value.source),
@@ -269,7 +277,7 @@ fn visit_ports(
 }
 
 impl QuantityWritePlan<QuantityWriteKey, Quantity> {
-    /// Preserve account unregistration's existing supply-before-removal write order.
+    /// Preserve each original teardown owner's supply-before-removal write order.
     /// This consumes no new allocation or permit: only a fresh exact two-port
     /// complete-balance burn prepared by the original supply owner may be ordered.
     pub(super) fn order_supply_before_complete_removal(
@@ -393,7 +401,7 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
         visit_ports(effects, |key, before, after| {
             let asset = match &key {
                 PortKey::Balance(balance) => &balance.asset,
-                PortKey::Supply(asset) => *asset,
+                PortKey::Supply(asset) | PortKey::Retire(asset) => *asset,
             };
             lifecycles.push_reserved((asset.definition.clone(), asset.incarnation));
             let key = match key {
@@ -420,6 +428,7 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
                     ))
                 }
                 PortKey::Supply(asset) => QuantityWriteKey::Supply(asset.definition.clone()),
+                PortKey::Retire(asset) => QuantityWriteKey::Retire(asset.clone()),
             };
             retain(
                 &mut reservation,
@@ -480,6 +489,28 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
             |expected| matches!(expected, QuantityWriteKey::Balance(value) if value == key),
             before,
             after,
+        )
+    }
+
+    /// Consume the original lifecycle erasure only for its retained live incarnation
+    /// and zero supply. No generic supply/balance permit can substitute for it.
+    pub(super) fn consume_retirement(
+        &mut self,
+        key: &AssetDefinitionId,
+        incarnation: Option<iroha_data_model::nexus::AxtAssetIncarnationV1>,
+        before: Option<&Quantity>,
+    ) -> Result<QuantityWritePermit<'_, QuantityWriteKey, Quantity>, QuantityWritePlanError> {
+        let Some(before) = before else {
+            self.failed = true;
+            return Err(QuantityWritePlanError::Mismatch);
+        };
+        self.consume_matching(
+            |expected| {
+                matches!(expected, QuantityWriteKey::Retire(asset)
+                if &asset.definition == key && Some(asset.incarnation) == incarnation)
+            },
+            before,
+            &Quantity::zero(),
         )
     }
 

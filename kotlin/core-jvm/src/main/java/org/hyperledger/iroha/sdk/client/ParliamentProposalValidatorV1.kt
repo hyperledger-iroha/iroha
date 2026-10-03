@@ -55,6 +55,7 @@ internal object ParliamentProposalValidatorV1 {
             "KagemushaVerifierPolicyInstall" -> kagemushaVerifierPolicyInstall(payload)
             "KagemushaVerifierReleaseInstall" -> KagemushaVerifierProposalValidatorV1.install(payload)
             "KagemushaVerifierReleaseActivate" -> KagemushaVerifierProposalValidatorV1.activate(payload)
+            "KagemushaVerifierReleaseRetire" -> KagemushaVerifierProposalValidatorV1.retire(payload)
             else -> throw IllegalArgumentException("proposal.kind is unknown or retired")
         }
         return proposal

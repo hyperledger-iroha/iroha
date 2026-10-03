@@ -55,6 +55,7 @@ fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
             "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
+            "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
         ]
     );
 }
@@ -2269,7 +2270,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
                     ds_asset_id: state.gov.voting_asset_id.clone(),
                     xor_asset_id: state.gov.voting_asset_id.clone(),
                     reward_pool_account_id: ALICE_ID.clone(),
-                    validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+                    validator_lane_id: iroha_model_base::topology::LaneId::new(0),
                 },
             },
         },

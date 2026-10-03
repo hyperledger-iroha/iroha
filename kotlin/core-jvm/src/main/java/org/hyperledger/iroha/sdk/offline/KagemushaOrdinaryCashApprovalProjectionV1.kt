@@ -107,13 +107,15 @@ class KagemushaOrdinaryCashApprovalProjectionV1 private constructor(
             binding: KagemushaOrdinaryCashApprovalOriginalBindingV1): KagemushaOrdinaryCashApprovalProjectionV1 =
             requireProjection(KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION, w, s, binding, true)
 
-        // Shared Rust fixture messages exercise generic model grammar before ordinary credential
-        // authentication. Production ordinary callers always provide retained public bindings.
+        // Shared Rust fixture messages use the model's purpose-selected subject before ordinary
+        // credential authentication. Production callers still provide retained public bindings.
         internal fun requireModelMessageShape(
             purpose: KagemushaOrdinaryCashApprovalPurposeV1,
             w: ByteArray,
             s: ByteArray,
-        ): KagemushaOrdinaryCashApprovalProjectionV1 = requireProjection(purpose, w, s, null)
+        ): KagemushaOrdinaryCashApprovalProjectionV1 = requireProjection(purpose, w, s, null,
+            purpose == KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION &&
+                (s.getOrNull(331)?.toInt() == 1 || s.getOrNull(331)?.toInt() == 3))
 
         private fun requireProjection(
             purpose: KagemushaOrdinaryCashApprovalPurposeV1,

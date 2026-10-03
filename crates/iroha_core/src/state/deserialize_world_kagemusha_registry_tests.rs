@@ -641,3 +641,53 @@ fn restored_policy_reload_accepts_exact_head_and_rejects_unavailable_release() {
         &state.kagemusha_v1_runtime_verifier()
     ));
 }
+
+#[test]
+fn direct_standby_retirement_without_certified_original_owner_never_publishes() {
+    let install: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 =
+        norito::decode_canonical(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+        )))
+        .unwrap();
+    let predecessor = install.proposal.successor().unwrap();
+    let target = install.proposal.manifest.release_id;
+    let world = World::default();
+    set_registry(&world, predecessor.clone());
+    let state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        "generic-testnet".parse().unwrap(),
+        install.proposal.network_id,
+    );
+    let before_generation = state.view_generation.load(Ordering::Acquire);
+    let mut block = state.block(first_header());
+    block
+        .world
+        .kagemusha_verifier_registry
+        .get_mut()
+        .retire_standby(target)
+        .unwrap();
+    assert!(
+        block
+            .world
+            .kagemusha_verifier_registry
+            .get()
+            .releases
+            .is_empty()
+    );
+    assert!(matches!(
+        block.commit_empty_block_for_testing(),
+        Err(TransactionsBlockError::KagemushaGovernanceUnavailable)
+    ));
+    assert_eq!(state.latest_block_hash_fast(), None);
+    assert_eq!(
+        state.world.kagemusha_verifier_registry.view().get(),
+        &predecessor
+    );
+    assert_eq!(
+        state.view_generation.load(Ordering::Acquire),
+        before_generation
+    );
+}

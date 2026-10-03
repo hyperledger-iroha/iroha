@@ -34,7 +34,7 @@ fn projection_serial_fixed_schedule_binds_exact_length_before_twenty_bytes() {
         }
         assert_eq!(counts, [8, 20]);
     }
-    assert_eq!(projection_serial::FIX_END, 129);
+    assert_eq!(projection_serial::FIX_END, 130);
 }
 
 #[test]

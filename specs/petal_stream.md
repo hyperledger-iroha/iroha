@@ -40,6 +40,12 @@ forward error correction and payload integrity check. KAGEMUSHA payloads use the
 §5.4 with the same values as `IrohaPeerWireKindV1` (1 request, 2 payment, 3 acknowledgement) and
 carry the encoded `IPM1` message as the payload.
 
+> **Superseded KAGEMUSHA kinds (2026-10-03).** Kinds 1 to 3 and the 7 552-byte payment figures in
+> this document name the retired exchange. The
+> [single implementation draft](kagemusha_single_design_proposal.md) §§5 and 8 define the messages
+> and their 10,000-byte bound; Petal remains one of their carriers. The kind values are replaced
+> together with the implementing change.
+
 ## 2. Frame geometry (normative)
 
 All coordinates are *design units* on a square canvas of 1024 units, origin at the top-left, `y`

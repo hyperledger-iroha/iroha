@@ -79,6 +79,17 @@ pub(super) fn reconstruct_ordinary_credential_original_v1<F: KagemushaPoseidonFi
     layout: &KagemushaOrdinaryAppCredentialOriginalLayoutV1,
     original: &OrdinaryCredentialOriginalCellsV1<F>,
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let preimage = assemble_ordinary_credential_original_v1(builder, layout, original)?;
+    hash(builder.main(0), jobs, preimage)
+}
+
+/// Assemble every codec byte and CRC from the exact semantic cells before union selection.
+/// This fixed layout operation creates no digest or authority on its own.
+pub(super) fn assemble_ordinary_credential_original_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    layout: &KagemushaOrdinaryAppCredentialOriginalLayoutV1,
+    original: &OrdinaryCredentialOriginalCellsV1<F>,
+) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
     if layout.original.end != layout.bytes.len()
         || layout.original.start >= layout.original.end
         || layout.play_integrity_bytes.is_some() != original.play_integrity_fields.is_some()
@@ -220,7 +231,7 @@ pub(super) fn reconstruct_ordinary_credential_original_v1<F: KagemushaPoseidonFi
         .map(PastaSha256ByteV1::constant)
         .collect::<Vec<_>>();
     preimage.extend(frame);
-    hash(ctx, jobs, preimage)
+    Ok(preimage)
 }
 
 /// Assigned originals lent by the actual financial operation/current credential relation.

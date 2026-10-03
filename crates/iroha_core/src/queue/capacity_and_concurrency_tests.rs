@@ -158,6 +158,13 @@ async fn queue_throttling() {
         let bob_account = Account::new(bob_id.clone()).build(&bob_id);
         World::with([domain], [alice_account, bob_account], [])
     };
+    // Explicit Global metadata belongs to this admission component fixture;
+    // it does not authenticate genesis or certified native history.
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());

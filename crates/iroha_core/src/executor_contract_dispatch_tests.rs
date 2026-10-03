@@ -1641,8 +1641,8 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
     }
     for id in reserved {
         // Exercise the signed pipeline as well: the only change from the positive
-        // control is one forbidden parameter. Startup's public diagnostic hides the
-        // detailed validation reason, so the exact policy assertion is above.
+        // control is one forbidden parameter. Startup retains the original typed
+        // validation reason, which must match the direct policy predicate.
         let mut config = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
         config
             .genesis_parameters
@@ -1653,8 +1653,18 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
             .err()
             .expect("reserved parameters must stay closed during authenticated genesis");
         assert!(
-            matches!(&error.error, crate::sumeragi::test_chain::TestChainError::Genesis(reason)
-                if reason.starts_with("original native genesis execution: Invalid genesis block: Genesis execution output rejected:")),
+            matches!(&error.error,
+                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                if matches!(error.as_ref(),
+                    crate::block::BlockValidationError::InvalidGenesis(
+                        crate::block::InvalidGenesisError::RejectedOutput(output)
+                    ) if matches!(output.reason.as_ref(),
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(reason)
+                        ) if reason.contains("only be changed by an enacted SORA Parliament proposal")
+                    )
+                )
+            ),
             "{id}: {error:?}",
         );
         assert_eq!(
@@ -1840,8 +1850,18 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                 .err()
                 .expect("malformed DPN signed genesis rejects");
             assert!(
-                matches!(&error.error, crate::sumeragi::test_chain::TestChainError::Genesis(reason)
-                if reason.starts_with("original native genesis execution: Invalid genesis block: Genesis execution output rejected:")),
+                matches!(&error.error,
+                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                if matches!(error.as_ref(),
+                    crate::block::BlockValidationError::InvalidGenesis(
+                        crate::block::InvalidGenesisError::RejectedOutput(output)
+                    ) if matches!(output.reason.as_ref(),
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(reason)
+                        ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                    )
+                )
+            ),
                 "{name} {payload}: {error:?}"
             );
             let view = error.state.view();

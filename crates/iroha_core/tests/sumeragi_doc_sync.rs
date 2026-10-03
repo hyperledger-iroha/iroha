@@ -43,6 +43,8 @@ fn governance_api_doc_covers_joint_consensus_flow() {
     let repo_root = workspace_root();
     let doc = std::fs::read_to_string(repo_root.join("specs/governance_api.md"))
         .expect("read governance_api.md");
+    // Markdown soft wrapping does not alter the governed value or its exact wording.
+    let doc = doc.split_whitespace().collect::<Vec<_>>().join(" ");
     let horizon = npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS;
     let activation = npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
     let slashing_delay = npos::SLASHING_DELAY_BLOCKS;

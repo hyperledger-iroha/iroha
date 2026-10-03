@@ -87,7 +87,8 @@ use crate::zk::{
 };
 
 pub use kagemusha_v1_reserve::{
-    KagemushaRedemptionRecordV1, KagemushaReserveOperationRecordV1, KagemushaTopUpRecordV1,
+    KagemushaOrdinaryTopUpRecordV1, KagemushaRedemptionRecordV1, KagemushaReserveOperationRecordV1,
+    KagemushaTopUpRecordV1,
 };
 
 /// Maximum canonical JSON bytes for one authenticated recursive verifier profile.

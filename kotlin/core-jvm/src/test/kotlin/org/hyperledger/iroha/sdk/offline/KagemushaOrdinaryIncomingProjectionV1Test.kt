@@ -9,14 +9,28 @@ import org.junit.jupiter.api.Test
 /** Public synthetic shape controls over actual Rust model fixtures; no issued authority. */
 class KagemushaOrdinaryIncomingProjectionV1Test {
  private fun specimen(tag: String, terminal: Boolean): Pair<ByteArray,ByteArray> {
-  val rows=Files.readAllLines(Paths.get("fixtures/offline/kagemusha_app_platform_messages_v1.tsv"))
-   .filter { !it.startsWith("#") && it.isNotEmpty() }.associate { val p=it.split('\t');p[0] to p[1].chunked(2).map { it.toInt(16).toByte() }.toByteArray() }
+  val rows=fixtures()
   val w=rows.getValue("w_${tag}_9").copyOf();val s=rows.getValue("s_${tag}_9").copyOf()
   w.copyInto(s,155,213,245);w[52]=if(terminal) 1 else 2
   if(terminal) {s.fill(31,364,396);s.fill(32,396,428)} else s.fill(0,364,428)
   // Real ordinary W2 window is finite 10 seconds, fixed data only.
   w.fill(0,309,325);w[309]=1;w[317]=2;sha(s).copyInto(w,245)
   return w to s
+ }
+ // Gradle tests execute from the module directory. Read the same maintained Rust fixture
+ // from its actual repository ancestor; no copied or synthetic fallback is accepted.
+ private fun fixtures(): Map<String,ByteArray> {
+  var directory=Paths.get("").toAbsolutePath().normalize()
+  while(directory!=null) {
+   val path=directory.resolve("fixtures/offline/kagemusha_app_platform_messages_v1.tsv")
+   if(Files.isRegularFile(path)) return Files.readAllLines(path,Charsets.UTF_8)
+    .filter { !it.startsWith("#") && it.isNotEmpty() }.associate { line ->
+     val columns=line.split('\t');require(columns.size==2)
+     columns[0] to columns[1].chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    }
+   directory=directory.parent
+  }
+  error("missing Rust app platform message fixture")
  }
  private fun sha(b:ByteArray)=MessageDigest.getInstance("SHA-256").digest(b)
  private fun binding(w:ByteArray,s:ByteArray)=KagemushaOrdinaryCashApprovalOriginalBindingV1(

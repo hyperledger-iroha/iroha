@@ -290,7 +290,7 @@ fn produce_two(is_axt: bool) {
 
 /// Run the same normal facade, retention and mutation controls for fixed caller facts.
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-pub(super) fn produce_fixture(
+pub fn produce_fixture(
     is_axt: bool,
     label: &str,
     fixture: impl FnOnce() -> capture::CaptureFixture,

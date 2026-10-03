@@ -446,7 +446,7 @@ fn selected_leaf_and_sibling_stripes_preserve_masked_bytes_and_pass_limits() {
         vec![0, 0],
         vec![3, 1],
         vec![plan.lde_rows()],
-        (0..2 * QUERY_COUNT + 1).collect(),
+        (0..=2 * QUERY_COUNT).collect(),
     ] {
         assert!(
             replay

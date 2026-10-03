@@ -65,6 +65,13 @@ async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer()
         .with_metadata(multisig_metadata)
         .build(&multisig_id);
     let world = World::with([domain], [signer, cosigner, validator, multisig], []);
+    // Explicit Global metadata belongs to this admission component fixture;
+    // it does not authenticate signed genesis, native history or publication.
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let mut state = State::new(world, kura, query_handle);
     {
         let nexus = state.nexus.get_mut();

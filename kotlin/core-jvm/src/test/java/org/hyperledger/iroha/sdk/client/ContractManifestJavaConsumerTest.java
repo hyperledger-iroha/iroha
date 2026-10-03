@@ -55,7 +55,7 @@ final class ContractManifestJavaConsumerTest {
     String payload = "{\"manifest\":{\"entrypoints\":[{\"name\":\"inspect\","
         + "\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":[],"
         + "\"return_type\":\"AssetDefinitionView\",\"return_schema\":{\"nodes\":[" + nodes + "]}}]}}";
-    return ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8))
+    return parseManifestFixture(payload.getBytes(StandardCharsets.UTF_8))
         .manifest.entrypoints.get(0).returnSchema;
   }
 

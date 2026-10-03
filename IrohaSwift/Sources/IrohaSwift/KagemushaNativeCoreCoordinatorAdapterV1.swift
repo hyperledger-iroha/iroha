@@ -55,6 +55,14 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     try bridge.invokeOrdinaryIncoming(phase, originals: originals)
   }
 
+  func ordinaryIncomingBinding(session: KagemushaOrdinaryNativeAccountSessionV1) throws
+    -> KagemushaOrdinaryIncomingNativeBindingV1 {
+    guard try session.originalCoordinator() === self else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("incoming session belongs to another coordinator")
+    }
+    return try KagemushaOrdinaryIncomingNativeBindingV1(session: session, bridge: bridge)
+  }
+
   /// Native derives purpose2 W from the exact authenticated receiver request.
   public func prepareOrdinarySendApproval(originalReceiverRequest: Data) throws
     -> KagemushaNativePreparedAppApprovalV1 {

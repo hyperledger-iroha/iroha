@@ -84,6 +84,29 @@ impl QuantityStorageTransaction<'_, AssetDefinitionId, AssetDefinition> {
             .map(|definition| AssetDefinitionMetadataMut { definition })
     }
 
+    /// Remove the actual definition under its one-shot lifecycle permit. A mismatched
+    /// permit preserves business behavior while permanently refusing candidate capture.
+    pub(super) fn retire_definition(
+        &mut self,
+        key: &AssetDefinitionId,
+        incarnation: Option<iroha_data_model::nexus::AxtAssetIncarnationV1>,
+        plan: &mut QuantityWritePlan<QuantityWriteKey, Quantity>,
+    ) -> Option<AssetDefinition> {
+        let permit = plan.consume_retirement(
+            key,
+            incarnation,
+            self.inner.get(key).map(AssetDefinition::total_quantity),
+        );
+        if permit.is_err() {
+            self.raw_write = true;
+        }
+        let previous = self.inner.remove(key.clone());
+        if let Ok(permit) = permit {
+            permit.applied();
+        }
+        previous
+    }
+
     /// Perform one original supply write; failed capture cannot alter business state.
     /// A mismatch remains sticky in both the plan and the raw-write observation.
     pub(super) fn write_supply(

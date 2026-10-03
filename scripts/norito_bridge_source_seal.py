@@ -181,6 +181,8 @@ _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
     "java/iroha_android/core/src/main/resources/META-INF/proguard/iroha3.pro",
     "kotlin/core-jvm/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro",
     "kotlin/client-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.KagemushaAndroidOrdinaryHardwareServiceFactoryV1",
+    "kotlin/client-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.KagemushaFirstDeviceHardwareEvidenceServiceFactoryV1",
+    "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeOwnerV1",
     "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidHardwareProviderFactoryV1",
 })
 # Exact public trybuild diagnostics in the maintained package closures.

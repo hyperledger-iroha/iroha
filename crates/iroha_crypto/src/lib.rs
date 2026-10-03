@@ -686,6 +686,13 @@ impl From<(bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)> for KeyPair {
 
 /// Validated ML-DSA/SM2 material borrows its original canonical envelope.
 /// Only owned decoded material enters the decoded-key cache.
+#[cfg_attr(
+    all(feature = "bls", not(feature = "sm")),
+    expect(
+        clippy::large_enum_variant,
+        reason = "decoded BLS material stays inline so canonical key admission does not introduce an additional heap allocation"
+    )
+)]
 enum PublicKeyMaterial<'a> {
     MlDsa(&'a [u8]),
     #[cfg(feature = "gost")]

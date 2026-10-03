@@ -9,24 +9,24 @@
 
 use super::{F, Sources, bit, multiply, shift, word};
 
-pub(super) const QUOTIENT: usize = 0;
-pub(super) const REMAINDER: usize = 36;
-pub(super) const QUOTIENT_RESULT: usize = 72;
-pub(super) const QUOTIENT_BORROWS: usize = 108;
-pub(super) const REMAINDER_RESULT: usize = 112;
-pub(super) const REMAINDER_BORROWS: usize = 148;
-pub(super) const QUOTIENT_NEGATIVE: usize = 152;
-pub(super) const REMAINDER_NEGATIVE: usize = 153;
-pub(super) const GAS_DIFFERENCE: usize = 154;
-pub(super) const GAS_BORROWS: usize = 190;
-pub(super) const SUM_CARRIES: usize = 194;
-pub(super) const ZERO_DENOMINATOR: usize = 202;
-pub(super) const ZERO_INVERSE: usize = 203;
-pub(super) const OVERFLOW: usize = 204;
-pub(super) const OVERFLOW_INVERSE: usize = 205;
-pub(super) const ARITHMETIC_ERROR: usize = 206;
-pub(super) const LOCAL_TRAP: usize = 207;
-pub(super) const CONSTRAINTS: usize = 264;
+pub(in super::super) const QUOTIENT: usize = 0;
+pub(in super::super) const REMAINDER: usize = 36;
+pub(in super::super) const QUOTIENT_RESULT: usize = 72;
+pub(in super::super) const QUOTIENT_BORROWS: usize = 108;
+pub(in super::super) const REMAINDER_RESULT: usize = 112;
+pub(in super::super) const REMAINDER_BORROWS: usize = 148;
+pub(in super::super) const QUOTIENT_NEGATIVE: usize = 152;
+pub(in super::super) const REMAINDER_NEGATIVE: usize = 153;
+pub(in super::super) const GAS_DIFFERENCE: usize = 154;
+pub(in super::super) const GAS_BORROWS: usize = 190;
+pub(in super::super) const SUM_CARRIES: usize = 194;
+pub(in super::super) const ZERO_DENOMINATOR: usize = 202;
+pub(in super::super) const ZERO_INVERSE: usize = 203;
+pub(in super::super) const OVERFLOW: usize = 204;
+pub(in super::super) const OVERFLOW_INVERSE: usize = 205;
+pub(in super::super) const ARITHMETIC_ERROR: usize = 206;
+pub(in super::super) const LOCAL_TRAP: usize = 207;
+pub(in super::super) const CONSTRAINTS: usize = 264;
 const WORDS: [usize; 5] = [
     QUOTIENT,
     REMAINDER,
@@ -37,7 +37,7 @@ const WORDS: [usize; 5] = [
 const BOOLEAN_RANGES: [(usize, usize); 5] =
     [(108, 112), (148, 154), (190, 203), (204, 205), (206, 208)];
 
-pub(super) fn signed_kind(kind: usize) -> bool {
+pub(in super::super) fn signed_kind(kind: usize) -> bool {
     kind == 0 || kind == 2 || kind == 4
 }
 
@@ -49,15 +49,15 @@ fn fill_word(bank: &mut [F], offset: usize, value: u64) {
 }
 
 /// Untrusted candidate material. The verifier constrains every cell independently.
-pub(super) struct Witness {
-    pub(super) bank: [F; shift::BANK_WIDTH],
-    pub(super) product: [F; multiply::WIDTH],
-    pub(super) digits: [F; 64],
-    pub(super) remainder: u64,
-    pub(super) denominator: u64,
+pub(in super::super) struct Witness {
+    pub(in super::super) bank: [F; shift::BANK_WIDTH],
+    pub(in super::super) product: [F; multiply::WIDTH],
+    pub(in super::super) digits: [F; 64],
+    pub(in super::super) remainder: u64,
+    pub(in super::super) denominator: u64,
 }
 
-pub(super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
+pub(in super::super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
     let signed = signed_kind(kind);
     let a_negative = signed && (left as i64) < 0;
     let b_negative = signed && (right as i64) < 0;
@@ -154,15 +154,15 @@ pub(super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
     }
 }
 
-pub(super) struct Selection {
-    pub(super) active: F,
-    pub(super) signed: F,
-    pub(super) ceiling: F,
-    pub(super) out_of_gas: F,
-    pub(super) assertion_failed: F,
+pub(in super::super) struct Selection {
+    pub(in super::super) active: F,
+    pub(in super::super) signed: F,
+    pub(in super::super) ceiling: F,
+    pub(in super::super) out_of_gas: F,
+    pub(in super::super) assertion_failed: F,
 }
 
-pub(super) fn append_residues(
+pub(in super::super) fn append_residues(
     out: &mut Vec<F>,
     bank: &[F],
     product: &[F],
@@ -342,7 +342,7 @@ pub(super) fn append_residues(
     debug_assert_eq!(out.len() - initial, CONSTRAINTS);
 }
 
-pub(super) fn result_half(bank: &[F], kind: usize, half: usize) -> F {
+pub(in super::super) fn result_half(bank: &[F], kind: usize, half: usize) -> F {
     let offset = if kind < 2 || kind == 4 {
         QUOTIENT_RESULT
     } else {

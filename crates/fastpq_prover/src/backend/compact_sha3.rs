@@ -170,10 +170,10 @@ impl PreparedHashFrame {
     }
     /// Independent scalar reference retained only by native parity tests.
     #[cfg(test)]
-    pub(super) fn hash_cpu(&self) -> crate::Result<Digest> {
+    pub(super) fn hash_cpu(&self) -> Digest {
         let mut hash = self.prefix.clone();
         hash.update(&self.encoded);
-        Ok(hash.finalize())
+        hash.finalize()
     }
 }
 impl Context {

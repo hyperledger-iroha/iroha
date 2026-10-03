@@ -1,4 +1,4 @@
-//! Private canonical fetch and original CALL/RETURN/STORE/scalar/branch producer ownership.
+//! Private canonical fetch and original CALL/RETURN/STORE/LOAD/scalar/branch producer ownership.
 //!
 //! One original packet array owns architectural control, operand reads, both
 //! lifecycle roles and protected return-PC state. The same references feed the
@@ -9,7 +9,9 @@
 // the entire invocation in one masked STARK. This partial dispatcher has no
 // production adapter, verifier registration or complete-State authority.
 
+mod load_success;
 mod scalar;
+mod store_success;
 
 use super::{F, bit, frame_lifecycle, packet, wide};
 use ivm::{PreparedContract, limits::MAX_CONTRACT_CALL_DEPTH};
@@ -41,7 +43,7 @@ const SCALAR: usize = RETURN_DELTA + 2;
 pub(super) const WIDTH: usize = SCALAR + scalar::WIDTH;
 /// Exhaustive original producers owned by this dispatcher, in native order.
 pub(super) const PORTS: usize = 21;
-/// Architectural control owner indexes; frame indexes 0..21 stay disjoint.
+/// Architectural control owner indexes; frame/memory-policy owners 0..23 stay disjoint.
 const PC_OWNER: u32 = 32;
 const GAS_OWNER: u32 = 33;
 const CYCLE_OWNER: u32 = 34;
@@ -202,6 +204,10 @@ pub(super) struct Decoded<'a> {
     pub(super) child: F,
     pub(super) returning: F,
     pub(super) store: F,
+    pub(super) load: F,
+    pub(super) load_address: [F; 4],
+    pub(super) load_destination: F,
+    pub(super) load_destination_enabled: F,
     pub(super) target: [F; 4],
     pub(super) store_address: [F; 4],
     pub(super) store_value: &'a [F; packet::WIDTH],
@@ -216,6 +222,7 @@ enum Role {
     Child,
     Return,
     Store,
+    Load,
     Scalar,
     Branch,
 }
@@ -231,6 +238,7 @@ fn role(instruction: u32) -> Option<Role> {
             Some(Role::Return)
         }
         wide::memory::STORE64 => Some(Role::Store),
+        wide::memory::LOAD64 => Some(Role::Load),
         _ if scalar::is_branch(instruction) => Some(Role::Branch),
         _ if scalar::is_supported(instruction) => Some(Role::Scalar),
         _ => None,
@@ -302,7 +310,7 @@ fn header(
     }
 }
 
-/// Constrain canonical private fetch, native base debit and one-cycle commit,
+/// Constrain canonical private fetch, native base debit and exact-cycle commit,
 /// exact source registers, CALL fresh-parent state, protected RETURN target and
 /// the native bounded return-stack depth transition.
 ///
@@ -341,9 +349,15 @@ fn append_control_residues<'a>(
     let child = select(&|_, w| role(w) == Some(Role::Child));
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
+    let load = select(&|_, w| role(w) == Some(Role::Load));
+    let memory = store.add(load);
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
+    // GETGAS is a real scalar step and gas-owner write, but its native debit is zero.
+    let scalar_base_gas =
+        select(&|_, w| role(w) == Some(Role::Scalar) && wide::opcode(w) != wide::system::GETGAS);
     let scalar_extra_gas = select(&|_, w| {
         scalar::is_rotate(w)
+            || scalar::is_mean(w)
             || matches!(
                 wide::opcode(w),
                 wide::arithmetic::SLT
@@ -355,6 +369,14 @@ fn append_control_residues<'a>(
     let multiply_extra_gas = select(&|_, w| scalar::is_multiply(w)).mul(F(2));
     let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
     let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
+    let division_extra_gas = select(&|_, w| scalar::is_division(w)).mul(F(9));
+    let ceiling_selected = select(&|_, w| scalar::is_division_ceiling(w));
+    let ceiling_extra_gas = ceiling_selected.mul(F(2));
+    let ceiling_extra_cycles = ceiling_selected.mul(F(11));
+    let square_extra_gas = select(&|_, w| scalar::is_square_root(w)).mul(F(5));
+    let square_extra_cycles = square_extra_gas;
+    let mean_extra_cycles = select(&|_, w| scalar::is_mean(w)).mul(F(2));
+    let gcd_extra = select(&|_, w| scalar::is_gcd(w)).mul(F(11));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
@@ -368,7 +390,7 @@ fn append_control_residues<'a>(
     out.push(
         child
             .add(returning)
-            .add(store)
+            .add(memory)
             .add(scalar)
             .add(branching)
             .sub(active),
@@ -456,9 +478,13 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: two for CALL/RETURN, three for STORE64, one
-        // for scalar arithmetic and conditional branches, plus one for comparisons/rotates
-        // and two for the four multiply variants.
+        // Native base cost: zero for GETGAS, two for CALL/RETURN, three for
+        // STORE64/LOAD64, one for other scalar arithmetic and conditional branches,
+        // plus one for comparisons/rotates/MEAN
+        // and two for the four multiply variants, five for ISQRT.
+        // DIV_CEIL adds two gas beyond ordinary division and consumes twelve
+        // cycles; GCD consumes twelve gas/cycles, ISQRT six, MEAN three;
+        // other roles consume one cycle.
         // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
@@ -469,12 +495,16 @@ fn append_control_residues<'a>(
             child
                 .add(returning)
                 .mul(F(2))
-                .add(store.mul(F(3)))
-                .add(scalar)
+                .add(memory.mul(F(3)))
+                .add(scalar_base_gas)
                 .add(scalar_extra_gas)
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)
                 .add(move_extra_gas)
+                .add(division_extra_gas)
+                .add(ceiling_extra_gas)
+                .add(square_extra_gas)
+                .add(gcd_extra)
                 .add(branching)
         } else {
             F::ZERO
@@ -488,6 +518,10 @@ fn append_control_residues<'a>(
         );
         let carry_in = if i == 0 {
             active
+                .add(mean_extra_cycles)
+                .add(square_extra_cycles)
+                .add(ceiling_extra_cycles)
+                .add(gcd_extra)
         } else {
             row[CARRIES + 4 + i - 1]
         };
@@ -531,15 +565,13 @@ fn append_control_residues<'a>(
         packets,
         STORE_BASE,
         Space::Register,
-        weighted(&|_, w| {
-            if role(w) == Some(Role::Store) {
-                F(wide::rd(w) as u64)
-            } else {
-                F::ZERO
-            }
+        weighted(&|_, w| match role(w) {
+            Some(Role::Store) => F(wide::rd(w) as u64),
+            Some(Role::Load) => F(wide::rs1(w) as u64),
+            _ => F::ZERO,
         }),
         F::ZERO,
-        store,
+        memory,
         F::ZERO,
     );
     header(
@@ -563,12 +595,12 @@ fn append_control_residues<'a>(
     out.push(p[STORE_BASE][BEFORE_TAG]);
     for (slot, register) in [(STORE_BASE, false), (STORE_VALUE, true)] {
         let zero = select(&|_, w| {
-            role(w) == Some(Role::Store)
-                && if register {
-                    wide::rs1(w) == 0
-                } else {
-                    wide::rd(w) == 0
-                }
+            if register {
+                role(w) == Some(Role::Store) && wide::rs1(w) == 0
+            } else {
+                (role(w) == Some(Role::Store) && wide::rd(w) == 0)
+                    || (role(w) == Some(Role::Load) && wide::rs1(w) == 0)
+            }
         });
         for field in (BEFORE..BEFORE + 4).chain([BEFORE_TAG]) {
             out.push(zero.mul(p[slot][field]));
@@ -578,7 +610,7 @@ fn append_control_residues<'a>(
         out.push(p[STORE_BASE][BEFORE + i].sub(limb(row, 6, i)));
         out.push(p[RETURN_REGISTER][BEFORE + i].sub(limb(row, 8, i)));
         let immediate = weighted(&|_, w| {
-            if role(w) == Some(Role::Store) {
+            if matches!(role(w), Some(Role::Store | Role::Load)) {
                 constant_limb(i64::from(wide::imm8(w)) as u64, i)
             } else {
                 F::ZERO
@@ -761,7 +793,7 @@ fn append_control_residues<'a>(
                     };
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
-                Some(Role::Store | Role::Scalar) => constant_limb(pc + 4, i),
+                Some(Role::Store | Role::Load | Role::Scalar) => constant_limb(pc + 4, i),
                 Some(Role::Branch) => {
                     // PreparedContract has already checked both successors
                     // against its instruction boundaries. Native branches do
@@ -796,8 +828,18 @@ fn append_control_residues<'a>(
         child,
         returning,
         store,
+        load,
+        load_address: core::array::from_fn(|i| load.mul(limb(row, 7, i))),
+        load_destination: weighted(&|_, w| {
+            if role(w) == Some(Role::Load) {
+                F(wide::rd(w) as u64)
+            } else {
+                F::ZERO
+            }
+        }),
+        load_destination_enabled: select(&|_, w| role(w) == Some(Role::Load) && wide::rd(w) != 0),
         target: core::array::from_fn(|i| p[PC_WRITE][AFTER + i]),
-        store_address: core::array::from_fn(|i| limb(row, 7, i)),
+        store_address: core::array::from_fn(|i| store.mul(limb(row, 7, i))),
         store_value: &p[STORE_VALUE],
         child_active: &p[CHILD_ACTIVE],
         return_active: &p[RETURN_ACTIVE],

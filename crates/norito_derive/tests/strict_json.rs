@@ -30,6 +30,22 @@ struct RequiredOptional {
     #[norito(required)]
     optional: Option<u32>,
 }
+macro_rules! required_record {
+    ($name:ident, $derive:path, $ty:ty) => {
+        #[derive(Debug, PartialEq, Eq, $derive)]
+        struct $name {
+            #[norito(required)]
+            required: $ty,
+            optional: $ty,
+        }
+    };
+}
+required_record!(MacroRequiredOptional, JsonDeserialize, Option<u32>);
+required_record!(
+    FastMacroRequiredOptional,
+    norito_derive::FastJson,
+    ::core::option::Option<u32>
+);
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct FlattenedFields {
     label: String,
@@ -215,6 +231,48 @@ fn derived_missing_fields_remain_structured_on_every_object_decode_path() {
         decode_fast::<FastRequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
             .expect_err("fast enum omission must reject"),
         "optional",
+    );
+}
+#[test]
+fn macro_forwarded_option_types_preserve_required_keys_and_explicit_null() {
+    for (input, required) in [
+        (r#"{"required":null}"#, None),
+        (r#"{"required":7}"#, Some(7)),
+    ] {
+        let expected = MacroRequiredOptional {
+            required,
+            optional: None,
+        };
+        assert_eq!(
+            json::from_str::<MacroRequiredOptional>(input).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json::from_json_fast::<MacroRequiredOptional>(input).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_fast::<FastMacroRequiredOptional>(input).unwrap(),
+            FastMacroRequiredOptional {
+                required,
+                optional: None,
+            }
+        );
+    }
+    assert_structured_missing_field(
+        json::from_str::<MacroRequiredOptional>(r#"{}"#)
+            .expect_err("macro-forwarded required key cannot be omitted"),
+        "required",
+    );
+    assert_missing_field(
+        json::from_json_fast::<MacroRequiredOptional>(r#"{}"#)
+            .expect_err("fallback macro-forwarded required key cannot be omitted"),
+        "required",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastMacroRequiredOptional>(r#"{}"#)
+            .expect_err("fast macro-forwarded required key cannot be omitted"),
+        "required",
     );
 }
 #[test]
@@ -578,5 +636,94 @@ fn macro_forwarded_optional_option_keeps_absence_null_and_values_on_both_json_pa
             norito::decode_from_bytes::<ForwardedNormalOptions>(&bytes).unwrap(),
             expected
         );
+    }
+}
+
+macro_rules! forwarded_option_record {
+    ($required:ty, $optional:ty) => {
+        #[derive(
+            Debug,
+            PartialEq,
+            Eq,
+            JsonDeserialize,
+            JsonSerialize,
+            norito_derive::FastJson,
+            norito::Encode,
+            norito::Decode,
+            norito::NoritoSchema,
+        )]
+        #[norito(no_fast_from_json, deny_unknown_fields)]
+        #[norito_schema(name = "norito.test.ForwardedOptionRecord")]
+        struct ForwardedOptionRecord {
+            #[norito(required)]
+            required: $required,
+            optional: $optional,
+        }
+    };
+}
+forwarded_option_record!(Option<u32>, ::core::option::Option<u32>);
+
+#[test]
+fn forwarded_macro_option_preserves_required_null_and_optional_omission_on_every_json_path() {
+    for (input, expected) in [
+        (
+            r#"{"required":null}"#,
+            ForwardedOptionRecord {
+                required: None,
+                optional: None,
+            },
+        ),
+        (
+            r#"{"required":7,"optional":9}"#,
+            ForwardedOptionRecord {
+                required: Some(7),
+                optional: Some(9),
+            },
+        ),
+    ] {
+        assert_eq!(
+            json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json::from_value::<ForwardedOptionRecord>(json::from_str(input).unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_fast::<ForwardedOptionRecord>(input).unwrap(),
+            expected
+        );
+        let binary = norito::encode_canonical(&expected).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ForwardedOptionRecord>(&binary).unwrap(),
+            expected
+        );
+        let encoded = json::to_json(&expected).unwrap();
+        assert!(encoded.contains("\"required\":"));
+        assert_eq!(
+            json::from_str::<ForwardedOptionRecord>(&encoded).unwrap(),
+            expected
+        );
+    }
+    for input in [r#"{}"#, r#"{"optional":9}"#] {
+        assert_missing_field(
+            json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).unwrap_err(),
+            "required",
+        );
+        assert_missing_field(
+            json::from_value::<ForwardedOptionRecord>(json::from_str(input).unwrap()).unwrap_err(),
+            "required",
+        );
+        assert_missing_field(
+            decode_fast::<ForwardedOptionRecord>(input).unwrap_err(),
+            "required",
+        );
+    }
+    for input in [
+        r#"{"required":null,"required":7}"#,
+        r#"{"required":null,"extra":7}"#,
+    ] {
+        assert!(json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).is_err());
+        assert!(decode_fast::<ForwardedOptionRecord>(input).is_err());
     }
 }

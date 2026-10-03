@@ -260,7 +260,7 @@ mod tests {
     }
     #[test]
     fn completed_output_is_opaque_little_endian_and_exact() {
-        let words = [u64::MAX, 0, 0x0123456789abcdef, 0x8000000000000000];
+        let words = [u64::MAX, 0, 0x0123_4567_89ab_cdef, 0x8000_0000_0000_0000];
         let buffer = PooledBuffer::from_slice(&words).unwrap();
         let mut output = [[0; 32]; 1];
         collect(&buffer, &mut output).unwrap();

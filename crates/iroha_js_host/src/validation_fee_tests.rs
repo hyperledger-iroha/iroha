@@ -20,7 +20,7 @@ fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBinding
         )),
         &validation_fee_account(2),
         43,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .unwrap();
     ValidationFeeTreasuryPayoutBindingV1 {
@@ -42,7 +42,7 @@ fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBinding
         min_interval_ms: 60000,
         max_source_age_ms: 300000,
         max_slippage_bps: 100,
-        validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+        validator_lane_id: iroha_model_base::topology::LaneId::new(0),
         min_reward_claim_xor_minor: 1,
     }
 }

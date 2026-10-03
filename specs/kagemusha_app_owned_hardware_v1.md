@@ -1,5 +1,12 @@
 # KAGEMUSHA app-owned hardware V1 contract
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 This normative contract freezes the existing financial signing message S and the ordinary-app approval message W. Implementations must satisfy the roles, admission, signing and recovery requirements below. The contract does not establish an installed issuer, qualified monetary profile, physical attestation result or offline support. The current implementation gaps are stated separately and must not be filled by decoded bytes or synthetic admission.
 
 ## Roles and capability boundary

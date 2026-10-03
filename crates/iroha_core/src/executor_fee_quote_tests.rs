@@ -82,6 +82,7 @@ fn original_claim_fee_payload(
 fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() {
     use crate::execution_attempt::ExecutionAttemptError;
     let (world, authority, _, _, _) = sns_permission_original_world();
+    let world = component_world_for_testing(world);
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(2_u32);
     let pipeline = Pipeline::default();
@@ -109,6 +110,16 @@ fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() 
         )
     };
     assert!(quote().unwrap().quote.charges.is_empty());
+    // Probe the original claim reader directly as well as its complete fee-quote caller.
+    // Otherwise an earlier root-scope decode refusal could mask an erased claim refusal.
+    let original_reader = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+    );
+    assert_eq!(
+        original_reader.reason(),
+        ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+    );
     let error = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
         || quote().unwrap_err(),
@@ -126,6 +137,7 @@ fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() 
 fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
     use crate::execution_attempt::ExecutionAttemptError;
     let (world, authority, recipient, record_key, record_bytes) = sns_permission_original_world();
+    let world = component_world_for_testing(world);
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus
         .fees
@@ -148,12 +160,15 @@ fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
         )
     };
     assert!(quote().unwrap().quote.charges.is_empty());
-    // Measure the actual two original metadata reads, then give the quote exactly that
-    // budget. Both metadata strings must succeed before the authoritative SNS decoder refuses.
-    let prefix_fits = |limit| {
+    // Measure both real call prefixes. The direct claim reader consumes the two
+    // metadata strings; its fee-quote caller first consumes the immutable root scope.
+    let prefix_fits = |limit, include_root| {
         norito::with_decode_limits_scope(
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32),
             || {
+                if include_root && !private_fees::permits_public_exemption(&world.view())? {
+                    return Ok(false);
+                }
                 metadata_string(&payload.metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY).and_then(
                     |hash| {
                         metadata_string(&payload.metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
@@ -163,19 +178,32 @@ fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
             },
         )
     };
-    let (mut lower, mut upper) = (0, 65_536);
-    assert_eq!(prefix_fits(upper), Ok(true));
-    while lower < upper {
-        let middle = lower + (upper - lower) / 2;
-        if prefix_fits(middle) == Ok(true) {
-            upper = middle;
-        } else {
-            lower = middle + 1;
+    let minimum_prefix = |include_root| {
+        let (mut lower, mut upper) = (0, 65_536);
+        assert_eq!(prefix_fits(upper, include_root), Ok(true));
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2;
+            if prefix_fits(middle, include_root) == Ok(true) {
+                upper = middle;
+            } else {
+                lower = middle + 1;
+            }
         }
-    }
-    assert_eq!(prefix_fits(lower), Ok(true));
+        assert_eq!(prefix_fits(lower, include_root), Ok(true));
+        lower
+    };
+    let metadata_prefix = minimum_prefix(false);
+    let original_reader = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, metadata_prefix, 32),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+    );
+    assert_eq!(
+        original_reader.reason(),
+        ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+    );
+    let quote_prefix = minimum_prefix(true);
     let error = norito::with_decode_limits_scope(
-        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, lower, 32),
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, quote_prefix, 32),
         || quote().unwrap_err(),
     );
     assert!(

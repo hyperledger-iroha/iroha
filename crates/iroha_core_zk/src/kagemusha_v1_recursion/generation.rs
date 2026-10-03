@@ -10070,6 +10070,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ordinary_qualification_wallet_identity_roundtrips_as_canonical_multisig() {
+        use iroha_data_model::account::AccountId;
+
+        let sender = ordinary_qualification_wallet_account_v1(62);
+        let receiver = ordinary_qualification_wallet_account_v1(63);
+        assert_eq!(sender, ordinary_qualification_wallet_account_v1(62));
+        assert_ne!(sender, receiver);
+        assert!(sender.try_signatory().is_none());
+        let policy = sender
+            .multisig_policy()
+            .expect("multisig qualification wallet");
+        assert_eq!(policy.threshold(), 1);
+        assert_eq!(policy.members().len(), 1);
+        assert_eq!(
+            AccountId::parse_encoded(&sender.to_string()).unwrap(),
+            sender
+        );
+        let bytes = norito::encode_canonical(&sender).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<AccountId>(&bytes).unwrap(),
+            sender
+        );
+    }
+
+    #[test]
     fn terminal_hash_protocol_pins_reject_every_substituted_or_absent_role() {
         let authenticated = [[1; 32], [2; 32], [3; 32], [4; 32]];
         validate_terminal_hash_protocol_pins_v1(authenticated, authenticated)
@@ -11080,6 +11105,10 @@ mod ordinary_zero_bootstrap_qualification_tests;
 mod ordinary_mint_genuine_qualification_tests;
 
 #[cfg(all(test, unix))]
+#[path = "ordinary_mint_public_artifact_tests.rs"]
+mod ordinary_mint_public_artifact_tests;
+
+#[cfg(all(test, unix))]
 #[path = "ordinary_active_state_bootstrap.rs"]
 mod ordinary_active_state_bootstrap;
 
@@ -11099,6 +11128,7 @@ mod ordinary_active_send_terminal;
 #[path = "ordinary_active_receive_state_tests.rs"]
 mod ordinary_active_receive_state;
 
+/// Domainless canonical wallet identity shared by the mathematical qualification graph.
 #[cfg(test)]
 pub(super) fn ordinary_qualification_wallet_account_v1(
     seed: u8,

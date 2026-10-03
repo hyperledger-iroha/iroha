@@ -7861,6 +7861,11 @@ fn canonical_dataspace_route(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    // Classify an absent dataspace before looking for its lane. Lane absence
+    // applies only to a dataspace admitted by the current catalog.
+    if dataspace_catalog.by_id(dataspace_id).is_none() {
+        return Err(RoutingResolveError::UnknownDataspace { dataspace_id });
+    }
     let lane_id = lane_catalog
         .lanes()
         .iter()
@@ -10545,6 +10550,25 @@ mod tests {
             .insert(account_id.clone(), scope_entry);
     }
     include!("router_initial_routing_tests.rs");
+    #[test]
+    fn canonical_dataspace_route_classifies_unknown_scope_before_lane_absence() {
+        let unknown = DataSpaceId::new(8);
+        for lanes in [
+            LaneCatalog::default(),
+            lane_catalog_from_configs(vec![LaneConfig {
+                id: LaneId::SINGLE,
+                dataspace_id: unknown,
+                ..LaneConfig::default()
+            }]),
+        ] {
+            assert_eq!(
+                canonical_dataspace_route(unknown, &lanes, &DataSpaceCatalog::default()),
+                Err(RoutingResolveError::UnknownDataspace {
+                    dataspace_id: unknown
+                })
+            );
+        }
+    }
     #[test]
     fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -16991,7 +17015,7 @@ mod tests {
         );
     }
     #[test]
-    fn fx_corridor_state_view_plan_rejects_sns_dataspace_without_canonical_lane() {
+    fn fx_corridor_state_view_plan_rejects_sns_dataspace_outside_catalog() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
         let (source_sink, _) = gen_account_in("wonderland");
         let (destination_reserve, _) = gen_account_in("wonderland");
@@ -17040,7 +17064,8 @@ mod tests {
             view.world(),
             state_view_ledger_time_ms(&view),
         );
-        let expected = RoutingResolveError::NoLaneForDataspace {
+        // SNS identity alone cannot admit a physical participant absent from the catalog.
+        let expected = RoutingResolveError::UnknownDataspace {
             dataspace_id: dynamic_dataspace,
         };
         assert_eq!(queued_plan, Err(expected.clone()));

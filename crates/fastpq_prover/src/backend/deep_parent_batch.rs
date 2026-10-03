@@ -44,7 +44,7 @@ pub(super) fn hash_in_place(
             .collect::<Vec<_>>()
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-        return super::deep_leaf_batch::execute_prepared(&frames, right, execution);
+        super::deep_leaf_batch::execute_prepared(&frames, right, execution)
     }
     #[cfg(not(any(feature = "fastpq-gpu", feature = "simd")))]
     {
@@ -101,8 +101,8 @@ mod tests {
             let mut left = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();
             let mut right = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();
             for (index, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
-                *left = core::array::from_fn(|lane| (3 * index + lane + 1) as u8);
-                *right = core::array::from_fn(|lane| (7 * index + lane + 11) as u8);
+                *left = core::array::from_fn(|lane| (3 * index + lane + 1).to_le_bytes()[0]);
+                *right = core::array::from_fn(|lane| (7 * index + lane + 11).to_le_bytes()[0]);
             }
             let expected = indices
                 .iter()

@@ -182,6 +182,9 @@ fn allocator_observer_detects_backing_growth_and_recovers_after_unwind() {
 }
 
 // Include the production helpers, not a copied predicate or diagnostic shim.
+#[path = "../src/state/deserialize_world_musubi_source_traits.rs"]
+mod source_traits;
+use source_traits::MusubiSourceReadOnly;
 #[path = "../src/smartcontracts/isi/musubi/attestation_records.rs"]
 mod attestation_records;
 #[path = "../src/smartcontracts/isi/musubi/replication_binding.rs"]
@@ -311,4 +314,54 @@ fn provider_helpers_keep_static_model_error_order_and_outlive_the_source() {
     drop((archive, location));
     assert_eq!(binding.reason(), expected_archive.reason());
     assert_eq!(record.reason(), expected_location.reason());
+}
+
+#[test]
+fn shared_source_contract_borrows_every_original_world_table_without_allocations() {
+    let world = World::new();
+    let view = world.view();
+    let (_, count) = allocations_during(|| {
+        macro_rules! same {
+            ($source:ident, $world:ident) => {
+                assert!(std::ptr::eq(
+                    std::ptr::from_ref(view.$source()).cast::<()>(),
+                    std::ptr::from_ref(WorldReadOnly::$world(&view)).cast::<()>()
+                ));
+            };
+        }
+        same!(source_musubi_archives, musubi_archives);
+        same!(
+            source_musubi_archive_availability,
+            musubi_archive_availability
+        );
+        same!(source_musubi_archive_locations, musubi_archive_locations);
+        same!(source_musubi_locations_by_pin, musubi_locations_by_pin);
+        same!(
+            source_musubi_locations_by_provider,
+            musubi_locations_by_provider
+        );
+        same!(
+            source_musubi_locations_by_replication_order,
+            musubi_locations_by_replication_order
+        );
+        same!(source_musubi_packages, musubi_packages);
+        same!(
+            source_musubi_provider_bundle_attestations,
+            musubi_provider_bundle_attestations
+        );
+        same!(source_musubi_public_directory, musubi_public_directory);
+        same!(source_musubi_releases, musubi_releases);
+        same!(source_musubi_resolver_index, musubi_resolver_index);
+        same!(source_pin_manifests, pin_manifests);
+        same!(source_provider_owners, provider_owners);
+        same!(source_replication_orders, replication_orders);
+        assert_eq!(
+            view.source_musubi_resolver_index_revision(),
+            WorldReadOnly::musubi_resolver_index_revision(&view)
+        );
+    });
+    assert_eq!(
+        count, 0,
+        "shared trait forwards original sources without rebuilding views"
+    );
 }

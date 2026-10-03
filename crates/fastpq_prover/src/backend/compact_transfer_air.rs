@@ -1256,19 +1256,6 @@ mod tests {
         }
     }
 
-    /// Materialise exact base columns only in explicit prover resource tests.
-    fn physical_columns(witness: &PhysicalSmtWitness) -> Vec<Vec<u64>> {
-        let mut columns = (0..COLUMN_COUNT)
-            .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-            .collect::<Vec<_>>();
-        for row in witness.rows() {
-            for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-                column.push(value);
-            }
-        }
-        columns
-    }
-
     #[test]
     #[ignore = "explicit complete canonical q77 SMT proof with native masked trace"]
     fn complete_smt_prover_diagnostic() {

@@ -46,7 +46,9 @@ static PRODUCER: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 pub(super) fn hold_producer_for_test() -> MutexGuard<'static, ()> {
     // As in `acquire`, this mutex protects no shared witness state.
-    PRODUCER.lock().unwrap_or_else(|error| error.into_inner())
+    PRODUCER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[path = "compact_quantity_producer/decode_policy.rs"]

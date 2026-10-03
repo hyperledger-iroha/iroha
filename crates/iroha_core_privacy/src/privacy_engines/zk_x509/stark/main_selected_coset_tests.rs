@@ -1038,3 +1038,119 @@ fn registered_public_zero_suffix_cost_keeps_all_masks_and_selected_coordinates()
 
 #[path = "main_selected_twiddle_tests.rs"]
 mod public_twiddle;
+
+#[test]
+fn selected_production_scheduler_uses_only_registered_public_geometry() {
+    for native in 0..=u8::MAX {
+        for common in 0..=u8::MAX {
+            assert_eq!(
+                use_coarse_inner_schedule_v1(native, common),
+                common == 22 && [15, 16, 18, 19].contains(&native)
+            );
+        }
+    }
+}
+
+#[test]
+fn selected_production_coarse_schedule_matches_original_and_full_domain_oracle() {
+    let common = 22;
+    let rows = 1usize << common;
+    let selected = (0..136)
+        .flat_map(|query| {
+            let block = (query * 1729 + 17) % (rows / 16);
+            block * 16..block * 16 + 16
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2176);
+    for native in [15, 16, 18, 19] {
+        let values = (0..1usize << native)
+            .map(|row| F((17 * row + 1) as u64))
+            .collect::<Vec<_>>();
+        let mask = (0..1816)
+            .map(|degree| F((29 * degree + 3) as u64))
+            .collect::<Vec<_>>();
+        let coefficients = Column::from_vec_v1(
+            masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+        );
+        assert_eq!(coefficients.len(), (1usize << native) + 1816);
+        let full =
+            full_compact_reference_v1(&coefficients, native, common, &selected, |_| {}).unwrap();
+        for workers in [1, 4, 20] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            let actual = pool
+                .install(|| evaluate_v1(&coefficients, native, common, &selected))
+                .unwrap();
+            let original = pool
+                .install(|| {
+                    evaluate_scheduled_with_v1::<true>(
+                        &coefficients,
+                        native,
+                        common,
+                        &selected,
+                        |_| {},
+                    )
+                })
+                .unwrap();
+            assert_eq!(&*actual, &*original);
+            assert_eq!(&*actual, &*full);
+        }
+    }
+}
+
+#[test]
+fn selected_production_coarse_schedule_retains_validation_and_full_scratch_erasure() {
+    let native = 15;
+    let common = 22;
+    let rows = 1usize << common;
+    let coefficients = Column::from_vec_v1(vec![F(11); (1usize << native) + 1816]);
+    for selected in [vec![], vec![rows], vec![2, 1], vec![1, 1]] {
+        let (result, erased) = inspection::observe_v1(|| {
+            evaluate_with_v1(&coefficients, native, common, &selected, |_| {
+                panic!("invalid public coordinates before private writes")
+            })
+        });
+        assert!(result.is_err());
+        assert!(erased.is_empty());
+    }
+    let noncanonical = [F(GOLDILOCKS_MODULUS_V1)];
+    let (result, erased) = inspection::observe_v1(|| {
+        evaluate_with_v1(&noncanonical, native, common, &[0], |_| {
+            panic!("invalid field before private writes")
+        })
+    });
+    assert!(result.is_err());
+    assert!(erased.is_empty());
+    for unwind in [false, true] {
+        let (result, erased) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(|| {
+                evaluate_with_v1(
+                    &coefficients,
+                    native,
+                    common,
+                    &[0, 7, rows - 1],
+                    |scratch| {
+                        assert_eq!(scratch.len(), rows);
+                        assert!(scratch.iter().any(|value| *value != F::ZERO));
+                        if unwind {
+                            panic!("production coarse transform after-scale unwind");
+                        }
+                    },
+                )
+            })
+        });
+        if unwind {
+            assert!(result.is_err());
+            assert_eq!(erased.iter().map(|row| row.cells).sum::<usize>(), rows + 3);
+        } else {
+            assert_eq!(result.unwrap().unwrap().len(), 3);
+            assert_eq!(erased.iter().map(|row| row.cells).sum::<usize>(), rows);
+        }
+        assert!(erased.iter().any(|row| row.nonzero_before > 0));
+        assert!(erased.iter().all(|row| row.nonzero_after == 0));
+    }
+}

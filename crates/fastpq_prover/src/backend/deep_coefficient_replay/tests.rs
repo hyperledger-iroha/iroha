@@ -200,7 +200,7 @@ fn selected_group_stripes_keep_all_fiber_coordinates_and_reject_bad_indices_earl
         vec![0, 0],
         vec![3, 1],
         vec![256],
-        (0..2 * super::super::deep_geometry::QUERY_COUNT + 1).collect(),
+        (0..=2 * super::super::deep_geometry::QUERY_COUNT).collect(),
     ] {
         assert!(
             replay

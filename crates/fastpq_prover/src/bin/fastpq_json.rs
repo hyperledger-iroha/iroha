@@ -930,7 +930,7 @@ mod tests {
             missing.contains("source transfer occurrences must cover every remote-spend claim")
         );
 
-        request.source_transfer_occurrences = vec![occurrence.clone(), occurrence.clone()];
+        request.source_transfer_occurrences = vec![occurrence, occurrence];
         let extra = build_batch_from_request(&request)
             .expect_err("extra source occurrence must fail before batch sealing");
         assert!(extra.contains("source transfer occurrences must cover every remote-spend claim"));

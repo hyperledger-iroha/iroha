@@ -155,6 +155,15 @@ fn kagemusha_registry_successor_for_proposal_v1(
             }
             payload.successor()
         }
+        ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
+            if payload.network_id != network_id
+                || payload.proposal_operator != proposal.proposer
+                || &payload.expected_predecessor != predecessor
+            {
+                return Err("KAGEMUSHA retirement proposal differs from the registry predecessor");
+            }
+            payload.successor()
+        }
         _ => Err("KAGEMUSHA registry token requires an exact typed proposal"),
     }
 }
@@ -731,7 +740,8 @@ pub(crate) fn parliament_attempt_policy_v1(
         | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
         | ProposalKind::KagemushaVerifierPolicyInstall(_)
         | ProposalKind::KagemushaVerifierReleaseInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseActivate(_) => &[
+        | ProposalKind::KagemushaVerifierReleaseActivate(_)
+        | ProposalKind::KagemushaVerifierReleaseRetire(_) => &[
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
             ParliamentBody::InterestPanel,

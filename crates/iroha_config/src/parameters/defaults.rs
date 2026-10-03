@@ -3455,10 +3455,11 @@ pub mod nexus {
             * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS
             + 9 * 1024 * 1024;
         /// Minimum original-owner backing for one public-lane stake-share key,
-        /// one validator group, and three cloned Ed25519 account identifiers.
+        /// one validator group, three cloned Ed25519 account identifiers, and
+        /// four aggregate charge descriptors with three nonzero magnitudes.
         /// The Core group is a transparent wrapper around this exact tuple
-        /// layout. Larger keys/multisig controllers are measured against the
-        /// configured finite pool; Quantity owners remain separate obligations.
+        /// layout. Larger keys, multisig controllers and exact final quantity
+        /// magnitudes are measured against the configured finite pool.
         pub const CONSENSUS_STAKE_INDEX_MIN_BYTES: usize = core::mem::size_of::<(
             iroha_model_base::topology::LaneId,
             iroha_data_model::account::AccountId,
@@ -3470,9 +3471,12 @@ pub mod nexus {
             iroha_primitives::numeric::Quantity,
             iroha_primitives::numeric::Quantity,
             iroha_primitives::numeric::Quantity,
+            Option<iroha_primitives::numeric::Quantity>,
         )>() + 3
-            * (1 + 32 + core::mem::size_of::<iroha_allocation::AllocationCharge>());
-        /// Finite process-local pool for stake-index backings and nested account keys.
+            * (1 + 32 + core::mem::size_of::<iroha_allocation::AllocationCharge>())
+            + 4 * core::mem::size_of::<iroha_allocation::AllocationCharge>()
+            + 3 * core::mem::size_of::<usize>();
+        /// Finite process-local pool for stake-index backings, keys and aggregate magnitudes.
         pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;

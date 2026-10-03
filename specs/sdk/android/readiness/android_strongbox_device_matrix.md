@@ -1,5 +1,10 @@
 # KAGEMUSHA V1 Android hardware qualification matrix
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](../../../kagemusha_single_design_proposal.md)
+> uses stock phones and a software provider. This matrix is not a release gate;
+> record device results in the verification checklist.
+
 This is the physical-device release gate for an Android KAGEMUSHA V1
 hardware profile. A profile remains disabled until every required device row has
 fresh, signed evidence from the exact release candidate. Emulator, software-key,

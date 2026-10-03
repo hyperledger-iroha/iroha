@@ -703,14 +703,16 @@ pub struct FileSnapshot {
     changed: (i64, i64),
 }
 
-pub(super) fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
+/// Capture a revalidated private journal with exact owner-only mode.
+pub fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
     let value = validate_file(file, true)?;
     if value.mode() & 0o7777 != 0o600 {
         return Err(denied("private journal requires mode 0600"));
     }
     snapshot_file(file, true)
 }
-pub(super) fn validate_public_original(file: &File) -> io::Result<()> {
+/// Validate retained public-file custody and its accepted read modes.
+pub fn validate_public_original(file: &File) -> io::Result<()> {
     let value = validate_file(file, false)?;
     if !matches!(value.mode() & 0o7777, 0o644 | 0o444) {
         return Err(denied("public original requires mode 0644 or 0444"));
@@ -736,7 +738,8 @@ impl Directory {
     }
 }
 
-pub(super) fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
+/// Capture current metadata after validating the retained file authority.
+pub fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
     let value = validate_file(file, private)?;
     Ok(FileSnapshot {
         identity: identity(file)?,

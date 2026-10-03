@@ -188,10 +188,6 @@ impl norito::NoritoSchema for ProviderDiscoveryProofRefV1<'_> {
 impl<'a> ProviderDiscoveryProofRefV1<'a> {
     /// Borrow exact originals under the publisher's retained allocation budget.
     /// Construction grants no admission or finality authority.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the allocation-free borrowed proof directly mirrors independently retained world, council, provider, owner, advert and optional token originals"
-    )]
     #[must_use]
     pub fn new(
         world: &'a WorldStateSnapshotV1,

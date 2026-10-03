@@ -102,6 +102,45 @@ fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     assert_eq!(error.to_string(), "duplicate `required` attribute");
 }
 #[test]
+fn type_ident_and_required_attr_recognize_transparent_type_wrappers() {
+    let grouped = |ty| {
+        syn::Type::Group(syn::TypeGroup {
+            group_token: Default::default(),
+            elem: Box::new(ty),
+        })
+    };
+    for ty in [
+        grouped(syn::parse_quote!(Option<u32>)),
+        syn::parse_quote!((Option<u32>)),
+        grouped(syn::parse_quote!((::core::option::Option<u32>))),
+    ] {
+        assert_eq!(type_ident(&ty).unwrap(), "Option");
+        let field: syn::Field = syn::parse_quote! {
+            #[norito(required)]
+            value: #ty
+        };
+        let attrs = FieldAttr::parse(&field.attrs).expect("required attribute");
+        validate_required_attr(&field, &attrs, true).expect("wrapped Option is still Option");
+    }
+    let ty = grouped(syn::parse_quote!((u32)));
+    assert_eq!(type_ident(&ty).unwrap(), "u32");
+    let field: syn::Field = syn::parse_quote! {
+        #[norito(required)]
+        value: #ty
+    };
+    let attrs = FieldAttr::parse(&field.attrs).expect("required attribute");
+    let error =
+        validate_required_attr(&field, &attrs, true).expect_err("wrapped scalar must reject");
+    assert_eq!(
+        error.to_string(),
+        "#[norito(required)] can only be used on Option fields"
+    );
+    for ty in [syn::parse_quote!(&Option<u32>), syn::parse_quote!((u32,))] {
+        assert!(type_ident(&ty).is_none());
+        assert!(!is_option_type(&ty));
+    }
+}
+#[test]
 fn required_attribute_rejects_value_and_incompatible_uses() {
     let valued: syn::Field = syn::parse_quote! {
         #[norito(required = true)]
@@ -187,8 +226,10 @@ fn required_option_accepts_transparent_group_and_parenthesis_types() {
             elem: Box::new(ty),
         })
     }
-    let types: [syn::Type; 3] = [
+    let types: [syn::Type; 5] = [
         syn::parse_quote!(Option<u32>),
+        syn::parse_quote!(::core::option::Option<u32>),
+        syn::parse_quote!((Option<u32>)),
         syn::parse_quote!(std::option::Option<String>),
         syn::parse_quote!(core::option::Option<Vec<u32>>),
     ];
@@ -211,9 +252,11 @@ fn required_option_accepts_transparent_group_and_parenthesis_types() {
 }
 
 #[test]
-fn transparent_wrappers_do_not_make_values_references_or_boxes_optional() {
-    let types: [syn::Type; 3] = [
+fn transparent_wrappers_do_not_make_non_option_types_optional() {
+    let types: [syn::Type; 5] = [
         syn::parse_quote!(u32),
+        syn::parse_quote!(Vec<Option<u32>>),
+        syn::parse_quote!((Option<u32>,)),
         syn::parse_quote!(&Option<u32>),
         syn::parse_quote!(Box<Option<u32>>),
     ];

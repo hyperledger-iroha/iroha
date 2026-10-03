@@ -268,7 +268,10 @@ fn prepared_body_borrows_exact_owner_and_never_exposes_a_consumable_prefix() {
         let expected = norito::encode_canonical(&frame).unwrap();
         assert_eq!(&*prepared.encoded, expected);
         assert_eq!(prepared.job().body().len(), expected.len());
-        assert!(std::ptr::eq(prepared.job().body(), &*prepared.encoded));
+        assert!(std::ptr::eq(
+            prepared.job().body(),
+            std::ptr::from_ref(&*prepared.encoded)
+        ));
         for _ in 0..3 {
             assert_eq!(prepared.job().scalar(), context.hash_frame(&frame).unwrap());
         }

@@ -97,9 +97,14 @@ fn fixture() -> (State, Nexus, KeyPair, RetailDailyLimitPolicyV1) {
         ],
     )
     .unwrap();
-    let state = State::new(
+    // Keep the routing catalog, its derived geometry and this component State
+    // aligned. This fixture does not authenticate a native genesis or history.
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    let state = State::new_with_nexus_for_testing(
         world,
-        crate::kura::Kura::blank_kura_for_testing(),
+        nexus.clone(),
         crate::query::store::LiveQueryStore::start_test(),
     );
     (state, nexus, key, policy)
@@ -301,6 +306,8 @@ fn retail_declared_scope_substitution_cannot_escape_catalog_or_native_source() {
         ],
     )
     .unwrap();
+    expanded.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&expanded.lane_catalog);
     for instruction in substitutions {
         let transaction = accepted(&key, instruction);
         let route = crate::queue::policy_route::PhysicalExecutionPolicyRoute::resolve(

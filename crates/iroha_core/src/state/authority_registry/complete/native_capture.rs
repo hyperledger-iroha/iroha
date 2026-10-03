@@ -17,11 +17,7 @@ pub(crate) fn capture_domains_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     let domains = state.world.domains.view();
     let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
         "world.domains",
@@ -48,11 +44,7 @@ pub(crate) fn capture_accounts_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     let accounts = state.world.accounts.view();
     let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
         "world.accounts",
@@ -83,11 +75,7 @@ pub(crate) fn capture_account_alias_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     let aliases = state.world.account_aliases.view();
     let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
         "world.account_aliases",

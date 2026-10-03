@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 governed provider registry
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 The provider secret used by `PlatformCredential` is authorized through its public
 commitment in the threshold-authenticated release receipt. A witness-selected
 Merkle root, a hardware-backed signing key, and the release's enabled-profile

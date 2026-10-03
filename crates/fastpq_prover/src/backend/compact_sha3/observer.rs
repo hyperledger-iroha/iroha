@@ -176,7 +176,9 @@ fn positions(count: usize) -> Vec<usize> {
         .collect()
 }
 fn child(seed: usize) -> Digest {
-    Digest::from_bytes(core::array::from_fn(|i| ((seed * 17 + i * 73) & 255) as u8))
+    Digest::from_bytes(core::array::from_fn(|i| {
+        (seed * 17 + i * 73).to_le_bytes()[0]
+    }))
 }
 const ORACLES: [Oracle; 8] = [
     Oracle::Row,
@@ -223,9 +225,24 @@ fn exercise(relation: &impl DeepRelation) -> Capture {
             let mut terminal = None;
             for index in positions(leaves) {
                 let before = count();
-                terminal = Some(binding.hash_leaf(oracle, index as u32, &bytes).unwrap());
+                terminal = Some(
+                    binding
+                        .hash_leaf(
+                            oracle,
+                            u32::try_from(index).expect("bounded oracle index"),
+                            &bytes,
+                        )
+                        .unwrap(),
+                );
                 assert_eq!(count(), before + 1);
-                assert_last_hash(1, tag, round, 0, index as u32, terminal.unwrap());
+                assert_last_hash(
+                    1,
+                    tag,
+                    round,
+                    0,
+                    u32::try_from(index).expect("bounded oracle index"),
+                    terminal.unwrap(),
+                );
                 assert!(coverage.insert((ordinal, 0, index)));
                 leaf_count += 1;
             }
@@ -241,18 +258,39 @@ fn exercise(relation: &impl DeepRelation) -> Capture {
                     let before = count();
                     root = Some(
                         binding
-                            .hash_parent(oracle, level, index as u32, left, right)
+                            .hash_parent(
+                                oracle,
+                                level,
+                                u32::try_from(index).expect("bounded oracle index"),
+                                left,
+                                right,
+                            )
                             .unwrap(),
                     );
                     assert_eq!(count(), before + 1);
-                    assert_last_hash(2, tag, round, level, index as u32, root.unwrap());
+                    assert_last_hash(
+                        2,
+                        tag,
+                        round,
+                        level,
+                        u32::try_from(index).expect("bounded oracle index"),
+                        root.unwrap(),
+                    );
                     assert!(coverage.insert((ordinal, level, index)));
                     parent_count += 1;
                 }
             }
             roots.push(root.unwrap());
             let before = count();
-            assert!(binding.hash_leaf(oracle, leaves as u32, &bytes).is_err());
+            assert!(
+                binding
+                    .hash_leaf(
+                        oracle,
+                        u32::try_from(leaves).expect("bounded oracle leaves"),
+                        &bytes
+                    )
+                    .is_err()
+            );
             assert!(binding.hash_leaf(oracle, 0, &bytes[..width - 1]).is_err());
             let mut invalid = bytes;
             invalid[..8].copy_from_slice(&u64::MAX.to_le_bytes());
@@ -269,7 +307,13 @@ fn exercise(relation: &impl DeepRelation) -> Capture {
             );
             assert!(
                 binding
-                    .hash_parent(oracle, 1, (leaves / 2).max(1) as u32, child(0), child(1))
+                    .hash_parent(
+                        oracle,
+                        1,
+                        u32::try_from((leaves / 2).max(1)).expect("bounded parent index"),
+                        child(0),
+                        child(1)
+                    )
                     .is_err()
             );
             if leaves == 1 {

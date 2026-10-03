@@ -1,7 +1,8 @@
 //! Original leaf INTEGER provenance for Projection's canonical serial magnitude.
 //!
-//! TODO: disclosed subject attributes still need exact source and parser-equivalence
-//! constraints; this serial repair does not activate the credential profile.
+//! Disclosed attributes have separate Subject/OID/value and complete Name-policy
+//! constraints. TODO: finish end-to-end parser-equivalence and credential
+//! qualification before activating the profile.
 use super::*;
 
 pub(super) const FIX_SERIAL: usize = variable_output::FIX_END;

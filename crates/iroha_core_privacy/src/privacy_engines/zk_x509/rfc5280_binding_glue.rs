@@ -113,7 +113,8 @@ pub(super) fn populate_node_classification_v1(row: &mut ZkX509Rfc5280StarkBaseRo
     for (index, role) in TIME_ROLES.into_iter().enumerate() {
         let difference = row[BASE_ROLE].sub(F(role as u64));
         row[NODE_TIME_FLAGS + index] = F(u64::from(difference == F::ZERO));
-        row[NODE_TIME_INVERSES + index] = difference.inv().unwrap_or(F::ZERO);
+        // Role differences are canonical field values, including a matching zero.
+        row[NODE_TIME_INVERSES + index] = difference.inverse_or_zero_canonical_v1();
     }
 }
 
@@ -558,4 +559,27 @@ pub(super) fn append_relation_rows_v1(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod private_inverse_tests {
+    use super::*;
+
+    #[test]
+    fn private_time_role_inverses_preserve_original_zero_cells_and_row_ownership() {
+        // The source role is a bounded grammar enum. Include all byte values so
+        // this also covers values outside the admitted role census.
+        for role in 0_u64..=255 {
+            let mut row = [F(7); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            row[BASE_ROLE] = F(role);
+            let mut expected = row;
+            for (index, time_role) in TIME_ROLES.into_iter().enumerate() {
+                let difference = F(role).sub(F(time_role as u64));
+                expected[NODE_TIME_FLAGS + index] = F(u64::from(difference == F::ZERO));
+                expected[NODE_TIME_INVERSES + index] = difference.inv().unwrap_or(F::ZERO);
+            }
+            populate_node_classification_v1(&mut row);
+            assert_eq!(row, expected, "role={role}");
+        }
+    }
 }

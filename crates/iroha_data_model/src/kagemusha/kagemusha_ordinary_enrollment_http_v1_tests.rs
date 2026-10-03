@@ -434,7 +434,7 @@ fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
         let selected = mutate(&json, |v| {
             v.as_object_mut().unwrap().insert(
                 "selected_integrity".into(),
-                json::json!({"challenge":"AA==","lease":"AA=="}),
+                norito::json!({"challenge":"AA==","lease":"AA=="}),
             );
         });
         assert!(

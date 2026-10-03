@@ -15,7 +15,7 @@ enum Readiness {
 }
 static METAL: Mutex<Readiness> = Mutex::new(Readiness::Unchecked);
 /// Public probe counts are charged cold even if readiness is already cached.
-pub(crate) const KAT_HASHES: usize = 8;
+pub const KAT_HASHES: usize = 8;
 const KATS: [(usize, usize, [u8; 32]); KAT_HASHES] = [
     (
         0,
@@ -135,7 +135,7 @@ impl Readiness {
         // previous typed witness/source callbacks have not been invoked.
         let messages = KATS.map(|(len, _, _)| {
             (0..len)
-                .map(|i| ((i * 73 + len) & 255) as u8)
+                .map(|i| (i * 73 + len).to_le_bytes()[0])
                 .collect::<Vec<_>>()
         });
         let prefixes = core::array::from_fn::<_, KAT_HASHES, _>(|index| {
@@ -178,7 +178,7 @@ impl Readiness {
     }
 }
 /// Call before entropy/private callbacks. It never receives a private job.
-pub(crate) fn preflight(backend: Backend) -> Result<()> {
+pub fn preflight(backend: Backend) -> Result<()> {
     if crate::gpu::transform_completion_uncertain_v1() {
         return Err(error(
             "uncertain device completion closes SHA3 private staging",
@@ -190,7 +190,7 @@ pub(crate) fn preflight(backend: Backend) -> Result<()> {
     state.preflight(&mut |jobs, out| dispatch(backend, jobs, out))
 }
 /// Admission was public; successful return exposes only completed exact outputs.
-pub(crate) fn hash(backend: Backend, jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
+pub fn hash(backend: Backend, jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
     keccak_batch::validate(jobs, output.len())?;
     if crate::gpu::transform_completion_uncertain_v1() {
         return Err(error("uncertain device completion closes SHA3 dispatch"));
@@ -274,7 +274,7 @@ mod tests {
         let _lane = crate::backend::acquire_gpu_lane();
         preflight(Backend::Metal).unwrap();
         let bytes = (0..MAX_BODY_FOR_TEST)
-            .map(|i| (i * 73) as u8)
+            .map(|i| (i * 73).to_le_bytes()[0])
             .collect::<Vec<_>>();
         for prefix_length in [0, 1, 7, 135, 136, 137, 271] {
             let mut prefix = Sha3_256V1::new();

@@ -1,5 +1,11 @@
 # KAGEMUSHA V1 peer transport
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) §§5 and 8
+> define the exchange, message kinds and byte bounds. The text below describes
+> the retired exchange; carrier framing rules remain until replaced, together
+> with the kind tables in `qr_stream.md` and `petal_stream.md`.
+
 KAGEMUSHA has one transport-neutral three-message exchange:
 
 1. Receiver: signed `KagemushaPaymentRequestV1`.

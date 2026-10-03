@@ -21,7 +21,7 @@ fn cached_prefix_matches_complete_input_and_binds_every_public_frame_field() {
         h.update(&body);
         let expected = h.finalize();
         assert_eq!(context.hash_frame(&frame).unwrap(), expected);
-        assert_eq!(prepared.hash_cpu().unwrap(), expected);
+        assert_eq!(prepared.hash_cpu(), expected);
         assert_ne!(longer.hash_frame(&frame).unwrap(), expected);
         for (kind, oracle, round, level, index, width) in [
             (2, 1, 0, 0, 17, 32),

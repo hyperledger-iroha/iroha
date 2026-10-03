@@ -122,7 +122,7 @@ pub(super) fn hash_pair(left: Job<'_>, right: Job<'_>) -> [[u8; 32]; 2] {
     let mut output = [[0; 32]; 2];
     for lane in 0..2 {
         for byte in 0..32 {
-            output[lane][byte] = (state[byte / 8][lane] >> ((byte % 8) * 8)) as u8;
+            output[lane][byte] = state[byte / 8][lane].to_le_bytes()[byte % 8];
         }
     }
     output

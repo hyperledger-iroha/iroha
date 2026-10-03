@@ -118,6 +118,6 @@ mod proto {
         assert_eq!(eb, ev);
         let vv: Vec<[u8; 32]> = vec![[5; 32]];
         let vf = norito::to_bytes(&vv);
-        println!("vec arr {:?}", vf.map(|b| hex::encode(b)));
+        println!("vec arr {:?}", vf.map(hex::encode));
     }
 }

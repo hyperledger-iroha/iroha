@@ -1183,31 +1183,6 @@ struct FriFinalVerification<'a> {
     round: usize,
 }
 
-/// Fixed FRI geometry shared with the bounded compact verifier.
-#[cfg(test)]
-pub mod compact_fri_support {
-    use super::*;
-
-    /// Derive the existing bounded binary layer schedule from fixed geometry.
-    pub fn layer_lengths(
-        domain_size: usize,
-        arity: u32,
-        max_reductions: u32,
-    ) -> Result<Vec<usize>> {
-        super::expected_fri_layer_lengths(domain_size, arity, max_reductions)
-    }
-
-    /// Derive the existing exact terminal degree bound for the joint quotient proof.
-    pub fn terminal_degree_bound(
-        domain_size: usize,
-        blowup_factor: u32,
-        arity: u32,
-        layer_lengths: &[usize],
-    ) -> Result<usize> {
-        super::fri_terminal_degree_bound(domain_size, blowup_factor, arity, layer_lengths)
-    }
-}
-
 /// Check the opened initial index and every round/layer count before any hashing.
 #[cfg(any(test, feature = "dev-tools"))]
 fn check_fri_query_shape(

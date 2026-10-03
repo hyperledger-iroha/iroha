@@ -536,6 +536,8 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierRel
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
 #[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseRetireV1);
+#[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);

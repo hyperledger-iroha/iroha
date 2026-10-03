@@ -482,12 +482,14 @@ mod tests {
     #[ignore = "requires real Metal execution; never substitutes CPU results"]
     fn digest384_heterogeneous_frames_match_cpu_on_metal() {
         let _gpu_lane = crate::backend::acquire_gpu_lane();
-        let lengths = [0, 1, 6, 7, 8, 13, 14, 15, 27, 28, 29, 135, 136, 137, 512];
+        let lengths = [
+            0_usize, 1, 6, 7, 8, 13, 14, 15, 27, 28, 29, 135, 136, 137, 512,
+        ];
         let payloads: Vec<Vec<u8>> = lengths
             .iter()
             .map(|&len| {
                 (0..len)
-                    .map(|index| ((index * 73 + len) & 255) as u8)
+                    .map(|index| (index * 73 + len).to_le_bytes()[0])
                     .collect()
             })
             .collect();

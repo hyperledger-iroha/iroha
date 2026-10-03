@@ -3,6 +3,7 @@
 use super::*;
 use crate::{id::NetworkId, kagemusha::*};
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use std::fmt::Write as _;
 
 #[test]
 fn independently_threshold_signed_core_app_key_reuse_is_rejected() {
@@ -78,8 +79,10 @@ fn android_evaluation() -> KagemushaPlatformEvaluationOriginalsV1 {
     let payload = b"{\"entries\":{}}".to_vec();
     let h = Sha256::digest(&payload)
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+        .fold(String::new(), |mut encoded, byte| {
+            write!(&mut encoded, "{byte:02x}").expect("write hexadecimal digest");
+            encoded
+        });
     KagemushaPlatformEvaluationOriginalsV1::AndroidRevocation{canonical_snapshot_original:format!("iroha.android.attestation.revocation.snapshot.v1\npayload_sha256={h}\nresponse_date_ms=1000\nlast_modified_ms=-\ncache_max_age_seconds=10\nserial_count=2\nserial=1\nserial=a\ntbs_sha256_count=1\ntbs_sha256={}\n","12".repeat(32)).into_bytes(),original_status_payload:payload}
 }
 fn fixture(
@@ -112,7 +115,7 @@ fn fixture(
     let risk = KagemushaAppleReceiptRiskPolicyV1 {
         version: 1,
         app_id_utf8: b"ABCDEFGHIJ.example.ordinary".to_vec(),
-        maximum_creation_age_ms: 300000,
+        maximum_creation_age_ms: 300_000,
         maximum_risk_metric: 5,
     };
     let app_id = if apple {
@@ -164,7 +167,7 @@ fn fixture(
         app_authority_policy_digest: app_authority.canonical_digest().unwrap(),
         platform_trust_roots_digest: roots.canonical_digest().unwrap(),
         valid_from_ms: 100,
-        expires_at_ms: 500000,
+        expires_at_ms: 500_000,
     }
     .seal_identity_profile_id()
     .unwrap();
@@ -179,7 +182,7 @@ fn fixture(
         planned_hardware_epoch: 7,
         enrollment_issuer_key: credential_issuer.public_key().clone(),
         app_authority_key: raw_issuer.public_key().clone(),
-        maximum_pending_lifetime_ms: 120000,
+        maximum_pending_lifetime_ms: 120_000,
         maximum_current_state_lifetime_ms: 60000,
         maximum_credential_lifetime_ms: 10000,
     };
@@ -287,7 +290,7 @@ fn issuer_domain_digest_complete_field_mutations_reject_original_policy() {
                     .public_key()
                     .clone()
             }
-            7 => t.maximum_pending_lifetime_ms = 110000,
+            7 => t.maximum_pending_lifetime_ms = 110_000,
             8 => t.maximum_current_state_lifetime_ms = 50000,
             _ => t.maximum_credential_lifetime_ms = 9999,
         }
@@ -316,7 +319,7 @@ fn issuer_complete_keys_network_profile_epoch_joins_survive_valid_threshold_dige
             }
             5 => t.maximum_credential_lifetime_ms = 9999,
             _ => t.maximum_credential_lifetime_ms = 10001,
-        };
+        }
         let changed = with_committed_issuer(&p, &t);
         assert!(
             t.authenticate_under_policy(&changed, [21; 32], 2000)
@@ -345,16 +348,16 @@ fn issuer_original_bounds_versions_epochs_and_lifetimes() {
             4 => t.planned_policy_epoch = 0,
             5 => t.planned_hardware_epoch = 0,
             6 => t.maximum_pending_lifetime_ms = 0,
-            7 => t.maximum_pending_lifetime_ms = 120001,
+            7 => t.maximum_pending_lifetime_ms = 120_001,
             8 => t.maximum_current_state_lifetime_ms = 0,
-            9 => t.maximum_current_state_lifetime_ms = 120001,
+            9 => t.maximum_current_state_lifetime_ms = 120_001,
             10 => t.maximum_credential_lifetime_ms = 0,
             _ => {
                 t.enrollment_issuer_key = KeyPair::from_seed(vec![90; 32], Algorithm::Secp256k1)
                     .public_key()
                     .clone()
             }
-        };
+        }
         assert!(t.canonical_bytes().is_err());
     }
     assert!(KagemushaOrdinaryEnrollmentIssuerPolicyV1::decode_canonical_exact(&[]).is_err());
@@ -370,7 +373,7 @@ fn issuer_current_original_expiry_time_regression_and_policy_drift() {
     let (s, p) = fixture(false);
     let v = s.authenticate_under_policy(&p, [21; 32], 2000).unwrap();
     assert!(v.recheck_current(&p, [21; 32], 1999).is_err());
-    assert!(v.recheck_current(&p, [21; 32], 500000).is_err());
+    assert!(v.recheck_current(&p, [21; 32], 500_000).is_err());
     assert!(s.authenticate_under_policy(&p, [21; 32], 99).is_err());
     let (mut t, _) = fixture(false);
     t.planned_hardware_epoch = 8;
@@ -395,38 +398,41 @@ fn issuer_signed_digest_mutation_requires_real_threshold_approval() {
 }
 #[test]
 fn issuer_lane_sole_canonical_name_account_and_complete_namespace_network_preimage() {
-    let (s, p) = fixture(false);
+    let (issuer_policy, identity_policy) = fixture(false);
     let account = AccountId::new(
         KeyPair::from_seed(vec![91; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
     let fi: Name = "cbsi".parse().unwrap();
-    let lane = s.derive_enrollment_lane(&fi, &account).unwrap();
-    let f = norito::encode_canonical(&fi).unwrap();
-    let a = norito::encode_canonical(&account).unwrap();
-    let mut h = Sha256::new();
-    h.update(LANE_DOMAIN);
-    h.update(s.network_id);
-    h.update(s.lane_namespace_id);
-    h.update((f.len() as u64).to_le_bytes());
-    h.update(&f);
-    h.update((a.len() as u64).to_le_bytes());
-    h.update(&a);
-    assert_eq!(lane, <[u8; 32]>::from(h.finalize()));
-    let v = s.authenticate_under_policy(&p, [21; 32], 2000).unwrap();
+    let lane = issuer_policy.derive_enrollment_lane(&fi, &account).unwrap();
+    let encoded_institution = norito::encode_canonical(&fi).unwrap();
+    let encoded_account = norito::encode_canonical(&account).unwrap();
+    let mut preimage_hasher = Sha256::new();
+    preimage_hasher.update(LANE_DOMAIN);
+    preimage_hasher.update(issuer_policy.network_id);
+    preimage_hasher.update(issuer_policy.lane_namespace_id);
+    preimage_hasher.update((encoded_institution.len() as u64).to_le_bytes());
+    preimage_hasher.update(&encoded_institution);
+    preimage_hasher.update((encoded_account.len() as u64).to_le_bytes());
+    preimage_hasher.update(&encoded_account);
+    assert_eq!(lane, <[u8; 32]>::from(preimage_hasher.finalize()));
+    let verified_issuer = issuer_policy
+        .authenticate_under_policy(&identity_policy, [21; 32], 2000)
+        .unwrap();
     assert_eq!(
         lane,
-        v.derive_enrollment_lane(&p, [21; 32], &fi, &account, 2000)
+        verified_issuer
+            .derive_enrollment_lane(&identity_policy, [21; 32], &fi, &account, 2000)
             .unwrap()
     );
-    for n in 0..4 {
-        let mut t = s.clone();
+    for mutation in 0..4 {
+        let mut changed_policy = issuer_policy.clone();
         let mut acct = account.clone();
         let mut otherfi = fi.clone();
-        match n {
-            0 => t.network_id = [22; 32],
-            1 => t.lane_namespace_id = [22; 32],
+        match mutation {
+            0 => changed_policy.network_id = [22; 32],
+            1 => changed_policy.lane_namespace_id = [22; 32],
             2 => {
                 acct = AccountId::new(
                     KeyPair::from_seed(vec![92; 32], Algorithm::Ed25519)
@@ -435,11 +441,17 @@ fn issuer_lane_sole_canonical_name_account_and_complete_namespace_network_preima
                 )
             }
             _ => otherfi = "bpng".parse().unwrap(),
-        };
-        assert_ne!(lane, t.derive_enrollment_lane(&otherfi, &acct).unwrap());
+        }
+        assert_ne!(
+            lane,
+            changed_policy
+                .derive_enrollment_lane(&otherfi, &acct)
+                .unwrap()
+        );
     }
     assert!(
-        v.derive_enrollment_lane(&p, [21; 32], &fi, &account, 1999)
+        verified_issuer
+            .derive_enrollment_lane(&identity_policy, [21; 32], &fi, &account, 1999)
             .is_err()
     );
 }

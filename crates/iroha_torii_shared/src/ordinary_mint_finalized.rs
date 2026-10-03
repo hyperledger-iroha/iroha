@@ -75,12 +75,14 @@ impl OrdinaryMintFinalizedReadV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     fn selector() -> OrdinaryMintFinalizedReadV1 {
         let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
         OrdinaryMintFinalizedReadV1 {
             version: 1,
-            network_id: NetworkId::from_genesis_hash(Hash::prehashed([8; 32])),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::prehashed([8; 32]),
+            )),
             payer: AccountId::new(key.public_key().clone()),
             operation_id: [1; 32],
             request_original_sha256: [2; 32],

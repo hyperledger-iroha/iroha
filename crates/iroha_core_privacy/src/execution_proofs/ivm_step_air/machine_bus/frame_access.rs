@@ -83,6 +83,10 @@ pub(super) struct Ports<'a> {
 pub(super) struct Decision {
     pub(super) permitted: F,
     pub(super) range_error: F,
+    /// Same original active-generation owner consumed by descriptor reads.
+    pub(super) active_generation: F,
+    /// Successful writes in the live stack or result table update this generation.
+    pub(super) initialized_write: F,
 }
 
 fn pack(bits: &[F]) -> F {
@@ -292,6 +296,10 @@ pub(super) fn append_residues(
     Decision {
         permitted: row[ALLOWED],
         range_error: row[RANGE_ERROR],
+        active_generation: active,
+        initialized_write: live
+            .mul(row[STACK].add(row[RESULT_BRANCH]))
+            .mul(F(u64::from(schedule.write))),
     }
 }
 
@@ -373,4 +381,4 @@ fn initialized_header(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

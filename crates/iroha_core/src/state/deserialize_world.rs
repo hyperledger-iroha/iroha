@@ -9480,6 +9480,7 @@ fn build_state(
                 execution_budget.clone(),
             ),
         )),
+        ivm_execution_pool: execution_budget.clone(),
         pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
             PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget),
         ),

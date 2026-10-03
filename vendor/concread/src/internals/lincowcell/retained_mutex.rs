@@ -16,20 +16,28 @@ use std::{
 
 #[derive(Debug)]
 pub(super) struct Mutex<T> {
-    inner: parking_lot::Mutex<T>,
+    inner: std::sync::Mutex<T>,
     poisoned: AtomicBool,
 }
 
 impl<T> Mutex<T> {
     pub(super) fn new(value: T) -> Self {
+        // Initialize any native backing at owner construction, never at the
+        // first retained source read on a previously unused thread. A standard
+        // mutex has no parking_lot deadlock-detector per-thread allocation.
+        let inner = std::sync::Mutex::new(value);
+        drop(inner.lock().unwrap_or_else(PoisonError::into_inner));
         Self {
-            inner: parking_lot::Mutex::new(value),
+            inner,
             poisoned: AtomicBool::new(false),
         }
     }
 
     pub(super) fn lock(&self) -> LockResult<MutexGuard<'_, T>> {
-        self.finish(self.inner.lock(), true)
+        self.finish(
+            self.inner.lock().unwrap_or_else(PoisonError::into_inner),
+            true,
+        )
     }
 
     pub(super) fn try_lock(&self) -> TryLockResult<MutexGuard<'_, T>> {
@@ -37,7 +45,10 @@ impl<T> Mutex<T> {
     }
 
     pub(super) fn lock_retained(&self) -> LockResult<MutexGuard<'_, T>> {
-        self.finish(self.inner.lock(), false)
+        self.finish(
+            self.inner.lock().unwrap_or_else(PoisonError::into_inner),
+            false,
+        )
     }
 
     pub(super) fn try_lock_retained(&self) -> TryLockResult<MutexGuard<'_, T>> {
@@ -45,13 +56,20 @@ impl<T> Mutex<T> {
     }
 
     fn try_acquire(&self, armed: bool) -> TryLockResult<MutexGuard<'_, T>> {
-        let guard = self.inner.try_lock().ok_or(TryLockError::WouldBlock)?;
+        let guard = match self.inner.try_lock() {
+            Ok(guard) => guard,
+            // The backing primitive cannot distinguish read-only retained
+            // abandonment from interrupted publication. The original explicit
+            // flag below remains the sole poison verdict for both lock paths.
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return Err(TryLockError::WouldBlock),
+        };
         self.finish(guard, armed).map_err(TryLockError::Poisoned)
     }
 
     fn finish<'a>(
         &'a self,
-        inner: parking_lot::MutexGuard<'a, T>,
+        inner: std::sync::MutexGuard<'a, T>,
         armed: bool,
     ) -> LockResult<MutexGuard<'a, T>> {
         let guard = MutexGuard {
@@ -81,13 +99,13 @@ impl<T> Mutex<T> {
 #[derive(Debug)]
 pub(super) struct MutexGuard<'a, T> {
     // The poison verdict is stored before this actual native guard unlocks.
-    inner: parking_lot::MutexGuard<'a, T>,
+    inner: std::sync::MutexGuard<'a, T>,
     poisoned: &'a AtomicBool,
     panicking_on_entry: bool,
     armed: bool,
     retained: bool,
     // Preserve the original guard's !Send / conditional Sync contract even if
-    // another workspace dependency enables parking_lot's send_guard feature.
+    // the internal backing implementation changes.
     _not_send: PhantomData<std::sync::MutexGuard<'a, ()>>,
 }
 

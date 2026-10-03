@@ -68,8 +68,8 @@ mod tests {
                     parent(
                         &context,
                         3,
-                        levels.len() as u32,
-                        index as u32,
+                        u32::try_from(levels.len()).expect("bounded reference tree depth"),
+                        u32::try_from(index).expect("bounded reference tree index"),
                         children[0],
                         children[1],
                     )

@@ -32,7 +32,7 @@ pub fn kagemusha_ordinary_node_mint_codec_fixture_v1() -> KagemushaOrdinaryNodeM
         version: 1,
         lineage: context.lineage.clone(),
         operation_id: context.operation_id,
-        predecessor: context.predecessor.clone(),
+        predecessor: context.predecessor,
         source: KagemushaOrdinaryIncomingSourceSelectionV1::Mint {
             topup_request_original_sha256: Sha256::digest(&topup_request_original).into(),
         },
