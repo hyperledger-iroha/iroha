@@ -8,6 +8,9 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
   private let bridge: KagemushaCoreCoordinatorBridgeV1
   private let original: KagemushaAppPlatformPreparedProjectionV1
   private let originalID: Data
+  private let finalIdentityLock = NSRecursiveLock()
+  private var finalCredentialOriginal: Data?
+  private var finalCredentialDigest: Data?
 
   private init(bridge: KagemushaCoreCoordinatorBridgeV1,
     original: KagemushaAppPlatformPreparedProjectionV1, originalID: Data) {
@@ -87,13 +90,56 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
     guard (1...16384).contains(canonicalSignedCredential.count) else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid final app identity original size")
     }
+    finalIdentityLock.lock(); defer { finalIdentityLock.unlock() }
     let originalCredential = Data(canonicalSignedCredential)
+    if let retained = finalCredentialOriginal, retained != originalCredential {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("retained final credential original changed")
+    }
     _ = try recheck()
     let fields = try call(8, raw: originalCredential)
     let accepted = try KagemushaAppEnrollmentFinalIdentityProjectionV1(
       nativeFields: fields, originalPendingScope: original.nativeScope)
     _ = try recheck()
+    if let retained = finalCredentialDigest, retained != accepted.credentialDigest {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("retained final credential domain digest changed")
+    }
+    finalCredentialOriginal = originalCredential
+    finalCredentialDigest = Data(accepted.credentialDigest)
     return KagemushaNativeOrdinaryAppIdentityConfirmationV1(accepted: accepted)
+  }
+
+  /// Export complete Start DATA from this same consumed E, signed C and admitted
+  /// credential owner. Native authenticates every original and both current clock bounds.
+  /// This is neither a reconstructed credential nor a financial session/grant.
+  func financialStartOriginal(originalSignedPreparation: Data) throws -> Data {
+    finalIdentityLock.lock(); defer { finalIdentityLock.unlock() }
+    let c = try KagemushaOrdinaryAppIdentityPreparedProjectionV1.challenge(transport: originalSignedPreparation)
+    guard Data(SHA256.hash(data: c.canonicalSigningBytes)) == originalID,
+      let credential = finalCredentialOriginal, let digest = finalCredentialDigest else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("complete financial Start lacks held originals")
+    }
+    _ = try recheck()
+    let first = try call(15, raw: KagemushaCoreCoordinatorFrameV1.u32(0))
+    _ = try recheck()
+    guard first[4] == original.nativeScope, first[5] == digest else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("complete financial Start metadata substituted owner")
+    }
+    let total = Int(KagemushaAppPlatformPreparedProjectionV1.u32(first[3]))
+    var chunks = [first]
+    for index in 1..<((total + 65535) / 65536) {
+      _ = try recheck()
+      chunks.append(try call(15, raw: KagemushaCoreCoordinatorFrameV1.u32(UInt32(index))))
+      _ = try recheck()
+    }
+    let body = try OrdinaryEnrollmentWire.retailStartOriginalChunks(chunks,
+      signedPreparation: originalSignedPreparation, credential: credential,
+      pendingScope: original.nativeScope, credentialDigest: digest, nativeTicket: original.ticket)
+    _ = try recheck()
+    guard try call(15, raw: KagemushaCoreCoordinatorFrameV1.u32(0)) == first else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("complete financial Start readback changed")
+    }
+    _ = try recheck()
+    return body
   }
 
   /// Cancel this original ticket. Native Core rejects cancellation after invocation.

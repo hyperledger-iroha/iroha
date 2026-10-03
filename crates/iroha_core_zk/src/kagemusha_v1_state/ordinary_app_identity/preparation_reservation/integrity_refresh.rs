@@ -4,6 +4,10 @@ use super::*;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 
+#[path = "integrity_refresh_recovery.rs"]
+mod recovery;
+pub use recovery::KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1;
+
 const PI_FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "ordinary-integrity-refresh.norito.wal",
     magic: b"KGMCPIR1",
@@ -153,6 +157,28 @@ impl KagemushaOrdinaryIntegrityRefreshOwnerV1 {
         this.prefix = Some(prefix);
         this.require_financial(financial)?;
         Ok(this)
+    }
+    /// Reopen an actual retained PI journal, or acknowledge true directory absence only.
+    /// Absence creates no journal/lease. A symlink, malformed/missing WAL, failed open or
+    /// incomplete record is never treated as absence or as permission to recreate custody.
+    /// # Errors
+    /// Refuses changed completed financial custody, unsafe storage or malformed existing history.
+    pub fn open_existing_if_present(
+        root: &Path,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<Option<Self>> {
+        financial.recheck_historical_proof_custody()?;
+        let directory = root.join("ordinary-integrity-refresh");
+        let result = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                Some(Self::open_existing(root, financial)?)
+            }
+            Ok(_) => return Err(Custody),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(Custody),
+        };
+        financial.recheck_historical_proof_custody()?;
+        Ok(result)
     }
     fn new(
         journal: PrivateJournal,
@@ -488,6 +514,58 @@ impl KagemushaOrdinaryIntegrityRefreshOwnerV1 {
     ) -> Result<Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>> {
         self.require_financial(financial)?;
         Ok(self.leases.clone())
+    }
+    /// Read only exact pending originals and completed FI/C. This never resumes a platform
+    /// invocation, acknowledges a pending signature/lease, refreshes expiry or lends money.
+    /// # Errors
+    /// Refuses changed completed financial/PI storage or an unknown platform invocation.
+    pub fn recovery_fields(
+        &self,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<Vec<Vec<u8>>> {
+        self.require_financial(financial)?;
+        financial.recheck_historical_proof_custody()?;
+        let mut fields = vec![
+            self.enrollment
+                .certificate()
+                .canonical_bytes()
+                .map_err(|_| Custody)?,
+            self.enrollment.app_credential().original().to_vec(),
+        ];
+        if let Some(pending) = &self.pending {
+            if pending.invoked && pending.signature.is_none() && pending.signature_pending.is_none()
+            {
+                return Err(super::super::KagemushaOrdinaryIdentityErrorV1::UnknownOutcome);
+            }
+            fields.extend([
+                pending.nonce.to_vec(),
+                vec![if pending.signature.is_some() {
+                    3
+                } else if pending.signature_pending.is_some() {
+                    2
+                } else {
+                    u8::from(pending.invoked)
+                }],
+                pending
+                    .challenge
+                    .as_ref()
+                    .map(|c| c.to_transport_bytes().map_err(|_| Custody))
+                    .transpose()?
+                    .unwrap_or_default(),
+                pending
+                    .signature
+                    .as_ref()
+                    .or(pending.signature_pending.as_ref())
+                    .cloned()
+                    .unwrap_or_default(),
+                pending.token.clone().unwrap_or_default(),
+                pending.lease_pending.clone().unwrap_or_default(),
+            ]);
+        } else {
+            fields.extend([vec![], vec![0], vec![], vec![], vec![], vec![]]);
+        }
+        self.require_financial(financial)?;
+        Ok(fields)
     }
     /// Durably abandon uncertainty without reusing nonce or invoking the old platform attempt.
     /// # Errors
@@ -840,7 +918,10 @@ mod tests {
 
     // Actual original cryptography under known-public synthetic fixture keys. No installed
     // root, hardware, current money grant or Native qualification is manufactured by these tests.
-    fn financial(root: &Path, integrity: bool) -> KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+    pub(super) fn financial(
+        root: &Path,
+        integrity: bool,
+    ) -> KagemushaOrdinaryEnrolledFinancialOwnerV1 {
         let mut f = Fixture::with_single_member_wallet(false, integrity, [19; 32]);
         let original = selected(&f, 300);
         let mut held =
@@ -871,11 +952,11 @@ mod tests {
         held.complete_enrollment(Arc::new(f.verify(600).unwrap()))
             .unwrap()
     }
-    fn time(financial: &mut KagemushaOrdinaryEnrolledFinancialOwnerV1, now: u64) {
+    pub(super) fn time(financial: &mut KagemushaOrdinaryEnrolledFinancialOwnerV1, now: u64) {
         financial.reservation.reference_ms = now;
         financial.reservation.reference_clock = Reading::now().unwrap();
     }
-    fn originals(
+    pub(super) fn originals(
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
         nonce: [u8; 32],
     ) -> (
@@ -986,6 +1067,9 @@ mod tests {
         let prepare = owner.prepare(financial).unwrap();
         let nonce: [u8; 32] = prepare[1].as_slice().try_into().unwrap();
         let (signed, der, lease) = originals(financial, nonce);
+        // TEST ONLY: cryptographic fixture construction must not spend the synthetic clock
+        // margin. Production continues sampling both actual bounds without resetting time.
+        time(financial, 1400);
         let fields = owner
             .accept_challenge(financial, &signed.to_transport_bytes().unwrap())
             .unwrap();

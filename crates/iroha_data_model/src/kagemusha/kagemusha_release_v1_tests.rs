@@ -2166,6 +2166,63 @@ fn print_governed_release_fixtures() {
         .proposal
         .validate()
         .expect("exact sole standby activation");
+    // Generate an authenticated active/history/unused-standby predecessor so every
+    // SDK proves preservation of existing issuance authority, not just empty removal.
+    // Signed fixture reports remain test material, never release qualification.
+    let mut retire_predecessor = activate.proposal.successor().unwrap();
+    let keys = authority_keys();
+    let policy = retire_predecessor
+        .authority_policy
+        .as_ref()
+        .unwrap()
+        .clone();
+    let first_active = activate.proposal.successor_release_id;
+    let mut standby_release_id = [0; 32];
+    for (index, mask) in [0x5a, 0xa5].into_iter().enumerate() {
+        let mut receipt = install.proposal.receipt.clone();
+        receipt.source_tree_digest[0] ^= mask;
+        let mut manifest = install.proposal.manifest.clone();
+        manifest.source_tree_digest = receipt.source_tree_digest;
+        manifest.validation_receipt_digest = receipt.canonical_digest().unwrap();
+        let manifest = manifest.seal().unwrap();
+        let attestation = release_attestation(&manifest, &receipt, &policy, &keys[..2]);
+        retire_predecessor
+            .install_authenticated_release(&manifest, &receipt, &attestation)
+            .unwrap();
+        if index == 0 {
+            retire_predecessor
+                .activate_standby(Some(first_active), manifest.release_id)
+                .unwrap();
+        } else {
+            standby_release_id = manifest.release_id;
+        }
+    }
+    assert_eq!(retire_predecessor.releases.len(), 3);
+    let retire = crate::isi::governance::ProposeKagemushaVerifierReleaseRetireV1 {
+        proposal: crate::governance::types::KagemushaVerifierReleaseRetireProposalV1 {
+            proposal_operator: activate.proposal.proposal_operator.clone(),
+            network_id: activate.proposal.network_id,
+            expected_predecessor: retire_predecessor,
+            standby_release_id,
+        },
+    };
+    retire
+        .proposal
+        .validate()
+        .expect("actual authenticated standby retirement input");
+    let retire_frame = norito::encode_canonical(&retire).unwrap();
+    assert_eq!(norito::decode_canonical::<crate::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>(&retire_frame).unwrap(), retire);
+    let retire_kind = ProposalKind::KagemushaVerifierReleaseRetire(retire.proposal);
+    let retire_json = norito::json::to_json(&retire_kind).unwrap();
+    assert_eq!(
+        norito::json::from_json::<ProposalKind>(&retire_json).unwrap(),
+        retire_kind
+    );
+    println!(
+        "GOVERNANCE_RELEASE_FIXTURE_RETIRE_HEX={}",
+        hex::encode(retire_frame)
+    );
+    println!("GOVERNANCE_RELEASE_FIXTURE_RETIRE_JSON={retire_json}");
     println!(
         "GOVERNANCE_RELEASE_FIXTURE_INSTALL_HEX={}",
         hex::encode(norito::encode_canonical(&install).unwrap())

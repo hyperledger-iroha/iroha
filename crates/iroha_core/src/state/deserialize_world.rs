@@ -9378,7 +9378,9 @@ fn build_state(
         ))
     })?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let da_receipt_cursors = PublicationRwLock::new(DaReceiptCursorIndex::default());
+    let da_receipt_cursors =
+        PublicationRwLock::try_new(DaReceiptCursorIndex::default(), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?;
     let da_shard_cursors =
         PublicationRwLock::try_new(DaShardCursorIndex::default(), &execution_budget)
             .map_err(StateStorageAdmissionError::World)?;

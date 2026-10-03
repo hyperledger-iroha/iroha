@@ -24,11 +24,7 @@ pub(crate) fn capture_domains_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     // Eight inspected rows/members per retained-row allowance is local capture
     // policy, not gas or validity. A larger prior image can require a larger
     // admitted bound even when the current table would fit the retention limit.
@@ -76,11 +72,7 @@ pub(crate) fn capture_accounts_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     let checked =
         CheckedAccountIdentities::capture(&state.world, limits.max_rows.saturating_mul(8));
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
@@ -129,11 +121,7 @@ pub(crate) fn capture_account_alias_table_once(
     if generation & 1 != 0 {
         return Ok(None);
     }
-    let budget = state
-        .pipeline_ivm_prepared_cache
-        .read()
-        .execution_budget()
-        .clone();
+    let budget = state.ivm_execution_budget();
     let checked = CheckedAccountAliases::capture(&state.world, limits.max_rows.saturating_mul(8));
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
@@ -196,11 +184,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let budget = state
-            .pipeline_ivm_prepared_cache
-            .read()
-            .execution_budget()
-            .clone();
+        let budget = state.ivm_execution_budget();
         // Fresh State owns the native tip's original generations and controls,
         // plus each separately funded physical reader/writer release source.
         let native_tip_bytes = mv::cell::CellInitialization::<

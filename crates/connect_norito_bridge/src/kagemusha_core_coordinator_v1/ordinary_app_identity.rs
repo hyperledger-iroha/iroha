@@ -3,8 +3,14 @@
 //! Monetary methods stay unavailable until a separate genuine constrained financial owner exists.
 #[path = "ordinary_current_control.rs"]
 mod current_control;
+#[path = "ordinary_fi_http_proof.rs"]
+mod fi_http_proof;
 #[path = "ordinary_incoming_driver.rs"]
 mod incoming_driver;
+#[path = "ordinary_integrity_refresh.rs"]
+mod integrity_refresh;
+#[path = "ordinary_mint_funding_driver.rs"]
+mod mint_funding_driver;
 #[path = "ordinary_outgoing_driver.rs"]
 mod outgoing_driver;
 use super::{
@@ -20,9 +26,18 @@ pub use current_control::{
     KagemushaOrdinaryNativeCurrentControlResponseV1,
     invoke_kagemusha_native_ordinary_current_control_v1,
 };
+pub use fi_http_proof::{
+    KagemushaNativeOrdinaryFiHttpKeyLoanV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
+};
 pub use incoming_driver::{
     KagemushaOrdinaryNativeIncomingRequestV1, KagemushaOrdinaryNativeIncomingResponseV1,
     invoke_kagemusha_native_ordinary_incoming_v1,
+};
+pub use integrity_refresh::{
+    KagemushaOrdinaryNativeIntegrityRefreshRequestV1,
+    KagemushaOrdinaryNativeIntegrityRefreshResponseV1,
+    invoke_kagemusha_native_ordinary_integrity_refresh_v1,
 };
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_core_zk::kagemusha_v1_recursion::{
@@ -35,20 +50,25 @@ use iroha_core_zk::kagemusha_v1_state::{
     KagemushaOrdinaryAppEnrollmentAttemptV1 as Attempt,
     KagemushaOrdinaryAppPossessionAttemptV1 as Possession,
     KagemushaOrdinaryEnrolledFinancialOwnerV1 as FinancialOwner,
+    KagemushaOrdinaryIntegrityRefreshOwnerV1 as IntegrityRefresh,
     KagemushaOrdinaryPreparationReservationV1 as Reservation,
     KagemushaOrdinaryPreparationSelectedOriginalsV1 as Selected,
     KagemushaOrdinaryRetailEnrollmentAttemptV1 as Retail,
+    KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1 as IntegrityRecovery,
 };
 use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+};
+pub use mint_funding_driver::{
+    KagemushaOrdinaryNativeMintFundingRequestV1, KagemushaOrdinaryNativeMintFundingResponseV1,
+    invoke_kagemusha_native_ordinary_mint_funding_v1,
 };
 pub use outgoing_driver::{
     KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
     KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
 };
+use sha2::{Digest as _, Sha256};
 use std::{
-    fs::{File, OpenOptions},
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -62,14 +82,37 @@ pub enum KagemushaOrdinaryEnrollmentDispositionV1 {
     /// Reopen the exact previously retained original; missing storage is never recreated.
     Recover,
 }
+pub(super) fn native_existing_account_journal_disposition(
+    original: &Path,
+) -> Result<KagemushaOrdinaryEnrollmentDispositionV1, Error> {
+    match std::fs::symlink_metadata(original) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            // This selects only recovery DATA. The real portable kernel authenticates native
+            // owner/private mode or DACL, links and every retained ancestor before that choice.
+            let original =
+                iroha_fs::RetainedFile::open_private(original).map_err(|_| Error::Rejected)?;
+            original.revalidate().map_err(|_| Error::Rejected)?;
+            Ok(KagemushaOrdinaryEnrollmentDispositionV1::Recover)
+        }
+        Ok(_) => Err(Error::Rejected),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Existing directory ancestry is checked by the actual journal create/open kernel.
+            // A moved/replaced original after this observation is refused there; no retry fallback.
+            Ok(KagemushaOrdinaryEnrollmentDispositionV1::Fresh)
+        }
+        Err(_) => Err(Error::Rejected),
+    }
+}
+
 /// Concrete retained native account/release/policy selection and original storage directory.
 /// This source performs no issuer HTTP callback. Mobile transports return untrusted originals
 /// through explicit C21 intake, and the actual reservation/Attempt owners authenticate them.
 pub struct KagemushaNativeOrdinaryAppIdentitySourceV1 {
     path: PathBuf,
-    directory: File,
+    directory: iroha_fs::ReaderDirectory,
     selected: Arc<Selected>,
     preparation_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    native_local_recovery: bool,
     platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
     integrity_policy_original: Option<Vec<u8>>,
     bootstrap: Option<BootstrapMaterial>,
@@ -115,14 +158,11 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             path.to_str().ok_or(Error::Rejected)?.as_bytes(),
         )
         .map_err(|_| Error::Rejected)?;
+        #[cfg(unix)]
         if path.canonicalize().map_err(|_| Error::Rejected)? != path {
             return Err(Error::Rejected);
         }
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|_| Error::Rejected)?;
+        let directory = iroha_fs::ReaderDirectory::open(&path).map_err(|_| Error::Rejected)?;
         match (
             selected
                 .integrity_policy_digest()
@@ -145,6 +185,7 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             directory,
             selected,
             preparation_disposition,
+            native_local_recovery: false,
             platform_disposition,
             integrity_policy_original,
             bootstrap: None,
@@ -250,7 +291,35 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
         self.native_account_session = Some(session);
         self
     }
+    fn recheck_installed_originals_for_refresh(&self, path: &Path) -> Result<(), Error> {
+        self.recheck_installed_directory_originals(path)?;
+        self.native_account_session
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .recheck_installed_account_for_refresh()
+    }
+    // Retained proof computation may outlive the current clock/read observation.
+    // This authenticates the actual installed source and same unretired selection;
+    // the Cash proof loan separately checks complete captured C/FI/PI/clock originals.
+    // It supplies no current signing, financial or State-effect admission.
+    fn recheck_retained_owner_originals(&self, path: &Path) -> Result<(), Error> {
+        self.recheck_installed_directory_originals(path)?;
+        self.native_account_session
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .recheck_retained_account_identity()
+    }
     fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
+        self.recheck_installed_directory_originals(path)?;
+        if let Some(session) = &self.native_account_session {
+            session.recheck()?;
+        }
+        self.selected
+            .trusted_time_ms()
+            .map(|_| ())
+            .map_err(|_| Error::Rejected)
+    }
+    fn recheck_installed_directory_originals(&self, path: &Path) -> Result<(), Error> {
         if let Some(cash) = &self.cash {
             cash.inventory.recheck().map_err(|_| Error::Rejected)?;
             if cash
@@ -262,31 +331,30 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
                 return Err(Error::Rejected);
             }
         }
-        if let Some(session) = &self.native_account_session {
-            session.recheck()?;
-        }
-        self.selected
-            .trusted_time_ms()
-            .map_err(|_| Error::Rejected)?;
-        let held = self.directory.metadata().map_err(|_| Error::Rejected)?;
-        let current = std::fs::symlink_metadata(&self.path).map_err(|_| Error::Rejected)?;
-        if path != self.path
-            || !held.is_dir()
-            || !current.is_dir()
-            || current.file_type().is_symlink()
-            || held.dev() != current.dev()
-            || held.ino() != current.ino()
-            || held.uid() != current.uid()
-            || held.gid() != current.gid()
-            || held.mode() != current.mode()
-        {
+        if path != self.path {
             return Err(Error::Rejected);
         }
+        // Retain every native ancestor and the same directory. The actual child journals may
+        // change its namespace timestamps; they cannot replace its identity or custody.
+        self.directory.revalidate().map_err(|_| Error::Rejected)?;
         Ok(())
     }
     fn original_enrollment_id(&self, path: &Path) -> Result<[u8; 32], Error> {
         self.recheck_originals(path)?;
         self.selected.enrollment_id().map_err(|_| Error::Rejected)
+    }
+    pub(super) fn enable_native_local_recovery(&mut self) {
+        self.native_local_recovery = true;
+    }
+    fn exact_local_disposition(
+        &self,
+        configured: KagemushaOrdinaryEnrollmentDispositionV1,
+        original: &Path,
+    ) -> Result<KagemushaOrdinaryEnrollmentDispositionV1, Error> {
+        if !self.native_local_recovery {
+            return Ok(configured);
+        }
+        native_existing_account_journal_disposition(original)
     }
     fn reserve_preparation(&self, path: &Path) -> Result<Reservation, Error> {
         self.recheck_originals(path)?;
@@ -294,7 +362,13 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             .selected
             .trusted_time_ms()
             .map_err(|_| Error::Rejected)?;
-        let result = match self.preparation_disposition {
+        let exact = path
+            .join(format!(
+                "{}-preparation",
+                hex::encode(self.original_enrollment_id(path)?)
+            ))
+            .join("ordinary-preparation.norito.wal");
+        let result = match self.exact_local_disposition(self.preparation_disposition, &exact)? {
             KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
                 Reservation::create(path, self.selected.clone(), now)
             }
@@ -532,6 +606,11 @@ struct Owner {
     retail_started: bool,
     retail: Option<Retail>,
     financial: Option<FinancialOwner>,
+    integrity_recovery: Option<IntegrityRecovery>,
+    integrity_refresh: Option<IntegrityRefresh>,
+    integrity_refresh_started: bool,
+    integrity_catalog: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    completed_retail_ticket: Option<u64>,
     bootstrap_started: bool,
     bootstrap: Option<BootstrapOwner>,
     bootstrap_route_ticket: Option<u64>,
@@ -558,12 +637,84 @@ fn approval_uses_cash(
         _ => Err(Error::Rejected),
     }
 }
+fn same_integrity_catalog(
+    left: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+    right: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.original() == b.original())
+}
 struct OrdinaryBackend {
     path: PathBuf,
     source: Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>,
     owner: Mutex<Owner>,
 }
 impl OrdinaryBackend {
+    fn activate_recovered_bootstrap(&self, owner: &mut Owner) -> Result<bool, Error> {
+        if owner.bootstrap.is_some() {
+            return Ok(true);
+        }
+        let Some(material) = &self.source.bootstrap else {
+            return Ok(false);
+        };
+        if let Some(recovery) = &owner.integrity_recovery {
+            if let Some(ticket) = recovery
+                .completed_retail_ticket()
+                .map_err(|_| Error::Rejected)?
+            {
+                owner.completed_retail_ticket = Some(ticket);
+            }
+        }
+        let Some(recovery) = owner.integrity_recovery.take() else {
+            return Ok(false);
+        };
+        let (financial, refresh, catalog) = match recovery.activate_for_bootstrap() {
+            Ok(parts) => parts,
+            Err((held, _)) => {
+                owner.integrity_recovery = Some(held);
+                return Ok(false);
+            }
+        };
+        if !material.integrity_leases.is_empty()
+            && !same_integrity_catalog(&material.integrity_leases, &catalog)
+        {
+            return Err(Error::Rejected);
+        }
+        owner.integrity_refresh = refresh;
+        owner.integrity_catalog = catalog;
+        if owner.bootstrap_started {
+            return Err(Error::Rejected);
+        }
+        owner.bootstrap_started = true;
+        let path = self.path.join(hex::encode(
+            financial.enrollment().certificate().subject.enrollment_id,
+        ));
+        owner.bootstrap = Some(
+            match self.source.exact_local_disposition(
+                material.disposition,
+                &path.join("logical-approvals/ordinary-approval.norito.wal"),
+            )? {
+                KagemushaOrdinaryEnrollmentDispositionV1::Fresh => BootstrapOwner::create_new(
+                    path,
+                    financial,
+                    Arc::clone(&material.verifier),
+                    material.capacity,
+                ),
+                KagemushaOrdinaryEnrollmentDispositionV1::Recover => BootstrapOwner::open_existing(
+                    path,
+                    financial,
+                    Arc::clone(&material.verifier),
+                    material.capacity,
+                    &owner.integrity_catalog,
+                ),
+            }
+            .map_err(|_| Error::Rejected)?,
+        );
+        Ok(true)
+    }
     fn invoke_cash_approval(
         &self,
         owner: &mut Owner,
@@ -925,6 +1076,132 @@ impl OrdinaryBackend {
         if owner.handle != Some(handle) {
             return Err(Error::Rejected);
         }
+        if phase == 15 {
+            use sha2::{Digest as _, Sha256};
+
+            let ticket =
+                u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let index =
+                u32::from_le_bytes(f[2].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let pending = owner
+                .attempt
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .retained_pending_identity()
+                .map_err(|_| Error::Rejected)?;
+            let app = owner.possession.as_ref().ok_or(Error::Rejected)?;
+            if app.ticket() != ticket {
+                return Err(Error::Rejected);
+            }
+            let body = app
+                .financial_start_original_http_data(
+                    pending,
+                    owner.reservation.as_ref().ok_or(Error::Rejected)?,
+                )
+                .map_err(|_| Error::Rejected)?;
+            let offset = (index as usize).checked_mul(65536).ok_or(Error::Rejected)?;
+            if offset >= body.len() {
+                return Err(Error::Rejected);
+            }
+            let now = self
+                .source
+                .selected
+                .trusted_time_ms()
+                .map_err(|_| Error::Rejected)?;
+            let fields = vec![
+                index.to_le_bytes().to_vec(),
+                body[offset..body.len().min(offset + 65536)].to_vec(),
+                Sha256::digest(&body).to_vec(),
+                (body.len() as u32).to_le_bytes().to_vec(),
+                pending.native_scope().to_vec(),
+                app.final_identity(pending, now)
+                    .map_err(|_| Error::Rejected)?
+                    .digest()
+                    .to_vec(),
+            ];
+            self.source.recheck_originals(&self.path)?;
+            let response = kagemusha_core_coordinator_encode_response_v1(&fields)
+                .map_err(|_| Error::Rejected)?;
+            kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
+                .map_err(|_| Error::Rejected)?;
+            return Ok(response);
+        }
+        if phase == 13
+            && (owner.integrity_recovery.is_some()
+                || owner.bootstrap.is_some()
+                || owner.cash.is_some())
+        {
+            let offered =
+                u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let ticket = owner
+                .retail
+                .as_ref()
+                .map(Retail::ticket)
+                .or(owner.completed_retail_ticket)
+                .or_else(|| {
+                    owner
+                        .integrity_recovery
+                        .as_ref()
+                        .and_then(|held| held.completed_retail_ticket().ok().flatten())
+                })
+                .ok_or(Error::Rejected)?;
+            if offered != ticket {
+                return Err(Error::Rejected);
+            }
+            let fields = if let Some(held) = &owner.integrity_recovery {
+                held.completed_retail_recovery_fields()
+                    .map_err(|_| Error::Rejected)?
+            } else if let Some(cash) = &mut owner.cash {
+                cash.with_integrity_refresh_custody(|financial|financial.retained_enrollment_recovery_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)).map_err(|_|Error::Rejected)?
+            } else {
+                owner.bootstrap.as_mut().ok_or(Error::Rejected)?.with_integrity_refresh_custody(|financial|financial.retained_enrollment_recovery_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)).map_err(|_|Error::Rejected)?
+            };
+            self.source.recheck_originals(&self.path)?;
+            return kagemusha_core_coordinator_encode_response_v1(&fields)
+                .map_err(|_| Error::Rejected);
+        }
+        if phase == 12
+            && (owner.integrity_recovery.is_some()
+                || owner.bootstrap.is_some()
+                || owner.cash.is_some())
+        {
+            let ticket =
+                u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let native_ticket = owner
+                .retail
+                .as_ref()
+                .map(Retail::ticket)
+                .or(owner.completed_retail_ticket)
+                .or_else(|| {
+                    owner
+                        .integrity_recovery
+                        .as_ref()
+                        .and_then(|held| held.completed_retail_ticket().ok().flatten())
+                })
+                .ok_or(Error::Rejected)?;
+            if ticket != native_ticket {
+                return Err(Error::Rejected);
+            }
+            let (completed, recovery) = if let Some(held) = &owner.integrity_recovery {
+                (
+                    held.completed_enrollment_fields()
+                        .map_err(|_| Error::Rejected)?,
+                    held.completed_retail_recovery_fields()
+                        .map_err(|_| Error::Rejected)?,
+                )
+            } else if let Some(cash) = &mut owner.cash {
+                cash.with_integrity_refresh_custody(|financial|Ok((financial.retained_enrollment_completion_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)?,financial.retained_enrollment_recovery_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)?))).map_err(|_|Error::Rejected)?
+            } else {
+                owner.bootstrap.as_mut().ok_or(Error::Rejected)?.with_integrity_refresh_custody(|financial|Ok((financial.retained_enrollment_completion_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)?,financial.retained_enrollment_recovery_fields().map_err(|_|iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity)?))).map_err(|_|Error::Rejected)?
+            };
+            if recovery[2] != f[2] {
+                return Err(Error::Rejected);
+            }
+            self.activate_recovered_bootstrap(&mut owner)?;
+            self.source.recheck_originals(&self.path)?;
+            return kagemusha_core_coordinator_encode_response_v1(&completed)
+                .map_err(|_| Error::Rejected);
+        }
         if phase == 9 {
             let Owner {
                 attempt,
@@ -956,7 +1233,10 @@ impl OrdinaryBackend {
                     .join("retail-enrollment");
                 let reserve = reservation.as_ref().ok_or(Error::Rejected)?;
                 *retail = Some(
-                    match self.source.platform_disposition {
+                    match self.source.exact_local_disposition(
+                        self.source.platform_disposition,
+                        &root.join("ordinary-retail-enrollment.wal"),
+                    )? {
                         KagemushaOrdinaryEnrollmentDispositionV1::Fresh => Retail::create(
                             &root,
                             pending,
@@ -988,6 +1268,7 @@ impl OrdinaryBackend {
                 reservation,
                 retail,
                 financial,
+                integrity_recovery,
                 bootstrap_started,
                 bootstrap,
                 ..
@@ -1057,35 +1338,17 @@ impl OrdinaryBackend {
                         }
                     }
                     if bootstrap.is_none()
-                        && let Some(material) = &self.source.bootstrap
+                        && self.source.bootstrap.is_some()
+                        && integrity_recovery.is_none()
                     {
-                        *bootstrap_started = true;
-                        let financial = financial.take().ok_or(Error::Rejected)?;
-                        let path = self
-                            .path
-                            .join(hex::encode(enrollment.certificate().subject.enrollment_id));
-                        *bootstrap = Some(
-                            match material.disposition {
-                                KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
-                                    BootstrapOwner::create_new(
-                                        path,
-                                        financial,
-                                        material.verifier.clone(),
-                                        material.capacity,
-                                    )
-                                }
-                                KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
-                                    BootstrapOwner::open_existing(
-                                        path,
-                                        financial,
-                                        material.verifier.clone(),
-                                        material.capacity,
-                                        &material.integrity_leases,
-                                    )
-                                }
+                        let fin = financial.take().ok_or(Error::Rejected)?;
+                        match IntegrityRecovery::from_completed_financial(&self.path, fin) {
+                            Ok(held) => *integrity_recovery = Some(held),
+                            Err((fin, _)) => {
+                                *financial = Some(fin);
+                                return Err(Error::Rejected);
                             }
-                            .map_err(|_| Error::Rejected)?,
-                        );
+                        }
                     }
                     vec![
                         enrollment.certificate().subject.enrollment_id.to_vec(),
@@ -1106,6 +1369,10 @@ impl OrdinaryBackend {
             }
             response
         };
+        if phase == 12 {
+            owner.completed_retail_ticket = owner.retail.as_ref().map(Retail::ticket);
+            self.activate_recovered_bootstrap(&mut owner)?;
+        }
         self.source.recheck_originals(&self.path)?;
         let response = kagemusha_core_coordinator_encode_response_v1(&response)
             .map_err(|_| Error::Rejected)?;
@@ -1139,8 +1406,13 @@ impl OrdinaryBackend {
             // generates C/key, fetches issuer data or retries an unknown device invocation.
             if owner.attempt.is_none() {
                 if owner.attempted.is_some()
-                    || self.source.platform_disposition
-                        != KagemushaOrdinaryEnrollmentDispositionV1::Recover
+                    || self.source.exact_local_disposition(
+                        self.source.platform_disposition,
+                        &self
+                            .path
+                            .join(hex::encode(self.source.original_enrollment_id(&self.path)?))
+                            .join("ordinary-app-enrollment.wal"),
+                    )? != KagemushaOrdinaryEnrollmentDispositionV1::Recover
                 {
                     return Err(Error::Rejected);
                 }
@@ -1204,7 +1476,10 @@ impl OrdinaryBackend {
                     .path
                     .join(hex::encode(self.source.original_enrollment_id(&self.path)?))
                     .join("possession");
-                let result = match self.source.platform_disposition {
+                let result = match self.source.exact_local_disposition(
+                    self.source.platform_disposition,
+                    &root.join("ordinary-app-possession.wal"),
+                )? {
                     KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
                         Possession::create_with_native_selected(
                             &root,
@@ -1306,13 +1581,17 @@ impl OrdinaryBackend {
                 .try_into()
                 .map_err(|_| Error::Rejected)?,
         );
-        self.source.recheck_originals(&self.path)?;
+        if phase == 15 {
+            self.source.recheck_retained_owner_originals(&self.path)?;
+        } else {
+            self.source.recheck_originals(&self.path)?;
+        }
         let mut owner = self.owner.lock().map_err(|_| Error::Rejected)?;
         if owner.handle != Some(handle) {
             return Err(Error::Rejected);
         }
         let response = if phase == 15 {
-            // This same opened descriptor projects only its installed current account originals.
+            // This same opened descriptor projects only its installed retained account originals.
             // No wallet read or C reservation starts here; an absent Native session is refused.
             let session = self
                 .source
@@ -1405,7 +1684,13 @@ impl OrdinaryBackend {
                     .selected
                     .trusted_time_ms()
                     .map_err(|_| Error::Rejected)?;
-                let attempt = match self.source.platform_disposition {
+                let attempt = match self.source.exact_local_disposition(
+                    self.source.platform_disposition,
+                    &self
+                        .path
+                        .join(hex::encode(id))
+                        .join("ordinary-app-enrollment.wal"),
+                )? {
                     KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
                         Attempt::create_with_native_selected(
                             &self.path,
@@ -1508,7 +1793,11 @@ impl OrdinaryBackend {
                 _ => return Err(Error::Rejected),
             }
         };
-        self.source.recheck_originals(&self.path)?;
+        if phase == 15 {
+            self.source.recheck_retained_owner_originals(&self.path)?;
+        } else {
+            self.source.recheck_originals(&self.path)?;
+        }
         finish_identity_response(&owner, frame, &response)
     }
 }
@@ -1556,6 +1845,25 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
             return Err(Error::Rejected);
         }
         owner.opened = true;
+        let preparation_wal = self
+            .path
+            .join(format!(
+                "{}-preparation",
+                hex::encode(self.source.original_enrollment_id(&self.path)?)
+            ))
+            .join("ordinary-preparation.norito.wal");
+        if self
+            .source
+            .exact_local_disposition(self.source.preparation_disposition, &preparation_wal)?
+            == KagemushaOrdinaryEnrollmentDispositionV1::Recover
+        {
+            owner.integrity_recovery = IntegrityRecovery::open_completed_native_custody_if_present(
+                &self.path,
+                Arc::clone(&self.source.selected),
+            )
+            .map_err(|_| Error::Rejected)?;
+            self.activate_recovered_bootstrap(&mut owner)?;
+        }
         owner.handle = Some(1);
         self.source.recheck_originals(&self.path)?;
         Ok(1)
@@ -1580,6 +1888,10 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
         owner.bootstrap_route_ticket = None;
         owner.cash = None;
         owner.financial = None;
+        owner.integrity_recovery = None;
+        owner.integrity_refresh = None;
+        owner.integrity_catalog.clear();
+        owner.completed_retail_ticket = None;
         owner.retail = None;
         owner.possession = None;
         owner.attempt = None;
@@ -2278,6 +2590,7 @@ mod tests {
         );
         assert!(possession_call(&b, h, 14, vec![ft]).is_err());
         assert!(b.owner.lock().unwrap().financial.is_some());
+
         assert_eq!(
             b.invoke(h, Method::PreparedAppOperationApproval, &[]),
             Err(Error::Rejected)
@@ -2353,6 +2666,41 @@ mod tests {
             }
         }
         assert!(b.owner.lock().unwrap().financial.is_some());
+        assert!(b.owner.lock().unwrap().bootstrap.is_none());
+        // Exercise absent-bootstrap refusals above while the actual financial owner
+        // remains retained, then release it before testing exclusive durable recovery.
+        {
+            let mut owner = b.owner.lock().unwrap();
+            owner.financial = None;
+            owner.retail = None;
+            owner.possession = None;
+            owner.attempt = None;
+            owner.reservation = None;
+        }
+        let recovered = IntegrityRecovery::open_completed_native_custody_if_present(
+            &b.path,
+            Arc::clone(&b.source.selected),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            recovered.completed_financial_enrollment_original().unwrap(),
+            certificate.canonical_bytes().unwrap()
+        );
+        assert!(recovered.retained_integrity_catalog().unwrap().is_empty());
+        assert_eq!(
+            recovered.completed_retail_recovery_fields().unwrap()[0],
+            vec![3]
+        );
+        assert!(
+            IntegrityRecovery::open_completed_native_custody_if_present(
+                &b.path,
+                Arc::clone(&b.source.selected)
+            )
+            .is_err()
+        );
+        drop(recovered);
+        assert!(b.owner.lock().unwrap().financial.is_none());
         assert!(b.owner.lock().unwrap().bootstrap.is_none());
         assert_eq!(
             b.invoke(h, Method::InitialEnrollment, &[]),
@@ -2565,5 +2913,64 @@ mod tests {
             assert!(!approval_uses_cash(phase, &[7; 32], Some(7)).unwrap());
         }
         assert!(approval_uses_cash(0, &7u64.to_le_bytes(), Some(7)).is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod existing_account_storage_tests {
+    use super::*;
+    #[test]
+    fn native_local_recovery_never_turns_existing_invalid_material_into_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exact.wal");
+        assert_eq!(
+            native_existing_account_journal_disposition(&path).unwrap(),
+            KagemushaOrdinaryEnrollmentDispositionV1::Fresh
+        );
+        std::fs::write(&path, b"TEST ONLY opaque corrupt WAL; no admission").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            native_existing_account_journal_disposition(&path).unwrap(),
+            KagemushaOrdinaryEnrollmentDispositionV1::Recover
+        );
+        // The real journal decoder must reject these bytes; presence chooses only the read route.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(native_existing_account_journal_disposition(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("missing-target", &path).unwrap();
+        assert!(native_existing_account_journal_disposition(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod portable_account_storage_tests {
+    use super::*;
+    #[test]
+    fn native_recovery_selection_requires_the_same_private_existing_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let owner = iroha_fs::OwnerDirectory::open(&root).unwrap();
+        let path = root.join("exact.wal");
+        assert_eq!(
+            native_existing_account_journal_disposition(&path).unwrap(),
+            KagemushaOrdinaryEnrollmentDispositionV1::Fresh
+        );
+        owner
+            .write_atomic(
+                "exact.wal",
+                b"TEST ONLY opaque original; no enrollment grant",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        assert_eq!(
+            native_existing_account_journal_disposition(&path).unwrap(),
+            KagemushaOrdinaryEnrollmentDispositionV1::Recover
+        );
+        assert!(path.exists());
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            b"TEST ONLY opaque original; no enrollment grant"
+        );
     }
 }

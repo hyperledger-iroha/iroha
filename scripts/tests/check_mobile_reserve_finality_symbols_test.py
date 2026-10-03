@@ -44,6 +44,9 @@ class ReserveFinalitySymbolTests(unittest.TestCase):
             "connect_norito_kagemusha_ordinary_runtime_startup_v1",
             "connect_norito_kagemusha_ordinary_current_control_v1",
             "connect_norito_kagemusha_ordinary_outgoing_v1",
+            "connect_norito_kagemusha_ordinary_incoming_v1",
+            "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
+            "connect_norito_kagemusha_ordinary_mint_funding_v1",
         ):
             self.assertIn(symbol, emitted)
             self.assertIn(symbol, expected[0])
@@ -80,11 +83,14 @@ check_binary_symbols test-only-library test-only-inventory "$2"
         self.assertEqual(set(expected), set(declared))
         self.assertIn("connect_norito_kagemusha_core_coordinator_install_v1", expected)
 
-    def test_ordinary_startup_control_and_outgoing_are_required_on_both_platforms(self) -> None:
+    def test_ordinary_runtime_and_financial_endpoints_are_required_on_both_platforms(self) -> None:
         for missing in (
             "connect_norito_kagemusha_ordinary_runtime_startup_v1",
             "connect_norito_kagemusha_ordinary_current_control_v1",
             "connect_norito_kagemusha_ordinary_outgoing_v1",
+            "connect_norito_kagemusha_ordinary_incoming_v1",
+            "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
+            "connect_norito_kagemusha_ordinary_mint_funding_v1",
         ):
             for mode in ("apple", "elf"):
                 with self.subTest(mode=mode, missing=missing):
@@ -97,15 +103,24 @@ check_binary_symbols test-only-library test-only-inventory "$2"
         entries = (
             ("nativeBindApplicationV1", "ordinary_android_installed_context.rs"),
             ("nativeRetireOriginalV1", "ordinary_android_installed_context.rs"),
+            ("nativeExistingAndroidAccountV1", "ordinary_android_existing_account.rs"),
+            ("nativeConsumeExistingAndroidAccountV1", "ordinary_android_existing_account.rs"),
             ("nativeStartupV1", "ordinary_native_startup.rs"),
             ("nativeCurrentControlV1", "ordinary_current_control.rs"),
             ("nativeOutgoingV1", "ordinary_outgoing_driver.rs"),
+            ("nativeIncomingV1", "ordinary_incoming_driver.rs"),
+            ("nativeIntegrityRefreshV1", "ordinary_integrity_refresh.rs"),
+            ("nativeMintFundingV1", "ordinary_mint_funding_driver.rs"),
         )
+        declared = set(re.findall(r"@JvmStatic\s+private\s+external\s+fun\s+(native\w+)\s*\(", consumer))
+        methods = {method for method, _ in entries}
+        self.assertEqual(declared, methods)
         expected = symbols("ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS")
         for method, source_name in entries:
             symbol = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_" + method
             source = (ROOT / "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1" / source_name).read_text()
-            self.assertIn("@JvmStatic private external fun " + method + "(", consumer)
+            if method in declared:
+                self.assertIn("@JvmStatic private external fun " + method + "(", consumer)
             self.assertIn("pub extern \"system\" fn " + symbol, source)
             self.assertIn(symbol, expected)
             result = self.check("elf", missing=symbol)

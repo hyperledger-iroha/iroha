@@ -28,7 +28,7 @@ fn state(
     DigestV1,
     u64,
     i32,
-    (u64, u64),
+    FileIdentity,
     JournalFileVersion,
 ) {
     (
@@ -346,7 +346,7 @@ fn shared_frame_grammar_rejects_corrupt_and_torn_records_before_delivering_them(
         // test exercises the shared frame parser and captured-boundary checks themselves.
         // No production caller can assign these private replay/ownership fields.
         let metadata = journal.journal.metadata().unwrap();
-        journal.observed_version = JournalFileVersion::from_metadata(&metadata);
+        journal.observed_version = JournalFileVersion::from_file(&journal.journal).unwrap();
         journal.acknowledged_bytes = metadata.len();
         journal.read_bytes = metadata.len();
         let mut calls = 0;

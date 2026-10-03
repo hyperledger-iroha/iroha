@@ -101,20 +101,6 @@ public interface IrohaClient {
     return future;
   }
 
-  /**
-   * Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`.
-   *
-   * <p>Request instructions are encoded as base64 native Norito {@code InstructionBox} frames in
-   * the JSON body.
-   */
-  default CompletableFuture<MultisigResponse> proposeMultisig(
-      final MultisigProposeRequest request) {
-    final CompletableFuture<MultisigResponse> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new IllegalStateException(
-            "proposeMultisig requires a concrete IrohaClient implementation"));
-    return future;
-  }
 
   /**
    * Resolves an account alias literal against the node's alias registry via

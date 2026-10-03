@@ -52,6 +52,24 @@ public final class KagemushaOrdinaryNativeAccountSessionV1: @unchecked Sendable 
   /// Recheck the same Native session and exact W/S originals; failure freezes this owner.
   public func requireCurrent() throws { try guarded {} }
 
+  /// Renew the same installed account through the genuine Native four-node clock/read
+  /// protocol. An expired read cannot be checked before renewal. Native checks the original
+  /// unretired owner first; this holder checks its unchanged selection after the fresh read.
+  /// No replacement account, caller clock, original bytes or financial grant is accepted.
+  public func refreshOriginalAccountClock() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !unusable else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    do {
+      _ = try coordinator.invokeOrdinaryIncoming(.refreshAccountClock)
+      try selection.requireCurrent()
+    } catch {
+      unusable = true
+      try? coordinator.close()
+      throw error
+    }
+  }
+
   /// Return the same retained Native coordinator after checking its original W/S owner.
   /// Subsequent Native calls still enforce their own original custody and authority.
   public func originalCoordinator() throws -> KagemushaNativeCoreCoordinatorAdapterV1 {

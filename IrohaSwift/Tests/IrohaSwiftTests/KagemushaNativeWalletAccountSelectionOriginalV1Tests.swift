@@ -144,6 +144,9 @@ final class KagemushaNativeWalletAccountSelectionOriginalV1Tests: XCTestCase {
       return try KagemushaCoreCoordinatorFrameV1.encodeResponse(.preparedOrdinaryAppIdentity,
         requestFrame: request, fields: response)
     }
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws {
       closeCalls += 1
       if failClose { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(-310) }

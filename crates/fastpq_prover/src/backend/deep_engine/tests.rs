@@ -1188,6 +1188,18 @@ fn retirement_authentication_fixture() -> (
 
 #[test]
 fn every_current_root_frontier_byte_and_extension_lane_is_authenticated() {
+    fn changed(value: WireDigest, byte: usize) -> WireDigest {
+        let mut bytes = value.into_bytes();
+        bytes[byte] ^= 1;
+        WireDigest::from_bytes(bytes)
+    }
+    fn frontier(proof: &mut DeepProof, which: usize) -> &mut Vec<WireDigest> {
+        match which {
+            0 => &mut proof.row_siblings,
+            1 => &mut proof.quotient_siblings,
+            _ => &mut proof.rounds[which - 2].siblings,
+        }
+    }
     let (binding, queries, mut proof, plans, composition) = retirement_authentication_fixture();
     let check = |proof: &DeepProof| {
         authenticate(&binding, proof, &plans)?;
@@ -1204,11 +1216,6 @@ fn every_current_root_frontier_byte_and_extension_lane_is_authenticated() {
         Ok::<_, Error>(())
     };
     check(&proof).unwrap();
-    fn changed(value: WireDigest, byte: usize) -> WireDigest {
-        let mut bytes = value.into_bytes();
-        bytes[byte] ^= 1;
-        WireDigest::from_bytes(bytes)
-    }
     for root in 0..8 {
         let saved = match root {
             0 => proof.row_root,
@@ -1228,13 +1235,6 @@ fn every_current_root_frontier_byte_and_extension_lane_is_authenticated() {
             0 => proof.row_root = saved,
             1 => proof.quotient_root = saved,
             _ => proof.fri_roots[root - 2] = saved,
-        }
-    }
-    fn frontier(proof: &mut DeepProof, which: usize) -> &mut Vec<WireDigest> {
-        match which {
-            0 => &mut proof.row_siblings,
-            1 => &mut proof.quotient_siblings,
-            _ => &mut proof.rounds[which - 2].siblings,
         }
     }
     for which in 0..7 {
@@ -1278,8 +1278,8 @@ fn every_current_root_frontier_byte_and_extension_lane_is_authenticated() {
             _ => proof.quotients[0].composition_mask = saved,
         }
     }
-    for round in 0..5 {
-        for coordinate in 0..FRI_ARITIES[round] - 1 {
+    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
+        for coordinate in 0..arity - 1 {
             let saved = proof.rounds[round].groups[0].values[coordinate];
             for lane in 0..4 {
                 proof.rounds[round].groups[0].values[coordinate] = increment(saved, lane);

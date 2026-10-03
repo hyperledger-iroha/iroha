@@ -27,7 +27,8 @@
     "GlobalDataTriggerPermissionGovernance",
     "KagemushaVerifierPolicyInstall",
     "KagemushaVerifierReleaseInstall",
-    "KagemushaVerifierReleaseActivate"
+    "KagemushaVerifierReleaseActivate",
+    "KagemushaVerifierReleaseRetire"
   ],
   "contract_lifecycle_actions": [
     "Activate",

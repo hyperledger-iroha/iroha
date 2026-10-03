@@ -412,6 +412,7 @@ object ParliamentApiV1 {
         "KagemushaVerifierPolicyInstall",
         "KagemushaVerifierReleaseInstall",
         "KagemushaVerifierReleaseActivate",
+        "KagemushaVerifierReleaseRetire",
     )
 
     /** Exact first-release actions admitted by contract-lifecycle governance proposals. */

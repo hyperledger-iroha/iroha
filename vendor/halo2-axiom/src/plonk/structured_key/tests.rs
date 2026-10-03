@@ -413,7 +413,42 @@ where
     let permutation_count = offset;
     let targets = permutation_count + 4;
     let cells = pk.permutation.permutations.len() * 64;
-    assert_eq!(targets + 4 * cells, bytes.len());
+    let scanned = scan_structured::<C, _, _, KeyCircuit<C::Scalar>, NoValues>(
+        &mut bytes.as_slice(),
+        6,
+        length,
+        #[cfg(feature = "circuit-params")]
+        (),
+        &mut io::sink(),
+        NoValues,
+    )
+    .unwrap();
+    let target_offsets = scanned
+        .metadata
+        .permutations
+        .iter()
+        .flat_map(|record| {
+            let (stride, prefix) = if record.mode == Mode::Sparse {
+                (8, 4)
+            } else {
+                (4, 0)
+            };
+            (0..record.targets.length as usize / stride)
+                .map(move |i| record.targets.offset as usize + i * stride + prefix)
+        })
+        .collect::<Vec<_>>();
+    assert!(target_offsets.len() >= 2);
+    assert_eq!(
+        scanned.metadata.permutation_targets.offset as usize,
+        targets
+    );
+    assert_eq!(
+        targets as u64 + scanned.metadata.permutation_targets.length,
+        length
+    );
+    let mut old_magic = bytes.clone();
+    old_magic[..16].copy_from_slice(b"Halo2StructPK1\0\0");
+    assert!(read_key::<C>(&old_magic, 6, length).is_err());
     for at in [
         0,
         15,
@@ -460,11 +495,12 @@ where
     }
     for target in [cells as u32, u32::MAX] {
         let mut bad = bytes.clone();
-        bad[targets..targets + 4].copy_from_slice(&target.to_le_bytes());
+        let at = target_offsets[0];
+        bad[at..at + 4].copy_from_slice(&target.to_le_bytes());
         assert!(read_key::<C>(&bad, 6, length).is_err());
     }
     let mut duplicate = bytes.clone();
-    duplicate.copy_within(targets..targets + 4, targets + 4);
+    duplicate.copy_within(target_offsets[0]..target_offsets[0] + 4, target_offsets[1]);
     assert!(read_key::<C>(&duplicate, 6, length).is_err());
     let mut padded = bytes.clone();
     padded.push(0);

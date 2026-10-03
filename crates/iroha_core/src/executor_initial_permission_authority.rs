@@ -1495,6 +1495,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
         iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
         iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,

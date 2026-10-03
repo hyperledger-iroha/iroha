@@ -1,7 +1,6 @@
 //! Public-boundary regression tests for state-backed native FX routing plans.
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_core::{
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::{
         ConfigLaneRouter, LaneRouter, RoutingPlan, RoutingResolveError,
@@ -238,22 +237,17 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     let corridor = corridor();
     let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
     feed.feed_id = corridor.oracle_feed_id.clone();
-    let mut state = State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
     let lanes = lane_catalog();
     let dataspaces = dataspace_catalog();
     let policy = routing_policy();
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.lane_catalog = lanes.clone();
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lanes);
     nexus.dataspace_catalog = dataspaces.clone();
     nexus.routing_policy = policy.clone();
-    state
-        .set_nexus(nexus)
-        .expect("pre-genesis Nexus configuration must be valid");
+    // Open Kura with the same original catalog that State will authenticate.
+    let state =
+        State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero block height"),
         None,

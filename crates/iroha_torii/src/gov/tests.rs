@@ -55,6 +55,7 @@ fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
             "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
+            "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
         ]
     );
 }

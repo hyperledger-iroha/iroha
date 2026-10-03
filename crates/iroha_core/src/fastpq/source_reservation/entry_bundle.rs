@@ -287,6 +287,20 @@ impl EntryBundleReservationTransaction<'_> {
         self.inner.owner_usage(&owner.inner).map_err(Into::into)
     }
 
+    /// Validate an already retained entry against this exact original binding and
+    /// generation. Equal public hashes in a foreign journal never substitute.
+    pub(crate) fn matches_existing_entry(&self, hash: Hash, owner: &EntryBundleOwner) -> bool {
+        let Some(actual) = self.bindings.entries.get(&hash) else {
+            return false;
+        };
+        owner.entry_hash == hash
+            && std::sync::Arc::ptr_eq(&actual.binding.ledger, &owner.inner.binding.ledger)
+            && actual.binding.context == owner.inner.binding.context
+            && actual.binding.id == owner.inner.binding.id
+            && actual.binding.generation == owner.inner.binding.generation
+            && self.inner.validate_owner(&owner.inner).is_ok()
+    }
+
     /// Exact usage for the complete logical entry across committed/staged fragments.
     pub(crate) fn owner_usage(
         &self,

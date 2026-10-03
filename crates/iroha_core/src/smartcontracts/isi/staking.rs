@@ -35,6 +35,7 @@ use iroha_data_model::{
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
+use iroha_primitives::numeric::QuantityAccumulator;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use std::{alloc::Layout, collections::BTreeMap, ops::Range, time::Duration};
 #[path = "staking_effects.rs"]
@@ -55,15 +56,17 @@ pub(crate) type PublicLaneStakeShareKey = (LaneId, AccountId, AccountId);
 
 /// Borrowed, allocation-free preflight for the stake-index retained backings.
 ///
-/// These counts admit the nested account copies, but not aggregate quantities
-/// or arithmetic scratch. They make the source shape available before the
-/// index starts allocating from the same world.
+/// Canonical sums use bounded stack limbs. These counts admit every nested
+/// account copy and all four final aggregate magnitudes before the index
+/// starts allocating from the same original World and pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PublicLaneStakeIndexDemand {
     share_rows: usize,
     validator_groups: usize,
     account_clone_bytes: usize,
     account_clone_charges: usize,
+    quantity_bytes: usize,
+    quantity_charges: usize,
 }
 
 impl PublicLaneStakeIndexDemand {
@@ -87,7 +90,10 @@ impl PublicLaneStakeIndexDemand {
             validator_groups: 0,
             account_clone_bytes: 0,
             account_clone_charges: 0,
+            quantity_bytes: 0,
+            quantity_charges: 0,
         };
+        let mut aggregates = [QuantityAccumulator::zero(); 3];
         let mut previous_key: Option<&PublicLaneStakeShareKey> = None;
         let mut shares_in_group = 0_usize;
         for (key, share) in rows {
@@ -109,6 +115,10 @@ impl PublicLaneStakeIndexDemand {
                 }
             }
             if previous_key.is_none_or(|previous| previous.0 != key.0 || previous.1 != key.1) {
+                if previous_key.is_some() {
+                    demand.add_quantity_group(&aggregates)?;
+                    aggregates = [QuantityAccumulator::zero(); 3];
+                }
                 validate_group(key)?;
                 demand.validator_groups =
                     demand.validator_groups.checked_add(1).ok_or_else(|| {
@@ -132,9 +142,40 @@ impl PublicLaneStakeIndexDemand {
             })?;
             demand.add_account_clone(&key.1)?;
             demand.add_account_clone(&key.2)?;
+            aggregate_index_share(&mut aggregates, key, share)?;
             previous_key = Some(key);
         }
+        if previous_key.is_some() {
+            demand.add_quantity_group(&aggregates)?;
+        }
         Ok(demand)
+    }
+
+    fn add_quantity_group(&mut self, aggregates: &[QuantityAccumulator; 3]) -> Result<(), Error> {
+        // Overflow is preserved for the exposure read. It must not reject an
+        // unrelated group's otherwise canonical bonded/pending index.
+        let exposure = aggregate_index_exposure(aggregates).unwrap_or_default();
+        for aggregate in [aggregates[0], aggregates[1], aggregates[2], exposure] {
+            let layout = aggregate.admission_layout().map_err(|_| {
+                Error::InvariantViolation(
+                    "public-lane stake-index quantity layout overflows".into(),
+                )
+            })?;
+            self.quantity_bytes =
+                self.quantity_bytes
+                    .checked_add(layout.size())
+                    .ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "public-lane stake-index quantity demand overflows".into(),
+                        )
+                    })?;
+            self.quantity_charges = self.quantity_charges.checked_add(1).ok_or_else(|| {
+                Error::InvariantViolation(
+                    "public-lane stake-index quantity charge count overflows".into(),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     fn add_account_clone(&mut self, account: &AccountId) -> Result<(), Error> {
@@ -175,15 +216,21 @@ impl PublicLaneStakeIndexDemand {
 
     fn checked_retained_layouts(self) -> Result<(Layout, Layout, Layout, usize), Error> {
         let (shares, groups) = self.checked_fixed_layouts()?;
-        let charges =
-            Layout::array::<AllocationCharge>(self.account_clone_charges).map_err(|_| {
-                Error::InvariantViolation("public-lane stake-index charge backing overflows".into())
+        let charge_count = self
+            .account_clone_charges
+            .checked_add(self.quantity_charges)
+            .ok_or_else(|| {
+                Error::InvariantViolation("public-lane stake-index charge count overflows".into())
             })?;
+        let charges = Layout::array::<AllocationCharge>(charge_count).map_err(|_| {
+            Error::InvariantViolation("public-lane stake-index charge backing overflows".into())
+        })?;
         let bytes = shares
             .size()
             .checked_add(groups.size())
             .and_then(|sum| sum.checked_add(charges.size()))
             .and_then(|sum| sum.checked_add(self.account_clone_bytes))
+            .and_then(|sum| sum.checked_add(self.quantity_bytes))
             .ok_or_else(|| {
                 Error::InvariantViolation(
                     "public-lane stake-index retained demand overflows".into(),
@@ -244,7 +291,7 @@ impl PublicLaneStakeIndexDemand {
 
 // The transparent tuple makes the exact group allocation layout available to
 // iroha_config without making that lower layer depend on this Core module.
-// Quantity's nested storage remains a separate demand.
+// The four Quantity magnitudes are admitted separately from the fixed tuple.
 #[repr(transparent)]
 struct IndexedValidatorStake(
     (
@@ -254,6 +301,7 @@ struct IndexedValidatorStake(
         Quantity,
         Quantity,
         Quantity,
+        Option<Quantity>,
     ),
 );
 
@@ -266,6 +314,7 @@ impl IndexedValidatorStake {
             Quantity::zero(),
             Quantity::zero(),
             Quantity::zero(),
+            None,
         ))
     }
 
@@ -295,10 +344,12 @@ impl IndexedValidatorStake {
 pub(crate) struct PublicLaneStakeIndex {
     /// Original charged backing, including nested account clones below.
     share_keys: ChargedBuffer<PublicLaneStakeShareKey>,
-    /// Original charged group backing; its Quantity owners remain unfunded.
+    /// Original charged group backing, including exactly admitted Quantity owners.
     groups: ChargedBuffer<IndexedValidatorStake>,
-    /// Every original nested account charge drops after its physical key owner.
+    /// Every nested key and magnitude drops before its original charge.
     _nested_account_charges: ChargedBuffer<AllocationCharge>,
+    /// Canonical zero for absent groups has no heap backing.
+    zero: Quantity,
     #[cfg(test)]
     row_visits: usize,
 }
@@ -346,8 +397,8 @@ impl PublicLaneStakeIndex {
                 Ok(())
             },
         )?;
-        // Reserve the complete fixed and nested-account layouts atomically
-        // before any retained key allocation. The charge buffer is declared
+        // Reserve complete fixed, account and aggregate layouts atomically
+        // before any retained key or magnitude allocation. The charge buffer is declared
         // before keys/groups so local error paths drop physical keys first.
         let (share_layout, group_layout, charges_layout, retained_bytes) =
             demand.checked_retained_layouts()?;
@@ -358,16 +409,18 @@ impl PublicLaneStakeIndex {
             .try_split(charges_layout)
             .expect("complete nested charge backing was reserved");
         let mut nested_account_charges: ChargedBuffer<AllocationCharge> =
-            ChargedBuffer::try_from_charge(demand.account_clone_charges, charges_charge).map_err(
-                |(_, error)| match error {
-                    iroha_allocation::ChargedBufferFromChargeError::Allocator { layout } => {
-                        EvidencePreparationError::Allocator {
-                            requested_bytes: layout.size(),
-                        }
+            ChargedBuffer::try_from_charge(
+                demand.account_clone_charges + demand.quantity_charges,
+                charges_charge,
+            )
+            .map_err(|(_, error)| match error {
+                iroha_allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                    EvidencePreparationError::Allocator {
+                        requested_bytes: layout.size(),
                     }
-                    _ => EvidencePreparationError::Invariant,
-                },
-            )?;
+                }
+                _ => EvidencePreparationError::Invariant,
+            })?;
         let share_charge = reservation
             .try_split(share_layout)
             .expect("complete fixed stake-index demand was reserved");
@@ -394,8 +447,10 @@ impl PublicLaneStakeIndex {
                     _ => EvidencePreparationError::Invariant,
                 },
             )?;
-        // TODO: Admit aggregate Quantity limbs, arithmetic scratch and the
-        // source/world lookup owners separately.
+        // Source rows and lookup results remain borrowed from the exact World.
+        // All arithmetic scratch is bounded stack storage; only final canonical
+        // magnitudes allocate, after splitting their original prepaid charges.
+        let mut aggregates = [QuantityAccumulator::zero(); 3];
         #[cfg(test)]
         let mut row_visits = demand.share_rows;
 
@@ -424,6 +479,15 @@ impl PublicLaneStakeIndex {
                 .last()
                 .is_none_or(|group| group.lane_id() != key.0 || group.validator() != &key.1)
             {
+                if let Some(previous) = groups.as_mut_slice().last_mut() {
+                    finish_index_group(
+                        previous,
+                        &aggregates,
+                        &mut reservation,
+                        &mut nested_account_charges,
+                    )?;
+                    aggregates = [QuantityAccumulator::zero(); 3];
+                }
                 let validator_key = (
                     key.0,
                     clone_index_account(&key.1, &mut reservation, &mut nested_account_charges)?,
@@ -473,14 +537,15 @@ impl PublicLaneStakeIndex {
                 .try_push(copied_key)
                 .map_err(|_| EvidencePreparationError::Invariant)?;
             indexed.0.2.end = share_keys.as_slice().len();
-            indexed.0.3 = quantity_add(indexed.0.3.clone(), share.bonded.clone())?;
-            if key.2 == key.1 {
-                indexed.0.4 = quantity_add(indexed.0.4.clone(), share.bonded.clone())?;
-            }
-            for (request_id, pending) in &share.pending_unbonds {
-                ensure_canonical_pending_unbond(request_id, pending)?;
-                indexed.0.5 = quantity_add(indexed.0.5.clone(), pending.amount.clone())?;
-            }
+            aggregate_index_share(&mut aggregates, key, share)?;
+        }
+        if let Some(last) = groups.as_mut_slice().last_mut() {
+            finish_index_group(
+                last,
+                &aggregates,
+                &mut reservation,
+                &mut nested_account_charges,
+            )?;
         }
 
         for (key, record) in world.public_lane_validators().iter() {
@@ -501,7 +566,8 @@ impl PublicLaneStakeIndex {
         }
 
         demand.validate_materialized(groups.as_slice(), share_keys.as_slice())?;
-        if nested_account_charges.as_slice().len() != demand.account_clone_charges
+        if nested_account_charges.as_slice().len()
+            != demand.account_clone_charges + demand.quantity_charges
             || reservation.remaining_bytes() != 0
         {
             return Err(EvidencePreparationError::Invariant.into());
@@ -511,6 +577,7 @@ impl PublicLaneStakeIndex {
             share_keys,
             groups,
             _nested_account_charges: nested_account_charges,
+            zero: Quantity::zero(),
             #[cfg(test)]
             row_visits,
         })
@@ -527,16 +594,17 @@ impl PublicLaneStakeIndex {
         })
     }
 
-    /// Return total bonded and pending-unbond custody for one validator.
+    /// Borrow the already funded total bonded and pending-unbond custody.
+    /// Repeated penalty reads cannot create replacement magnitude allocations.
     pub(crate) fn total_exposure(
         &self,
         lane_id: LaneId,
         validator: &AccountId,
-    ) -> Result<Quantity, Error> {
-        let Some(indexed) = Self::find_group(self.groups.as_slice(), lane_id, validator) else {
-            return Ok(Quantity::zero());
-        };
-        quantity_add(indexed.0.3.clone(), indexed.0.5.clone())
+    ) -> Result<&Quantity, Error> {
+        match Self::find_group(self.groups.as_slice(), lane_id, validator) {
+            Some(indexed) => indexed.0.6.as_ref().ok_or(Error::Math(MathError::Overflow)),
+            None => Ok(&self.zero),
+        }
     }
 
     fn find_group<'a>(
@@ -571,7 +639,7 @@ impl PublicLaneStakeIndex {
     }
 }
 
-/// Compare aggregate custody without cloning its unfunded Quantity limbs.
+/// Compare aggregate custody without cloning its originally funded Quantity limbs.
 fn indexed_validator_totals_match(
     indexed: Option<&IndexedValidatorStake>,
     total_stake: &Quantity,
@@ -584,6 +652,92 @@ fn indexed_validator_totals_match(
             total_stake == &zero && self_stake == &zero
         }
     }
+}
+
+/// Accumulate one exact borrowed row while retaining all arithmetic scratch inline.
+fn aggregate_index_share(
+    aggregates: &mut [QuantityAccumulator; 3],
+    key: &PublicLaneStakeShareKey,
+    share: &PublicLaneStakeShare,
+) -> Result<(), Error> {
+    let add = |sum: &mut QuantityAccumulator, amount: &Quantity| {
+        sum.try_add(amount)
+            .map_err(|_| Error::Math(MathError::Overflow))
+    };
+    add(&mut aggregates[0], &share.bonded)?;
+    if key.1 == key.2 {
+        add(&mut aggregates[1], &share.bonded)?;
+    }
+    for (request_id, pending) in &share.pending_unbonds {
+        ensure_canonical_pending_unbond(request_id, pending)?;
+        add(&mut aggregates[2], &pending.amount)?;
+    }
+    Ok(())
+}
+
+/// Preserve the original bonded-plus-complete-pending grouping at the domain boundary.
+fn aggregate_index_exposure(
+    aggregates: &[QuantityAccumulator; 3],
+) -> Result<QuantityAccumulator, Error> {
+    let mut exposure = aggregates[0];
+    exposure
+        .try_add_accumulator(&aggregates[2])
+        .map_err(|_| Error::Math(MathError::Overflow))?;
+    Ok(exposure)
+}
+
+/// Materialize each final magnitude once under its exact original-pool charge.
+fn finish_index_group(
+    group: &mut IndexedValidatorStake,
+    aggregates: &[QuantityAccumulator; 3],
+    reservation: &mut AllocationReservation,
+    charges: &mut ChargedBuffer<AllocationCharge>,
+) -> Result<(), EvidencePreparationError> {
+    let exposure = aggregate_index_exposure(aggregates).ok();
+    group.0.3 = materialize_index_quantity(aggregates[0], reservation, charges)?;
+    group.0.4 = materialize_index_quantity(aggregates[1], reservation, charges)?;
+    group.0.5 = materialize_index_quantity(aggregates[2], reservation, charges)?;
+    group.0.6 = match exposure {
+        Some(exposure) => Some(materialize_index_quantity(exposure, reservation, charges)?),
+        None => {
+            // Preserve the same exact descriptor count without allocating a
+            // replacement magnitude for an unrepresentable exposure.
+            materialize_index_quantity(QuantityAccumulator::zero(), reservation, charges)?;
+            None
+        }
+    };
+    Ok(())
+}
+
+/// Preserve the charge until every physical aggregate owned by the index drops.
+fn materialize_index_quantity(
+    aggregate: QuantityAccumulator,
+    reservation: &mut AllocationReservation,
+    charges: &mut ChargedBuffer<AllocationCharge>,
+) -> Result<Quantity, EvidencePreparationError> {
+    let layout = aggregate
+        .admission_layout()
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    let charge = reservation
+        .try_split(layout)
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC55"))]
+    let charge = {
+        // Mutation: release the admitted original while the physical quantity lives.
+        drop(charge);
+        reservation
+            .try_split(Layout::new::<()>())
+            .expect("zero mutation charge")
+    };
+    charges
+        .try_push(charge)
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    aggregate.try_into_quantity().map_err(|error| match error {
+        iroha_primitives::bigint::BigIntAdmissionCloneError::Allocator { requested_bytes } => {
+            EvidencePreparationError::Allocator { requested_bytes }
+        }
+        _ => EvidencePreparationError::Invariant,
+    })
 }
 
 /// Copy one retained account only after every nested layout is split from the

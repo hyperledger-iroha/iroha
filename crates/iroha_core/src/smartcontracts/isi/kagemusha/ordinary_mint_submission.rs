@@ -281,7 +281,7 @@ pub(super) fn admit(
     Ok((proof, decision))
 }
 
-fn integrity_originals(
+pub(super) fn integrity_originals(
     value: Option<&KagemushaOrdinaryNodeMintIntegrityOriginalsV1>,
 ) -> Option<KagemushaOrdinaryIntegrityProofOriginalsV1<'_>> {
     value.map(|v| KagemushaOrdinaryIntegrityProofOriginalsV1 {
@@ -290,7 +290,7 @@ fn integrity_originals(
     })
 }
 
-fn admit_control(
+pub(super) fn admit_control(
     submission: &KagemushaOrdinaryNodeMintSubmissionV1,
     fi: &KagemushaOrdinaryRetailEnrollmentCertificateV1,
     issuer: &KagemushaRetailEnrollmentIssuerPolicyV1,
@@ -325,7 +325,9 @@ fn admit_control(
 // Permission tokens own canonical JSON payloads inside the maintained complete Permission
 // Norito archive. They are not Norito DTOs; no second binary layout or generic token decoder
 // is admitted. The name and exact canonical payload survive the actual World equality check.
-fn decode_issuer_purpose_original(raw: &[u8]) -> Result<CanAuthorizeKagemushaOrdinaryMint, String> {
+pub(super) fn decode_issuer_purpose_original(
+    raw: &[u8],
+) -> Result<CanAuthorizeKagemushaOrdinaryMint, String> {
     let original: iroha_data_model::permission::Permission = decode_exact(raw, 32 * 1024)?;
     let token = CanAuthorizeKagemushaOrdinaryMint::try_from(&original)
         .map_err(|_| "ordinary Mint permission name/payload differs")?;
@@ -336,7 +338,10 @@ fn decode_issuer_purpose_original(raw: &[u8]) -> Result<CanAuthorizeKagemushaOrd
     }
     Ok(token)
 }
-fn decode_exact<T: norito::NoritoSerialize>(raw: &[u8], maximum: usize) -> Result<T, String>
+pub(super) fn decode_exact<T: norito::NoritoSerialize>(
+    raw: &[u8],
+    maximum: usize,
+) -> Result<T, String>
 where
     for<'de> T: norito::NoritoDeserialize<'de>,
 {

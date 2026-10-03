@@ -201,6 +201,28 @@ impl SourceQuotaTransaction<'_> {
         Ok(())
     }
 
+    /// Retain only the existing signed-call entry, without opening an owner or
+    /// reserving credit. Teardown is never promoted into a mandatory purpose.
+    pub(crate) fn retain_quantity_retirement_entry(&self, hash: Hash) -> Option<EntryBundleOwner> {
+        if self.failed {
+            return None;
+        }
+        self.ordinary.as_ref()?.existing_entry(hash).ok().flatten()
+    }
+
+    /// Recheck the original journal identity/generation before every owned removal.
+    pub(crate) fn matches_quantity_retirement_entry(
+        &self,
+        hash: Hash,
+        owner: &EntryBundleOwner,
+    ) -> bool {
+        !self.failed
+            && self
+                .ordinary
+                .as_ref()
+                .is_some_and(|journal| journal.matches_existing_entry(hash, owner))
+    }
+
     /// Authenticate one original sweep purpose before its numeric movement.
     /// State verifies the move-only SNS permit before this mechanical journal selection.
     /// E is opened only by a nonempty transcript inside the same disposable transaction.

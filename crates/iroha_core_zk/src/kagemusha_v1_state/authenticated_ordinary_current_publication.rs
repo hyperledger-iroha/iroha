@@ -121,7 +121,9 @@ impl PublishedGuard {
 impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
     // Only the genuine consuming cash owner can borrow these retained holders. There is no
     // public financial-secret projection, serialized capability or replacement-owner path.
-    pub(super) fn cash_financial(&self) -> &KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+    pub(in crate::kagemusha_v1_state::authenticated_core_owner) fn cash_financial(
+        &self,
+    ) -> &KagemushaOrdinaryEnrolledFinancialOwnerV1 {
         &self.financial
     }
 
@@ -133,7 +135,9 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
     /// grant, and cannot authorize State CAS or exposure. The cash actor first requires its
     /// actual process-marked current-control proof capture; live effects separately recheck all
     /// current financial, policy/revocation, FI, PI and clock originals.
-    pub(super) fn recheck_historical_cash_custody(&self) -> Result<(), KagemushaStateErrorV1> {
+    pub(in crate::kagemusha_v1_state::authenticated_core_owner) fn recheck_historical_cash_custody(
+        &self,
+    ) -> Result<(), KagemushaStateErrorV1> {
         self.current
             .require_single_record(&self.canonical)
             .map_err(storage)?;

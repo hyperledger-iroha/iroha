@@ -28,11 +28,13 @@ fn fixture_path() -> std::path::PathBuf {
 }
 #[test]
 fn v1_raw_transcript_64_fixture_verifies() {
-    let mut public_inputs = PublicInputs::default();
-    public_inputs.dsid = [0x11; 16];
-    public_inputs.slot = 42;
-    public_inputs.perm_root = [0xCC; 32];
-    public_inputs.tx_set_hash = [0xDD; 32];
+    let public_inputs = PublicInputs {
+        dsid: [0x11; 16],
+        slot: 42,
+        perm_root: [0xCC; 32],
+        tx_set_hash: [0xDD; 32],
+        ..PublicInputs::default()
+    };
     let batch = v1_fixture_batch(64, public_inputs);
     let path = fixture_path();
     if fixture_update_requested() {
@@ -97,7 +99,7 @@ fn v1_fixture_batch(rows: usize, public_inputs: PublicInputs) -> TransitionBatch
     let mut row_idx = 0usize;
     let mut transfer_idx = 0usize;
     while row_idx < rows {
-        if row_idx % 3 == 0 && rows - row_idx >= 2 {
+        if row_idx.is_multiple_of(3) && rows - row_idx >= 2 {
             let (transcript, sender, receiver) = transfer_pair(transfer_idx);
             batch.push(sender);
             batch.push(receiver);

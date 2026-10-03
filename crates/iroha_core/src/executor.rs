@@ -9857,7 +9857,11 @@ mod tests {
         );
 
         // Refusal fixtures remain genuinely pre-genesis, with no routing authority.
-        let pristine = state_for_testing(World::new());
+        let pristine = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
         assert_eq!(pristine.committed_height(), 0);
         assert_eq!(pristine.kura().blocks_count(), 0);
         assert!(
@@ -15223,8 +15227,13 @@ mod tests {
             .expect_err("signed genesis cannot invent a committed prepared-contract identity");
         assert!(
             matches!(&failure.error,
-                crate::sumeragi::test_chain::TestChainError::Genesis(reason)
-                if reason.contains("Genesis execution output rejected:")),
+                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                if matches!(error.as_ref(),
+                    crate::block::BlockValidationError::InvalidGenesis(
+                        crate::block::InvalidGenesisError::RejectedOutput(_)
+                    )
+                )
+            ),
             "unexpected authentic producer refusal: {}",
             failure.error
         );

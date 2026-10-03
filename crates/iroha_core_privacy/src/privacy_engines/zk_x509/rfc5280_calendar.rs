@@ -333,11 +333,9 @@ pub(super) fn populate_v1(
     witness[MONTH + month] = F::ONE;
     for (index, remainder) in [r4, r100, r400].into_iter().enumerate() {
         witness[ZERO + index] = F(u64::from(remainder == 0));
-        witness[INVERSE + index] = if remainder == 0 {
-            F::ZERO
-        } else {
-            F(remainder).inv().ok_or(Error::Semantic)?
-        };
+        // All three integer remainders are below400, hence canonical. The
+        // existing date/range checks above retain their original error policy.
+        witness[INVERSE + index] = F(remainder).inverse_or_zero_canonical_v1();
     }
     witness[LEAP] = F(u64::from(leap));
     witness[GENERALIZED] = F(u64::from(generalized));
@@ -399,6 +397,37 @@ mod tests {
     fn put_bits(witness: &mut [F; WIDTH_V1], offset: usize, width: usize, value: u64) {
         for bit in 0..width {
             witness[offset + bit] = F((value >> bit) & 1);
+        }
+    }
+
+    #[test]
+    fn private_calendar_remainder_inverses_preserve_every_admitted_year() {
+        for year in 1970..=9999 {
+            let (_, witness, values) = sample(year, 3, 1, 0, 0, 0);
+            assert!(
+                residues(values, &witness)
+                    .iter()
+                    .all(|value| *value == F::ZERO)
+            );
+            for (index, divisor) in [4, 100, 400].into_iter().enumerate() {
+                let remainder = F(u64::try_from(year % divisor).unwrap());
+                assert_eq!(witness[ZERO + index], F(u64::from(remainder == F::ZERO)));
+                assert_eq!(witness[INVERSE + index], remainder.inv().unwrap_or(F::ZERO));
+            }
+        }
+        // Preserve rejection of every inverse/zero cell at both zero and
+        // nonzero remainders, including the century and encoding boundaries.
+        for year in [1970, 1972, 1999, 2000, 2049, 2050, 2099, 2100, 2400, 9999] {
+            let (_, witness, values) = sample(year, 3, 1, 0, 0, 0);
+            for column in (ZERO..ZERO + 3).chain(INVERSE..INVERSE + 3) {
+                let mut changed = witness;
+                changed[column] = changed[column].add(F::ONE);
+                assert!(
+                    residues(values, &changed)
+                        .iter()
+                        .any(|value| *value != F::ZERO)
+                );
+            }
         }
     }
 

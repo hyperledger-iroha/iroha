@@ -148,17 +148,20 @@ fn actual_catalog_rejects_corrupt_policy_projections_after_state_construction() 
 fn actual_catalog_preserves_original_allocation_refusal_and_retry() {
     let state = state();
     let original = state.ivm_execution_budget();
+    // State keeps its original native-tip and publication-release owners alive.
+    // Only the capture's own allocations may disappear when its snapshot drops.
+    let resident = original.reserved_bytes();
     original.set_limit_bytes(0);
     assert!(matches!(
         capture(&state),
         Err(LeafError::Admission(_) | LeafError::OrderedRange(_))
     ));
-    assert_eq!(original.reserved_bytes(), 0);
+    assert_eq!(original.reserved_bytes(), resident);
     original.set_limit_bytes(16 * 1024 * 1024);
     let snapshot = capture(&state).unwrap().unwrap();
     assert_eq!(snapshot.table_id(), "world.asset_definitions");
     assert_eq!(snapshot.row_count(), 1);
-    assert!(original.reserved_bytes() > 0);
+    assert!(original.reserved_bytes() > resident);
     drop(snapshot);
-    assert_eq!(original.reserved_bytes(), 0);
+    assert_eq!(original.reserved_bytes(), resident);
 }

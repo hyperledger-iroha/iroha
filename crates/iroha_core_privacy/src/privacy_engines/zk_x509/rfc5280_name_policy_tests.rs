@@ -12,6 +12,15 @@ fn name_policy_actual_complete_census_binds_original_instances_and_unique_keys()
             .flat_map(|d| &d.nodes)
             .filter(|n| n.role == ZkX509Rfc5280GrammarRoleV1::NameAttributeOid)
             .count();
+        let mut expected_by_class = [0; 3];
+        for source in role_nodes_v1(&trace, ZkX509Rfc5280GrammarRoleV1::NameAttributeOid) {
+            expected_by_class[usize::from(source.role_instance / 1024)] += 1;
+        }
+        assert!(
+            expected_by_class[2] > 0,
+            "the original CRL issuer must be covered"
+        );
+        let mut seen_by_class = [0; 3];
         let mut seen = 0;
         let mut previous = 0;
         for family in [
@@ -63,12 +72,13 @@ fn name_policy_actual_complete_census_binds_original_instances_and_unique_keys()
                             );
                         }
                         if row[BASE_ROLE] == F(9) {
-                            let key = row[BASE_DOCUMENT].0 * 8
+                            let key = row[BASE_DOCUMENT].0 * 12
                                 + row[BASE_H].0 / 1024 * 4
                                 + row[BASE_ENDPOINT_ROLE].0
                                 + 1;
                             assert!(key > previous);
                             previous = key;
+                            seen_by_class[(row[BASE_H].0 / 1024) as usize] += 1;
                             seen += 1;
                         }
                     }
@@ -76,10 +86,11 @@ fn name_policy_actual_complete_census_binds_original_instances_and_unique_keys()
             }
         }
         assert_eq!(seen, expected);
+        assert_eq!(seen_by_class, expected_by_class);
         assert!(seen > 0);
     }
     assert_eq!(name_policy::NODE_PREFIX_END, 134);
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 146);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
     assert_eq!(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1, 39);
 }
 
@@ -108,13 +119,13 @@ fn name_policy_duplicate_and_decreasing_oid_keys_cannot_reset_carried_state() {
     let mut previous = 0;
     let mut rows = Vec::new();
     for document in 0..4 {
-        for name in 0..2 {
+        for name in 0..3 {
             for variant in 0..4 {
                 rows.push(name_policy_oid_row(document, name, variant, &mut previous));
             }
         }
     }
-    assert_eq!(previous, 32);
+    assert_eq!(previous, 48);
     for i in 0..rows.len() {
         let next = rows
             .get(i + 1)
@@ -155,6 +166,80 @@ fn name_policy_duplicate_and_decreasing_oid_keys_cannot_reset_carried_state() {
             .iter()
             .any(|r| *r != F::ZERO)
     );
+}
+
+#[test]
+fn name_policy_crl_class_and_cross_document_keys_cannot_alias() {
+    let mut fixed = [F::ZERO; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
+    fixed[ZkX509Rfc5280StarkFamilyV1::FixedByte as usize] = F::ONE;
+    fixed[FIX_ACTIVATION_CONTINUE] = F::ONE;
+    // The former stride-eight framing assigned both rows the same key nine.
+    // Original CRL class two remains distinct from the next document's issuer.
+    let mut previous = 0;
+    let crl = name_policy_oid_row(0, 2, 0, &mut previous);
+    let issuer = name_policy_oid_row(1, 0, 0, &mut previous);
+    assert_eq!(crl[BASE_STATE_AFTER], F(9));
+    assert_eq!(issuer[BASE_STATE_AFTER], F(13));
+    assert_eq!(
+        name_policy::residues(&crl, &issuer, &fixed),
+        [F::ZERO; name_policy::RESIDUES]
+    );
+    let mut collision = issuer;
+    collision[BASE_DOCUMENT] = F::ZERO;
+    collision[BASE_H] = F(2048);
+    collision[BASE_F] = F(2);
+    assert!(
+        name_policy::residues(
+            &collision,
+            &[F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1],
+            &fixed
+        )
+        .iter()
+        .any(|r| *r != F::ZERO)
+    );
+    let mut predecessor = crl[BASE_STATE_AFTER].0;
+    assert!(name_policy::populate_fixed_byte(&mut collision, &mut predecessor).is_err());
+    // A real six-bit gap to the last key is admitted; the old five-bit range
+    // would reject it. This local range test does not replace grammar admission.
+    let mut previous = 0;
+    let final_key = name_policy_oid_row(3, 2, 3, &mut previous);
+    assert_eq!(final_key[BASE_STATE_AFTER], F(48));
+    fixed[FIX_EXPECTED] = F::ONE;
+    assert_eq!(
+        name_policy::residues(
+            &final_key,
+            &[F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1],
+            &fixed
+        ),
+        [F::ZERO; name_policy::RESIDUES]
+    );
+    assert_eq!(final_key[BASE_SMALL_BITS + 11], F::ONE);
+    let mut truncated_gap = final_key;
+    truncated_gap[BASE_SMALL_BITS + 11] = F::ZERO;
+    assert!(
+        name_policy::residues(
+            &truncated_gap,
+            &[F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1],
+            &fixed
+        )
+        .iter()
+        .any(|r| *r != F::ZERO)
+    );
+    for illegal in [3, 4, 7] {
+        let mut row = final_key;
+        row[BASE_F] = F(illegal);
+        row[BASE_H] = F(illegal * 1024);
+        assert!(
+            name_policy::residues(
+                &row,
+                &[F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1],
+                &fixed
+            )
+            .iter()
+            .any(|r| *r != F::ZERO)
+        );
+        assert!(name_policy::populate_fixed_byte(&mut row, &mut 0).is_err());
+    }
 }
 
 #[test]
@@ -250,5 +335,49 @@ fn name_policy_every_opened_input_has_affine_degree_at_most_four() {
                 "column={column}"
             );
         }
+    }
+}
+
+#[test]
+fn shared_fixed_byte_private_inverses_preserve_all_original_source_pairs() {
+    for trace in [canonical_trace_v1(), spki_maximum_release_trace_v1()] {
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let semantic = build_zk_x509_rfc5280_semantic_witness_v1(&trace).unwrap();
+        let family = ZkX509Rfc5280StarkFamilyV1::FixedByte as usize;
+        assert_eq!(
+            material.family_rows[family].len(),
+            semantic.fixed_bytes.len()
+        );
+        let mut zero_boundaries = [0_usize; 2];
+        let mut names = 0;
+        let mut other_purposes = 0;
+        for (ordinal, source) in semantic.fixed_bytes.iter().enumerate() {
+            let row = material
+                .base_row(material.schedule.starts[family] + ordinal)
+                .unwrap();
+            let remaining = source
+                .length
+                .checked_sub(source.offset)
+                .unwrap()
+                .checked_sub(1)
+                .unwrap();
+            assert_eq!(
+                row[BASE_INVERSE],
+                F(u64::from(source.offset)).inv().unwrap_or(F::ZERO)
+            );
+            assert_eq!(
+                row[BASE_G],
+                F(u64::from(remaining)).inv().unwrap_or(F::ZERO)
+            );
+            zero_boundaries[0] += usize::from(source.offset == 0);
+            zero_boundaries[1] += usize::from(remaining == 0);
+            if source.purpose == 9 {
+                names += 1;
+            } else {
+                other_purposes += 1;
+            }
+        }
+        assert!(zero_boundaries.into_iter().all(|count| count > 0));
+        assert!(names > 0 && other_purposes > 0);
     }
 }

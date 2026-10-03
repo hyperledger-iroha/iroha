@@ -379,14 +379,18 @@ fn shift_workspace_is_canonical_on_old_scalar_branch_and_padding_rows() {
 
 #[test]
 fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
+    let root_gas = root_setup_gas();
     for instruction in instructions(4) {
         let cost = 1 + u64::from(is_rotate(instruction));
         let inputs = [(2, 0x8000_0000_0000_0001, true), (3, 63, true)];
-        let root_gas = root_setup_gas();
-        for gas in 0..cost {
-            let (program, recorder, outcome) = capture(&[instruction], &inputs, gas, 32);
+        // Root invocation pays for the original Unit result table and its bitmap
+        // before the interpreter begins a diagnostic opcode step.
+        for initial_gas in 0..root_gas {
+            let (program, recorder, outcome) = capture(&[instruction], &inputs, initial_gas, 32);
             assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
-            assert_root_preflight_out_of_gas(&program, &recorder, gas);
+            assert_root_preflight_out_of_gas(&program, &recorder, initial_gas);
+        }
+        for gas in 0..cost {
             let (_, recorder, outcome) = capture(&[instruction], &inputs, root_gas + gas, 32);
             assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
             assert_eq!(recorder.records().len(), 1);
@@ -397,10 +401,6 @@ fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
             assert_eq!(record.before, record.after);
         }
-        let frame_budget = root_result_table_gas();
-        let (program, recorder, outcome) = capture(&[instruction], &inputs, frame_budget, 32);
-        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
-        assert_root_preflight_out_of_gas(&program, &recorder, frame_budget);
         for gas in [root_gas + cost, 0xffff, 0x10000, u64::MAX] {
             let (program, recorder, _later_outcome) = capture(&[instruction], &inputs, gas, 32);
             let record = &recorder.records()[0];
@@ -454,8 +454,13 @@ fn native_shift_requires_admitted_return_and_remains_running_before_it() {
         code.truncate(artifact.code_offset() + 4);
         // V1 admission rejects reachable fallthrough outside the instruction image
         // before execution. Do not bypass it with a standalone opcode image.
-        let error = ivm::prepare_contract(code.into()).unwrap_err();
+        let error = ivm::prepare_contract(code.into())
+            .expect_err("the signed entrypoint cannot fall through missing code");
         assert!(error.to_string().contains("reaches non-instruction pc 4"));
+        assert!(matches!(
+            error.into_vm_error(),
+            ivm::VMError::InvalidMetadata
+        ));
         let program = Program::new(artifact).unwrap();
         let (program, recorder, outcome) =
             capture_program(program, &[(2, 17, true), (3, 1, true)], 100);

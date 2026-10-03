@@ -9,32 +9,21 @@
 /// Native preparation window shared by the cash owner and independent proof admission.
 pub(crate) const ORDINARY_PREPARATION_LIFETIME_MS: u64 = 10_000;
 
-#[cfg(unix)]
 mod bootstrap_checkpoint;
-#[cfg(unix)]
 pub use bootstrap_checkpoint::{
     KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
 };
-#[cfg(unix)]
 mod recovery_journal_bundle;
-#[cfg(unix)]
 pub use recovery_journal_bundle::KagemushaPendingRecoveryJournalsV1;
-#[cfg(unix)]
 mod response_evidence_archive;
-#[cfg(unix)]
 pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
     KagemushaResponseEvidenceContextV1,
 };
-#[cfg(unix)]
 mod authenticated_core_owner;
-#[cfg(unix)]
 pub(crate) use authenticated_core_owner::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
-#[cfg(unix)]
 pub use authenticated_core_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
-#[cfg(unix)]
 pub(crate) use authenticated_core_owner::verify_ordinary_bootstrap_guard_v1;
-#[cfg(unix)]
 pub use authenticated_core_owner::{
     KagemushaAuthenticatedBootstrapProvingSelectionV1, KagemushaAuthenticatedBootstrapStageV1,
     KagemushaAuthenticatedBootstrappedWalletV1,
@@ -45,7 +34,10 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
-    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaAuthenticatedOutboxReleaseV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1,
+    KagemushaAuthenticatedOrdinaryMintAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryMintFundingTransportV1,
+    KagemushaAuthenticatedOrdinaryMintTransactionSigningV1, KagemushaAuthenticatedOutboxReleaseV1,
     KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
@@ -53,7 +45,6 @@ pub use authenticated_core_owner::{
     KagemushaNativeOrdinaryCashOwnerV1, KagemushaNativeOrdinaryPreparedCashApprovalV1,
     KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
 };
-#[cfg(unix)]
 pub(crate) use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
@@ -66,15 +57,10 @@ pub(crate) use authenticated_core_owner::{
     KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
-#[cfg(unix)]
 mod ordinary_native_clock;
-#[cfg(unix)]
 pub use ordinary_native_clock::KagemushaAuthenticatedOrdinaryServiceReceivedLineageCommitAssertionV1;
-#[cfg(unix)]
 pub use ordinary_native_clock::KagemushaAuthenticatedOrdinaryServiceReceivedSourceV1;
-#[cfg(unix)]
 pub(crate) use ordinary_native_clock::KagemushaRetainedOrdinaryNativeClockOriginalsV1;
-#[cfg(unix)]
 pub use ordinary_native_clock::{
     KAGEMUSHA_ORDINARY_NATIVE_CLOCK_SELECTION_ORIGINAL_MAX_BYTES_V1,
     KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1,
@@ -87,9 +73,7 @@ pub use ordinary_native_clock::{
     KagemushaOrdinaryNativeTimeIntervalV1, KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
     verify_ordinary_native_signed_clock_original_v1,
 };
-#[cfg(unix)]
 mod ordinary_app_identity;
-#[cfg(unix)]
 pub use ordinary_app_identity::{
     KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
     KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
@@ -98,13 +82,15 @@ pub use ordinary_app_identity::{
     KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
     KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
-    KagemushaOrdinaryGovernedPolicyOriginalsV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaOrdinaryFiHttpProofKeyLoanV1, KagemushaOrdinaryFiHttpProofPurposeV1,
+    KagemushaOrdinaryFiHttpRequestDataV1, KagemushaOrdinaryGovernedPolicyOriginalsV1,
+    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryIntegrityRefreshOwnerV1,
     KagemushaOrdinaryIssuerPreparationAttemptV1, KagemushaOrdinaryPreparationCarrierV1,
     KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
     KagemushaOrdinaryReceivedLineageCommitOriginalV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
-    KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
+    KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1, KagemushaPendingAppIdentityV1,
+    KagemushaPreparedOrdinaryAppEnrollmentV1, KagemushaPreparedOrdinaryFiHttpProofV1,
 };
-#[cfg(unix)]
 pub(crate) use ordinary_app_identity::{
     KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
@@ -116,31 +102,24 @@ pub(crate) use ordinary_app_identity::{
 mod candidate_lifecycle;
 mod commitments;
 use commitments::*;
-#[cfg(unix)]
 mod coordinator_operation_store;
-#[cfg(unix)]
 pub use coordinator_operation_store::{
     KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1, KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1,
     KagemushaCoordinatorOperationStoreErrorV1, KagemushaCoordinatorOperationStoreV1,
     KagemushaCoordinatorSenderIntentRecoveryV1,
 };
 mod handoff_verification;
-#[cfg(unix)]
 mod hardware_transaction_journal;
-#[cfg(unix)]
 pub use hardware_transaction_journal::KagemushaHardwareTransactionJournalV1;
-#[cfg(unix)]
 pub use hardware_transaction_journal::KagemushaHardwareTransactionTransportV1;
 mod mint_fold_private_inputs;
 mod mint_inbox;
 mod mint_inbox_operations;
 mod one_use_key_ratchet;
 mod outgoing_operation_index;
-#[cfg(unix)]
 mod private_journal;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) use private_journal::TestPersistenceFailure;
-#[cfg(unix)]
 pub(crate) use private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 mod receive_fold;
 mod receive_fold_operation;
@@ -162,7 +141,6 @@ pub use state_proof_archive_export::{
     KagemushaOutgoingStateProofArchivePairV1,
 };
 
-#[cfg(any(test, unix))]
 pub(crate) use candidate_lifecycle::KagemushaOutgoingCommitCapabilityV1;
 pub(crate) use candidate_lifecycle::terminal_journal_canonical_layout_v1;
 #[cfg(test)]
@@ -178,7 +156,6 @@ pub use candidate_lifecycle::{
     PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1, SenderOutboxReservationOutcomeV1,
 };
 pub use handoff_verification::KagemushaHandoffEvidenceV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 pub use handoff_verification::{
     KagemushaHandoffEvidenceSizesV1, KagemushaHandoffSequenceVerificationV1,
     verify_kagemusha_handoff_evidence_sequence_v1, verify_kagemusha_handoff_evidence_v1,
@@ -186,7 +163,6 @@ pub use handoff_verification::{
 pub use iroha_data_model::kagemusha::KagemushaOutboxReservationV1;
 pub use mint_fold_private_inputs::KagemushaMintFoldOpeningCapabilityV1;
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldOpeningWitnessV1;
-#[cfg(any(test, unix))]
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldPrivateInputsV1;
 pub use mint_inbox::*;
 pub(crate) use mint_inbox::{
@@ -210,10 +186,8 @@ pub use outgoing_operation_index::{
 };
 #[cfg(test)]
 pub use receive_fold::ReceiveFoldReplayRootUpdateInputV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 pub use receive_fold::{KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1, ReceiveFoldV1};
 pub use receive_fold::{KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1, ReceiveFoldCreditV1, ReceiveFoldErrorV1};
-#[cfg(any(test, unix))]
 pub use receive_fold_operation::{PeerCreditFoldInputV1, PeerCreditFoldPreviewV1};
 pub use redemption_release::{
     KAGEMUSHA_REDEMPTION_TERMINAL_RECEIPT_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
@@ -279,7 +253,6 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
-#[cfg(unix)]
 pub use self::sparse_merkle::authenticated_history::disk_history_store::{
     KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
 };
@@ -295,7 +268,6 @@ pub use self::sparse_merkle::authenticated_history::{
 pub use self::sparse_merkle::authenticated_history::{
     KagemushaCommittedRootReadV1, KagemushaHistoryOverlayUsageV1,
 };
-#[cfg(any(test, unix))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryDualInsertPreparationV1, prepare_history_identity_pair_v1,
     require_history_proof_root_bridge_v1,
@@ -304,11 +276,9 @@ pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryIdentityClassificationV1, VerifiedKagemushaHistoryProofRootBridgeV1,
     classify_history_identity_v1, validate_committed_history_v1,
 };
-#[cfg(any(test, unix))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryInsertPreparationV1, prepare_history_identity_insert_v1,
 };
-#[cfg(any(test, unix))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryProofRootBridgeRequestV1, KagemushaHistoryRootSelectionCertificateV1,
     KagemushaHistoryRootSelectionSubjectV1,
@@ -392,7 +362,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Durably prepare one consumed-credit replay insertion before hardware root selection.
     pub(crate) fn prepare_replay(
         &mut self,
@@ -409,7 +378,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Prepare one replay insertion and one terminal decision under a single atomic root CAS.
     pub(crate) fn prepare_replay_and_terminal_decision(
         &mut self,
@@ -429,7 +397,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Require this exact live attempt before requesting fresh hardware authority.
     pub(crate) fn require_prepared(
         &self,
@@ -438,7 +405,6 @@ where
         self.store.require_prepared(transaction)
     }
 
-    #[cfg(any(test, unix))]
     /// Commit an already prepared CAS selected by a verified hardware certificate.
     pub(crate) fn commit_prepared(
         &mut self,
@@ -447,7 +413,6 @@ where
         self.store.commit_prepared(certificate)
     }
 
-    #[cfg(any(test, unix))]
     /// Resolve a prepared CAS after restart using its verified hardware certificate.
     pub(crate) fn recover_prepared(
         &mut self,
@@ -465,7 +430,6 @@ where
         self.store.abort_prepared(transaction_id)
     }
 
-    #[cfg(any(test, unix))]
     /// Describe the exact SHA-256/Pasta relation required for a replay-changing state proof.
     pub(crate) fn proof_root_bridge_request(
         &self,
@@ -1341,7 +1305,6 @@ pub struct TransitionPreviewV1 {
     pub journal_revision_after: u128,
 }
 
-#[cfg(any(test, unix))]
 /// Caller-owned material needed to prepare one receiver-bound `SendSplit` transition.
 ///
 /// Core derives the amount and receiver binding directly from the signed request,
@@ -1373,7 +1336,6 @@ pub struct SendSplitPreparationV1 {
     pub sealed_recovery_seeds: Vec<u8>,
 }
 
-#[cfg(any(test, unix))]
 /// Caller-owned material needed to prepare one full or partial `RedeemSplit` intent.
 ///
 /// Core derives the private aggregate successor, terminal lifecycle, redemption identity,
@@ -1436,7 +1398,6 @@ pub struct ConsumedCreditInsertWitnessV1 {
         [KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1],
 }
 
-#[cfg(any(test, unix))]
 /// A credit-fold transition and its exact private replay-tree insert witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreditFoldPreviewV1 {
@@ -1453,7 +1414,6 @@ pub struct CreditFoldPreviewV1 {
     trusted_commit_time_ms: u64,
 }
 
-#[cfg(any(test, unix))]
 impl CreditFoldPreviewV1 {
     /// Borrow the opaque recursive-opening capability from this exact checked preview.
     #[must_use]
@@ -1531,7 +1491,6 @@ pub struct DurableAcknowledgementV1 {
 }
 
 impl DurableAcknowledgementV1 {
-    #[cfg(any(test, unix))]
     fn from_acknowledgement(
         acknowledgement: KagemushaAcknowledgementV1,
         request: &KagemushaPaymentRequestV1,
@@ -1598,7 +1557,6 @@ pub struct PaymentStageAuthorizationV1 {
     pub acknowledgement: KagemushaAcknowledgementV1,
 }
 
-#[cfg(any(test, unix))]
 /// Durable staging outcome for an inbound public payment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StagePaymentOutcomeV1 {
@@ -2202,7 +2160,6 @@ impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
 }
 
 /// Compute the private store identity from the exact governed lane and state context.
-#[cfg(unix)]
 pub(crate) fn disk_history_lane_binding(
     context: KagemushaStateContextV1,
     lane: &KagemushaLaneIdV1,
@@ -2238,7 +2195,6 @@ pub(crate) fn disk_history_lane_binding(
     Ok(hash.finalize().into())
 }
 
-#[cfg(unix)]
 impl<R, G> KagemushaStateMachineV1<R, G, KagemushaDiskAuthenticatedHistoryStoreV1>
 where
     R: KagemushaRecursiveVerifierV1,
@@ -2415,7 +2371,6 @@ where
     #[cfg(test)]
     /// Stage a zero-balance lane after proof and hardware registration verification.
     /// The returned opaque owner cannot perform wallet operations before checkpoint publication.
-    #[cfg(unix)]
     fn stage_bootstrap_with_owner(
         proof_release: KagemushaStateProofReleaseV1,
         state_context: KagemushaStateContextV1,
@@ -2522,7 +2477,6 @@ where
             .classify_existing_prepare(request)
     }
 
-    #[cfg(any(test, unix))]
     /// Derive one complete, recoverable `SendSplit` intent without mutating monetary state.
     ///
     /// The signed request supplies the exact amount and recipient. Core authenticates its
@@ -2830,7 +2784,6 @@ where
         Ok(preview)
     }
 
-    #[cfg(any(test, unix))]
     /// Derive one complete, recoverable full or partial `RedeemSplit` intent.
     ///
     /// Core derives the private aggregate successor, terminal lifecycle, redemption ID, proof
@@ -2962,7 +2915,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Atomically bind a caller ID, reserve sender bytes, and prepare the exact transition.
     ///
     /// Both authenticated identity arguments must come from a qualified native session. Core
@@ -3007,7 +2959,6 @@ where
         Ok((indexed_outcome, reservation_outcome, capability))
     }
 
-    #[cfg(any(test, unix))]
     /// Reissue authority for one exact caller-indexed preparation after authenticated recovery.
     pub(crate) fn recover_indexed_outgoing_commit_capability(
         &self,
@@ -3056,7 +3007,6 @@ where
         self.persist_verified_outgoing_candidate(candidate)
     }
 
-    #[cfg(any(test, unix))]
     fn persist_verified_outgoing_candidate(
         &mut self,
         candidate: PersistedOutgoingCandidateV1,
@@ -3078,7 +3028,6 @@ where
         Ok(candidate)
     }
 
-    #[cfg(any(test, unix))]
     /// Atomically install the hardware-certified successor exactly once.
     ///
     /// A committed predecessor can therefore never coexist with its old monetary head in a
@@ -3129,7 +3078,6 @@ where
         Ok(committed)
     }
 
-    #[cfg(any(test, unix))]
     /// Verify and persist the redemption proof and canonical voucher for byte-identical retry.
     pub(crate) fn finalize_outgoing_redemption(
         &mut self,
@@ -3147,7 +3095,6 @@ where
         self.install_finalized_outgoing_envelope(finalized)
     }
 
-    #[cfg(any(test, unix))]
     fn committed_candidate_for_finalization(
         &self,
     ) -> Result<CommittedOutgoingCandidateV1, KagemushaStateErrorV1> {
@@ -3168,7 +3115,6 @@ where
         Ok(committed)
     }
 
-    #[cfg(any(test, unix))]
     fn install_finalized_outgoing_envelope(
         &mut self,
         finalized: DurableOutgoingEnvelopeV1,
@@ -3187,7 +3133,6 @@ where
         self.pending_credits.len() + self.mint_inbox.pending_count()
     }
 
-    #[cfg(any(test, unix))]
     /// Preview folding one finalized mint credit into the aggregate and durably prepare its
     /// external replay-root CAS.
     pub(crate) fn preview_mint_fold(
@@ -3267,7 +3212,6 @@ where
         })
     }
 
-    #[cfg(any(test, unix))]
     fn derive_mint_fold_transition(
         &self,
         credit: &KagemushaMintCreditV1,
@@ -3379,7 +3323,6 @@ where
         ))
     }
 
-    #[cfg(any(test, unix))]
     /// Return the exact qualified-hardware message selecting a mint's external replay root.
     pub(crate) fn mint_fold_history_root_selection_signing_bytes(
         &self,
@@ -3399,7 +3342,6 @@ where
         .map_err(map_authenticated_history_error)
     }
 
-    #[cfg(any(test, unix))]
     /// Authenticate and attach the hardware-selected replay root after verifying the paired mint
     /// transition proof for the same logical operation.
     pub(crate) fn authorize_mint_fold_history(
@@ -3473,7 +3415,6 @@ where
         }
     }
 
-    #[cfg(any(test, unix))]
     fn install_mint_fold(
         &mut self,
         credit: KagemushaMintCreditV1,
@@ -3603,7 +3544,6 @@ where
         Ok(self.state.clone())
     }
 
-    #[cfg(any(test, unix))]
     fn validate_mint_fold_history_preview(
         &self,
         preview: &CreditFoldPreviewV1,
@@ -3639,7 +3579,6 @@ where
         Ok(())
     }
 
-    #[cfg(any(test, unix))]
     /// Preview the exact receiver journal statement for a new public payment.
     pub(crate) fn preview_stage_payment(
         &self,
@@ -3672,7 +3611,6 @@ where
         })
     }
 
-    #[cfg(any(test, unix))]
     /// Durably stage or idempotently classify one inbound credit.
     ///
     /// Request expiry is checked only against the sender's trusted commit time inside the credit.
@@ -4386,7 +4324,6 @@ where
         Ok(recovered)
     }
 
-    #[cfg(any(test, unix))]
     fn validate_peer_payment(
         &self,
         request: &KagemushaPaymentRequestV1,
@@ -4401,7 +4338,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     fn ensure_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4413,7 +4349,6 @@ where
         self.ensure_non_mint_credit_id_available(credit_id, envelope_digest)
     }
 
-    #[cfg(any(test, unix))]
     fn ensure_non_mint_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4436,7 +4371,6 @@ where
         Ok(())
     }
 
-    #[cfg(any(test, unix))]
     fn ensure_peer_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4785,7 +4719,6 @@ where
     }
 }
 
-#[cfg(any(test, unix))]
 fn terminal_lifecycle_binding_v1(
     state: &KagemushaStateV1,
     operation_kind: KagemushaOperationKindV1,
@@ -4839,7 +4772,6 @@ fn required_pending_credit_prefix(
     Err(KagemushaStateErrorV1::InsufficientBalance)
 }
 
-#[cfg(unix)]
 fn authenticate_bootstrap_authorization<R, G>(
     proof_release: &KagemushaStateProofReleaseV1,
     preview: &BootstrapPreviewV1,
@@ -4870,7 +4802,6 @@ where
         .map_err(KagemushaStateErrorV1::GuardRejected)
 }
 
-#[cfg(unix)]
 fn bootstrap_state_public_inputs(
     artifacts: KagemushaRecursionArtifactsV1,
     preview: &BootstrapPreviewV1,
@@ -5105,16 +5036,14 @@ pub use hardware_evidence_bootstrap::{
     KagemushaHardwareEvidenceErrorV1,
 };
 
-#[cfg(unix)]
 mod ordinary_incoming_preview;
-#[cfg(unix)]
 pub(crate) use ordinary_incoming_preview::{
     OrdinaryIncomingMathSourceV1, OrdinaryIncomingPreviewV1, derive_ordinary_incoming_preview_v1,
+    ordinary_incoming_receive_lifecycle_binding_v1,
 };
 
 /// Sole data-only semantic digest of an ordinary incoming financial edge.
 /// This exposes the existing maintained formula, without admitting a State or Native owner.
-#[cfg(unix)]
 pub(crate) fn ordinary_incoming_transport_semantic_digest_v1(
     statement: &TransitionProofStatementV1,
     normalized_guard_statement_digest: DigestV1,
@@ -5138,7 +5067,6 @@ pub(crate) fn ordinary_incoming_transport_semantic_digest_v1(
 
 /// Data-only ordinary incoming context derived by the same maintained Native formulas.
 /// It lends no FI, signed clock, pending DATA selection or approval capability.
-#[cfg(unix)]
 pub(crate) fn ordinary_incoming_guard_context_v1(
     artifacts: KagemushaRecursionArtifactsV1,
     statement: &TransitionProofStatementV1,
@@ -5164,3 +5092,16 @@ pub(crate) fn ordinary_incoming_guard_context_v1(
         .map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
     Ok(context)
 }
+
+#[cfg(all(test, unix))]
+pub(crate) use ordinary_incoming_preview::{
+    OrdinaryConsumedCreditsForQualificationV1, ordinary_incoming_preview_for_qualification_v1,
+};
+
+#[cfg(all(test, unix))]
+pub(crate) use authenticated_core_owner::{
+    OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
+};
+
+#[cfg(test)]
+pub(crate) use ordinary_native_clock::ordinary_signed_clock_data_for_qualification_v1;

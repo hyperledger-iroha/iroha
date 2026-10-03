@@ -4028,16 +4028,11 @@ mod tests {
         let exact_management = Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Domain(alias.canonical_name.domain_id().unwrap()),
         });
+        // These permissions come from the original signed genesis below, not the
+        // unexecuted fixture World. The positive exact-grant assertions follow startup.
+        assert!(world.view().account_permissions().get(&registrar).is_none());
         assert!(
-            world
-                .view()
-                .account_permissions()
-                .get(&registrar)
-                .unwrap()
-                .contains(&exact_management)
-        );
-        assert!(
-            crate::alias::authority_can_manage_resolved_account_alias(
+            !crate::alias::authority_can_manage_resolved_account_alias(
                 &world.view(),
                 &registrar,
                 &alias
@@ -4061,6 +4056,22 @@ mod tests {
         nexus.dataspace_catalog = catalog.clone();
         // Both supplied configuration cuts describe this same pre-genesis catalog.
         nexus.configured_dataspace_catalog = catalog.clone();
+        nexus.lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            std::num::NonZeroU32::new(2).unwrap(),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: iroha_model_base::topology::LaneId::new(1),
+                    dataspace_id: dataspace,
+                    alias: "is2".into(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .unwrap();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();

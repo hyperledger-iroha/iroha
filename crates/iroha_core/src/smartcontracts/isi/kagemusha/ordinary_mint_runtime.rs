@@ -57,6 +57,34 @@ pub(super) fn selected_runtime<'a>(
     }
     Ok(runtime)
 }
+// Retained historical request admission is distinct from the enabled-new-topup selector.
+// A retired release may authenticate its immutable committed source; no new debit is lent.
+pub(super) fn verify_retained(
+    owner: &AuthenticatedKagemushaV1RuntimeVerifier,
+    raw: &[u8],
+    credential: &KagemushaVerifiedOrdinaryAppCredentialV1,
+    lease: Option<&KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
+    clock: &KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+) -> Result<KagemushaVerifiedOrdinaryMintAuthorizationV1, String> {
+    let runtime = selected_retained_runtime(owner, raw)?;
+    verify_ordinary_mint_authorization_v1(&runtime.verifier, raw, credential, lease, clock)
+}
+pub(super) fn selected_retained_runtime<'a>(
+    owner: &'a AuthenticatedKagemushaV1RuntimeVerifier,
+    raw: &[u8],
+) -> Result<&'a AuthenticatedKagemushaV1ReleaseRuntime, String> {
+    let request = KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(raw)?;
+    let context = &request.authorization.statement.context;
+    let runtime = owner.runtime_for_terminal_verification(context.release_id)?;
+    require_production_release_purpose_v1(runtime.purpose)?;
+    if context.lineage.owner.runtime.network_id != runtime.network_id
+        || runtime.release_id != context.release_id
+    {
+        return Err("retained ordinary Mint selected release/network differs".into());
+    }
+    Ok(runtime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

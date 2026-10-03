@@ -150,8 +150,10 @@ impl Fixture {
         let child = role == Role::Child;
         let returning = role == Role::Return;
         let store = role == Role::Store;
+        let load = role == Role::Load;
+        let memory = store || load;
         let pc = u64::from(program.first_pc) + slot as u64 * 4;
-        let cost = if store { 3 } else { 2 };
+        let cost = if memory { 3 } else { 2 };
         let gas = 13;
         let cycles = 100;
         let target = if returning {
@@ -164,12 +166,12 @@ impl Fixture {
             0
         };
         let raw_return = if returning { target + return_delta } else { 0 };
-        let base = if store {
+        let base = if memory {
             ivm::Memory::STACK_START + 64
         } else {
             0
         };
-        let imm = if store {
+        let imm = if memory {
             i64::from(wide::imm8(w)) as u64
         } else {
             0
@@ -325,11 +327,11 @@ impl Fixture {
             row[HALT] = F(u64::from(target == program.code_end()));
             row[HALT_INVERSE] = difference.inv().unwrap_or(F::ZERO);
         }
-        if store {
+        if memory {
             p[MEMORY_BASE] = event(
                 Space::Register,
                 0,
-                wide::rd(w) as u32,
+                if store { wide::rd(w) } else { wide::rs1(w) } as u32,
                 base,
                 base,
                 false,
@@ -337,6 +339,8 @@ impl Fixture {
                 false,
                 false,
             );
+        }
+        if store {
             p[STORE_VALUE] = event(
                 Space::Register,
                 0,
@@ -529,13 +533,25 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
-        enc::encode_rr(wide::arithmetic::DIV, 2, 3, 1),
+        enc::encode_rr(wide::crypto::VADD64, 2, 3, 1),
     ] {
         assert!(role(w).is_none());
     }
     assert!(role(enc::encode_rr(wide::arithmetic::SLL, 2, 3, 1)) == Some(Role::Scalar));
     assert!(role(enc::encode_jump(wide::control::JAL, 0, 2)) == Some(Role::Jump));
     assert!(role(enc::encode_offset24(wide::control::JMP, -2)) == Some(Role::Jump));
+    assert!(matches!(
+        role(enc::encode_rr(wide::arithmetic::DIV_CEIL, 2, 3, 1)),
+        Some(Role::Scalar)
+    ));
+    assert!(matches!(
+        role(enc::encode_rr(wide::arithmetic::GCD, 2, 3, 1)),
+        Some(Role::Scalar)
+    ));
+    assert!(matches!(
+        role(enc::encode_ri(wide::memory::LOAD64, 2, 3, 0)),
+        Some(Role::Load)
+    ));
     let changed = Program::new(contract(
         &[enc::encode_ri(wide::arithmetic::ADDI, 2, 3, 1)],
         1_000,

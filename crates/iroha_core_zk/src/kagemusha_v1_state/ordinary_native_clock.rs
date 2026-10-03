@@ -41,16 +41,12 @@ pub use service_finalized_mint_source::KagemushaAuthenticatedOrdinaryServiceFina
 mod service_incoming_reservation_assertion;
 pub use service_incoming_reservation_assertion::KagemushaAuthenticatedOrdinaryServiceIncomingReservationAssertionV1;
 
-#[cfg(unix)]
 #[path = "ordinary_native_clock/service_received_commit_assertion.rs"]
 mod service_received_commit_assertion;
-#[cfg(unix)]
 pub use service_received_commit_assertion::KagemushaAuthenticatedOrdinaryServiceReceivedLineageCommitAssertionV1;
 
-#[cfg(unix)]
 #[path = "ordinary_native_clock/service_received_source.rs"]
 mod service_received_source;
-#[cfg(unix)]
 pub use service_received_source::KagemushaAuthenticatedOrdinaryServiceReceivedSourceV1;
 
 const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -923,3 +919,6 @@ fn signed_observation_digest(
     }
     Ok(digest.finalize().into())
 }
+
+#[cfg(test)]
+pub(crate) use tests::ordinary_signed_clock_data_for_qualification_v1;

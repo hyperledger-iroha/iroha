@@ -22,9 +22,22 @@
     native <methods>;
 }
 
-# Exact shared ordinary startup/current-FI and Application/retirement JNI names must survive R8.
+# Exact shared ordinary startup/current-FI, incoming, Mint funding and Application/retirement JNI names must survive R8.
 # nativeBindApplicationV1(android.app.Application): boolean retains identity only;
 # nativeRetireOriginalV1(): boolean is deny-only and accepts no account/root/secret frame.
 -keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryRuntimeJniV1 {
     native <methods>;
+}
+
+# Native creates this exact private final continuation through the measured product loader.
+# It is not a provider or a caller-supplied key constructor. Keep only its fixed loan grammar.
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryExistingAccountIntakeV1 {
+    private <init>();
+    public void consumeOriginal(java.lang.String, byte[]);
+}
+
+# Sole module-safe funding provider. No alternate endpoint/fields constructor is public.
+-keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeOwnerV1
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeProviderV1 {
+    public <init>();
 }

@@ -32,7 +32,14 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
     try self.init(coreSelectionSigningBytes: corePreparationSigningBytes, preparation: true)
   }
 
-  private init(coreSelectionSigningBytes: Data, preparation: Bool) throws {
+  /// Internal ordinary incoming purpose1 projection; the generic hardware grammar is separate.
+  init(coreOrdinaryIncomingTerminalSigningBytes: Data) throws {
+    try self.init(coreSelectionSigningBytes: coreOrdinaryIncomingTerminalSigningBytes,
+      preparation: false, ordinaryIncomingTerminal: true)
+  }
+
+  private init(coreSelectionSigningBytes: Data, preparation: Bool,
+    ordinaryIncomingTerminal: Bool = false) throws {
     let bytes = [UInt8](coreSelectionSigningBytes)
     let headerLength = Self.signingDomain.count + MemoryLayout<UInt64>.size
     guard bytes.count == Self.totalBytes,
@@ -49,13 +56,15 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
     }
     let operation = bytes[Self.operationTag]
     let outgoing = operation == 2 || operation == 4
+    let commitmentsRequired = (outgoing || ordinaryIncomingTerminal) && !preparation
     guard bytes[Self.version].elementsEqual([1, 0]), (0...5).contains(operation),
       !preparation || outgoing,
+      !ordinaryIncomingTerminal || (!preparation && (operation == 1 || operation == 3)),
       Self.scopedDigests.allSatisfy({ range in bytes[range].contains(where: { $0 != 0 }) }),
       bytes[Self.policyEpoch].contains(where: { $0 != 0 }),
       bytes[Self.hardwareEpochGeneration].contains(where: { $0 != 0 }),
-      bytes[Self.candidateDigest].contains(where: { $0 != 0 }) == (outgoing && !preparation),
-      bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == (outgoing && !preparation) else {
+      bytes[Self.candidateDigest].contains(where: { $0 != 0 }) == commitmentsRequired,
+      bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == commitmentsRequired else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
     if operation == 0 {

@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
-import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
@@ -166,8 +165,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       "(alloc::string::String, alloc::vec::Vec<u8>)";
   private static final String CUSTOM_INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::transparent::CustomInstruction";
-  private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
-      "iroha_torii::routing::MultisigProposeDto";
   private final int chainDiscriminant;
 
   private TransactionPayloadAdapter(final int chainDiscriminant) {
@@ -700,17 +697,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return value;
   }
 
-  static byte[] encodeMultisigProposeRequest(
-      final MultisigProposeRequest request, final int chainDiscriminant) {
-    return withChainContext(
-        chainDiscriminant,
-        () ->
-            NoritoCodec.encode(
-                request,
-                MULTISIG_PROPOSE_DTO_SCHEMA,
-                new MultisigProposeRequestAdapter(),
-                NoritoHeader.COMPACT_LEN));
-  }
 
   static InstructionBox decodeInstructionBox(final byte[] encoded) {
     return NoritoCodec.decode(encoded, new InstructionAdapter(), INSTRUCTION_BOX_SCHEMA);
@@ -1039,60 +1025,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
       throw new UnsupportedOperationException("Multisig instruction byte decoding is not supported");
-    }
-  }
-
-  private static final class MultisigProposeRequestAdapter
-      implements TypeAdapter<MultisigProposeRequest> {
-    @Override
-    public void encode(final NoritoEncoder encoder, final MultisigProposeRequest value) {
-      validateMultisigProposeRequest(value);
-      encodeSizedField(
-          encoder,
-          OPTIONAL_ACCOUNT_ID_ADAPTER,
-          optionalString(value.multisigAccountId()));
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalString(value.multisigAccountAlias()));
-      encodeSizedField(
-          encoder,
-          ACCOUNT_ID_ADAPTER,
-          requireNonBlank(value.signerAccountId(), "signerAccountId"));
-      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.publicKeyHex()));
-      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.signatureB64()));
-      encodeSizedField(
-          encoder,
-          NoritoAdapters.option(UINT64_ADAPTER),
-          Optional.ofNullable(value.creationTimeMs()));
-      encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
-      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.memo()));
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalValidationFeePolicyVersion(value.validationFeePolicyVersion()));
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalValidationFeePolicyHash(value.validationFeePolicyHash()));
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalValidationFeeHijiriFeeQuoteHash(value.validationFeeHijiriFeeQuoteHash()));
-      encodeSizedField(encoder, ENCODED_INSTRUCTION_LIST_ADAPTER, value.instructions());
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalValidationFeeInstructionIndex(value.validationFeeInstructionIndex()));
-      encodeSizedField(
-          encoder,
-          OPTIONAL_STRING_ADAPTER,
-          optionalValidationFeeTransferEntryIndex(value.validationFeeTransferEntryIndex()));
-    }
-
-    @Override
-    public MultisigProposeRequest decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("MultisigProposeRequest decoding is not supported");
     }
   }
 
@@ -1528,76 +1460,13 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return Optional.of(normalized);
   }
 
-  private static Optional<String> optionalValidationFeePolicyVersion(final Long value) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    if (value.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeePolicyVersion must be non-negative");
-    }
-    return Optional.of(value.toString());
-  }
 
-  private static Optional<String> optionalValidationFeePolicyHash(final String value) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    return Optional.of(normalizeValidationFeePolicyHash(value));
-  }
 
-  private static Optional<String> optionalValidationFeeHijiriFeeQuoteHash(final String value) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    return Optional.of(normalizeValidationFeeHijiriFeeQuoteHash(value));
-  }
 
-  private static Optional<String> optionalValidationFeeInstructionIndex(final Long value) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    if (value.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
-    }
-    return Optional.of(value.toString());
-  }
 
-  private static Optional<String> optionalValidationFeeTransferEntryIndex(final Long value) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    if (value.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeeTransferEntryIndex must be non-negative");
-    }
-    return Optional.of(value.toString());
-  }
 
-  private static String normalizeValidationFeePolicyHash(final String value) {
-    return normalizeValidationFeeHash(value, "validationFeePolicyHash");
-  }
 
-  private static String normalizeValidationFeeHijiriFeeQuoteHash(final String value) {
-    return normalizeValidationFeeHash(value, "validationFeeHijiriFeeQuoteHash");
-  }
 
-  private static String normalizeValidationFeeHash(
-      final String value, final String fieldName) {
-    final String normalized =
-        requireNonBlank(value, fieldName).toLowerCase(Locale.ROOT);
-    if (normalized.length() != 64) {
-      throw new IllegalArgumentException(fieldName + " must contain 64 hex characters");
-    }
-    for (int index = 0; index < normalized.length(); index++) {
-      final char character = normalized.charAt(index);
-      final boolean isHex =
-          (character >= '0' && character <= '9')
-              || (character >= 'a' && character <= 'f');
-      if (!isHex) {
-        throw new IllegalArgumentException(fieldName + " must contain 64 hex characters");
-      }
-    }
-    return normalized;
-  }
 
   private static String requireNonBlank(final String value, final String fieldName) {
     if (value == null) {
@@ -1610,54 +1479,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return normalized;
   }
 
-  private static void validateMultisigProposeRequest(final MultisigProposeRequest request) {
-    if (request == null) {
-      throw new IllegalArgumentException("request must not be null");
-    }
-    final boolean hasAccountId = optionalString(request.multisigAccountId()).isPresent();
-    final boolean hasAlias = optionalString(request.multisigAccountAlias()).isPresent();
-    if (hasAccountId == hasAlias) {
-      throw new IllegalArgumentException(
-          "Exactly one of multisigAccountId or multisigAccountAlias must be provided");
-    }
-    requireNonBlank(request.signerAccountId(), "signerAccountId");
-    if (request.instructions().isEmpty()) {
-      throw new IllegalArgumentException("instructions must not be empty");
-    }
-    if (request.creationTimeMs() != null && request.creationTimeMs().longValue() < 0L) {
-      throw new IllegalArgumentException("creationTimeMs must be non-negative");
-    }
-    final boolean hasPolicyVersion = request.validationFeePolicyVersion() != null;
-    final boolean hasPolicyHash = request.validationFeePolicyHash() != null;
-    final boolean hasHijiriFeeQuoteHash = request.validationFeeHijiriFeeQuoteHash() != null;
-    final boolean hasInstructionIndex = request.validationFeeInstructionIndex() != null;
-    final boolean hasTransferEntryIndex = request.validationFeeTransferEntryIndex() != null;
-    if (hasPolicyVersion != hasPolicyHash) {
-      throw new IllegalArgumentException(
-          "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
-    }
-    if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-      throw new IllegalArgumentException(
-          "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash");
-    }
-    if (!hasPolicyVersion && hasInstructionIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeInstructionIndex requires validation fee policy metadata");
-    }
-    if (!hasPolicyVersion && hasTransferEntryIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeTransferEntryIndex requires validation fee policy metadata");
-    }
-    if (hasTransferEntryIndex && !hasInstructionIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeTransferEntryIndex requires validationFeeInstructionIndex");
-    }
-    optionalValidationFeePolicyVersion(request.validationFeePolicyVersion());
-    optionalValidationFeePolicyHash(request.validationFeePolicyHash());
-    optionalValidationFeeHijiriFeeQuoteHash(request.validationFeeHijiriFeeQuoteHash());
-    optionalValidationFeeInstructionIndex(request.validationFeeInstructionIndex());
-    optionalValidationFeeTransferEntryIndex(request.validationFeeTransferEntryIndex());
-  }
 
   private static InstructionBox tryDecodeWireInstruction(
       final byte[] payload, final int flags) {

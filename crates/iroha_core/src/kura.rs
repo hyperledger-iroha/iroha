@@ -131,6 +131,11 @@ const MAX_EVICTION_COMPACTION_STAGE_BYTES: u64 = 1024 * 1024;
 const MAX_EVICTION_COMPACTION_ENTRIES: usize = 4096;
 const EVICTION_FILE_DIGEST_DOMAIN: &[u8] = b"iroha:kura:eviction-file:v1\0";
 const KAGEMUSHA_MINT_OUTBOX_DIR_NAME: &str = "kagemusha_v1_mint_outbox";
+const KAGEMUSHA_ORDINARY_MINT_PROGRESS_DIR_NAME: &str = "kagemusha_v1_ordinary_mint_progress";
+const MAX_KAGEMUSHA_ORDINARY_MINT_PROGRESS_BYTES: usize = 4096;
+const KAGEMUSHA_ORDINARY_MINT_OUTBOX_DIR_NAME: &str = "kagemusha_v1_ordinary_mint_outbox";
+const MAX_KAGEMUSHA_ORDINARY_MINT_OUTBOX_BYTES: usize =
+    iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1;
 const KAGEMUSHA_MINT_AUTHORITY_DIR_NAME: &str = "kagemusha_v1_mint_authority";
 const MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES: usize =
     iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1 + 256;
@@ -6276,6 +6281,7 @@ impl Kura {
         Ok(Some(entry.result))
     }
 }
+include!("kura/ordinary_mint_credit_outbox.rs");
 include!("kura/durable_block_and_atomic_sidecar_io.rs");
 impl Kura {
     fn rollback_intent_path(blocks_root: &Path) -> PathBuf {

@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.offline.KagemushaP256Codec
 
-/** Closed recursive JSON projection for the two governed KAGEMUSHA verifier-release proposals. */
+/** Closed recursive JSON projection for governed KAGEMUSHA verifier-release proposals. */
 internal object KagemushaVerifierProposalValidatorV1 {
     private val EXACT_JSON_MAX = BigInteger("9007199254740991")
     private val U32_MAX = BigInteger("4294967295")
@@ -44,6 +44,22 @@ internal object KagemushaVerifierProposalValidatorV1 {
         require(bytes32(row["release_id"], "successor release id").contentEquals(successor) &&
             uint(row["status"], BigInteger.valueOf(3), "successor status") == BigInteger.valueOf(2)) {
             "first activation requires its sole installed standby target"
+        }
+    }
+
+    fun retire(value: Map<String, Any?>) {
+        exact(value, setOf("proposal_operator", "network_id", "expected_predecessor", "standby_release_id"), "KagemushaVerifierReleaseRetire")
+        account(value["proposal_operator"], "KagemushaVerifierReleaseRetire.proposal_operator")
+        NetworkId.parse(string(value["network_id"], "KagemushaVerifierReleaseRetire.network_id"))
+        val predecessor = governedVerifierRegistry(value["expected_predecessor"], "KagemushaVerifierReleaseRetire.expected_predecessor")
+        require(predecessor["authority_policy"] != null) { "release retirement requires a governed signer policy" }
+        val target = bytes32(value["standby_release_id"], "KagemushaVerifierReleaseRetire.standby_release_id", nonzero = true)
+        val releases = array(predecessor["releases"], "KagemushaVerifierReleaseRetire.expected_predecessor.releases")
+        val row = releases.map { objectValue(it, "retirement predecessor release") }.singleOrNull {
+            bytes32(it["release_id"], "retirement release id").contentEquals(target)
+        }
+        require(row != null && uint(row["status"], BigInteger.valueOf(3), "retirement release status") == BigInteger.valueOf(2)) {
+            "release retirement requires its exact unused standby target"
         }
     }
 

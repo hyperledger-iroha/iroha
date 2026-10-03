@@ -138,6 +138,23 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
         possession: &KagemushaOrdinaryAppPossessionAttemptV1,
         reservation: &KagemushaOrdinaryPreparationReservationV1,
     ) -> Result<Self> {
+        Self::open_mode(root, pending, possession, reservation, false)
+    }
+    pub(super) fn open_completed_history(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+        reservation: &KagemushaOrdinaryPreparationReservationV1,
+    ) -> Result<Self> {
+        Self::open_mode(root, pending, possession, reservation, true)
+    }
+    fn open_mode(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+        reservation: &KagemushaOrdinaryPreparationReservationV1,
+        completed_only: bool,
+    ) -> Result<Self> {
         let selected = reservation.selected_originals()?.clone();
         let now = selected.trusted_time_ms()?;
         if reservation.retained_prepared_owner()?.native_scope != pending.preparation.native_scope {
@@ -205,11 +222,12 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
                     if authenticated_at_ms < this.admitted_at_ms || authenticated_at_ms > now {
                         return Err(Custody);
                     }
-                    this.enrollment = Some(Arc::new(this.authenticate_certificate(
+                    this.enrollment = Some(Arc::new(this.authenticate_certificate_mode(
                         pending,
                         possession,
                         &original,
                         authenticated_at_ms,
+                        completed_only,
                     )?));
                     this.completed_at_ms = Some(authenticated_at_ms);
                     this.stage = 3;
@@ -217,8 +235,69 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
                 _ => return Err(Custody),
             }
         }
-        this.recheck(pending, possession)?;
+        if completed_only {
+            this.recheck_completed_history(pending, possession)?;
+        } else {
+            this.recheck(pending, possession)?;
+        }
         Ok(this)
+    }
+    pub(super) fn recheck_completed_history(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+    ) -> Result<()> {
+        if self.stage != 3 || self.pending_scope != pending.native_scope() {
+            return Err(Custody);
+        }
+        possession.recheck_completed_history(pending)?;
+        let completed = self.completed_at_ms.ok_or(Custody)?;
+        self.selected.trusted_time_interval()?.check_both(|now| {
+            if completed > now {
+                return Err(Custody);
+            }
+            pending.recheck_retained_originals_at_trusted_time(now)
+        })?;
+        let enrollment = self.enrollment.as_ref().ok_or(Custody)?;
+        let full = enrollment
+            .certificate()
+            .canonical_bytes()
+            .map_err(|_| Custody)?;
+        let verified =
+            self.authenticate_certificate_mode(pending, possession, &full, completed, true)?;
+        if verified.possession().original() != enrollment.possession().original()
+            || verified.authenticated_at_ms() != enrollment.authenticated_at_ms()
+        {
+            return Err(Custody);
+        }
+        let app = possession.completed_identity(pending)?;
+        if app.digest() != self.credential_digest
+            || self.challenge.canonical_bytes().map_err(|_| Custody)? != self.challenge_original
+        {
+            return Err(Custody);
+        }
+        let mut count = 0;
+        self.journal
+            .scan_complete(|_, raw| {
+                if self.rows.get(count).map(Vec::as_slice) != Some(raw) {
+                    return Err(super::super::PrivateJournalError::Corrupt);
+                }
+                count += 1;
+                Ok(())
+            })
+            .map_err(|_| Custody)?;
+        if count != self.rows.len() || count != MAX_ROWS {
+            return Err(Custody);
+        }
+        Ok(())
+    }
+    pub(super) fn completed_enrollment(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+    ) -> Result<&Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>> {
+        self.recheck_completed_history(pending, possession)?;
+        self.enrollment.as_ref().ok_or(Custody)
     }
     /// Exact native ticket; public bytes do not recreate the holder.
     pub const fn ticket(&self) -> u64 {
@@ -369,8 +448,26 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
         raw: [u8; 64],
         now: u64,
     ) -> Result<KagemushaVerifiedOrdinaryRetailEnrollmentPossessionV1> {
-        let app = possession.final_identity(pending, self.now()?)?;
-        let raw_platform = possession.original_platform_evidence(pending, self.now()?)?;
+        self.possession_proof_mode(pending, possession, raw, now, false)
+    }
+    fn possession_proof_mode(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+        raw: [u8; 64],
+        now: u64,
+        completed_only: bool,
+    ) -> Result<KagemushaVerifiedOrdinaryRetailEnrollmentPossessionV1> {
+        let app = if completed_only {
+            possession.completed_identity(pending)?
+        } else {
+            possession.final_identity(pending, self.now()?)?
+        };
+        let raw_platform = if completed_only {
+            possession.completed_platform_original(pending)?
+        } else {
+            possession.original_platform_evidence(pending, self.now()?)?
+        };
         let evidence = match app.subject().platform_class {
             KagemushaHardwarePlatformClassV1::AndroidKeyMint => {
                 KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
@@ -416,6 +513,16 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
         raw: &[u8],
         now: u64,
     ) -> Result<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
+        self.authenticate_certificate_mode(pending, possession, raw, now, false)
+    }
+    fn authenticate_certificate_mode(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        possession: &KagemushaOrdinaryAppPossessionAttemptV1,
+        raw: &[u8],
+        now: u64,
+        completed_only: bool,
+    ) -> Result<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
         if raw.is_empty() || raw.len() > 16 * 1024 {
             return Err(Rejected);
         }
@@ -424,7 +531,11 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
         if certificate.canonical_bytes().map_err(|_| Rejected)? != raw {
             return Err(Rejected);
         }
-        let app = possession.final_identity(pending, self.now()?)?;
+        let app = if completed_only {
+            possession.completed_identity(pending)?
+        } else {
+            possession.final_identity(pending, self.now()?)?
+        };
         let selected = selection(
             pending,
             app,
@@ -432,8 +543,13 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
             now,
         )?;
         let owned_app = pending.authenticate_final_credential(app.original(), now)?;
-        let proof =
-            self.possession_proof(pending, possession, self.signature.ok_or(Custody)?, now)?;
+        let proof = self.possession_proof_mode(
+            pending,
+            possession,
+            self.signature.ok_or(Custody)?,
+            now,
+            completed_only,
+        )?;
         certificate
             .authenticate(
                 &selected,

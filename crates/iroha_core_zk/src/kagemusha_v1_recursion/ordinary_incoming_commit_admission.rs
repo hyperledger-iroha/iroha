@@ -186,11 +186,11 @@ impl KagemushaVerifiedOrdinaryIncomingCommitProofV1 {
 /// This authenticates original signed intervals, never sender elapsed time or a service effect.
 /// # Errors
 /// Refuses any original/protocol/source/Reserve/FI/clock/body/state/approval substitution, wrong
-/// purpose or failed actual proof/full-history verification. Receive remains explicitly refused.
+/// purpose or failed actual proof/full-history verification; each source variant is independently admitted.
 pub fn verify_ordinary_incoming_commit_v1(
     verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
     bundle: &KagemushaOrdinaryIncomingCommitProofBundleV1,
-    source: &KagemushaAuthenticatedOrdinaryServiceFinalizedMintSourceV1<'_>,
+    source: &KagemushaOrdinaryIncomingServiceSourceV1<'_, '_>,
     reserve: &KagemushaAuthenticatedOrdinaryServiceIncomingReservationAssertionV1<'_>,
     credential: &KagemushaVerifiedOrdinaryAppCredentialV1,
     w2_lease: Option<&KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
@@ -216,8 +216,7 @@ pub fn verify_ordinary_incoming_commit_v1(
             .request_original_sha256()
             .map_err(|e| e.to_string())?
             != bundle.terminal_body.intent.reserve_request_original_sha256
-        || reserve.issuer_policy().map_err(|e| e.to_string())?
-            != source.issuer_policy().map_err(|e| e.to_string())?
+        || reserve.issuer_policy().map_err(|e| e.to_string())? != source.issuer_policy()?
     {
         return reject();
     }
@@ -228,12 +227,10 @@ pub fn verify_ordinary_incoming_commit_v1(
         &reservation,
         credential,
         w1_lease,
-        source.issuer_policy().map_err(|e| e.to_string())?,
+        source.issuer_policy()?,
         [clocks[2], clocks[3]],
     )?;
-    source
-        .recheck_retained_custody()
-        .map_err(|e| e.to_string())?;
+    source.recheck()?;
     reserve
         .recheck_retained_custody()
         .map_err(|e| e.to_string())?;
@@ -567,7 +564,7 @@ impl GeneratedOrdinaryIncomingCommitOriginalsV1 {
 
 /// Assemble/reverify all actual retained incoming proofs and originals. This performs no key
 /// resolution, generation or randomized proving and is also the exact durable readmission kernel.
-/// Mint is active only under the genuine finalized source; Receive retains its separate refusal.
+/// Mint and Receive require their distinct genuine source loans and exact same immutable carrier.
 pub(crate) fn assemble_ordinary_incoming_commit_v1(
     verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
     selection: &KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_>,
@@ -622,12 +619,12 @@ pub(crate) fn assemble_ordinary_incoming_commit_v1(
     };
     let mut accepted = None;
     let mut sources = 0;
-    w2.with_finalized_mint_source(&mut |source, _credit| {
+    with_native_incoming_source(&w2, &mut |_source_originals, source| {
         sources += 1;
         if sources != 1 {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
-        source.recheck_retained_custody().map_err(native_error)?;
+        source.recheck().map_err(native_error)?;
         let mut clocks_count = 0;
         selection.with_retained_verified_signed_clock_originals(&mut |clocks| {
             clocks_count += 1;
@@ -678,7 +675,7 @@ pub(crate) fn assemble_ordinary_incoming_commit_v1(
         if clocks_count != 1 {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
-        source.recheck_retained_custody().map_err(native_error)?;
+        source.recheck().map_err(native_error)?;
         Ok(())
     })
     .map_err(|e| e.to_string())?;
@@ -769,12 +766,14 @@ mod tests {
 
     #[test]
     fn complete_incoming_commit_capacity_retains_five_clock_originals_and_finalized_source() {
-        // Actual supported protocol component maxima, not proof authority or a phone benchmark.
+        // Whole current source includes the separately retained full MintAuthority credit original.
+        // This adds 12,550,400 bytes to the former source bound; all five clocks remain.
+        // Actual supported component maxima, not proof authority or a phone benchmark.
         assert_eq!(
             KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1,
-            88_948_480
+            101_498_880
         );
-        assert_eq!(ordinary_incoming_commit_carrier_max_bytes_v1(), 122_715_904);
+        assert_eq!(ordinary_incoming_commit_carrier_max_bytes_v1(), 135_266_304);
         let clock_and_source = KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1
             + 5 * KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1;
         assert!(ordinary_incoming_commit_carrier_max_bytes_v1() > clock_and_source);
@@ -786,7 +785,7 @@ mod tests {
             .unwrap()
             .checked_mul(4)
             .unwrap();
-        assert_eq!(base64, 163_621_208);
+        assert_eq!(base64, 180_355_072);
         assert!(u32::try_from(raw).is_ok());
         // Physical StateAdvance also retains public successor, Commit receipt and exact WAL
         // framing. The sole private carrier maximum must not stand in for that full byte count.

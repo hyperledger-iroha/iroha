@@ -144,9 +144,129 @@ impl KagemushaOrdinaryTopUpFinalizedOriginalV1 {
     }
 }
 
+/// Complete data-frame ceiling, preserving the full maintained finality and neutral credit caps.
+/// Canonical framing is explicit; no component is truncated to fit a transport default.
+pub const KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1: usize =
+    KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1
+        + super::KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1
+        + 4096;
+
+/// Full ordinary finalized debit and its actual neutral MintAuthority credit proof originals.
+/// Decoding gives data only: independent release/finality/proof admission remains mandatory.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::KagemushaOrdinaryFinalizedMintCreditOriginalV1"
+)]
+pub struct KagemushaOrdinaryFinalizedMintCreditOriginalV1 {
+    /// First-release layout version.
+    pub version: u16,
+    /// Exact complete finalized debit original, including actual native receipt/membership.
+    pub finalized_source_original: Vec<u8>,
+    /// Exact canonical full neutral MintCredit, including both proofs and histories.
+    pub mint_credit_original: Vec<u8>,
+}
+impl KagemushaOrdinaryFinalizedMintCreditOriginalV1 {
+    /// Full original shape/equality checks only; no proof/effect capability is returned.
+    /// # Errors
+    /// Refuses unsupported, oversized, noncanonical or substituted complete operands.
+    pub fn validate_originals(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err("ordinary finalized credit version unsupported".into());
+        }
+        let finalized = KagemushaOrdinaryTopUpFinalizedOriginalV1::decode_canonical_exact(
+            &self.finalized_source_original,
+        )?;
+        let credit =
+            super::KagemushaMintCreditV1::decode_canonical_shape_exact(&self.mint_credit_original)
+                .map_err(|e| e.to_string())?;
+        let request =
+            KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(&finalized.request_original)?;
+        request.validate_finalized_credit(
+            &credit,
+            finalized
+                .finality
+                .reserve_receipt_witness
+                .receipt
+                .committed_at_ms,
+        )?;
+        if norito::encode_canonical(&credit).map_err(|e| e.to_string())?
+            != self.mint_credit_original
+        {
+            return Err("ordinary finalized credit is not the complete sole original".into());
+        }
+        Ok(())
+    }
+    /// Encode the sole complete bounded data frame.
+    /// # Errors
+    /// Refuses invalid originals, encoding failure or full-frame overflow.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate_originals()?;
+        let bytes = norito::encode_canonical(self).map_err(|e| e.to_string())?;
+        if bytes.len() > KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1 {
+            return Err("ordinary finalized credit full frame exceeds its ceiling".into());
+        }
+        Ok(bytes)
+    }
+    /// Decode complete data with the finite ceiling charged before decode.
+    /// # Errors
+    /// Refuses missing, oversized, trailing, noncanonical or substituted originals.
+    pub fn decode_canonical_exact(raw: &[u8]) -> Result<Self, String> {
+        if raw.is_empty() || raw.len() > KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1 {
+            return Err("ordinary finalized credit full frame outside its ceiling".into());
+        }
+        let value: Self =
+            norito::decode_canonical_with_limits(raw, norito::canonical_decode_limits(raw.len()))
+                .map_err(|e| e.to_string())?;
+        if value.canonical_bytes()? != raw {
+            return Err("ordinary finalized credit frame is not sole canonical original".into());
+        }
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn complete_credit_frame_refuses_missing_components_and_over_budget_before_decode() {
+        let mut data = KagemushaOrdinaryFinalizedMintCreditOriginalV1 {
+            version: 1,
+            finalized_source_original: Vec::new(),
+            mint_credit_original: Vec::new(),
+        };
+        assert!(data.canonical_bytes().is_err());
+        data.version = 2;
+        assert!(data.validate_originals().is_err());
+        assert!(
+            KagemushaOrdinaryFinalizedMintCreditOriginalV1::decode_canonical_exact(&[]).is_err()
+        );
+        assert!(
+            KagemushaOrdinaryFinalizedMintCreditOriginalV1::decode_canonical_exact(&vec![
+                0;
+                KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
+        // Sole model codec refuses a canonical container whose inner full originals are invalid;
+        // this test never fabricates a credit capability, finality or accepting verifier.
+        let raw = norito::encode_canonical(&data).unwrap();
+        assert!(
+            KagemushaOrdinaryFinalizedMintCreditOriginalV1::decode_canonical_exact(&raw).is_err()
+        );
+    }
     #[test]
     fn actual_debit_intent_binds_both_complete_originals_and_their_lengths() {
         let a = kagemusha_ordinary_mint_applied_intent_digest_v1(b"ab", b"c");

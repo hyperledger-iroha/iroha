@@ -33,35 +33,38 @@ fn requests(f: &Fixture) -> Vec<KagemushaOrdinaryEnrollmentHttpRequestV1> {
     vec![
         Request::Prepare(KagemushaOrdinaryPreparationHttpRequestV1 {
             account_id: f.selection.owner.account_id.canonical_i105().unwrap(),
-            client_nonce_hex: hex(&c.challenge.client_nonce), release_id_hex: hex(&c.challenge.release_id),
-            profile_id_hex: hex(&c.challenge.hardware_profile_id), lane_id_hex: hex(&c.challenge.lane_id),
+            client_nonce_hex: hex(&c.challenge.client_nonce),
+            release_id_hex: hex(&c.challenge.release_id),
+            profile_id_hex: hex(&c.challenge.hardware_profile_id),
+            lane_id_hex: hex(&c.challenge.lane_id),
             financial_authority_commitment_hex: hex(&c.challenge.financial_authority_commitment),
         }),
         Request::RawAttestation(KagemushaOrdinaryRawAttestationHttpRequestV1 {
-            schema: RAW_SCHEMA.into(), operation: "issue".into(), operation_id: hex(&c.challenge.attestation_challenge().unwrap()),
+            schema: RAW_SCHEMA.into(),
+            operation: "issue".into(),
+            operation_id: hex(&c.challenge.attestation_challenge().unwrap()),
             signed_preparation_base64: STANDARD.encode(c.to_transport_bytes().unwrap()),
-            attested_public_key_sec1_base64: STANDARD.encode(point), raw_attestation_base64: STANDARD.encode(super::super::kagemusha_platform_attestation_original_v1::platform_original_fixture(
-                c.challenge.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest).canonical_bytes().unwrap()),
+            attested_public_key_sec1_base64: STANDARD.encode(point),
+            raw_attestation_base64: STANDARD.encode(&f.proof.raw_attestation),
         }),
         Request::Certificate(KagemushaOrdinaryCredentialHttpRequestV1 {
-            schema: CREDENTIAL_SCHEMA.into(), operation: "issue".into(), operation_id: hex(&c.challenge.attestation_challenge().unwrap()),
+            schema: CREDENTIAL_SCHEMA.into(),
+            operation: "issue".into(),
+            operation_id: hex(&c.challenge.attestation_challenge().unwrap()),
             signed_preparation_base64: STANDARD.encode(c.to_transport_bytes().unwrap()),
-            attested_public_key_sec1_base64: STANDARD.encode(point), raw_attestation_base64: STANDARD.encode(super::super::kagemusha_platform_attestation_original_v1::platform_original_fixture(
-                c.challenge.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest).canonical_bytes().unwrap()),
-            app_possession: possession, play_integrity_token: None,
+            attested_public_key_sec1_base64: STANDARD.encode(point),
+            raw_attestation_base64: STANDARD.encode(&f.proof.raw_attestation),
+            app_possession: possession,
+            play_integrity_token: None,
         }),
-        Request::Start(KagemushaOrdinaryRetailStartHttpRequestV1 {
-            signed_preparation_base64: STANDARD.encode(c.to_transport_bytes().unwrap()),
-            app_certificate_base64: STANDARD.encode(f.selection.issuance.credential.canonical_bytes().unwrap()),
-        }),
+        Request::Start(start_originals(f)),
         Request::Finish(KagemushaOrdinaryRetailFinishHttpRequestV1 {
             challenge_id: hex(&c.challenge.attestation_challenge().unwrap()),
             account_signature_base64: STANDARD.encode(f.proof.account_signature.payload()),
         }),
     ]
 }
-fn replies(f: &Fixture) -> Vec<KagemushaOrdinaryEnrollmentHttpReplyV1> {
-    use KagemushaOrdinaryEnrollmentHttpReplyV1 as Reply;
+fn raw_original(f: &Fixture) -> Vec<u8> {
     let c = &f.selection.preparation;
     let subject = &f.selection.issuance.credential.subject;
     let raw_subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
@@ -72,20 +75,14 @@ fn replies(f: &Fixture) -> Vec<KagemushaOrdinaryEnrollmentHttpReplyV1> {
         security_level: subject.security_level,
         app_public_key: subject.app_public_key,
         attested_key_id: subject.attested_key_id,
-        raw_platform_evidence_digest: hash(
-            &super::super::kagemusha_platform_attestation_original_v1::platform_original_fixture(
-                c.challenge.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest,
-            )
-            .canonical_bytes()
-            .unwrap(),
-        ),
+        raw_platform_evidence_digest: hash(&f.proof.raw_attestation),
         app_signing_identity_digest: subject.app_signing_identity_digest,
         original_app_attest_counter: 0,
         issued_at_ms: c.challenge.issued_at_ms,
         expires_at_ms: c.challenge.expires_at_ms,
     };
-    let key = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
-    let raw = KagemushaRawAppAttestationAdmissionV1 {
+    let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+    KagemushaRawAppAttestationAdmissionV1 {
         signature: Signature::new(
             key.private_key(),
             &raw_subject.canonical_signing_bytes().unwrap(),
@@ -93,7 +90,34 @@ fn replies(f: &Fixture) -> Vec<KagemushaOrdinaryEnrollmentHttpReplyV1> {
         subject: raw_subject,
     }
     .to_transport_bytes()
-    .unwrap();
+    .unwrap()
+}
+fn start_originals(f: &Fixture) -> KagemushaOrdinaryRetailStartHttpRequestV1 {
+    let c = &f.selection.preparation;
+    let e = KagemushaAppEnrollmentPossessionV1 {
+        challenge: KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
+            &c.challenge,
+            &f.selection.issuance.credential.subject.app_public_key,
+            hash(&f.proof.raw_attestation),
+        )
+        .unwrap(),
+        evidence: f.proof.app_possession.clone(),
+    };
+    KagemushaOrdinaryRetailStartHttpRequestV1 {
+        wallet: f.selection.owner.account_id.canonical_i105().unwrap(),
+        signed_preparation_base64: STANDARD.encode(c.to_transport_bytes().unwrap()),
+        raw_admission_original_base64: STANDARD.encode(raw_original(f)),
+        platform_original_base64: STANDARD.encode(&f.proof.raw_attestation),
+        core_possession_original_base64: STANDARD.encode(norito::encode_canonical(&e).unwrap()),
+        app_certificate_base64: STANDARD
+            .encode(f.selection.issuance.credential.canonical_bytes().unwrap()),
+        selected_integrity: None,
+    }
+}
+fn replies(f: &Fixture) -> Vec<KagemushaOrdinaryEnrollmentHttpReplyV1> {
+    use KagemushaOrdinaryEnrollmentHttpReplyV1 as Reply;
+    let c = &f.selection.preparation;
+    let raw = raw_original(f);
     let credential = f.selection.issuance.credential.canonical_bytes().unwrap();
     vec![
         Reply::Prepare(KagemushaOrdinaryPreparationHttpReplyV1 {
@@ -334,4 +358,157 @@ fn minimal_sorted_json_preserves_full_original_slash_bytes_and_maximum_uint64() 
     );
     let decoded: Value = decode(&encode(&value).unwrap()).unwrap();
     assert_eq!(decoded.get("a").and_then(Value::as_u64), Some(u64::MAX));
+}
+
+#[test]
+fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
+    for apple in [false, true] {
+        let f = Fixture::new(apple);
+        let start = start_originals(&f);
+        let norito = start.canonical_norito_bytes().unwrap();
+        assert_eq!(
+            start,
+            KagemushaOrdinaryRetailStartHttpRequestV1::decode_canonical_norito_exact(&norito)
+                .unwrap()
+        );
+        let request = KagemushaOrdinaryEnrollmentHttpRequestV1::Start(start);
+        let json = request.canonical_bytes().unwrap();
+        let shape: Value = json::from_slice(&json).unwrap();
+        assert_eq!(shape.as_object().unwrap().len(), 7);
+        assert_eq!(shape.get("selected_integrity"), Some(&Value::Null));
+        assert_eq!(
+            request,
+            KagemushaOrdinaryEnrollmentHttpRequestV1::parse_http_data(
+                "/v1/kagemusha/enrollment/ordinary/start",
+                &json
+            )
+            .unwrap()
+        );
+        let mut tail = norito.clone();
+        tail.push(0);
+        assert!(
+            KagemushaOrdinaryRetailStartHttpRequestV1::decode_canonical_norito_exact(&tail)
+                .is_err()
+        );
+        assert!(
+            KagemushaOrdinaryRetailStartHttpRequestV1::decode_canonical_norito_exact(&vec![
+                0;
+                KAGEMUSHA_ORDINARY_ENROLLMENT_HTTP_MAX_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
+        // First release: each full original and explicit null are mandatory; old2-field refuses.
+        for key in [
+            "wallet",
+            "signed_preparation_base64",
+            "raw_admission_original_base64",
+            "platform_original_base64",
+            "core_possession_original_base64",
+            "app_certificate_base64",
+            "selected_integrity",
+        ] {
+            let missing = mutate(&json, |v| {
+                v.as_object_mut().unwrap().remove(key);
+            });
+            assert!(
+                KagemushaOrdinaryEnrollmentHttpRequestV1::parse(request.stage(), &missing).is_err()
+            );
+        }
+        for (key, limit) in [
+            ("raw_admission_original_base64", 315usize),
+            ("platform_original_base64", 131073),
+            ("core_possession_original_base64", 5121),
+            ("app_certificate_base64", 16385),
+        ] {
+            let oversized = mutate(&json, |v| {
+                v.as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), Value::String(STANDARD.encode(vec![1; limit])));
+            });
+            assert!(
+                KagemushaOrdinaryEnrollmentHttpRequestV1::parse(request.stage(), &oversized)
+                    .is_err()
+            );
+        }
+        let selected = mutate(&json, |v| {
+            v.as_object_mut().unwrap().insert(
+                "selected_integrity".into(),
+                norito::json!({"challenge":"AA==","lease":"AA=="}),
+            );
+        });
+        assert!(
+            KagemushaOrdinaryEnrollmentHttpRequestV1::parse(request.stage(), &selected).is_err()
+        );
+        let foreign = start_originals(&Fixture::new(!apple));
+        for (key, value) in [
+            ("wallet", foreign.wallet),
+            (
+                "raw_admission_original_base64",
+                foreign.raw_admission_original_base64,
+            ),
+            ("platform_original_base64", foreign.platform_original_base64),
+            (
+                "core_possession_original_base64",
+                foreign.core_possession_original_base64,
+            ),
+            ("app_certificate_base64", foreign.app_certificate_base64),
+        ] {
+            if shape.get(key) == Some(&Value::String(value.clone())) {
+                continue;
+            }
+            let changed = mutate(&json, |v| {
+                v.as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), Value::String(value));
+            });
+            assert!(
+                KagemushaOrdinaryEnrollmentHttpRequestV1::parse(request.stage(), &changed).is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn selected_integrity_public_carrier_roundtrips_complete_original_pair_without_start_authority() {
+    let f = Fixture::android_with_integrity();
+    let (challenge, lease) = f.integrity_refresh_originals();
+    let challenge_original = challenge.to_transport_bytes().unwrap();
+    let lease_original = lease.canonical_bytes().unwrap();
+    let pair = KagemushaOrdinaryStartIntegrityHttpV1 {
+        challenge: STANDARD.encode(&challenge_original),
+        lease: STANDARD.encode(&lease_original),
+    };
+    let binary = norito::encode_canonical(&pair).unwrap();
+    let decoded: KagemushaOrdinaryStartIntegrityHttpV1 = norito::decode_canonical_with_limits(
+        &binary,
+        norito::canonical_decode_limits(binary.len()),
+    )
+    .unwrap();
+    assert_eq!(decoded, pair);
+    assert_eq!(
+        STANDARD.decode(&decoded.challenge).unwrap(),
+        challenge_original
+    );
+    assert_eq!(STANDARD.decode(&decoded.lease).unwrap(), lease_original);
+    let json_original = json::to_vec(&pair).unwrap();
+    assert_eq!(
+        json::from_slice::<KagemushaOrdinaryStartIntegrityHttpV1>(&json_original).unwrap(),
+        pair
+    );
+    let unknown = mutate(&json_original, |value| {
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("current_authority".into(), Value::Bool(true));
+    });
+    assert!(json::from_slice::<KagemushaOrdinaryStartIntegrityHttpV1>(&unknown).is_err());
+    // A decoded refresh pair remains DATA. It cannot enter the initial Start ceremony.
+    let mut initial = start_originals(&f);
+    initial.selected_integrity = Some(pair);
+    assert!(
+        KagemushaOrdinaryEnrollmentHttpRequestV1::Start(initial)
+            .canonical_bytes()
+            .is_err()
+    );
 }

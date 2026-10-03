@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 sender recovery device contract
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 `connect_norito_bridge/src/kagemusha_device_bridge_v1/sender_payload.rs` defines
 the canonical public bodies for secure-device operations 5–10 and 12. These are
 shape and binding codecs, not a monetary software implementation. Stock C/JNI

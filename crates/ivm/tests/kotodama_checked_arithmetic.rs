@@ -1232,3 +1232,117 @@ fn full_width_math_helpers_match_constant_folding_and_runtime() {
         assert!(error.contains(diagnostic), "{expression}: {error}");
     }
 }
+
+#[test]
+fn rematerialized_literal_call_pressure_keeps_runtime_values_and_overflow() {
+    let source = include_str!("../../kotodama_lang/src/compiler/fixtures/v1/literal_homes.ko");
+    let (program, _, report) = Compiler::new()
+        .compile_source_with_manifest_and_report(source)
+        .expect("compile pressure fixture");
+    let frame_sum = report
+        .budget_report
+        .iter()
+        .map(|function| u64::from(function.frame_bytes))
+        .sum::<u64>();
+    for (input, expected) in [("17", "317"), ("-500", "-200"), ("0", "300")] {
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&program)
+            .expect("load real call-table artifact");
+        vm.set_program_counter(entrypoint_pc(&program)).unwrap();
+        let payload = Json::from_str_norito(&format!(r#"{{"value":"{input}"}}"#)).unwrap();
+        let mut host = argument_host(&program, &payload).unwrap();
+        let observer_budget = iroha_allocation::AllocationBudget::new(32 * 1024 * 1024);
+        let mut steps =
+            ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(4096, &observer_budget)
+                .expect("prepay bounded local diagnostic rows");
+        vm.run_with_host_diagnostic_steps(&mut host, &mut steps)
+            .expect("execute full argument table and checked arithmetic");
+        let initial_sp = steps
+            .records()
+            .first()
+            .expect("actual interpreter steps")
+            .before
+            .registers[31];
+        let minimum_sp = steps
+            .records()
+            .iter()
+            .map(|step| step.after.registers[31])
+            .min()
+            .unwrap();
+        let peak_stack = initial_sp
+            .checked_sub(minimum_sp)
+            .expect("descending call frames");
+        assert!(
+            peak_stack > 0 && peak_stack <= frame_sum,
+            "actual stack={peak_stack}, authenticated frames={frame_sum}"
+        );
+        let memory_steps = steps
+            .records()
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.opcode,
+                    Some(
+                        ivm::instruction::wide::memory::LOAD64
+                            | ivm::instruction::wide::memory::STORE64
+                    )
+                )
+            })
+            .count();
+        assert!(memory_steps > 0, "the real call tables must execute");
+        assert_eq!(
+            common::decode_int_word(&vm, vm.public_call_result_word(0).unwrap()),
+            bigint(expected)
+        );
+        eprintln!(
+            "literal-home runtime input={input} artifact_bytes={} gas_used={} memory_steps={memory_steps} peak_stack={peak_stack}",
+            program.len(),
+            1_000_000 - vm.remaining_gas()
+        );
+    }
+    let error = run_unary(&program, MAX_INT).expect_err("checked overflow remains observable");
+    assert_eq!(
+        numeric_fault_from_vm_error(&error),
+        Some(NumericFaultV1::MantissaOverflow)
+    );
+}
+
+#[test]
+fn rematerialized_numeric_operands_keep_rounding_branch_and_quantity_faults() {
+    let decimal = compile(
+        r#"seiyaku LiteralRounding {
+        view fn run(decimal value) -> decimal {
+            if (value < 0) { return value - 1.25; }
+            return value.div_round(divisor: 3, scale: 2, mode: Rounding::floor);
+        }
+    }"#,
+    );
+    for (value, expected) in [("2", "0.66"), ("-2", "-3.25")] {
+        let payload = Json::from_str_norito(&format!(r#"{{"value":"{value}"}}"#)).unwrap();
+        assert_eq!(
+            execute_numeric_program(&decimal, Some(&payload), NumericReturnKind::Decimal),
+            NumericOutcome::Value(NumericValue::Decimal(expected.parse().unwrap()))
+        );
+    }
+    let quantity = compile(
+        r#"seiyaku LiteralQuantity {
+        view fn run(quantity value) -> quantity { let quantity one = 1; return value - one; }
+    }"#,
+    );
+    for (value, expected) in [
+        (
+            "3.5",
+            NumericOutcome::Value(NumericValue::Quantity("2.5".parse().unwrap())),
+        ),
+        (
+            "0",
+            NumericOutcome::Fault(NumericFaultV1::QuantityUnderflow),
+        ),
+    ] {
+        let payload = Json::from_str_norito(&format!(r#"{{"value":"{value}"}}"#)).unwrap();
+        assert_eq!(
+            execute_numeric_program(&quantity, Some(&payload), NumericReturnKind::Quantity),
+            expected
+        );
+    }
+}

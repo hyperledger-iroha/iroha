@@ -44,7 +44,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.HttpClientTransportStatusTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportExactReadTests",
-        "org.hyperledger.iroha.android.client.HttpClientTransportHijiriQuoteTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportTests",
         "org.hyperledger.iroha.android.client.TransactionSubmissionCompatibilityTests",
         "org.hyperledger.iroha.android.client.HttpTransportExecutorFakeTests",
@@ -111,7 +110,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
         "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
         "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests",
-        "org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteTests",
       };
 
   private final String className;

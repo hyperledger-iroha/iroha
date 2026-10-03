@@ -1,8 +1,7 @@
 //! Exact original leaf Subject/OID/value provenance for disclosed attributes.
 //!
-//! TODO: enforce the complete original Name value census and the full
-//! UTF8/PrintableString policy for every Name. Selected membership is incremental
-//! source binding and does not establish complete parser equivalence or activation.
+//! The independent complete Name OID/value census constrains every original
+//! attribute, including undisclosed values; release qualification remains separate.
 use super::*;
 
 pub(super) const FIX_DISCLOSURE: usize = projection_serial::FIX_END;

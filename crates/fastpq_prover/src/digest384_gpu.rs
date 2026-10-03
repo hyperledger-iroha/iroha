@@ -60,6 +60,10 @@ pub enum Digest384GpuErrorV1 {
 /// payloads; failed readiness, execution, or canonical-output validation
 /// permanently quarantines that backend. This primitive API does not qualify
 /// or enable the complete native V1 GPU prover.
+///
+/// # Errors
+/// Rejects invalid batch geometry, unavailable or quarantined devices, failed
+/// known-answer checks, and device execution or canonical-output failures.
 pub fn try_hash_digest384_frames_v1(
     backend: Digest384GpuBackendV1,
     frames: &[GoldilocksDigest384FrameV1<'_>],
@@ -97,20 +101,20 @@ pub fn try_hash_digest384_frames_v1(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Digest384ReadinessV1 {
+pub enum Digest384ReadinessV1 {
     Unchecked,
     Ready,
     Quarantined,
 }
 
-pub(crate) struct Digest384BackendReadinessV1 {
-    pub(crate) frames: Digest384ReadinessV1,
+pub struct Digest384BackendReadinessV1 {
+    pub frames: Digest384ReadinessV1,
     #[cfg(test)]
-    pub(crate) indexed: Digest384ReadinessV1,
-    pub(crate) last_fields: Digest384ReadinessV1,
+    pub indexed: Digest384ReadinessV1,
+    pub last_fields: Digest384ReadinessV1,
 }
 impl Digest384BackendReadinessV1 {
-    pub(crate) fn ensure_available_v1(
+    pub fn ensure_available_v1(
         &self,
         backend: Digest384GpuBackendV1,
     ) -> Result<(), Digest384GpuErrorV1> {
@@ -126,7 +130,7 @@ impl Digest384BackendReadinessV1 {
         Ok(())
     }
 }
-pub(crate) fn backend_readiness_v1(
+pub fn backend_readiness_v1(
     backend: Digest384GpuBackendV1,
 ) -> &'static Mutex<Digest384BackendReadinessV1> {
     const UNCHECKED: Digest384BackendReadinessV1 = Digest384BackendReadinessV1 {
@@ -226,10 +230,10 @@ fn validate_frame_batch_geometry(
 
 // GPU descriptor layout is three u64 words: offset, padded length, lane-word
 // index. All values are bounded by u32, with no raw payload Debug implementation.
-pub(crate) struct StagedDigest384V1 {
-    pub(crate) words: Zeroizing<Vec<u64>>,
-    pub(crate) descriptors: Zeroizing<Vec<u64>>,
-    pub(crate) frame_count: usize,
+pub struct StagedDigest384V1 {
+    pub words: Zeroizing<Vec<u64>>,
+    pub descriptors: Zeroizing<Vec<u64>>,
+    pub frame_count: usize,
 }
 
 fn zeroed_words(len: usize) -> Result<Zeroizing<Vec<u64>>, Digest384GpuErrorV1> {
@@ -269,9 +273,9 @@ impl StagedDigest384V1 {
     }
 }
 
-pub(crate) const DIGEST384_GPU_PARAMETER_WORDS_V1: usize = 6 * 3 + 6 * 65 * 3 + 9;
+pub const DIGEST384_GPU_PARAMETER_WORDS_V1: usize = 6 * 3 + 6 * 65 * 3 + 9;
 
-pub(crate) fn digest384_gpu_parameters_v1() -> &'static [u64; DIGEST384_GPU_PARAMETER_WORDS_V1] {
+pub fn digest384_gpu_parameters_v1() -> &'static [u64; DIGEST384_GPU_PARAMETER_WORDS_V1] {
     static PARAMETERS: OnceLock<[u64; DIGEST384_GPU_PARAMETER_WORDS_V1]> = OnceLock::new();
     PARAMETERS.get_or_init(|| {
         let mut parameters = [0u64; DIGEST384_GPU_PARAMETER_WORDS_V1];
@@ -522,12 +526,12 @@ mod tests {
         let mut readiness = Digest384ReadinessV1::Unchecked;
         let frame = GoldilocksDigest384FrameV1::new(domain(), &[]).unwrap();
         let expected = [
-            0x0A084D2765A9990B,
-            0xD59F602C37B69E1B,
-            0xDE9BB3357209FA18,
-            0x3FAF16BA65A67BA3,
-            0xE68CCC7D9933B79D,
-            0xCAD66B9479314D52,
+            0x0A08_4D27_65A9_990B,
+            0xD59F_602C_37B6_9E1B,
+            0xDE9B_B335_7209_FA18,
+            0x3FAF_16BA_65A6_7BA3,
+            0xE68C_CC7D_9933_B79D,
+            0xCAD6_6B94_7931_4D52,
         ];
         let mut calls = 0;
         let mut dispatch = |_: &StagedDigest384V1, output: &mut [u64]| {
@@ -605,9 +609,9 @@ mod tests {
     }
 
     fn assert_device_parity(backend: Digest384GpuBackendV1) {
-        let payloads: Vec<Vec<u8>> = [0, 1, 3, 4, 7, 8, 9, 135, 136, 137, 4096]
+        let payloads: Vec<Vec<u8>> = [0_usize, 1, 3, 4, 7, 8, 9, 135, 136, 137, 4096]
             .into_iter()
-            .map(|len| (0..len).map(|i| (i % 256) as u8).collect())
+            .map(|len| (0..len).map(|i| i.to_le_bytes()[0]).collect())
             .collect();
         let fields: Vec<[&[u8]; 2]> = payloads
             .iter()
@@ -617,7 +621,10 @@ mod tests {
             .iter()
             .map(|fields| GoldilocksDigest384FrameV1::new(domain(), fields).unwrap())
             .collect();
-        let expected: Vec<_> = frames.iter().map(|frame| frame.hash()).collect();
+        let expected: Vec<_> = frames
+            .iter()
+            .map(GoldilocksDigest384FrameV1::hash)
+            .collect();
         assert_eq!(
             try_hash_digest384_frames_v1(backend, &frames)
                 .expect("selected device execution required"),

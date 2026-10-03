@@ -2,6 +2,8 @@
 
 #[path = "tests/literal_helpers.rs"]
 mod literal_helpers;
+#[path = "tests/rematerialized.rs"]
+mod rematerialized;
 
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
@@ -7223,20 +7225,13 @@ fn entry_spills_use_stack_frame() {
         .name("kotodama_entry_spills_use_stack_frame".to_owned())
         .stack_size(8 * 1024 * 1024)
         .spawn(|| {
-            let mut src = String::from("seiyaku SpillTest {\n  fn main() -> int {\n");
+            // Literal table references intentionally need no stack homes. Use
+            // genuine runtime parameters all live at one call to test spills.
             let count = 32;
-            for i in 0..count {
-                let value = i + 1;
-                src.push_str(&format!("    let a{i} = {value};\n"));
-            }
-            src.push_str("    let sum = ");
-            for i in 0..count {
-                if i > 0 {
-                    src.push_str(" + ");
-                }
-                src.push_str(&format!("a{i}"));
-            }
-            src.push_str(";\n    return sum;\n  }\n}\n");
+            let parameters = (0..count).map(|index| format!("int a{index}")).collect::<Vec<_>>().join(", ");
+            let arguments = (0..count).map(|index| format!("a{index}")).collect::<Vec<_>>().join(", ");
+            let sum = (0..count).map(|index| format!("a{index}")).collect::<Vec<_>>().join(" + ");
+            let src = format!("seiyaku SpillTest {{ fn sum({parameters}) -> int {{ return {sum}; }} fn main({parameters}) -> int {{ return sum({arguments}); }} }}");
             let parsed = crate::parser::parse(&src).expect("parse spill test");
             let typed = crate::semantic::analyze(&parsed).expect("type spill test");
             let ir_prog = crate::ir::lower(&typed).expect("lower spill test");

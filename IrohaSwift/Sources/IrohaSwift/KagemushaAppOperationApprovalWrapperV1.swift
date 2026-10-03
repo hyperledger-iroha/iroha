@@ -42,9 +42,17 @@ struct KagemushaAppOperationApprovalWrapperV1: Sendable {
       wrapper[start + 2] == purpose else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid app approval W layout or purpose")
     }
-    let subject = try (purpose == 2
-      ? KagemushaAppAttestTransitionBindingV1(corePreparationSigningBytes: nativeFinancialSubject)
-      : KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: nativeFinancialSubject)).canonicalSelectionSigningBytes
+    let binding: KagemushaAppAttestTransitionBindingV1
+    if purpose == 2 {
+      binding = try KagemushaAppAttestTransitionBindingV1(corePreparationSigningBytes: nativeFinancialSubject)
+    } else if let operation = nativeFinancialSubject.dropFirst(331).first,
+      operation == 1 || operation == 3 {
+      // Match the model's purpose-selected ordinary incoming subject. This is only DATA.
+      binding = try KagemushaAppAttestTransitionBindingV1(coreOrdinaryIncomingTerminalSigningBytes: nativeFinancialSubject)
+    } else {
+      binding = try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: nativeFinancialSubject)
+    }
+    let subject = binding.canonicalSelectionSigningBytes
     let fields = (0..<8).map { index in
       Data(wrapper[(start + 3 + index * 32)..<(start + 3 + (index + 1) * 32)])
     }

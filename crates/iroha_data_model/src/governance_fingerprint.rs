@@ -32,6 +32,9 @@ pub const KAGEMUSHA_VERIFIER_RELEASE_INSTALL_V1: &[u8] =
 /// Exact active KAGEMUSHA verifier-release proposal domain.
 pub const KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE_V1: &[u8] =
     b"iroha.governance.proposal.kagemusha_verifier_release_activate.v1";
+/// Exact unused standby KAGEMUSHA verifier-release retirement proposal domain.
+pub const KAGEMUSHA_VERIFIER_RELEASE_RETIRE_V1: &[u8] =
+    b"iroha.governance.proposal.kagemusha_verifier_release_retire.v1";
 pub const GOVERNANCE_EFFECT_PREIMAGE_V1: &[u8] = b"iroha.governance.effect_preimage.v1";
 pub const GOVERNANCE_SUBJECT_ID_V1: &[u8] = b"iroha.governance.subject.id.v1";
 pub const GOVERNANCE_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.attempt.id.v1";
@@ -95,6 +98,7 @@ mod tests {
             KAGEMUSHA_VERIFIER_POLICY_INSTALL_V1,
             KAGEMUSHA_VERIFIER_RELEASE_INSTALL_V1,
             KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE_V1,
+            KAGEMUSHA_VERIFIER_RELEASE_RETIRE_V1,
             GOVERNANCE_EFFECT_PREIMAGE_V1,
             GOVERNANCE_SUBJECT_ID_V1,
             GOVERNANCE_ATTEMPT_ID_V1,

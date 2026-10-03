@@ -465,6 +465,7 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1",
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1",
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1",
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",

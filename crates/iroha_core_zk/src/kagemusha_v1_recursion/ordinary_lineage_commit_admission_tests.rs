@@ -26,7 +26,7 @@ fn commit_data_decoder_requires_full_canonical_frame_and_exact_type() {
 #[test]
 fn compact_and_service_clock_caps_preserve_existing_full_original_maxima() {
     assert_eq!(
-        COMPACT_ORIGINAL_MAX,
+        KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1,
         KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1 + 256 * 1024
     );
     assert_eq!(

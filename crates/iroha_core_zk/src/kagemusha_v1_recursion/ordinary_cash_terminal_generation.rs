@@ -440,7 +440,7 @@ pub(super) fn prove_ordinary_cash_wrapper_pair_v1(
     )
 }
 #[allow(clippy::too_many_arguments)]
-fn finish_pair(
+pub(super) fn finish_pair(
     relation: u8,
     public: OrdinaryCashTerminalPublicV1,
     manifest: DigestV1,

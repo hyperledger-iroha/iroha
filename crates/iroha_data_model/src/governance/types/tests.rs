@@ -624,6 +624,9 @@ fn governance_types_encode() {
         ProposalKind::KagemushaVerifierReleaseActivate(_) => {
             panic!("unexpected KAGEMUSHA verifier-activation proposal")
         }
+        ProposalKind::KagemushaVerifierReleaseRetire(_) => {
+            panic!("unexpected KAGEMUSHA verifier-retirement proposal")
+        }
     }
 }
 
@@ -869,6 +872,9 @@ fn runtime_upgrade_proposal_roundtrip() {
         }
         ProposalKind::KagemushaVerifierReleaseActivate(_) => {
             panic!("unexpected KAGEMUSHA verifier-activation proposal")
+        }
+        ProposalKind::KagemushaVerifierReleaseRetire(_) => {
+            panic!("unexpected KAGEMUSHA verifier-retirement proposal")
         }
     }
 }

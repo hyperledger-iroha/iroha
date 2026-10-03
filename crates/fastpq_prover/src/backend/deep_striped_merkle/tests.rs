@@ -9,7 +9,7 @@ fn limits() -> StreamLimits {
         max_hashes: usize::MAX,
     }
 }
-fn hash(level: usize, index: usize, left: Digest, right: Digest) -> Result<Digest> {
+fn hash(level: usize, index: usize, left: Digest, right: Digest) -> Digest {
     {
         let mut hash = fastpq_isi::keccak256::Sha3_256V1::new();
         hash.update(b"test:striped:parent:");
@@ -17,12 +17,16 @@ fn hash(level: usize, index: usize, left: Digest, right: Digest) -> Result<Diges
         hash.update(&(index as u64).to_le_bytes());
         hash.update(left.as_bytes());
         hash.update(right.as_bytes());
-        Ok(hash.finalize())
+        hash.finalize()
     }
 }
 fn leaves(size: usize) -> Vec<Digest> {
     (0..size)
-        .map(|i| Digest::from_bytes(core::array::from_fn(|lane| (i * 7 + lane + 11) as u8)))
+        .map(|i| {
+            Digest::from_bytes(core::array::from_fn(|lane| {
+                (i * 7 + lane + 11).to_le_bytes()[0]
+            }))
+        })
         .collect()
 }
 fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
@@ -39,7 +43,6 @@ fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
                     children[0],
                     *children.get(1).unwrap_or(&children[0]),
                 )
-                .unwrap()
             })
             .collect::<Vec<_>>();
         let done = next.len() == 1;
@@ -50,16 +53,10 @@ fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
     }
 }
 
-fn batch_hash(
-    level: usize,
-    indices: &[usize],
-    left: &[[u8; 32]],
-    right: &mut [[u8; 32]],
-) -> Result<()> {
+fn batch_hash(level: usize, indices: &[usize], left: &[[u8; 32]], right: &mut [[u8; 32]]) {
     for ((&index, &left), right) in indices.iter().zip(left).zip(right.iter_mut()) {
-        *right = hash(level, index, digest(left), digest(*right))?.into_bytes();
+        *right = hash(level, index, digest(left), digest(*right)).into_bytes();
     }
-    Ok(())
 }
 
 #[test]
@@ -96,11 +93,21 @@ fn batched_rows_preserve_every_small_frontier_and_canonical_parent_coordinate() 
                                 *value = leaves[index].into_bytes();
                             }
                             stream
-                                .push_batch(&indices, &mut values, batch_hash, hash)
+                                .push_batch(
+                                    &indices,
+                                    &mut values,
+                                    |level, indices, left, right| {
+                                        batch_hash(level, indices, left, right);
+                                        Ok(())
+                                    },
+                                    |level, index, left, right| Ok(hash(level, index, left, right)),
+                                )
                                 .unwrap();
                         }
                     }
-                    let actual = stream.finish(hash).unwrap();
+                    let actual = stream
+                        .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+                        .unwrap();
                     assert_eq!(actual.root, expected.last().unwrap()[0]);
                     assert_eq!(actual.siblings, frontier);
                     assert_eq!(actual.parent_hashes, (count - 1).max(1));
@@ -121,15 +128,35 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         let mut values = SecretPolynomial::zeroed(indices.len()).unwrap();
         assert!(
             stream
-                .push_batch(&indices, &mut values, batch_hash, hash)
+                .push_batch(
+                    &indices,
+                    &mut values,
+                    |level, indices, left, right| {
+                        batch_hash(level, indices, left, right);
+                        Ok(())
+                    },
+                    |level, index, left, right| Ok(hash(level, index, left, right))
+                )
                 .is_err()
         );
         assert!(
             stream
-                .push_batch(&[0], &mut [[0; 32]], batch_hash, hash)
+                .push_batch(
+                    &[0],
+                    &mut [[0; 32]],
+                    |level, indices, left, right| {
+                        batch_hash(level, indices, left, right);
+                        Ok(())
+                    },
+                    |level, index, left, right| Ok(hash(level, index, left, right))
+                )
                 .is_err()
         );
-        assert!(stream.finish(hash).is_err());
+        assert!(
+            stream
+                .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+                .is_err()
+        );
     }
     // Every opaque digest bit pattern is valid; malformed field-word rejection
     // belonged to the retired digest. Ordering/shape and callback failures remain.
@@ -139,7 +166,15 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
             .start()
             .unwrap();
         stream
-            .push_batch(&[0, 2], &mut [[1; 32]; 2], batch_hash, hash)
+            .push_batch(
+                &[0, 2],
+                &mut [[1; 32]; 2],
+                |level, indices, left, right| {
+                    batch_hash(level, indices, left, right);
+                    Ok(())
+                },
+                |level, index, left, right| Ok(hash(level, index, left, right)),
+            )
             .unwrap();
         let partial = |_: usize, _: &[usize], _: &[[u8; 32]], right: &mut [[u8; 32]]| {
             right[0] = [marker; 32];
@@ -147,10 +182,19 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         };
         assert!(
             stream
-                .push_batch(&[1, 3], &mut [[2; 32]; 2], partial, hash)
+                .push_batch(
+                    &[1, 3],
+                    &mut [[2; 32]; 2],
+                    partial,
+                    |level, index, left, right| Ok(hash(level, index, left, right))
+                )
                 .is_err()
         );
-        assert!(stream.finish(hash).is_err());
+        assert!(
+            stream
+                .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+                .is_err()
+        );
     }
     let mut stream = StripedMerklePlan::new(2, 1, &[], limits())
         .unwrap()
@@ -158,12 +202,22 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         .unwrap();
     assert!(
         stream
-            .push_batch(&[0, 1], &mut [[1; 32]; 2], batch_hash, |_, _, _, _| Err(
-                invalid("upper hash failure")
-            ))
+            .push_batch(
+                &[0, 1],
+                &mut [[1; 32]; 2],
+                |level, indices, left, right| {
+                    batch_hash(level, indices, left, right);
+                    Ok(())
+                },
+                |_, _, _, _| Err(invalid("upper hash failure"))
+            )
             .is_err()
     );
-    assert!(stream.finish(hash).is_err());
+    assert!(
+        stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .is_err()
+    );
 }
 
 #[test]
@@ -185,11 +239,21 @@ fn full_capacity_batches_preserve_sparse_frontiers_across_run_boundaries() {
                 *value = values[index].into_bytes();
             }
             stream
-                .push_batch(&indices, &mut batch, batch_hash, hash)
+                .push_batch(
+                    &indices,
+                    &mut batch,
+                    |level, indices, left, right| {
+                        batch_hash(level, indices, left, right);
+                        Ok(())
+                    },
+                    |level, index, left, right| Ok(hash(level, index, left, right)),
+                )
                 .unwrap();
         }
     }
-    let result = stream.finish(hash).unwrap();
+    let result = stream
+        .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+        .unwrap();
     assert_eq!(result.root, expected.last().unwrap()[0]);
     assert_eq!(
         result.siblings,
@@ -228,10 +292,16 @@ fn every_small_frontier_and_stripe_shape_matches_the_existing_tree() {
                 for stripe in 0..stripes {
                     for row in 0..count / stripes {
                         let index = stripe + row * stripes;
-                        stream.push(index, leaves[index], hash).unwrap();
+                        stream
+                            .push(index, leaves[index], |level, index, left, right| {
+                                Ok(hash(level, index, left, right))
+                            })
+                            .unwrap();
                     }
                 }
-                let actual = stream.finish(hash).unwrap();
+                let actual = stream
+                    .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+                    .unwrap();
                 assert_eq!(actual.root, tree.last().unwrap()[0]);
                 assert_eq!(actual.siblings, expected_frontier);
                 assert_eq!(actual.leaf_hashes, count);
@@ -242,7 +312,7 @@ fn every_small_frontier_and_stripe_shape_matches_the_existing_tree() {
                             actual.root,
                             &queries.iter().map(|&i| leaves[i]).collect::<Vec<_>>(),
                             &actual.siblings,
-                            hash,
+                            |level, index, left, right| Ok(hash(level, index, left, right)),
                         )
                         .unwrap();
                 }
@@ -307,10 +377,16 @@ fn actual_128_stripe_geometry_has_bounded_stacks_and_sparse_frontier() {
         for stripe in 0..128 {
             for row in 0..8 {
                 let index = stripe + 128 * row;
-                stream.push(index, leaves[index], hash).unwrap();
+                stream
+                    .push(index, leaves[index], |level, index, left, right| {
+                        Ok(hash(level, index, left, right))
+                    })
+                    .unwrap();
             }
         }
-        let actual = stream.finish(hash).unwrap();
+        let actual = stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .unwrap();
         assert_eq!(actual.root, tree.last().unwrap()[0]);
         assert_eq!(actual.siblings, expected);
     }
@@ -333,37 +409,81 @@ fn malformed_and_failed_streams_cannot_return_a_root() {
         .unwrap()
         .start()
         .unwrap();
-    stream.push(0, values[0], hash).unwrap();
+    stream
+        .push(0, values[0], |level, index, left, right| {
+            Ok(hash(level, index, left, right))
+        })
+        .unwrap();
     assert!(
-        stream.push(1, values[1], hash).is_err(),
+        stream
+            .push(1, values[1], |level, index, left, right| Ok(hash(
+                level, index, left, right
+            )))
+            .is_err(),
         "next index must be two"
     );
-    assert!(stream.push(2, values[2], hash).is_err());
-    assert!(stream.finish(hash).is_err());
+    assert!(
+        stream
+            .push(2, values[2], |level, index, left, right| Ok(hash(
+                level, index, left, right
+            )))
+            .is_err()
+    );
+    assert!(
+        stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .is_err()
+    );
     let mut stream = StripedMerklePlan::new(4, 1, &[], limits())
         .unwrap()
         .start()
         .unwrap();
-    stream.push(0, values[0], hash).unwrap();
+    stream
+        .push(0, values[0], |level, index, left, right| {
+            Ok(hash(level, index, left, right))
+        })
+        .unwrap();
     assert!(
         stream
             .push(1, values[1], |_, _, _, _| Err(invalid("hash failure")))
             .is_err()
     );
-    assert!(stream.finish(hash).is_err());
+    assert!(
+        stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .is_err()
+    );
     let stream = StripedMerklePlan::new(1, 1, &[0], limits())
         .unwrap()
         .start()
         .unwrap();
-    assert!(stream.finish(hash).is_err());
+    assert!(
+        stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .is_err()
+    );
     let mut stream = StripedMerklePlan::new(1, 1, &[0], limits())
         .unwrap()
         .start()
         .unwrap();
-    stream.push(0, values[0], hash).unwrap();
-    assert!(stream.push(0, values[0], hash).is_err());
+    stream
+        .push(0, values[0], |level, index, left, right| {
+            Ok(hash(level, index, left, right))
+        })
+        .unwrap();
+    assert!(
+        stream
+            .push(0, values[0], |level, index, left, right| Ok(hash(
+                level, index, left, right
+            )))
+            .is_err()
+    );
     // Every rejected insertion poisons the owner, including after coverage.
-    assert!(stream.finish(hash).is_err());
+    assert!(
+        stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .is_err()
+    );
 }
 
 #[test]
@@ -517,17 +637,39 @@ fn extra_push_after_complete_coverage_poisoned_even_if_error_is_ignored() {
             .unwrap()
             .start()
             .unwrap();
-        stream.push(0, leaves(1)[0], hash).unwrap();
+        stream
+            .push(0, leaves(1)[0], |level, index, left, right| {
+                Ok(hash(level, index, left, right))
+            })
+            .unwrap();
         if scalar_extra {
-            assert!(stream.push(0, leaves(1)[0], hash).is_err());
+            assert!(
+                stream
+                    .push(0, leaves(1)[0], |level, index, left, right| Ok(hash(
+                        level, index, left, right
+                    )))
+                    .is_err()
+            );
         } else {
             assert!(
                 stream
-                    .push_batch(&[0], &mut [leaves(1)[0].into_bytes()], batch_hash, hash)
+                    .push_batch(
+                        &[0],
+                        &mut [leaves(1)[0].into_bytes()],
+                        |level, indices, left, right| {
+                            batch_hash(level, indices, left, right);
+                            Ok(())
+                        },
+                        |level, index, left, right| Ok(hash(level, index, left, right))
+                    )
                     .is_err()
             );
         }
-        assert!(stream.finish(hash).is_err());
+        assert!(
+            stream
+                .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+                .is_err()
+        );
     }
     // Cached complete coverage has the same poisoning rule; the first root
     // callback must never run after the rejected extra insertion.
@@ -542,9 +684,19 @@ fn extra_push_after_complete_coverage_poisoned_even_if_error_is_ignored() {
         .start_cached(cache)
         .unwrap();
     for (i, leaf) in leaves(128).into_iter().enumerate() {
-        stream.push(i, leaf, hash).unwrap();
+        stream
+            .push(i, leaf, |level, index, left, right| {
+                Ok(hash(level, index, left, right))
+            })
+            .unwrap();
     }
-    assert!(stream.push(128, leaves(1)[0], hash).is_err());
+    assert!(
+        stream
+            .push(128, leaves(1)[0], |level, index, left, right| Ok(hash(
+                level, index, left, right
+            )))
+            .is_err()
+    );
     assert!(
         stream
             .finish(|_, _, _, _| panic!("poisoned cached stream cannot hash"))

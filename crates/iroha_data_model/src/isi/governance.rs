@@ -15,7 +15,7 @@ use crate::{
         AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
         ContractLifecycleGovernanceProposalV1, GlobalDataTriggerPermissionGovernanceProposalV1,
         KagemushaVerifierPolicyInstallProposalV1, KagemushaVerifierReleaseActivateProposalV1,
-        KagemushaVerifierReleaseInstallProposalV1,
+        KagemushaVerifierReleaseInstallProposalV1, KagemushaVerifierReleaseRetireProposalV1,
     },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
@@ -195,6 +195,24 @@ impl PartialOrd for ProposeKagemushaVerifierReleaseActivateV1 {
     }
 }
 impl crate::seal::Instruction for ProposeKagemushaVerifierReleaseActivateV1 {}
+/// Propose retirement of one never-activated governed KAGEMUSHA standby release.
+#[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1"
+)]
+pub struct ProposeKagemushaVerifierReleaseRetireV1 {
+    /// Exact network, operator, full registry predecessor, and standby target.
+    pub proposal: KagemushaVerifierReleaseRetireProposalV1,
+}
+
+impl PartialOrd for ProposeKagemushaVerifierReleaseRetireV1 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.encode().cmp(&other.encode()))
+    }
+}
+impl crate::seal::Instruction for ProposeKagemushaVerifierReleaseRetireV1 {}
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -549,6 +567,9 @@ impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseInstallV1 {
 });
 impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseActivateV1 {
     proposal: KagemushaVerifierReleaseActivateProposalV1,
+});
+impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseRetireV1 {
+    proposal: KagemushaVerifierReleaseRetireProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,

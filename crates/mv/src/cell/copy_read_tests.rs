@@ -112,3 +112,20 @@ fn committed_copy_concurrent_publication_never_returns_an_invented_scalar() {
     });
     assert_eq!(*cell.try_committed_copy().unwrap().current(), 256);
 }
+
+#[test]
+fn first_original_copy_on_cold_thread_allocates_no_mutex_or_collector_backing() {
+    use crate::allocation_test_support::without_allocations;
+    let cell = Cell::new(7_u64);
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let original = without_allocations(|| cell.try_committed_copy().unwrap());
+                assert_eq!(*original.current(), 7);
+                without_allocations(|| assert!(original.try_matches_current(&cell).unwrap()));
+                without_allocations(|| drop(original));
+            })
+            .join()
+            .unwrap();
+    });
+}

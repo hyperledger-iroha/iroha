@@ -1754,6 +1754,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "KagemushaVerifierPolicyInstall",
             "KagemushaVerifierReleaseInstall",
             "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
         ]
     );
     let proposal_payload_refs = proposal_variants
@@ -1785,6 +1786,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1",
         ]
     );
     for payload_ref in proposal_payload_refs {

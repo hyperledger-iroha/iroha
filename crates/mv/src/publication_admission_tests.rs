@@ -119,3 +119,34 @@ fn pending_publication_waiter_keeps_original_control_until_cancelled() {
     drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn all_original_publication_constructors_initialize_cold_observation_mutexes() {
+    use crate::allocation_test_support::without_allocations;
+    let required = Publication::allocation_demand().unwrap().bytes();
+    let budget = AllocationBudget::new(2 * required);
+    let mut reservation = budget.try_reserve_bytes(required).unwrap();
+    let sources = [
+        Publication::new(),
+        Publication::from_admission(budget.try_reserve_bytes(required).unwrap()),
+        Publication::try_from_original(&mut reservation).unwrap(),
+    ];
+    assert_eq!(reservation.remaining_bytes(), 0);
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                for source in &sources {
+                    let first = without_allocations(|| source.try_capture_reads(|| true).unwrap());
+                    without_allocations(|| {
+                        assert!(first.same_as(&source.try_capture_reads(|| true).unwrap()));
+                        drop(first);
+                    });
+                }
+            })
+            .join()
+            .unwrap();
+    });
+    drop(sources);
+    drop(reservation);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

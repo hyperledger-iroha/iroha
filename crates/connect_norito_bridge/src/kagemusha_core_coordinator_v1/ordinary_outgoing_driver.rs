@@ -228,14 +228,22 @@ fn terminal_fields(
     {
         return Err(Error::Rejected.into());
     }
-    let (platform, mask, floor) = match (selected.platform_class, selected.security_level) {
-        (Platform::AndroidKeyMint, Security::TrustedExecutionEnvironment) => (5, 1, vec![]),
-        (Platform::AndroidKeyMint, Security::StrongBox) => (5, 2, vec![]),
-        (Platform::AppleAppAttest, Security::AppleAppAttest) => (
-            4,
-            0,
-            selected.app_attest_counter_floor.to_le_bytes().to_vec(),
-        ),
+    // W1 retains its own original floor. Enrollment and mutable post-capture floors differ.
+    let counter_floor = owner
+        .cash
+        .as_ref()
+        .ok_or(Error::Unavailable)?
+        .outgoing_terminal_app_attest_counter_floor()?;
+    let (platform, mask, floor) = match (
+        selected.platform_class,
+        selected.security_level,
+        counter_floor,
+    ) {
+        (Platform::AndroidKeyMint, Security::TrustedExecutionEnvironment, None) => (5, 1, vec![]),
+        (Platform::AndroidKeyMint, Security::StrongBox, None) => (5, 2, vec![]),
+        (Platform::AppleAppAttest, Security::AppleAppAttest, Some(floor)) => {
+            (4, 0, floor.to_le_bytes().to_vec())
+        }
         _ => return Err(Error::Rejected.into()),
     };
     Ok(vec![
@@ -278,14 +286,25 @@ fn invoke_originals(
     if installed.attempted_path.as_deref() != backend.path.to_str() {
         return Err(Error::Rejected.into());
     }
-    backend.source.recheck_originals(&backend.path)?;
+    // Only genuine renewal replaces an expired current S/W cut. Captured proof work
+    // retains the installed owner and immutable inputs without lending a live effect.
+    if phase == 16 {
+        backend
+            .source
+            .recheck_installed_originals_for_refresh(&backend.path)?;
+    } else if matches!(phase, 5 | 12) {
+        backend
+            .source
+            .recheck_retained_owner_originals(&backend.path)?;
+    } else {
+        backend.source.recheck_originals(&backend.path)?;
+    }
     drop(installed);
     let session = backend
         .source
         .native_account_session
         .as_ref()
         .ok_or(Error::Unavailable)?;
-    session.recheck()?;
     if phase == 16 {
         let owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
         if owner.handle != Some(handle) || owner.cash.is_none() {
@@ -295,12 +314,23 @@ fn invoke_originals(
         session.refresh_incoming_clock()?; // Existing genuine four-node original workflow.
         session.recheck()?;
         backend.source.recheck_originals(&backend.path)?;
+        {
+            let owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
+            if owner.handle != Some(handle) || owner.cash.is_none() {
+                return Err(Error::Unavailable.into());
+            }
+        }
         return Ok(KagemushaOrdinaryNativeOutgoingResponseV1 {
             version: 1,
             phase,
             core_handle: handle,
             fields: vec![],
         });
+    }
+    if matches!(phase, 5 | 12) {
+        session.recheck_retained_account_identity()?;
+    } else {
+        session.recheck()?;
     }
     let mut owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
     if owner.handle != Some(handle) {
@@ -410,8 +440,15 @@ fn invoke_originals(
     if phase == 8 || phase == 18 {
         fields = terminal_fields(&owner, &backend.source, fields)?;
     }
-    session.recheck()?;
-    backend.source.recheck_originals(&backend.path)?;
+    if matches!(phase, 5 | 12) {
+        session.recheck_retained_account_identity()?;
+        backend
+            .source
+            .recheck_retained_owner_originals(&backend.path)?;
+    } else {
+        session.recheck()?;
+        backend.source.recheck_originals(&backend.path)?;
+    }
     require_fields(phase, &fields)?;
     Ok(KagemushaOrdinaryNativeOutgoingResponseV1 {
         version: 1,
@@ -472,7 +509,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_outgoing_v1(
         _ => crate::ERR_KAGEMUSHA_V1,
     }
 }
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeOutgoingV1(
     mut env: jni::JNIEnv<'_>,

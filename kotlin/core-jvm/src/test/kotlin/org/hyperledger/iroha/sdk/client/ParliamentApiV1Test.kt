@@ -650,6 +650,99 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun kagemushaReleaseRetireConsumesTheGenuineFixtureAndRejectsStaleOrExtendedTargets() {
+        val fixture = "kagemusha_verifier_release_retire_v1.json"
+        val original = Files.readAllBytes(fixturePath().resolveSibling(fixture))
+        val parsed = ParliamentApiV1.Proposal.fromJson(original)
+        assertEquals("KagemushaVerifierReleaseRetire", parsed.kind)
+        assertEquals(objectValue(original), parsed.wire, "the entire native-produced predecessor must be preserved")
+        val predecessor = releaseNested(releaseProposalPayload(fixture), "expected_predecessor")
+        assertTrue(predecessor["active_release_id"] != null)
+        @Suppress("UNCHECKED_CAST")
+        val nativeRows = predecessor["releases"] as List<Map<String, Any?>>
+        assertEquals(listOf(1, 2, 3), nativeRows.map { (it["status"] as Number).toInt() }.sorted())
+        assertReleaseMutationRejected(fixture, "unknown payload field") { it["retired_alias"] = true }
+        assertReleaseMutationRejected(fixture, "missing target") { it.remove("standby_release_id") }
+        assertReleaseMutationRejected(fixture, "short target") { it["standby_release_id"] = List(31) { 1 } }
+        assertReleaseMutationRejected(fixture, "hex target instead of canonical byte array") { it["standby_release_id"] = "11".repeat(32) }
+        assertReleaseMutationRejected(fixture, "zero target") { it["standby_release_id"] = List(32) { 0 } }
+        assertReleaseMutationRejected(fixture, "absent target") { it["standby_release_id"] = List(32) { 99 } }
+        assertReleaseMutationRejected(fixture, "ungoverned predecessor") {
+            releaseNested(it, "expected_predecessor")["authority_policy"] = null
+        }
+        assertReleaseMutationRejected(fixture, "replay after removal") {
+            val predecessor = releaseNested(it, "expected_predecessor")
+            val target = it["standby_release_id"]
+            @Suppress("UNCHECKED_CAST")
+            val rows = predecessor["releases"] as List<Map<String, Any?>>
+            predecessor["releases"] = rows.filter { row -> row["release_id"] != target }
+        }
+        assertReleaseMutationRejected(fixture, "unknown nested release field") {
+            @Suppress("UNCHECKED_CAST")
+            val rows = releaseNested(it, "expected_predecessor")["releases"] as List<MutableMap<String, Any?>>
+            rows[0]["legacy_alias"] = true
+        }
+    }
+
+    @Test
+    fun kagemushaReleaseRetireKeepsGenuineActiveAndHistoricalRowsAndRefusesTheirRemoval() {
+        val fixture = "kagemusha_verifier_release_retire_v1.json"
+        val original = Files.readAllBytes(fixturePath().resolveSibling(fixture))
+        val parsed = ParliamentApiV1.Proposal.fromJson(original)
+        assertEquals(objectValue(original), parsed.wire)
+        val native = releaseProposalPayload(fixture)
+        val predecessor = releaseNested(native, "expected_predecessor")
+        @Suppress("UNCHECKED_CAST")
+        val rows = predecessor["releases"] as List<Map<String, Any?>>
+        assertEquals(listOf(1, 2, 3), rows.map { (it["status"] as Number).toInt() }.sorted())
+        val before = encode(native)
+        KagemushaVerifierProposalValidatorV1.retire(native)
+        assertContentEquals(before, encode(native), "validation must preserve the genuine complete registry and IDs")
+        for (status in listOf(1, 3)) {
+            val originalRow = rows.single { (it["status"] as Number).toInt() == status }
+            assertReleaseMutationRejected(fixture, "genuine nonstandby row status $status") {
+                it["standby_release_id"] = originalRow["release_id"]
+            }
+        }
+    }
+
+    @Test
+    fun kagemushaReleaseRetireValidatesParserOnlyMixedRowShapes() {
+        // Shape-only mutations of the genuine fixture are not authenticated registry authority.
+        fun mixed(): MutableMap<String, Any?> {
+            val payload = releaseProposalPayload("kagemusha_verifier_release_retire_v1.json")
+            val predecessor = releaseNested(payload, "expected_predecessor")
+            @Suppress("UNCHECKED_CAST")
+            val original = (predecessor["releases"] as List<Map<String, Any?>>)[0]
+            predecessor["releases"] = mutableListOf(
+                LinkedHashMap(original).apply { put("release_id", List(32) { 1 }); put("status", 1) },
+                LinkedHashMap(original).apply { put("release_id", List(32) { 2 }); put("status", 3) },
+                LinkedHashMap(original).apply { put("release_id", List(32) { 3 }); put("status", 2) },
+            )
+            predecessor["active_release_id"] = "01".repeat(32)
+            payload["standby_release_id"] = List(32) { 3 }
+            return payload
+        }
+        val accepted = mixed()
+        val before = encode(accepted)
+        KagemushaVerifierProposalValidatorV1.retire(accepted)
+        assertContentEquals(before, encode(accepted), "typed validation must not mutate the complete predecessor")
+        for (target in listOf(1, 2)) {
+            val invalid = mixed()
+            invalid["standby_release_id"] = List(32) { target }
+            assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.retire(invalid) }
+        }
+        val inconsistent = mixed()
+        releaseNested(inconsistent, "expected_predecessor")["active_release_id"] = "02".repeat(32)
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.retire(inconsistent) }
+        val unordered = mixed()
+        @Suppress("UNCHECKED_CAST")
+        val rows = releaseNested(unordered, "expected_predecessor")["releases"] as MutableList<MutableMap<String, Any?>>
+        rows.reverse()
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.retire(unordered) }
+    }
+
+    @Test
     fun attemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() {
         val accepted = objectValue(
             ParliamentApiV1.attemptDraftRequestJson(
@@ -1840,6 +1933,9 @@ class ParliamentApiV1Test {
             )
             "KagemushaVerifierReleaseActivate" -> releaseProposalPayload(
                 "kagemusha_verifier_release_activate_v1.json",
+            )
+            "KagemushaVerifierReleaseRetire" -> releaseProposalPayload(
+                "kagemusha_verifier_release_retire_v1.json",
             )
             else -> error("unsupported fixture kind $kind")
         }

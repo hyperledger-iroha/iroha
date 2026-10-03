@@ -1989,13 +1989,15 @@ mod tests {
                 .expect("independent native historical source snapshot");
             assert_eq!(source.0.key, service_key(b, period).unwrap());
             assert_eq!(source.1.service_blocks, weights);
-            let signed_claim_hash = stx.tx_call_hash.expect("signed claim execution identity");
+            let component_claim_hash = stx
+                .tx_call_hash
+                .expect("retained component execution identity");
             let transcript_count = stx.retail_fee_transcripts_for_test().len();
             claim_current_fee_credit(stx, &claimant, b.validator_lane_id).unwrap();
             let claim_transcripts = &stx.retail_fee_transcripts_for_test()[transcript_count..];
             assert_eq!(claim_transcripts.len(), 1);
             let transcript = &claim_transcripts[0];
-            assert_eq!(transcript.batch_hash, signed_claim_hash);
+            assert_eq!(transcript.batch_hash, component_claim_hash);
             assert_eq!(
                 transcript.authority_digest,
                 crate::fastpq::authority_digest(&b.reward_pool_account_id),
@@ -2006,8 +2008,8 @@ mod tests {
                 crate::fastpq::authority_digest(&claimant)
             );
             assert!(
-                !stx.retail_fee_source_kind_for_test(&signed_claim_hash),
-                "a signed native claim is ExecutionCall provenance, not an invented protocol-purpose source"
+                !stx.retail_fee_source_kind_for_test(&component_claim_hash),
+                "a retained component claim has ExecutionCall provenance, not an invented protocol-purpose source"
             );
             assert_eq!(transcript.deltas.len(), 1);
             let delta = &transcript.deltas[0];

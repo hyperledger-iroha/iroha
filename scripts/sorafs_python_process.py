@@ -130,24 +130,40 @@ class _Log:
         self.descriptors = ()
 
 
+def _signal_owned_group(process: subprocess.Popen, sig: int) -> None:
+    """Signal our exact session, reaping an exited child before a bounded retry.
+
+    Some POSIX hosts report a permission refusal for a group whose only member
+    is an exited, unreaped child. Retry the same signal only after that exact
+    child has actually exited and been reaped. A live child or a remaining
+    group's permission refusal is never treated as successful cleanup.
+    """
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError as denied:
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            raise denied
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+
+
 def _stop_owned_process(process: subprocess.Popen) -> None:
     """Terminate only the new session created for this producer's Python command."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    _signal_owned_group(process, signal.SIGTERM)
     try:
         process.wait(timeout=0.5)
     except subprocess.TimeoutExpired:
         pass
     # An already-exited direct child can leave its own Python descendants holding
     # pipe descriptors. The private session remains ours until collection ends.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _signal_owned_group(process, signal.SIGKILL)
     process.wait(timeout=5)
-
 
 def run_python_process(command: tuple[str, ...], *, cwd: Path, stdout_path: Path,
                        stderr_path: Path, home: Path, temporary: Path, stdout_limit: int,

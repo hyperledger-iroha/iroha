@@ -28,35 +28,26 @@ mod mint_helper;
 mod mint_transport_decider;
 mod native_backend;
 mod ordinary_app_guard_binding;
-#[cfg(unix)]
 mod ordinary_cash_candidate_verifier;
-#[cfg(unix)]
 mod ordinary_incoming_candidate_verifier;
-#[cfg(unix)]
 pub(crate) use ordinary_incoming_candidate_verifier::{
     KagemushaAuthenticatedOrdinaryIncomingCandidateV1, verify_ordinary_incoming_candidate_v1,
 };
 
-#[cfg(unix)]
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryIncomingTerminalGuardV1,
     verify_ordinary_incoming_terminal_guard_v1,
 };
 
 // Lineage admission reconstructs the full Wrapper audit in every supported verifier build.
-#[cfg(unix)]
 mod ordinary_cash_commit_originals;
-#[cfg(unix)]
 mod ordinary_cash_commit_wrapper;
 mod ordinary_cash_terminal_circuit;
-#[cfg(unix)]
 mod ordinary_cash_terminal_verifier;
-#[cfg(unix)]
 pub(crate) use ordinary_cash_commit_originals::{
     GeneratedOrdinaryCashCommitOriginalsV1, readmit_ordinary_cash_commit_v1,
 };
 
-#[cfg(unix)]
 pub(crate) use ordinary_cash_terminal_verifier::{
     KagemushaAuthenticatedOrdinaryCashTerminalV1, verify_ordinary_cash_terminal_v1,
 };
@@ -66,26 +57,20 @@ mod ordinary_incoming_terminal_binding;
 mod ordinary_mint_circuit;
 mod ordinary_mint_full_canonical_consumer;
 mod ordinary_mint_public;
-#[cfg(unix)]
 mod ordinary_mint_request_budget;
-#[cfg(unix)]
 mod ordinary_mint_verifier;
 mod ordinary_parent_canonical_stream;
 mod ordinary_state_mint_consumer;
 mod ordinary_state_receive_consumer;
-#[cfg(unix)]
 pub(crate) use ordinary_cash_candidate_verifier::{
     KagemushaAuthenticatedOrdinaryCashCandidateV1, verify_ordinary_cash_candidate_v1,
 };
-#[cfg(unix)]
 pub use ordinary_mint_request_budget::{
     KagemushaOrdinaryMintRequestByteBudgetV1, ordinary_mint_request_byte_budget_v1,
 };
-#[cfg(unix)]
 pub use ordinary_mint_verifier::{
     KagemushaVerifiedOrdinaryMintAuthorizationV1, verify_ordinary_mint_authorization_v1,
 };
-#[cfg(unix)]
 mod ordinary_cash_carrier_budget;
 mod ordinary_guard_verifier;
 mod ordinary_lineage_service_carrier;
@@ -97,19 +82,19 @@ mod ordinary_lineage_state_original;
 pub use ordinary_lineage_state_original::{
     KagemushaOrdinaryLineageStateOriginalV1, KagemushaOrdinaryLineageStateProjectionV1,
 };
-#[cfg(unix)]
 mod ordinary_lineage_proof_admission;
-#[cfg(unix)]
 pub use ordinary_cash_carrier_budget::{
     KagemushaOrdinaryCashCarrierBudgetV1, ordinary_cash_carrier_budget_v1,
 };
 
-#[cfg(unix)]
 pub use ordinary_lineage_proof_admission::{
+    KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1,
     KAGEMUSHA_ORDINARY_INCOMING_COMMIT_BUNDLE_MAX_BYTES_V1,
     KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1,
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryIncomingCommitProofBundleV1,
-    KagemushaOrdinaryIncomingReservationProofBundleV1, KagemushaOrdinaryLineageCommitProofBundleV1,
+    KagemushaOrdinaryIncomingMintOriginalsV1, KagemushaOrdinaryIncomingReceiveOriginalsV1,
+    KagemushaOrdinaryIncomingReservationProofBundleV1, KagemushaOrdinaryIncomingServiceSourceV1,
+    KagemushaOrdinaryIncomingSourceOriginalsV1, KagemushaOrdinaryLineageCommitProofBundleV1,
     KagemushaOrdinaryLineageOutgoingOriginalsV1, KagemushaOrdinaryLineageStateProofBundleV1,
     KagemushaOrdinaryLineageStatementOriginalV1, KagemushaOrdinaryLineageStatementV1,
     KagemushaVerifiedOrdinaryIncomingCommitProofV1,
@@ -124,7 +109,6 @@ pub use ordinary_lineage_proof_admission::{
     verify_ordinary_lineage_state_proof_v1, verify_service_ordinary_received_cash_output_v1,
 };
 
-#[cfg(unix)]
 pub(crate) use ordinary_lineage_proof_admission::{
     GeneratedOrdinaryIncomingCommitOriginalsV1, assemble_ordinary_incoming_commit_v1,
     assemble_ordinary_incoming_reservation_v1, readmit_ordinary_incoming_commit_v1,
@@ -171,7 +155,6 @@ mod terminal_authorization;
 mod terminal_body_commitment;
 mod terminal_durable_commitments;
 mod testnet_observation;
-#[cfg(unix)]
 mod testnet_value_ledger;
 mod transport_decider;
 mod typed_sha_consumer;
@@ -228,12 +211,10 @@ pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
 pub(crate) use generation::production_prover::GeneratedOrdinaryCashReservationOriginalsV1;
-#[cfg(unix)]
 pub(crate) use generation::production_prover::{
     GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
     KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
 };
-#[cfg(unix)]
 pub(crate) use generation::production_prover::{
     GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
     KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
@@ -301,11 +282,18 @@ pub use generation::{
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_platform_credential_hash_claim_v1,
 };
+pub use generation::{
+    KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+    prove_ordinary_finalized_mint_from_checkpoint_v1, verify_ordinary_finalized_mint_credit_v1,
+};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::{
     KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaLoadedEpRecursiveStateArtifactsV1,
-    KagemushaLoadedEqRecursiveStateArtifactsV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaLoadedEqRecursiveStateArtifactsV1, KagemushaOrdinaryRecursiveStateLayoutV1,
+    KagemushaRecursiveIncomingEpGenerationWitnessV1,
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
+    discover_kagemusha_ordinary_recursive_state_layout_v1,
+    generate_kagemusha_ordinary_recursive_state_artifacts_v1,
     generate_kagemusha_recursive_state_artifacts_v1, prove_kagemusha_recursive_state_hash_claim_v1,
     prove_kagemusha_recursive_state_v1,
 };
@@ -403,7 +391,6 @@ pub use testnet_observation::{
     KagemushaTestnetStateProofObservationV1, KagemushaTestnetValueAdmissionV1,
     KagemushaVerifiedFinalityChainV1, observe_kagemusha_testnet_state_proof_v1,
 };
-#[cfg(unix)]
 pub use testnet_value_ledger::{
     KagemushaTestnetMintCreditLedgerV1, KagemushaTestnetMintLedgerCreditV1,
 };
@@ -2686,7 +2673,6 @@ const _: () = {
     assert!(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1 == 6_528);
 };
 
-#[cfg(unix)]
 pub(crate) use ordinary_lineage_proof_admission::{
     KagemushaVerifiedOrdinaryReceivedCashOutputV1, ordinary_incoming_artifacts_v1,
     readmit_historical_ordinary_received_cash_output_v1, require_ordinary_incoming_predecessor_v1,

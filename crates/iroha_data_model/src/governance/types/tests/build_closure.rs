@@ -153,3 +153,6 @@ fn verifier_registry_subject_is_unique_and_shared_by_all_three_proposals() {
         assert!(kind.proposal_operator_v1().is_some());
     }
 }
+
+#[path = "retirement.rs"]
+mod retirement;

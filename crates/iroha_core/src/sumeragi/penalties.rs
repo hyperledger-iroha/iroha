@@ -1,7 +1,7 @@
 //! Deterministic `NPoS` consensus-evidence slashing.
 //!
 //! Parent validator locators retain exact original-pool backing and nested key custody.
-//! TODO(S8): evidence/history graphs, stake-index quantities and penalty-action arithmetic
+//! TODO(S8): evidence/history graphs, penalty-action arithmetic
 //! still need complete original-pool owners; this locator owner does not fund those graphs.
 #[cfg(test)]
 use crate::state::StateBlock;
@@ -210,7 +210,7 @@ impl ValidatorMap {
                 continue;
             }
             // Preserve validation even when no pending proof will use this locator.
-            // Quantity arithmetic remains an explicit stake-index resource obligation.
+            // The exposure is already materialized under original stake-index custody.
             original_slashable_exposure(index, key.0, &key.1)?;
             let peer = record.peer_id.public_key();
             let charge = reservation
@@ -310,11 +310,11 @@ fn clone_locator_account(
         })
 }
 
-fn original_slashable_exposure(
-    index: &PublicLaneStakeIndex,
+fn original_slashable_exposure<'a>(
+    index: &'a PublicLaneStakeIndex,
     lane: LaneId,
     validator: &AccountId,
-) -> Result<Quantity> {
+) -> Result<&'a Quantity> {
     index
         .total_exposure(lane, validator)
         .map_err(|error| eyre!("invalid slashable stake exposure for {validator}: {error}"))
@@ -656,7 +656,7 @@ impl<'a> PenaltyApplier<'a> {
                             locator.lane_id,
                             &locator.validator,
                         )?;
-                        if current_exposure > original_exposure {
+                        if &current_exposure > original_exposure {
                             return Err(eyre!(
                                 "slashable exposure increased while planning one penalty bundle"
                             ));
@@ -1659,7 +1659,7 @@ mod tests {
                 &first_locator.validator
             )
             .unwrap(),
-            Quantity::from(13_000_u64)
+            &Quantity::from(13_000_u64)
         );
         let second_locator = snapshot
             .validator_map
@@ -1674,7 +1674,7 @@ mod tests {
                 &second_locator.validator
             )
             .unwrap(),
-            Quantity::from(10_000_u64)
+            &Quantity::from(10_000_u64)
         );
         assert_eq!(
             state.stake_index_budget().reserved_bytes(),
@@ -1686,9 +1686,14 @@ mod tests {
                     Quantity,
                     Quantity,
                     Quantity,
+                    Option<Quantity>,
                 )>()
                 + expected_nested_key_bytes
-                + 8 * std::mem::size_of::<iroha_allocation::AllocationCharge>()
+                // Eight account-key charges and four aggregate charges per group.
+                + 16 * std::mem::size_of::<iroha_allocation::AllocationCharge>()
+                // Both groups retain their bonded, self and exposure limbs;
+                // only the first group has a nonzero pending magnitude.
+                + 7 * std::mem::size_of::<usize>()
         );
         drop(snapshot);
         assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
@@ -1721,8 +1726,11 @@ mod tests {
             Quantity,
             Quantity,
             Quantity,
+            Option<Quantity>,
         )>() + 3
-            * (validator_key_bytes + std::mem::size_of::<iroha_allocation::AllocationCharge>());
+            * (validator_key_bytes + std::mem::size_of::<iroha_allocation::AllocationCharge>())
+            + 4 * std::mem::size_of::<iroha_allocation::AllocationCharge>()
+            + 3 * std::mem::size_of::<usize>();
         let exact_held = budget
             .try_reserve_bytes(budget.limit_bytes() - backing)
             .expect("leave exact combined backing in original pool");
@@ -2613,7 +2621,7 @@ mod tests {
         for row in locators {
             assert_eq!(
                 original_slashable_exposure(&index, row.lane_id, &row.validator).unwrap(),
-                Quantity::from(10_000_u64)
+                &Quantity::from(10_000_u64)
             );
         }
         assert!(map.get(peers[1].public_key()).is_none());
@@ -2994,11 +3002,10 @@ mod tests {
                 &locators[0].validator,
             )
             .unwrap();
-            assert_eq!(exposure, Quantity::from(10_000_u64));
+            assert_eq!(exposure, &Quantity::from(10_000_u64));
             assert_eq!(snapshot.max_slash_bps, 10_000);
             assert_eq!(
-                max_slash_amount(&exposure, snapshot.max_slash_bps)
-                    .expect("canonical slash amount"),
+                max_slash_amount(exposure, snapshot.max_slash_bps).expect("canonical slash amount"),
                 Quantity::from(10_000_u64)
             );
         }

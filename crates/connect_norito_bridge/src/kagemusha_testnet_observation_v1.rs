@@ -6,7 +6,6 @@
 //! pin, or hardware qualification. This diagnostic boundary does not open the
 //! production monetary coordinator.
 
-#[cfg(unix)]
 use std::collections::BTreeMap;
 use std::{
     mem::{align_of, size_of},
@@ -23,9 +22,7 @@ use iroha_core_zk::kagemusha_v1_recursion::{
     KagemushaTestnetValueAdmissionV1, KagemushaVerifiedFinalityChainV1,
 };
 use iroha_core_zk::kagemusha_v1_state::KagemushaStateProofReleaseV1;
-#[cfg(unix)]
 use iroha_core_zk::kagemusha_v1_state::MintInboxReservationV1;
-#[cfg(unix)]
 use iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KagemushaInternalValidationReceiptV1,
@@ -38,9 +35,7 @@ use iroha_data_model::sumeragi_finality::{
 use iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1;
 use libc::{c_int, c_uchar};
 
-#[cfg(unix)]
 use crate::kagemusha_mobile_bootstrap_v1::KagemushaVerifiedMobileBootstrapV1;
-#[cfg(unix)]
 use crate::kagemusha_reserve_finality_v1::trusted_anchor;
 use crate::{
     ERR_BUFFER_TOO_SMALL, ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1, ERR_KAGEMUSHA_V1, ERR_NULL_PTR,
@@ -270,7 +265,6 @@ pub fn load_and_install_kagemusha_testnet_state_observation_owner_v1(
 }
 
 /// Whether to create a fresh native testnet trial or replay its exact private journal.
-#[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KagemushaTestnetDurableObservationModeV1 {
     /// Create a new journal, rejecting an existing path.
@@ -279,7 +273,6 @@ pub enum KagemushaTestnetDurableObservationModeV1 {
     Recover,
 }
 
-#[cfg(unix)]
 pub(crate) fn authenticated_observation_scope(
     bootstrap: &KagemushaVerifiedMobileBootstrapV1,
 ) -> Result<KagemushaTestnetStateObservationScopeV1, String> {
@@ -307,7 +300,6 @@ pub(crate) fn authenticated_observation_scope(
 ///
 /// Rejects unauthenticated artifacts, a changed scope/release, an absent or conflicting
 /// journal, missing independent finality anchors, failed replay, or an already installed owner.
-#[cfg(unix)]
 pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
     publication: &TestnetPublicationPermitV1<'_>,
     manifest_archive: &[u8],
@@ -427,7 +419,6 @@ fn load_authenticated_testnet_verifier(
 ///
 /// Rejects an absent or process-only owner, invalid reservation, changed-byte retry,
 /// duplicate credit, or journal write failure.
-#[cfg(unix)]
 pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
     reservation: &MintInboxReservationV1,
 ) -> Result<bool, String> {
@@ -436,7 +427,6 @@ pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
     })
 }
 
-#[cfg(unix)]
 pub(crate) fn reserve_kagemusha_testnet_mint_under_publication_v1(
     publication: &TestnetPublicationPermitV1<'_>,
     reservation: &MintInboxReservationV1,
@@ -469,7 +459,6 @@ pub(crate) fn reserve_kagemusha_testnet_mint_under_publication_v1(
 ///
 /// Rejects a missing durable owner or reservation, wrong network, malformed anchor,
 /// replacement pin, or poisoned owner.
-#[cfg(unix)]
 pub(crate) fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
     publication: &TestnetPublicationPermitV1<'_>,
     operation_id: [u8; 32],
@@ -496,7 +485,6 @@ pub(crate) fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
 /// No C/JNI caller can supply or serialize the opaque value-admission token. Holding
 /// the owner lock through the consumer prevents an observation/recovery race between
 /// rederiving the Applied proof and durably counting its credit.
-#[cfg(unix)]
 pub(crate) fn with_kagemusha_testnet_durable_credit_owner_v1<T>(
     publication: &TestnetPublicationPermitV1<'_>,
     consume: impl FnOnce(&KagemushaTestnetProofObservationOwnerV1) -> Result<T, String>,
@@ -512,7 +500,6 @@ pub(crate) fn with_kagemusha_testnet_durable_credit_owner_v1<T>(
     consume(&installed.owner)
 }
 
-#[cfg(unix)]
 fn require_durable_credit_owner_v1(durable: bool) -> Result<(), String> {
     if durable {
         Ok(())
@@ -669,7 +656,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1
 /// Each non-null pointer must reference its declared number of accessible bytes, and the
 /// output span must be writable for its declared capacity.
 #[unsafe(no_mangle)]
-#[cfg(unix)]
 pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
     operation_id_ptr: *const c_uchar,
     operation_id_len: usize,
@@ -846,7 +832,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
 /// Non-null pointers must reference their declared accessible spans; the output span must be
 /// writable, and `output_len` must be naturally aligned and disjoint from input and output.
 #[unsafe(no_mangle)]
-#[cfg(unix)]
 pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
     operation_id_ptr: *const c_uchar,
     operation_id_len: usize,
@@ -1015,7 +1000,6 @@ mod tests {
         assert_eq!(output_len, 0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn finalized_mint_entry_requires_complete_bounded_inputs_and_native_owner() {
         let input = [1_u8; 32];
@@ -1123,7 +1107,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn finalized_mint_entry_rejects_oversized_checkpoint_before_reading_or_owner_lookup() {
         let input = [1_u8; 32];
@@ -1159,7 +1142,6 @@ mod tests {
         assert!(output.iter().all(|byte| *byte == 0x5a));
     }
 
-    #[cfg(unix)]
     #[test]
     fn finalized_mint_entry_rejects_aliased_length_before_any_write() {
         let input = [1_u8; 32];
@@ -1325,7 +1307,6 @@ mod tests {
         assert!(!decoded.hardware_qualified);
     }
 
-    #[cfg(unix)]
     #[test]
     fn testnet_value_admission_archive_is_scoped_and_requires_native_owner() {
         let record = KagemushaTestnetValueAdmissionArchiveV1 {
@@ -1441,7 +1422,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn testnet_value_credit_owner_rejects_process_only_installation() {
         assert!(require_durable_credit_owner_v1(false).is_err());

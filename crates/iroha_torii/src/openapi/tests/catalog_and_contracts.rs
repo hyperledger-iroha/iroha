@@ -1845,11 +1845,15 @@ fn musubi_chunker_text_bounds_match_the_wire_type() {
 fn multisig_propose_schema_binds_complete_native_retail_assessment() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
-    let request = &schemas["MultisigProposeRequest"]["allOf"][1];
+    let request = &schemas["MultisigProposeRequest"];
     let properties = request["properties"].as_object().unwrap();
     assert_eq!(
-        properties["validation_fee_assessment"]["$ref"].as_str(),
+        properties["validation_fee_assessment"]["oneOf"][0]["$ref"].as_str(),
         Some("#/components/schemas/RetailFeeAssessmentV1")
+    );
+    assert_eq!(
+        properties["validation_fee_assessment"]["oneOf"][1]["type"].as_str(),
+        Some("null")
     );
     assert!(
         !request["required"]

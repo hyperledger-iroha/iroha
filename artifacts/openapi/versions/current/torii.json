@@ -10299,6 +10299,42 @@
         ],
         "type": "object"
       },
+      "FeeEvidenceWitnessProofV1": {
+        "additionalProperties": false,
+        "description": "Original fixed fee-evidence key and canonical snapshot bytes with 256 ordinary SMT siblings. Verify against independently anchored finality ordinary-write root.",
+        "properties": {
+          "key": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 256,
+            "minItems": 256,
+            "type": "array"
+          },
+          "value": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "siblings"
+        ],
+        "type": "object"
+      },
       "FeePaymentIntent": {
         "oneOf": [
           {
@@ -17233,6 +17269,23 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "KagemushaVerifierReleaseRetire",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -17689,6 +17742,35 @@
         ],
         "type": "object"
       },
+      "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1": {
+        "additionalProperties": false,
+        "description": "Exact Parliament retirement of one never-activated standby verifier release. Native admission checks the full original registry, signer policy, network and bonded operator; only the certified due State compare-and-set can remove that row. Active and historically active releases remain retained.",
+        "properties": {
+          "expected_predecessor": {
+            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
+          },
+          "network_id": {
+            "description": "Canonical checked genesis hash; native admission verifies checksum and byte-for-byte rendering.",
+            "maxLength": 74,
+            "minLength": 74,
+            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            "type": "string"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "standby_release_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          }
+        },
+        "required": [
+          "proposal_operator",
+          "network_id",
+          "expected_predecessor",
+          "standby_release_id"
+        ],
+        "type": "object"
+      },
       "GovernanceParliamentProposalPayloadMusubiRegistryActionV1": {
         "description": "Closed Parliament-only Musubi recovery, takedown, alias-retarget, and registry-policy action.",
         "oneOf": [
@@ -18096,54 +18178,32 @@
         "type": "object"
       },
       "GovernanceParliamentProposalPayloadValidationFeeChargingModeV1": {
-        "description": "Closed first-release validation-fee charging mode.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "charging_mode": {
-                "const": "DISABLED",
-                "type": "string"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "charging_mode",
-              "value"
-            ],
-            "type": "object"
+        "additionalProperties": false,
+        "description": "Sole first-release retail monthly charging mode.",
+        "properties": {
+          "charging_mode": {
+            "const": "RETAIL_MONTHLY_ALLOWANCE",
+            "type": "string"
           },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "charging_mode": {
-                "const": "PER_QUALIFYING_TRANSFER_INSTRUCTION",
-                "type": "string"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "charging_mode",
-              "value"
-            ],
-            "type": "object"
+          "value": {
+            "type": "null"
           }
-        ]
+        },
+        "required": [
+          "charging_mode",
+          "value"
+        ],
+        "type": "object"
       },
       "GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1": {
         "additionalProperties": false,
-        "description": "Exact typed contract and six-transfer plan authorized for the validation-fee treasury payout.",
+        "description": "Independent bounded native conversion policy. Five distinct single-signature provider controllers, exact feed version, distinct non-signable treasury/pool/reward custody, source-age/interval/slippage and per-attempt/day caps are all revalidated by Native admission.",
         "properties": {
-          "batch_ds": {
-            "const": "10",
-            "type": "string"
-          },
           "code_hash": {
-            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
           },
           "contract_address": {
             "description": "Canonical public contract address. Runtime admission verifies the full address grammar and canonical rendering.",
@@ -18151,57 +18211,122 @@
             "type": "string"
           },
           "ds_asset_id": {
-            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
-            "minLength": 1,
-            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string"
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
           },
           "entrypoint": {
             "const": "autonomous_validation_fee_tick",
             "type": "string"
           },
-          "max_xor_out": {
-            "const": "100",
+          "max_sbd_per_attempt_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_sbd_per_day_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_slippage_bps": {
+            "format": "uint16",
+            "maximum": 9999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_source_age_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_interval_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_reward_claim_xor_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pool_code_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
-          "min_xor_out": {
-            "const": "4",
+          "pool_contract_address": {
+            "minLength": 1,
             "type": "string"
           },
           "pool_vault_account_id": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
-          "recipients": {
+          "reference_feed_config_version": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reference_feed_id": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutRecipientV1"
+              "minLength": 1,
+              "type": "string"
             },
-            "maxItems": 4,
-            "minItems": 4,
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "reference_provider_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+            },
+            "maxItems": 5,
+            "minItems": 5,
             "type": "array",
             "uniqueItems": true
+          },
+          "reward_pool_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "treasury_account_id": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
+          "validator_lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "xor_asset_id": {
-            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
-            "minLength": 1,
-            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string"
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
           }
         },
         "required": [
           "contract_address",
           "code_hash",
-          "entrypoint",
           "treasury_account_id",
+          "pool_vault_account_id",
+          "entrypoint",
           "ds_asset_id",
           "xor_asset_id",
-          "pool_vault_account_id",
-          "batch_ds",
-          "min_xor_out",
-          "max_xor_out",
-          "recipients"
+          "pool_contract_address",
+          "pool_code_hash",
+          "reward_pool_account_id",
+          "reference_feed_id",
+          "reference_feed_config_version",
+          "reference_provider_accounts",
+          "max_slippage_bps",
+          "validator_lane_id",
+          "max_sbd_per_attempt_minor",
+          "max_sbd_per_day_minor",
+          "min_interval_ms",
+          "max_source_age_ms",
+          "min_reward_claim_xor_minor"
         ],
         "type": "object"
       },
@@ -18221,36 +18346,9 @@
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadValidationFeePayoutRecipientV1": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
-          },
-          "share": {
-            "const": "0.25",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account_id",
-          "share"
-        ],
-        "type": "object"
-      },
       "GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1": {
         "additionalProperties": false,
         "properties": {
-          "payout_lifecycle_proposal_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "policy": {
             "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyV1"
           },
@@ -18260,31 +18358,30 @@
         },
         "required": [
           "proposal_operator",
-          "policy",
-          "payout_lifecycle_proposal_id"
+          "policy"
         ],
         "type": "object"
       },
       "GovernanceParliamentProposalPayloadValidationFeePolicyV1": {
         "additionalProperties": false,
-        "description": "Complete exact-network validation-fee policy payload.",
+        "description": "Complete calendar pricing policy: effective Honiara month boundary after at least thirty days public notice. Native policy hashing and Parliament enactment bind immutable reward custody independently of conversion settings. Direct Model JSON, including Parliament proposal nesting, encodes fixed-byte fee hashes as canonical uppercase hexadecimal.",
         "properties": {
           "charging_mode": {
             "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeeChargingModeV1"
           },
           "ds_asset_id": {
-            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
-            "minLength": 1,
-            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string"
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
           },
           "ds_scale": {
             "const": 2,
             "format": "uint8",
             "type": "integer"
           },
-          "effective_from_height": {
-            "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
+          "effective_from_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
           },
           "exemption_classes": {
             "items": {
@@ -18292,28 +18389,24 @@
               "type": "string"
             },
             "maxItems": 1,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "expires_after_height": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "fee": {
-            "enum": [
-              "0",
-              "0.1"
-            ],
+            "description": "Positive exact institutional SBD charge, with at most two fractional digits. Native admission enforces signed512 mantissa and exact cents.",
+            "maxLength": 155,
+            "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]?[1-9])?|0\\.(?:[0-9]?[1-9]))$",
             "type": "string"
           },
           "network_id": {
             "$ref": "#/components/schemas/NetworkId"
+          },
+          "notice_published_at_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
           },
           "policy_version": {
             "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1"
@@ -18321,12 +18414,21 @@
           "previous_policy_hash": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "retail_schedule": {
+            "$ref": "#/components/schemas/RetailFeeScheduleV1"
+          },
+          "reward_custody": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeeRewardCustodyV1"
           },
           "schema_version": {
             "const": 1,
@@ -18335,32 +18437,60 @@
           },
           "treasury_account_id": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
-          },
-          "treasury_payout_binding": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
-          "schema_version",
+          "charging_mode",
+          "ds_asset_id",
+          "ds_scale",
+          "exemption_classes",
+          "fee",
           "network_id",
           "policy_version",
           "previous_policy_hash",
-          "ds_asset_id",
-          "ds_scale",
-          "fee",
+          "schema_version",
           "treasury_account_id",
-          "charging_mode",
-          "effective_from_height",
-          "expires_after_height",
-          "exemption_classes",
-          "treasury_payout_binding"
+          "retail_schedule",
+          "effective_from_ms",
+          "notice_published_at_ms",
+          "reward_custody"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeeRewardCustodyV1": {
+        "additionalProperties": false,
+        "description": "Immutable non-signable treasury, distinct fee/reward assets and reward pool, and authenticated earning lane. Native admission verifies contract subject and all custody relationships.",
+        "properties": {
+          "contract_address": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "ds_asset_id": {
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
+          },
+          "reward_pool_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "treasury_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "validator_lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "xor_asset_id": {
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
+          }
+        },
+        "required": [
+          "contract_address",
+          "treasury_account_id",
+          "ds_asset_id",
+          "xor_asset_id",
+          "reward_pool_account_id",
+          "validator_lane_id"
         ],
         "type": "object"
       },
@@ -23247,6 +23377,28 @@
         ],
         "type": "object"
       },
+      "MaintenanceTierV1": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum_average_balance_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "monthly_fee_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minimum_average_balance_minor",
+          "monthly_fee_minor"
+        ],
+        "type": "object"
+      },
       "ManifestAliasBinding": {
         "additionalProperties": false,
         "properties": {
@@ -24026,82 +24178,304 @@
         "type": "object"
       },
       "MultisigApproveRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
-            "type": "object"
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment"
+        ],
+        "type": "object"
       },
       "MultisigCancelRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
-            "type": "object"
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment"
+        ],
+        "type": "object"
       },
       "MultisigCancelResponse": {
         "additionalProperties": false,
@@ -24204,89 +24578,294 @@
         "type": "object"
       },
       "MultisigContractCallApproveRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
+            ]
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "payload": {
+            "description": "Exact normalized object payload of the selected deployed contract entrypoint. Approval must match the active proposal alias, entrypoint and payload exactly.",
             "type": "object"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "contract_alias",
+          "entrypoint",
+          "payload"
+        ],
+        "type": "object"
       },
       "MultisigContractCallProposeRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
             "properties": {
-              "contract_address": {
-                "type": "string"
-              },
-              "contract_alias": {
-                "type": "string"
-              },
-              "creation_time_ms": {
+              "fee_payment": {
+                "properties": {
+                  "value": {
+                    "properties": {
+                      "gas_limit": {
+                        "maximum": 18446744073709551615,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "gas_limit"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "entrypoint": {
-                "type": "string"
-              },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "payload": {
-                "type": "object"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "entrypoint",
-              "fee_payment"
-            ],
+            ]
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "payload": {
+            "description": "Exact normalized object payload of the selected deployed contract entrypoint. Approval must match the active proposal alias, entrypoint and payload exactly.",
             "type": "object"
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "contract_alias",
+          "entrypoint",
+          "payload"
+        ],
+        "type": "object"
       },
       "MultisigContractCallResponse": {
         "additionalProperties": false,
@@ -24693,82 +25272,121 @@
         "type": "string"
       },
       "MultisigProposeRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions": {
-                "items": {
-                  "$ref": "#/components/schemas/MultisigProposeInstructionInput"
-                },
-                "type": "array"
-              },
-              "memo": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
-              },
-              "validation_fee_hijiri_fee_quote_hash": {
-                "description": "Optional lowercase 32-byte composite Hijiri fee-quote hash. It is accepted only with the validation-fee policy version/hash pair and binds the global policy plus the execution account's risk-record presence and value.",
-                "maxLength": 64,
-                "minLength": 64,
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "validation_fee_instruction_index": {
-                "description": "Optional unsigned 64-bit instruction index encoded as a canonical decimal string. It is accepted only with the validation-fee policy version/hash pair.",
-                "maxLength": 20,
-                "minLength": 1,
-                "pattern": "^(?:0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "validation_fee_policy_hash": {
-                "description": "Optional lowercase 32-byte validation-fee policy hash. It must be provided together with validation_fee_policy_version.",
-                "maxLength": 64,
-                "minLength": 64,
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "validation_fee_policy_version": {
-                "description": "Optional unsigned 64-bit validation-fee policy version encoded as a canonical decimal string. It must be provided together with validation_fee_policy_hash.",
-                "maxLength": 20,
-                "minLength": 1,
-                "pattern": "^(?:0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "validation_fee_transfer_entry_index": {
-                "description": "Optional unsigned 64-bit transfer-entry index encoded as a canonical decimal string. It requires validation_fee_instruction_index and the validation-fee policy version/hash pair.",
-                "maxLength": 20,
-                "minLength": 1,
-                "pattern": "^(?:0|[1-9][0-9]*)$",
-                "type": "string"
+              {
+                "type": "null"
               }
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions": {
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposeInstructionInput"
             },
-            "required": [
-              "signer_account_id",
-              "fee_payment",
-              "instructions"
-            ],
-            "type": "object"
+            "type": "array"
+          },
+          "memo": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "validation_fee_assessment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RetailFeeAssessmentV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "instructions"
+        ],
+        "type": "object"
       },
       "MultisigResponse": {
         "additionalProperties": false,
@@ -36743,6 +37361,911 @@
         "required": [
           "canonical_name",
           "dataspace_id"
+        ],
+        "type": "object"
+      },
+      "RetailFeeAccountStateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "active_from_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_time_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "balance_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "balance_time_minor_ms": {
+            "format": "uint128",
+            "maximum": 340282366920938463463374607431768211455,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "billing_month_end_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "billing_month_start_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "closed_at_ms": {
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enrolled_at_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_accrual_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_maintenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RetailMaintenanceReceiptV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payments_used": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "billing_month_start_ms",
+          "billing_month_end_ms",
+          "active_from_ms",
+          "last_accrual_ms",
+          "active_time_ms",
+          "balance_minor",
+          "payments_used",
+          "enrolled_at_ms",
+          "balance_time_minor_ms",
+          "closed_at_ms",
+          "last_maintenance"
+        ],
+        "type": "object"
+      },
+      "RetailFeeAssessmentV1": {
+        "additionalProperties": false,
+        "description": "Complete consensus-revalidated assessment; zero included fees remain explicit. Expiry is exclusive and no later than Honiara month rollover. Keep the same assessment in the exact signed transaction or proposal; local caches and quote responses grant no fee authority.",
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "billing_month_start_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fee_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "intent_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "payments_used_before": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_revision": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "qualifying_payments": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retail_enrolled": {
+            "type": "boolean"
+          },
+          "state_commitment": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "retail_enrolled",
+          "billing_month_start_ms",
+          "policy_revision",
+          "payments_used_before",
+          "qualifying_payments",
+          "fee_minor",
+          "expires_at_ms",
+          "state_commitment",
+          "intent_hash"
+        ],
+        "type": "object"
+      },
+      "RetailFeeCanonicalAssetDefinitionIdV1": {
+        "description": "Canonical unprefixed Base58 asset-definition address: one version byte (1), complete 16-byte UUIDv4, and four Blake3 checksum bytes (21 decoded bytes). The 32-character allocation-free Model text bound is conservative. Native admission verifies exact decoded length/version/checksum/UUID version and variant; aliases and prefixed addresses are refused.",
+        "maxLength": 32,
+        "minLength": 1,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
+      },
+      "RetailFeeCurrentHeadProofV1": {
+        "additionalProperties": false,
+        "properties": {
+          "head": {
+            "$ref": "#/components/schemas/RetailFeeReceiptHeadV1"
+          },
+          "head_siblings": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 256,
+            "minItems": 256,
+            "type": "array"
+          },
+          "snapshot_witness": {
+            "$ref": "#/components/schemas/FeeEvidenceWitnessProofV1"
+          }
+        },
+        "required": [
+          "snapshot_witness",
+          "head",
+          "head_siblings"
+        ],
+        "type": "object"
+      },
+      "RetailFeeCurrentHeadResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RetailFeeCurrentHeadProofV1"
+          }
+        },
+        "required": [
+          "proof",
+          "finality_proof"
+        ],
+        "type": "object"
+      },
+      "RetailFeeEvidenceRecordProofV1": {
+        "additionalProperties": false,
+        "properties": {
+          "membership": {
+            "$ref": "#/components/schemas/RetailFeeReceiptMerkleMembershipV1"
+          },
+          "record": {
+            "$ref": "#/components/schemas/RetailFeeEvidenceRecordV1"
+          },
+          "snapshot_witness": {
+            "$ref": "#/components/schemas/FeeEvidenceWitnessProofV1"
+          }
+        },
+        "required": [
+          "snapshot_witness",
+          "record",
+          "membership"
+        ],
+        "type": "object"
+      },
+      "RetailFeeEvidenceRecordV1": {
+        "additionalProperties": false,
+        "description": "The receipts HTTP owner independently verifies the record is exactly the corresponding RetailReceipt native enum variant. Other fee-evidence families are not returned by this route.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "RetailReceipt",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/RetailFeeReceiptV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "recorded_at_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "recorded_at_height",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "RetailFeePaymentLegV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_minor_units": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "destination_account_id",
+          "amount_minor_units"
+        ],
+        "type": "object"
+      },
+      "RetailFeeQuoteRequestV1": {
+        "additionalProperties": false,
+        "description": "Ordered complete payment intent. Same-account legs stay in the signed intent but do not consume allowance. Native codec custody has its separate finite 262144-byte request ceiling; not every maximal-length 1000-leg request is guaranteed to fit.",
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "asset_definition_id": {
+            "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
+          },
+          "transfers": {
+            "items": {
+              "$ref": "#/components/schemas/RetailFeePaymentLegV1"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "asset_definition_id",
+          "transfers"
+        ],
+        "type": "object"
+      },
+      "RetailFeeQuoteResponseV1": {
+        "additionalProperties": false,
+        "description": "Evaluated finalized-state projection. Consensus revalidates the complete assessment when the exact signed intent executes.",
+        "properties": {
+          "assessment": {
+            "$ref": "#/components/schemas/RetailFeeAssessmentV1"
+          },
+          "ledger_finalised_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_hash_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RetailFeeQuoteRequestV1"
+          }
+        },
+        "required": [
+          "request",
+          "assessment",
+          "policy_hash_hex",
+          "ledger_finalised_height"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptCursorV1": {
+        "additionalProperties": false,
+        "description": "Authenticated descending frontier; hash is absent exactly at sequence zero. Obtain it from the native verified head or preceding native verified page.",
+        "properties": {
+          "next_receipt_hash": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wallet_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "wallet_id",
+          "next_sequence",
+          "next_receipt_hash"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptHeadV1": {
+        "additionalProperties": false,
+        "properties": {
+          "current_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "last_receipt_hash": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wallet_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "wallet_id",
+          "current_account_id",
+          "sequence",
+          "last_receipt_hash",
+          "updated_at_height"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptKindV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "MAINTENANCE",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "PAYMENT",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RetailFeeReceiptMerkleMembershipV1": {
+        "additionalProperties": false,
+        "description": "Actual MerkleProof<FeeEvidenceRecordV1> JSON. Native verification checks leaf index, original record, leaf count and exact path depth. Fee-evidence snapshots contain at most 4096 records, so a valid path has at most 12 siblings.",
+        "properties": {
+          "audit_path": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Hash"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 12,
+            "type": "array"
+          },
+          "leaf_index": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "leaf_index",
+          "audit_path"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptPageV1": {
+        "additionalProperties": false,
+        "description": "Complete contiguous descending wallet receipt page. Recompute every native receipt-chain hash before persisting its successor cursor.",
+        "properties": {
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/RetailFeeReceiptV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "receipts"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptV1": {
+        "additionalProperties": false,
+        "description": "Immutable linked native receipt. scheduled_minor equals collected_minor plus waived_minor; payment receipts bind the successful exact assessment and source transaction.",
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "assessment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RetailFeeAssessmentV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "billing_month_start_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "collected_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "effective_at_ms": {
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RetailFeeReceiptKindV1"
+          },
+          "payment_count": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "policy_revision": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "previous_receipt_hash": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receipt_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "recorded_at_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scheduled_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_transaction_hash": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waived_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wallet_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "wallet_id",
+          "sequence",
+          "previous_receipt_hash",
+          "receipt_id",
+          "account_id",
+          "kind",
+          "billing_month_start_ms",
+          "policy_revision",
+          "scheduled_minor",
+          "collected_minor",
+          "waived_minor",
+          "payment_count",
+          "recorded_at_height",
+          "policy_hash",
+          "source_transaction_hash",
+          "effective_at_ms",
+          "assessment"
+        ],
+        "type": "object"
+      },
+      "RetailFeeReceiptsResponseV1": {
+        "additionalProperties": false,
+        "description": "Receipt proofs align one-to-one with receipts; unique finality proofs are height ordered. Independently anchor native finality before accepting membership.",
+        "properties": {
+          "assurance": {
+            "const": "NATIVE_RECEIPT_MEMBERSHIP_PROOFS_REQUIRING_TRUSTED_FINALITY_VERIFICATION",
+            "type": "string"
+          },
+          "finality_proofs": {
+            "items": {
+              "$ref": "#/components/schemas/SumeragiFinalityProof"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "ledger_finalised_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_receipt_id": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receipt_proofs": {
+            "items": {
+              "$ref": "#/components/schemas/RetailFeeEvidenceRecordProofV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/RetailFeeReceiptV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "receipts",
+          "receipt_proofs",
+          "finality_proofs",
+          "ledger_finalised_height",
+          "next_receipt_id",
+          "assurance"
+        ],
+        "type": "object"
+      },
+      "RetailFeeScheduleV1": {
+        "additionalProperties": false,
+        "description": "Positive retail tariff. The first tier has zero floor; thresholds strictly increase and charges are nondecreasing. All amounts are exact SBD cents.",
+        "properties": {
+          "included_payments": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maintenance_tiers": {
+            "items": {
+              "$ref": "#/components/schemas/MaintenanceTierV1"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array"
+          },
+          "overage_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "included_payments",
+          "overage_minor",
+          "maintenance_tiers"
+        ],
+        "type": "object"
+      },
+      "RetailFeeStatementRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/RetailFeeReceiptCursorV1"
+          },
+          "limit": {
+            "format": "uint32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "RetailFeeStatementResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/RetailFeeReceiptCursorV1"
+          },
+          "next_cursor": {
+            "$ref": "#/components/schemas/RetailFeeReceiptCursorV1"
+          },
+          "page": {
+            "$ref": "#/components/schemas/RetailFeeReceiptPageV1"
+          }
+        },
+        "required": [
+          "cursor",
+          "page",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "RetailFeeStatusResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account_state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RetailFeeAccountStateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated_maintenance_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "forthcoming_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "institutional_fee_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ledger_finalised_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_hash_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "retail_schedule": {
+            "$ref": "#/components/schemas/RetailFeeScheduleV1"
+          }
+        },
+        "required": [
+          "account_state",
+          "policy_hash_hex",
+          "ledger_finalised_height",
+          "institutional_fee_minor",
+          "retail_schedule",
+          "estimated_maintenance_minor",
+          "forthcoming_policy"
+        ],
+        "type": "object"
+      },
+      "RetailMaintenanceReceiptV1": {
+        "additionalProperties": false,
+        "properties": {
+          "billing_month_start_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "collected_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "effective_at_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_revision": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scheduled_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "waived_minor": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "billing_month_start_ms",
+          "effective_at_ms",
+          "policy_revision",
+          "scheduled_minor",
+          "collected_minor",
+          "waived_minor"
         ],
         "type": "object"
       },
@@ -50770,216 +52293,6 @@
         "maxLength": 20,
         "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
         "type": "string"
-      },
-      "ValidationFeeHijiriQuoteRequestV1": {
-        "additionalProperties": false,
-        "description": "Canonical native-Norito request for one same-snapshot Hijiri validation-fee quote.",
-        "properties": {
-          "accountId": {
-            "$ref": "#/components/schemas/CanonicalAccountId",
-            "description": "Canonical universal account whose effective Hijiri risk is priced. It must exactly equal the authenticated canonical-account principal or name a live multisig controller for which that principal is a direct signatory."
-          },
-          "qualifyingTransferCount": {
-            "description": "Nonzero number of qualifying validation-fee transfers to aggregate before applying one ceiling operation.",
-            "format": "uint32",
-            "maximum": 100000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "accountId",
-          "qualifyingTransferCount"
-        ],
-        "type": "object",
-        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
-      },
-      "ValidationFeeHijiriQuoteResponseV1": {
-        "additionalProperties": false,
-        "description": "Evaluated-only Hijiri validation-fee quote derived from one committed-state snapshot. This response is not independently witness-verified.",
-        "properties": {
-          "accountId": {
-            "$ref": "#/components/schemas/CanonicalAccountId",
-            "description": "Echoed canonical universal account."
-          },
-          "accountRiskDigest": {
-            "description": "Lowercase digest of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskRevision is present.",
-            "oneOf": [
-              {
-                "maxLength": 64,
-                "minLength": 64,
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "accountRiskRevision": {
-            "description": "Positive revision of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskDigest is present.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "activePolicyHash": {
-            "description": "Canonical lowercase hash of the validation-fee policy active at quotedExecutionHeight.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "activePolicyVersion": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Positive version of the validation-fee policy active at quotedExecutionHeight."
-          },
-          "adjustedPerTransferFeeMinorUnits": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Informational one-transfer fee after one ceiling operation. Do not multiply this rounded value to derive an aggregate fee."
-          },
-          "aggregateAdjustedFeeMinorUnits": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Exact aggregate fee after applying feeMultiplierQ16 and rounding upward once."
-          },
-          "aggregateBaseFeeMinorUnits": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Exact checked product of basePerTransferFeeMinorUnits and qualifyingTransferCount."
-          },
-          "assurance": {
-            "const": "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED",
-            "description": "Honest assurance label for a live evaluation without an independent witness over both policy inputs.",
-            "type": "string"
-          },
-          "basePerTransferFeeMinorUnits": {
-            "const": "10",
-            "description": "Protected V1 base fee for one qualifying transfer, in fee-asset minor units.",
-            "type": "string"
-          },
-          "defaultAccountRiskQ16": {
-            "description": "Global default account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
-            "format": "uint32",
-            "maximum": 65536,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "effectiveAccountRiskQ16": {
-            "description": "Effective account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
-            "format": "uint32",
-            "maximum": 65536,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "evaluatedStateHeight": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Committed ledger tip read for every input in this same-snapshot evaluation."
-          },
-          "feeAssetDefinitionId": {
-            "description": "Canonical asset definition charged by the active validation-fee policy.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "feeMultiplierQ16": {
-            "description": "Applied multiplier as an exact raw Q16.16 integer. Hijiri V1 never discounts the base fee.",
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 65536,
-            "type": "integer"
-          },
-          "feeScale": {
-            "const": 2,
-            "description": "Protected V1 fee-asset decimal scale.",
-            "format": "uint8",
-            "type": "integer"
-          },
-          "hijiriFeeQuoteHash": {
-            "description": "Lowercase composite hash binding the global Hijiri policy, account identity, and explicit account-risk presence or value.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "hijiriParametersDigest": {
-            "description": "Domain-separated lowercase digest of the complete global Hijiri parameter.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "hijiriParametersRevision": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Positive revision of the active global Hijiri parameter."
-          },
-          "hijiriParametersVersion": {
-            "const": 1,
-            "description": "Active global Hijiri parameter schema version.",
-            "format": "uint16",
-            "type": "integer"
-          },
-          "qualifyingTransferCount": {
-            "description": "Echoed number of qualifying transfers priced as one aggregate.",
-            "format": "uint32",
-            "maximum": 100000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "quotedExecutionHeight": {
-            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
-            "description": "Checked successor of evaluatedStateHeight (committed tip + 1), used to select the policy scheduled for execution."
-          },
-          "schema": {
-            "const": "iroha.torii.v1.validation_fee.hijiri_quote.response",
-            "type": "string"
-          },
-          "treasuryAccountId": {
-            "$ref": "#/components/schemas/CanonicalAccountId",
-            "description": "Canonical treasury account that must receive the validation fee."
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "schema",
-          "version",
-          "assurance",
-          "evaluatedStateHeight",
-          "quotedExecutionHeight",
-          "accountId",
-          "activePolicyVersion",
-          "activePolicyHash",
-          "feeAssetDefinitionId",
-          "treasuryAccountId",
-          "feeScale",
-          "hijiriParametersVersion",
-          "hijiriParametersRevision",
-          "hijiriParametersDigest",
-          "defaultAccountRiskQ16",
-          "effectiveAccountRiskQ16",
-          "accountRiskRevision",
-          "accountRiskDigest",
-          "feeMultiplierQ16",
-          "hijiriFeeQuoteHash",
-          "basePerTransferFeeMinorUnits",
-          "adjustedPerTransferFeeMinorUnits",
-          "qualifyingTransferCount",
-          "aggregateBaseFeeMinorUnits",
-          "aggregateAdjustedFeeMinorUnits"
-        ],
-        "type": "object",
-        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
       },
       "ValidationFeePositiveDecimalU64StringV1": {
         "allOf": [
@@ -115389,11 +116702,20 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/validation-fee/hijiri/quote": {
-      "post": {
-        "description": "Evaluate the validation-fee base policy and Hijiri global/account-risk inputs from one committed-state snapshot for the checked successor execution height. The requested account must exactly equal the authenticated canonical-account principal or name a live multisig controller for which that principal is a direct signatory. Membership and the selected account-risk record are read from the same snapshot. The response echoes that account and the bounded transfer count, exposes the exact aggregate base and once-rounded adjusted fee, and carries the composite hash required by signed admission. This is an evaluated projection, not an independently witness-verified proof; later state changes can make it stale and admission will reject a mismatched binding.",
-        "operationId": "validationFeeHijiriQuote",
+    "/v1/validation-fee/accounts/{account_id}/receipts": {
+      "get": {
+        "description": "Read immutable native retail validation-fee receipts. Requires exact canonical request authentication and current same-snapshot wallet ownership. Evaluated data or a response alone grants no Native financial authority.",
+        "operationId": "validationFeeRetailReceipts",
         "parameters": [
+          {
+            "description": "Canonical current account; authorization derives only from actual same-snapshot native ownership.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+            }
+          },
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
             "in": "header",
@@ -115438,36 +116760,40 @@
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/x-norito": {
-              "schema": {
-                "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteRequestV1`.",
-                "format": "binary",
-                "type": "string",
-                "x-iroha-max-bytes": 4096,
-                "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
-              }
+          },
+          {
+            "in": "query",
+            "name": "after_receipt_id",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
             }
           },
-          "required": true
-        },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
-              "application/x-norito": {
+              "application/json": {
                 "schema": {
-                  "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteResponseV1`.",
-                  "format": "binary",
-                  "type": "string",
-                  "x-iroha-max-bytes": 65536,
-                  "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
+                  "$ref": "#/components/schemas/RetailFeeReceiptsResponseV1"
                 }
               }
             },
-            "description": "One same-snapshot, evaluated-only quote for committed tip + 1.",
+            "description": "Complete current native projection.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -115485,7 +116811,8 @@
                   "type": "string"
                 }
               }
-            }
+            },
+            "x-iroha-max-bytes": 8388608
           },
           "400": {
             "content": {
@@ -115493,16 +116820,9 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
-                  "format": "binary",
-                  "type": "string"
-                }
               }
             },
-            "description": "The Content-Type framing, native Norito body, request version, or qualifying transfer count is invalid.",
+            "description": "Invalid current complete request.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -115521,12 +116841,10 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable request rejection code.",
+                "description": "Actual stable native route refusal.",
                 "required": true,
                 "schema": {
                   "enum": [
-                    "request_content_type_invalid",
-                    "request_norito_invalid",
                     "validation_fee_request_invalid"
                   ],
                   "type": "string"
@@ -115594,7 +116912,7 @@
                 }
               }
             },
-            "description": "The authenticated canonical-account principal is neither the requested account nor a direct signatory of that live multisig controller.",
+            "description": "Authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer; the same finalized state selects that relation.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -115617,7 +116935,7 @@
                 "required": true,
                 "schema": {
                   "enum": [
-                    "validation_fee_hijiri_quote_account_mismatch"
+                    "retail_fee_account_mismatch"
                   ],
                   "type": "string"
                 }
@@ -115630,16 +116948,9 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
-                  "format": "binary",
-                  "type": "string"
-                }
               }
             },
-            "description": "A validation-fee policy is unavailable or disabled at the quoted height, or global Hijiri parameters are absent.",
+            "description": "Complete receipt evidence exceeds 8 MiB; request a smaller page.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -115658,102 +116969,11 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable quote-availability rejection code.",
+                "description": "Actual stable native route refusal.",
                 "required": true,
                 "schema": {
                   "enum": [
-                    "validation_fee_hijiri_quote_unavailable"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "The native Norito body exceeds the configured body or decode-resource limit.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Stable request-size rejection code.",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "request_payload_too_large"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Content-Type is missing or is not one parameter-free application/x-norito value.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Stable native-Norito media rejection code.",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "request_content_type_missing",
-                    "request_content_type_unsupported"
+                    "retail_fee_receipt_page_too_large"
                   ],
                   "type": "string"
                 }
@@ -115766,16 +116986,9 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
-                  "format": "binary",
-                  "type": "string"
-                }
               }
             },
-            "description": "The retained validation-fee or Hijiri state is malformed or inconsistent, or checked quote arithmetic cannot complete.",
+            "description": "Current originals or local resources cannot complete; retain and retry the same request.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -115794,10 +117007,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable state-consistency rejection code.",
+                "description": "Actual stable native route refusal.",
                 "required": true,
                 "schema": {
                   "enum": [
+                    "retail_fee_local_resources_unavailable",
+                    "ledger_catch_up_required",
                     "validation_fee_state_inconsistent"
                   ],
                   "type": "string"
@@ -115817,7 +117032,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "Evaluate a Hijiri validation-fee quote.",
+        "summary": "Read immutable native retail validation-fee receipts.",
         "tags": [
           "Validation fee"
         ],
@@ -115853,12 +117068,1122 @@
             }
           ]
         },
-        "x-iroha-operation": "validation_fee.hijiri.quote",
+        "x-iroha-operation": "validation_fee.retail.receipts",
         "x-iroha-route-auth": {
           "admission": "authenticated_account",
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
-          "stableRouteId": "validation_fee.hijiri.quote"
+          "stableRouteId": "validation_fee.retail.receipts"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/accounts/{account_id}/statement": {
+      "post": {
+        "description": "Read a private wallet retail validation-fee statement page. Requires exact canonical request authentication and current same-snapshot wallet ownership. Evaluated data or a response alone grants no Native financial authority.",
+        "operationId": "validationFeeRetailStatement",
+        "parameters": [
+          {
+            "description": "Canonical current account; authorization derives only from actual same-snapshot native ownership.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetailFeeStatementRequestV1"
+              }
+            }
+          },
+          "required": true,
+          "x-iroha-max-bytes": 16384
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailFeeStatementResponseV1"
+                }
+              }
+            },
+            "description": "Complete current native projection.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            },
+            "x-iroha-max-bytes": 1048576
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid current complete request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer; the same finalized state selects that relation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Complete private receipt page exceeds 1 MiB; retain frontier and request a smaller page.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_statement_too_large"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Current originals or local resources cannot complete; retain and retry the same request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_local_resources_unavailable",
+                    "ledger_catch_up_required",
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read a private wallet retail validation-fee statement page.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.retail.statement",
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "validation_fee.retail.statement"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/accounts/{account_id}/statement/head": {
+      "get": {
+        "description": "Read the current cumulative wallet retail validation-fee statement head. Requires exact canonical request authentication and current same-snapshot wallet ownership. Evaluated data or a response alone grants no Native financial authority.",
+        "operationId": "validationFeeRetailStatementHead",
+        "parameters": [
+          {
+            "description": "Canonical current account; authorization derives only from actual same-snapshot native ownership.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailFeeCurrentHeadResponseV1"
+                }
+              }
+            },
+            "description": "Complete current native projection.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            },
+            "x-iroha-max-bytes": 8388608
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid current complete request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer; the same finalized state selects that relation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No committed wallet head.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_head_unavailable"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Complete native head evidence exceeds 8 MiB.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_head_proof_too_large"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Current originals or local resources cannot complete; retain and retry the same request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_local_resources_unavailable",
+                    "ledger_catch_up_required",
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read the current cumulative wallet retail validation-fee statement head.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.retail.statement_head",
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "validation_fee.retail.statement_head"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/accounts/{account_id}/status": {
+      "get": {
+        "description": "Read a wallet's current monthly retail validation-fee status. Requires exact canonical request authentication and current same-snapshot wallet ownership. Evaluated data or a response alone grants no Native financial authority.",
+        "operationId": "validationFeeRetailStatus",
+        "parameters": [
+          {
+            "description": "Canonical current account; authorization derives only from actual same-snapshot native ownership.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailFeeStatusResponseV1"
+                }
+              }
+            },
+            "description": "Complete current native projection.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid current complete request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer; the same finalized state selects that relation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No active fee policy exists for this finalized status snapshot.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_quote_unavailable"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Current originals or local resources cannot complete; retain and retry the same request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_local_resources_unavailable",
+                    "ledger_catch_up_required",
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read a wallet's current monthly retail validation-fee status.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.retail.status",
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "validation_fee.retail.status"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -116581,6 +118906,361 @@
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "validation_fee.proposal.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/quote": {
+      "post": {
+        "description": "Evaluate a native retail validation-fee quote. Requires exact canonical request authentication and current same-snapshot wallet ownership. Evaluated data or a response alone grants no Native financial authority.",
+        "operationId": "validationFeeRetailQuote",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetailFeeQuoteRequestV1"
+              }
+            }
+          },
+          "required": true,
+          "x-iroha-max-bytes": 262144
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailFeeQuoteResponseV1"
+                }
+              }
+            },
+            "description": "Complete current native projection.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid current complete request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer; the same finalized state selects that relation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Current assessment unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_quote_unavailable"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Current originals or local resources cannot complete; retain and retry the same request.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Actual stable native route refusal.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "retail_fee_local_resources_unavailable",
+                    "ledger_catch_up_required",
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Evaluate a native retail validation-fee quote.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.retail.quote",
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "validation_fee.retail.quote"
         },
         "x-iroha-tool-effect": "read"
       }

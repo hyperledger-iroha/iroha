@@ -1,5 +1,12 @@
 # KAGEMUSHA V1
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 KAGEMUSHA V1 is the sole first-release hardware-cash protocol. Canonical text
 transport is `kgm1:` followed by unpadded base64url of one canonical Norito
 value. V1 has one decoder and no legacy protocol selector, alias, migration,

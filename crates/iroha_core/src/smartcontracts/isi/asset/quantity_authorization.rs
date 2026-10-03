@@ -186,6 +186,43 @@ impl SerializePayload for SupplyFrame<'_> {
     }
 }
 
+/// Bounded retirement-purpose context streams exact borrowed original arguments.
+/// Framing uses the existing canonical schemas directly and allocates no temporary
+/// tuple/Vec/controller/domain copies. The digest is an observation, never a capability.
+pub(super) fn retirement_context(
+    purpose: &str,
+    authority: &AccountId,
+    definition: &AssetDefinitionId,
+    incarnation: &iroha_data_model::nexus::AxtAssetIncarnationV1,
+    domain: Option<&iroha_model_base::domain::DomainId>,
+    balance: Option<(&AssetId, &Quantity)>,
+    limit: u64,
+) -> Option<Hash> {
+    let mut remaining = limit;
+    Hash::new_from_writer(|writer| {
+        writer.write_all(b"iroha:fastpq:original-retirement:v1\0")?;
+        // The fixed header is included in the original preimage ceiling as well.
+        remaining = remaining
+            .checked_sub(b"iroha:fastpq:original-retirement:v1\0".len() as u64)
+            .ok_or(io::ErrorKind::InvalidData)?;
+        write_delimited_frame(&purpose, &mut remaining, writer)?;
+        write_delimited_frame(authority, &mut remaining, writer)?;
+        write_delimited_frame(definition, &mut remaining, writer)?;
+        write_delimited_frame(incarnation, &mut remaining, writer)?;
+        write_delimited_frame(&domain.is_some(), &mut remaining, writer)?;
+        if let Some(domain) = domain {
+            write_delimited_frame(domain, &mut remaining, writer)?;
+        }
+        write_delimited_frame(&balance.is_some(), &mut remaining, writer)?;
+        if let Some((id, amount)) = balance {
+            write_delimited_frame(id, &mut remaining, writer)?;
+            write_delimited_frame(amount, &mut remaining, writer)?;
+        }
+        Ok(())
+    })
+    .ok()
+}
+
 // Framing includes the root type's alignment. Reject a target at compile time if
 // a borrowed projection would introduce different padding from the original DTO.
 const _: () = {
@@ -588,5 +625,135 @@ mod tests {
         assert_eq!(writer.attempted, 0);
         assert!(write_delimited_frame(&value, &mut (length + 8), &mut writer).is_err());
         assert_eq!(writer.attempted, 8);
+    }
+}
+
+#[cfg(test)]
+mod retirement_context_tests {
+    use super::*;
+    use iroha_data_model::nexus::AxtAssetIncarnationV1;
+    use iroha_model_base::domain::DomainId;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    #[test]
+    fn original_retirement_frames_bind_scope_authority_incarnation_and_exact_preimage_limit() {
+        let domain = DomainId::try_new("retire-context", "universal").unwrap();
+        let definition =
+            AssetDefinitionId::derive_from_components(domain.clone(), "units".parse().unwrap());
+        let incarnation =
+            AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"original registration").into())
+                .unwrap();
+        let other =
+            AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"later registration").into()).unwrap();
+        let asset = AssetId::of(definition.clone(), ALICE_ID.clone());
+        let amount = Quantity::from(7_u32);
+        let context = |purpose, authority, incarnation, domain, balance, limit| {
+            retirement_context(
+                purpose,
+                authority,
+                &definition,
+                incarnation,
+                domain,
+                balance,
+                limit,
+            )
+        };
+        let expected = context(
+            "domain-unregister",
+            &ALICE_ID,
+            &incarnation,
+            Some(&domain),
+            Some((&asset, &amount)),
+            u64::MAX,
+        )
+        .unwrap();
+        for changed in [
+            context(
+                "definition-unregister",
+                &ALICE_ID,
+                &incarnation,
+                None,
+                Some((&asset, &amount)),
+                u64::MAX,
+            ),
+            context(
+                "domain-unregister",
+                &BOB_ID,
+                &incarnation,
+                Some(&domain),
+                Some((&asset, &amount)),
+                u64::MAX,
+            ),
+            context(
+                "domain-unregister",
+                &ALICE_ID,
+                &other,
+                Some(&domain),
+                Some((&asset, &amount)),
+                u64::MAX,
+            ),
+            context(
+                "domain-unregister",
+                &ALICE_ID,
+                &incarnation,
+                Some(&domain),
+                None,
+                u64::MAX,
+            ),
+        ] {
+            assert_ne!(changed, Some(expected));
+        }
+        let mut low = 0;
+        let mut high = 16_384;
+        assert_eq!(
+            context(
+                "domain-unregister",
+                &ALICE_ID,
+                &incarnation,
+                Some(&domain),
+                Some((&asset, &amount)),
+                high
+            ),
+            Some(expected)
+        );
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if context(
+                "domain-unregister",
+                &ALICE_ID,
+                &incarnation,
+                Some(&domain),
+                Some((&asset, &amount)),
+                middle,
+            )
+            .is_some()
+            {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        assert_eq!(
+            context(
+                "domain-unregister",
+                &ALICE_ID,
+                &incarnation,
+                Some(&domain),
+                Some((&asset, &amount)),
+                high
+            ),
+            Some(expected)
+        );
+        assert_eq!(
+            context(
+                "domain-unregister",
+                &ALICE_ID,
+                &incarnation,
+                Some(&domain),
+                Some((&asset, &amount)),
+                high - 1
+            ),
+            None
+        );
     }
 }

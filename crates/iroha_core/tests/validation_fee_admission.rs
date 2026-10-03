@@ -1359,7 +1359,7 @@ fn signed_assessment_cannot_be_repurposed_for_another_amount_or_charge() {
 
 #[test]
 fn concurrent_reviewed_retail_payments_and_replay_do_not_double_spend_inclusion() {
-    let (state, user, key, recipient, treasury, asset) = test_state();
+    let (mut state, user, key, recipient, treasury, asset) = test_state();
     let policy = validation_fee_policy(&state, asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(&state, &user, &key, policy);
     {
@@ -1376,7 +1376,7 @@ fn concurrent_reviewed_retail_payments_and_replay_do_not_double_spend_inclusion(
         )
         .parse()
         .unwrap();
-        let mut store = state.world.smart_contract_state.block();
+        let mut store = state.world.smart_contract_state_mut_for_testing().block();
         store.insert(storage_key, norito::to_bytes(&record).unwrap());
         store.commit();
     }

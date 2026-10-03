@@ -896,10 +896,12 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     assert_eq!(bundle.transcripts.len(), 1);
     let transcript = &bundle.transcripts[0];
     assert_eq!(transcript.batch_hash, bundle.entry_hash);
-    assert_eq!(
-        transcript.authority_digest,
-        Hash::new(norito::encode_canonical(&*BOB_ID).unwrap()),
-    );
+    // The original authority is the signed BOB genesis signer, with the
+    // domain-separated AccountId commitment specified by the transfer gadget.
+    let mut authority_preimage = b"iroha:fastpq:v1:authority|".to_vec();
+    authority_preimage.extend_from_slice(&norito::codec::Encode::encode(&*BOB_ID));
+    assert_eq!(transcript.authority_digest, Hash::new(authority_preimage));
+    assert_ne!(transcript.authority_digest, crate::fastpq::authority_digest(&ALICE_ID));
     assert_eq!(transcript.deltas.len(), 1);
     let delta = &transcript.deltas[0];
     assert_eq!(delta.from_account, *ALICE_ID);
@@ -1269,6 +1271,13 @@ fn staged_fee_sponsor_activation_fixture() -> (
             balance: Quantity::from(10_u32),
         },
     );
+    // This admission component fixture requires explicit Global root metadata.
+    // It does not execute signed genesis or authenticate a native history.
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     (
         State::new_for_testing(
             world,

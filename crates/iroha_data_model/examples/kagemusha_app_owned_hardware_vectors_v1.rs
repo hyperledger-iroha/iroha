@@ -21,7 +21,7 @@ use iroha_data_model::{
 };
 use sha2::{Digest as _, Sha256};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn signing_vectors() -> Result<norito::json::Value, Box<dyn std::error::Error>> {
     let account_key = KeyPair::from_private_key(PrivateKey::from_bytes(
         Algorithm::Ed25519,
         &[0x42; 32], // Public, deterministic test material only.
@@ -37,9 +37,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("rotate", 5, KagemushaOperationKindV1::Rotate),
     ] {
         for index in [9_u128, u128::MAX - 1] {
-            let outgoing = matches!(
+            // These are public codec selectors, not hashes of admitted Native originals.
+            // Ordinary incoming terminal messages now bind candidate and body selectors too.
+            let commitments_required = matches!(
                 operation,
-                KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
+                KagemushaOperationKindV1::MintFold
+                    | KagemushaOperationKindV1::SendSplit
+                    | KagemushaOperationKindV1::ReceiveFold
+                    | KagemushaOperationKindV1::RedeemSplit
             );
             let subject = KagemushaHardwareTransitionSelectionV1 {
                 version: 1,
@@ -57,13 +62,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hardware_epoch_generation: 10,
                 operation_kind: operation,
                 transition_statement_digest: [11; 32],
-                candidate_envelope_digest: [if outgoing { 12 } else { 0 }; 32],
-                terminal_body_commitment: [if outgoing { 13 } else { 0 }; 32],
+                candidate_envelope_digest: [if commitments_required { 12 } else { 0 }; 32],
+                terminal_body_commitment: [if commitments_required { 13 } else { 0 }; 32],
                 secure_index_before: index,
                 secure_index_after: index + 1,
             };
-            let s = subject.canonical_signing_bytes()?;
-            let challenge = KagemushaAppOperationApprovalChallengeV1 {
+            let mut challenge = KagemushaAppOperationApprovalChallengeV1 {
                 version: 1,
                 purpose: KagemushaAppOperationApprovalPurposeV1::MonetaryTransition,
                 operation_id: [0x20 + tag; 32],
@@ -72,12 +76,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 authority_policy_digest: [0x24; 32],
                 attested_key_id: [0x25; 32],
                 enrollment_digest: [0x26; 32],
-                subject_signing_digest: Sha256::digest(&s).into(),
+                subject_signing_digest: [0; 32],
                 normalized_guard_digest: [0x28; 32],
                 issued_at_ms: 1000,
                 expires_at_ms: 2000,
                 subject,
             };
+            // Use the same purpose-selected subject path as the actual wrapper validator.
+            let s = challenge.canonical_subject_signing_bytes()?;
+            challenge.subject_signing_digest = Sha256::digest(&s).into();
             let w = challenge.canonical_signing_bytes()?;
             vectors.push(norito::json!({
                 "operation": name,
@@ -188,6 +195,114 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "vectors": vectors,
         "enrollment_vectors": enrollment_vectors,
     });
-    println!("{}", norito::json::to_json_pretty(&result)?);
+    Ok(result)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", norito::json::to_json_pretty(&signing_vectors()?)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_vectors_keep_all_operations_boundaries_and_enrollment_platforms() {
+        let generated = signing_vectors().unwrap();
+        assert_eq!(generated, signing_vectors().unwrap());
+        assert_eq!(generated.get("codec_only"), Some(&norito::json!(true)));
+        for flag in [
+            "native_authority",
+            "hardware_qualified",
+            "monetary_authority",
+        ] {
+            assert_eq!(generated.get(flag), Some(&norito::json!(false)));
+        }
+        let vectors = generated.get("vectors").unwrap().as_array().unwrap();
+        assert_eq!(vectors.len(), 10);
+        for (operation, pair) in vectors.chunks_exact(2).enumerate() {
+            for (row, index) in pair.iter().zip([9_u128, u128::MAX - 1]) {
+                assert_eq!(
+                    row.get("operation_tag").unwrap().as_u64(),
+                    Some(operation as u64 + 1)
+                );
+                assert_eq!(
+                    row.get("secure_index_before").unwrap().as_str().unwrap(),
+                    index.to_string()
+                );
+                assert_eq!(
+                    row.get("secure_index_after").unwrap().as_str().unwrap(),
+                    (index + 1).to_string()
+                );
+            }
+        }
+        let enrollment = generated
+            .get("enrollment_vectors")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(enrollment.len(), 2);
+        assert_eq!(
+            enrollment[0].get("platform").unwrap().as_str(),
+            Some("android_keymint")
+        );
+        assert_eq!(
+            enrollment[1].get("platform").unwrap().as_str(),
+            Some("apple_app_attest")
+        );
+    }
+
+    #[test]
+    fn incoming_codec_subjects_bind_candidate_body_and_exact_next_indices() {
+        let generated = signing_vectors().unwrap();
+        let mut incoming = 0;
+        for row in generated.get("vectors").unwrap().as_array().unwrap() {
+            if !matches!(row.get("operation_tag").unwrap().as_u64(), Some(1 | 3)) {
+                continue;
+            }
+            incoming += 1;
+            let raw =
+                hex::decode(row.get("challenge_archive_hex").unwrap().as_str().unwrap()).unwrap();
+            let challenge: KagemushaAppOperationApprovalChallengeV1 =
+                norito::decode_canonical_with_limits(
+                    &raw,
+                    norito::canonical_decode_limits(raw.len()),
+                )
+                .unwrap();
+            assert_eq!(norito::encode_canonical(&challenge).unwrap(), raw);
+            let subject = challenge.canonical_subject_signing_bytes().unwrap();
+            assert_eq!(
+                hex::encode(&subject),
+                row.get("subject_signing_hex").unwrap().as_str().unwrap()
+            );
+            assert_eq!(
+                hex::encode(challenge.canonical_signing_bytes().unwrap()),
+                row.get("approval_signing_hex").unwrap().as_str().unwrap()
+            );
+            assert_eq!(challenge.subject.candidate_envelope_digest, [12; 32]);
+            assert_eq!(challenge.subject.terminal_body_commitment, [13; 32]);
+            assert!(challenge.subject.canonical_signing_bytes().is_err());
+            assert!(challenge.subject.canonical_prepare_signing_bytes().is_err());
+            for mutation in 0..7 {
+                let mut changed = challenge;
+                match mutation {
+                    0 => changed.subject.candidate_envelope_digest = [0; 32],
+                    1 => changed.subject.terminal_body_commitment = [0; 32],
+                    2 => changed.subject.candidate_envelope_digest[0] ^= 1,
+                    3 => changed.subject.terminal_body_commitment[0] ^= 1,
+                    4 => changed.subject.secure_index_before ^= 1,
+                    5 => changed.subject.secure_index_after ^= 1,
+                    _ => {
+                        changed.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition
+                    }
+                }
+                assert!(
+                    changed.canonical_signing_bytes().is_err(),
+                    "mutation {mutation}"
+                );
+            }
+        }
+        assert_eq!(incoming, 4);
+    }
 }

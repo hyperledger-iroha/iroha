@@ -14,13 +14,14 @@ use super::fastpq_quantity_write_plan::{QuantityWriteKey, QuantityWritePlan};
 mod source_census;
 use super::*;
 use iroha_allocation::ChargedBuffer;
+use iroha_data_model::fastpq::{
+    FastpqExecutionAssetV1, FastpqExecutionEffectContextV1, FastpqExecutionEffectKindV1,
+    FastpqExecutionEffectsV1, FastpqSourceExecutionEntryV1,
+};
 #[cfg(test)]
 use iroha_data_model::fastpq::{
-    FastpqExecutionAssetV1, FastpqExecutionBalanceV1, FastpqExecutionEffectKindV1,
-    FastpqExecutionEffectV1, FastpqExecutionSupplyChangeV1, FastpqExecutionTransferV1,
-};
-use iroha_data_model::fastpq::{
-    FastpqExecutionEffectContextV1, FastpqExecutionEffectsV1, FastpqSourceExecutionEntryV1,
+    FastpqExecutionBalanceV1, FastpqExecutionEffectV1, FastpqExecutionSupplyChangeV1,
+    FastpqExecutionTransferV1,
 };
 use source_census::QuantitySourceCensusState;
 
@@ -58,6 +59,15 @@ impl QuantityMutationObservation {
             self.unowned = true;
         }
     }
+}
+
+/// Original signed invocation and quota custody retained by a single teardown.
+/// Private fields and no serializer/constructor outside State prevent digest-only
+/// authority. This observer grants neither execution permission nor source finality.
+pub(crate) struct QuantityRetirementInvocation {
+    source: crate::fastpq::FastpqCapturedTranscriptSource,
+    owner: crate::fastpq::source_reservation::entry_bundle::EntryBundleOwner,
+    pool: iroha_allocation::AllocationBudget,
 }
 
 /// Exact logical-entry frame accounting, retained with its original rollback owner.
@@ -243,8 +253,151 @@ struct PreparedQuantityAccounting {
     pending_after: QuantityCandidateUsage,
 }
 
+/// Original tape chronology prepared before the business mutation. Ordinary tapes
+/// retain the existing allocation-free linear path. Mixed lifecycle tapes reserve
+/// only fixed-width indices from the same original execution pool, then sort those
+/// indices in place; the immutable source effects and their order never change.
+struct QuantityLifecycleOrder {
+    effect_count: usize,
+    indices: Option<ChargedBuffer<usize>>,
+    #[cfg(test)]
+    work: QuantityLifecycleWork,
+}
+
+#[cfg(test)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct QuantityLifecycleWork {
+    preparation_visits: usize,
+    sort_comparisons: usize,
+    group_comparisons: usize,
+    effect_checks: usize,
+    retired_group_checks: usize,
+}
+
+impl QuantityLifecycleOrder {
+    fn asset(kind: &FastpqExecutionEffectKindV1) -> &FastpqExecutionAssetV1 {
+        match kind {
+            FastpqExecutionEffectKindV1::Transfer(value) => &value.source.asset,
+            FastpqExecutionEffectKindV1::Mint(value) | FastpqExecutionEffectKindV1::Burn(value) => {
+                &value.balance.asset
+            }
+            FastpqExecutionEffectKindV1::Retire(asset) => asset,
+        }
+    }
+
+    fn prepare(
+        effects: &[iroha_data_model::fastpq::FastpqExecutionEffectV1],
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, QuantityCaptureIssue> {
+        #[cfg(test)]
+        let mut work = QuantityLifecycleWork::default();
+        let mixed = effects.iter().any(|effect| {
+            #[cfg(test)]
+            {
+                work.preparation_visits += 1;
+            }
+            matches!(effect.kind, FastpqExecutionEffectKindV1::Retire(_))
+        });
+        let indices = if mixed {
+            let mut indices = ChargedBuffer::new(effects.len(), budget)
+                .map_err(|_| QuantityCaptureIssue::Capacity)?;
+            for index in 0..effects.len() {
+                indices.push_reserved(index);
+            }
+            // Asset definition and incarnation are fixed-width; original position
+            // totally orders repeated effects without changing their chronology.
+            // sort_unstable_by uses no allocation and has O(E log E) worst-case work.
+            indices.as_mut_slice().sort_unstable_by(|left, right| {
+                #[cfg(test)]
+                {
+                    work.sort_comparisons += 1;
+                }
+                Self::asset(&effects[*left].kind)
+                    .cmp(Self::asset(&effects[*right].kind))
+                    .then(left.cmp(right))
+            });
+            Some(indices)
+        } else {
+            None
+        };
+        Ok(Self {
+            effect_count: effects.len(),
+            indices,
+            #[cfg(test)]
+            work,
+        })
+    }
+
+    /// Visit each original fact exactly once. Every retired group has one terminal
+    /// Retire and actual final absence; every other group keeps original live checks.
+    fn matches(
+        &mut self,
+        effects: &[iroha_data_model::fastpq::FastpqExecutionEffectV1],
+        mut check_kind: impl FnMut(QuantityKindInput<'_>, bool) -> bool,
+        mut check_retired: impl FnMut(&FastpqExecutionAssetV1) -> bool,
+    ) -> bool {
+        if effects.len() != self.effect_count {
+            return false;
+        }
+        let Some(indices) = &self.indices else {
+            return effects.iter().all(|effect| {
+                #[cfg(test)]
+                {
+                    self.work.effect_checks += 1;
+                }
+                check_kind((&effect.kind).into(), false)
+            });
+        };
+        let indices = indices.as_slice();
+        let mut start = 0;
+        while start < indices.len() {
+            let asset = Self::asset(&effects[indices[start]].kind);
+            let mut end = start + 1;
+            while end < indices.len() {
+                #[cfg(test)]
+                {
+                    self.work.group_comparisons += 1;
+                }
+                if Self::asset(&effects[indices[end]].kind) != asset {
+                    break;
+                }
+                end += 1;
+            }
+            let retired = matches!(
+                effects[indices[end - 1]].kind,
+                FastpqExecutionEffectKindV1::Retire(_)
+            );
+            if retired {
+                #[cfg(test)]
+                {
+                    self.work.retired_group_checks += 1;
+                }
+                if !check_retired(asset) {
+                    return false;
+                }
+            }
+            for position in start..end {
+                let kind = &effects[indices[position]].kind;
+                if matches!(kind, FastpqExecutionEffectKindV1::Retire(_)) && position + 1 != end {
+                    return false;
+                }
+                #[cfg(test)]
+                {
+                    self.work.effect_checks += 1;
+                }
+                if !check_kind(kind.into(), retired) {
+                    return false;
+                }
+            }
+            start = end;
+        }
+        true
+    }
+}
+
 /// Move-only captured tape and exact write plan, still bound to its original execution owner.
 pub(crate) struct PreparedQuantityCapture {
+    lifecycle_order: QuantityLifecycleOrder,
     write_plan: Option<QuantityWritePlan<QuantityWriteKey, Quantity>>,
     accounting: PreparedQuantityAccounting,
     tape: QuantityTape,
@@ -339,6 +492,24 @@ impl WorldTransaction<'_, '_> {
         Ok(())
     }
 
+    /// Remove the actual definition through its retained lifecycle port.
+    /// The caller keeps mutation observation and definition/index cleanup ordering;
+    /// the private plan never escapes its original quantity observation owner.
+    pub(super) fn remove_quantity_definition(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+    ) -> Option<AssetDefinition> {
+        if let Some(plan) = self.quantity_mutation_observation.plan.as_mut() {
+            self.asset_definitions.retire_definition(
+                definition_id,
+                self.axt_asset_incarnations.get(definition_id).copied(),
+                plan,
+            )
+        } else {
+            self.asset_definitions.remove(definition_id.clone())
+        }
+    }
+
     /// Remove the actual balance through its exact port; the caller retains metadata cleanup.
     pub(super) fn remove_quantity_balance(&mut self, id: &AssetId) -> Option<AssetValue> {
         if let Some(plan) = self.quantity_mutation_observation.plan.as_mut() {
@@ -365,23 +536,15 @@ impl StateTransaction<'_, '_> {
         self.quantity_candidate_issue(QuantityCaptureIssue::UnsupportedOwner);
     }
 
-    /// Check arithmetic and exact live lifecycle without allocating a projection map.
-    fn quantity_kind_matches_live_lifecycle(&self, kind: QuantityKindInput<'_>) -> bool {
-        let live = |balance: QuantityBalanceInput<'_>| {
-            self.world
-                .asset_definitions
-                .get(balance.definition)
-                .is_some()
-                && self.world.axt_asset_incarnations.get(balance.definition)
-                    == Some(&balance.incarnation)
-                && balance.incarnation.validate().is_ok()
-        };
+    /// Check original exact arithmetic independently of whether its lifecycle has
+    /// subsequently ended. Retirement carries no caller-selected presence values.
+    fn quantity_kind_arithmetic_matches(kind: QuantityKindInput<'_>) -> bool {
         match kind {
+            QuantityKindInput::Retire(_, incarnation) => incarnation.validate().is_ok(),
             QuantityKindInput::Transfer(value) => {
-                live(value.source)
-                    && live(value.destination)
-                    && value.source.definition == value.destination.definition
+                value.source.definition == value.destination.definition
                     && value.source.incarnation == value.destination.incarnation
+                    && value.source.incarnation.validate().is_ok()
                     && value
                         .source_after
                         .checked_add_equals(value.amount, value.source_before)
@@ -392,7 +555,7 @@ impl StateTransaction<'_, '_> {
                         || value.source_after == value.destination_before)
             }
             QuantityKindInput::Mint(value) => {
-                live(value.balance)
+                value.balance.incarnation.validate().is_ok()
                     && !value.amount.is_zero()
                     && value
                         .balance_before
@@ -402,7 +565,7 @@ impl StateTransaction<'_, '_> {
                         .checked_add_equals(value.amount, value.supply_after)
             }
             QuantityKindInput::Burn(value) => {
-                live(value.balance)
+                value.balance.incarnation.validate().is_ok()
                     && value
                         .balance_after
                         .checked_add_equals(value.amount, value.balance_before)
@@ -411,6 +574,84 @@ impl StateTransaction<'_, '_> {
                         .checked_add_equals(value.amount, value.supply_before)
             }
         }
+    }
+
+    /// Check arithmetic and exact live lifecycle without allocating a projection map.
+    fn quantity_kind_matches_live_lifecycle(&self, kind: QuantityKindInput<'_>) -> bool {
+        if !Self::quantity_kind_arithmetic_matches(kind) {
+            return false;
+        }
+        let live = |balance: QuantityBalanceInput<'_>| {
+            self.world
+                .asset_definitions
+                .get(balance.definition)
+                .is_some()
+                && self.world.axt_asset_incarnations.get(balance.definition)
+                    == Some(&balance.incarnation)
+        };
+        match kind {
+            QuantityKindInput::Retire(id, incarnation) => {
+                self.world.axt_asset_incarnations.get(id) == Some(&incarnation)
+                    && self
+                        .world
+                        .asset_definitions
+                        .get(id)
+                        .is_some_and(|definition| definition.total_quantity().is_zero())
+                    && self.quantity_retirement_indexes_empty(id)
+            }
+            QuantityKindInput::Transfer(value) => live(value.source) && live(value.destination),
+            QuantityKindInput::Mint(value) | QuantityKindInput::Burn(value) => live(value.balance),
+        }
+    }
+
+    /// The actual original indexes and storage agree on absence before retirement.
+    /// The bounded candidate observes the original business enumeration; it cannot
+    /// certify a zero-supply definition that still owns a persisted zero balance.
+    fn quantity_retirement_indexes_empty(&self, id: &AssetDefinitionId) -> bool {
+        // The original definition/domain producer owns and validates its exact
+        // enumeration. These original reverse indexes are updated by the same
+        // typed balance mutator; raw writes remain sticky refusal. Do not add a
+        // full-world scan to each domain-owned definition retirement.
+        self.world.asset_definition_assets.get(id).is_none()
+            && self.world.asset_definition_holders.get(id).is_none()
+            && self
+                .world
+                .asset_definition_nonzero_holders
+                .get(id)
+                .is_none()
+    }
+
+    /// Check the retained chronology through its original prepared order. No
+    /// suffix search or capture-time uncharged map is introduced on any path.
+    fn quantity_tape_matches_final_lifecycles(
+        &self,
+        effects: &[iroha_data_model::fastpq::FastpqExecutionEffectV1],
+        order: &mut QuantityLifecycleOrder,
+    ) -> bool {
+        order.matches(
+            effects,
+            |kind, retired| {
+                if retired {
+                    Self::quantity_kind_arithmetic_matches(kind)
+                } else {
+                    self.quantity_kind_matches_live_lifecycle(kind)
+                }
+            },
+            |asset| {
+                asset.incarnation.validate().is_ok()
+                    && self
+                        .world
+                        .asset_definitions
+                        .get(&asset.definition)
+                        .is_none()
+                    && self
+                        .world
+                        .axt_asset_incarnations
+                        .get(&asset.definition)
+                        .is_none()
+                    && self.quantity_retirement_indexes_empty(&asset.definition)
+            },
+        )
     }
 
     #[cfg(test)]
@@ -423,6 +664,11 @@ impl StateTransaction<'_, '_> {
     fn quantity_projection(&self, key: &QuantityWriteKey) -> Option<&Quantity> {
         match key {
             QuantityWriteKey::Balance(id) => self.world.assets.get(id).map(AsRef::as_ref),
+            QuantityWriteKey::Retire(asset) => self
+                .world
+                .asset_definitions
+                .get(&asset.definition)
+                .map(|definition| definition.total_quantity()),
             QuantityWriteKey::Supply(id) => self
                 .world
                 .asset_definitions
@@ -438,6 +684,14 @@ impl StateTransaction<'_, '_> {
         let zero = Quantity::zero();
         let mut previous: Option<(&QuantityWriteKey, &Quantity)> = None;
         for (key, before, after) in plan.ordered_projections() {
+            if let QuantityWriteKey::Retire(asset) = key {
+                if !self.quantity_kind_matches_live_lifecycle(QuantityKindInput::Retire(
+                    &asset.definition,
+                    asset.incarnation,
+                )) {
+                    return false;
+                }
+            }
             let expected = match previous {
                 Some((previous_key, after)) if previous_key == key => after,
                 _ => self.quantity_projection(key).unwrap_or(&zero),
@@ -455,8 +709,16 @@ impl StateTransaction<'_, '_> {
         plan: &QuantityWritePlan<QuantityWriteKey, Quantity>,
     ) -> bool {
         if !plan.lifecycles().iter().all(|(id, incarnation)| {
-            self.world.asset_definitions.get(id).is_some()
-                && self.world.axt_asset_incarnations.get(id) == Some(incarnation)
+            let retired = plan.ordered_projections().any(|(key, _, _)|
+                matches!(key, QuantityWriteKey::Retire(asset) if &asset.definition == id && &asset.incarnation == incarnation));
+            if retired {
+                self.world.asset_definitions.get(id).is_none()
+                    && self.world.axt_asset_incarnations.get(id).is_none()
+                    && self.quantity_retirement_indexes_empty(id)
+            } else {
+                self.world.asset_definitions.get(id).is_some()
+                    && self.world.axt_asset_incarnations.get(id) == Some(incarnation)
+            }
         }) {
             return false;
         }
@@ -737,7 +999,12 @@ impl StateTransaction<'_, '_> {
         if !self.quantity_pre_state_matches(&write_plan) {
             return Err(QuantityCaptureIssue::InvalidFacts);
         }
+        let lifecycle_order = QuantityLifecycleOrder::prepare(
+            &tape.effects,
+            self.pipeline_ivm_prepared_cache.execution_budget(),
+        )?;
         Ok(PreparedQuantityCapture {
+            lifecycle_order,
             write_plan: Some(write_plan),
             accounting,
             tape,
@@ -789,7 +1056,7 @@ impl StateTransaction<'_, '_> {
             self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
         }
         if result.is_ok() {
-            if let Some(prepared) = prepared {
+            if let Some(mut prepared) = prepared {
                 let hash = prepared.tape.context.entry.entry_hash;
                 let current_full = self
                     .pending_fastpq_quantity_candidate
@@ -810,9 +1077,10 @@ impl StateTransaction<'_, '_> {
                     return result;
                 }
                 if !post_state_matches
-                    || !prepared.tape.effects.iter().all(|effect| {
-                        self.quantity_kind_matches_live_lifecycle((&effect.kind).into())
-                    })
+                    || !self.quantity_tape_matches_final_lifecycles(
+                        &prepared.tape.effects,
+                        &mut prepared.lifecycle_order,
+                    )
                 {
                     self.quantity_candidate_issue(QuantityCaptureIssue::InvalidFacts);
                     return result;
@@ -881,9 +1149,113 @@ impl StateTransaction<'_, '_> {
         })();
         self.apply_with_quantity_candidate(prepared, apply)
     }
-    /// Prepare an exact account-removal burn without changing its original write order.
+    /// Reserve the complete original retirement census from the existing execution
+    /// pool before any fixed-width lifecycle copy. No detached allocation owner exists.
+    pub(crate) fn reserve_quantity_retirement_lifecycles(
+        &self,
+        count: usize,
+    ) -> Result<
+        ChargedBuffer<(
+            AssetDefinitionId,
+            iroha_data_model::nexus::AxtAssetIncarnationV1,
+        )>,
+        QuantityCaptureIssue,
+    > {
+        if count > self.fastpq_source_policy.0.intrinsic.max_deltas as usize {
+            return Err(QuantityCaptureIssue::Capacity);
+        }
+        ChargedBuffer::new(count, self.pipeline_ivm_prepared_cache.execution_budget())
+            .map_err(|_| QuantityCaptureIssue::Capacity)
+    }
+
+    /// Retain the actual signed-call source and its existing quota owner after the
+    /// original instruction's authorization/custody checks, before its removals.
+    pub(crate) fn retain_quantity_retirement_invocation(
+        &self,
+    ) -> Result<QuantityRetirementInvocation, QuantityCaptureIssue> {
+        let hash = self
+            .tx_call_hash
+            .ok_or(QuantityCaptureIssue::UnsupportedOwner)?;
+        let source = self
+            .fastpq_source_context
+            .capture_transcript(
+                self.tx_call_hash,
+                hash,
+                self.current_lane_id,
+                self.current_dataspace_id,
+                *self.committed_fragments,
+            )
+            .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
+        let owner = self
+            .fastpq_source_quota
+            .retain_quantity_retirement_entry(hash)
+            .ok_or(QuantityCaptureIssue::UnsupportedOwner)?;
+        Ok(QuantityRetirementInvocation {
+            source,
+            owner,
+            pool: self.pipeline_ivm_prepared_cache.execution_budget().clone(),
+        })
+    }
+
+    /// Reject replacement source, quota or allocation custody even when public
+    /// values are equal. Retaining an owner never opens a new logical entry.
+    pub(crate) fn validate_quantity_retirement_invocation(
+        &self,
+        retained: &QuantityRetirementInvocation,
+    ) -> Result<Hash, QuantityCaptureIssue> {
+        let hash = retained.source.entry_hash();
+        let actual = self
+            .fastpq_source_context
+            .capture_transcript(
+                self.tx_call_hash,
+                hash,
+                self.current_lane_id,
+                self.current_dataspace_id,
+                *self.committed_fragments,
+            )
+            .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
+        if self.tx_call_hash != Some(hash)
+            || actual != retained.source
+            || !retained
+                .pool
+                .same_pool(self.pipeline_ivm_prepared_cache.execution_budget())
+            || !self
+                .fastpq_source_quota
+                .matches_quantity_retirement_entry(hash, &retained.owner)
+        {
+            return Err(QuantityCaptureIssue::UnsupportedOwner);
+        }
+        Ok(hash)
+    }
+
+    /// TODO: retain complete registration and mandatory-owner coverage before
+    /// admitting this diagnostic source in any finalized proof dispatcher.
+    /// Prepare the original definition erasure after all original selected balances
+    /// have been removed. This retains one closed lifecycle fact and one exact permit.
+    pub(crate) fn prepare_quantity_retirement_candidate(
+        &self,
+        authority: &AccountId,
+        entry_hash: Hash,
+        authorization_context: Hash,
+        id: &AssetDefinitionId,
+    ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
+        let incarnation = self
+            .world
+            .axt_asset_incarnations
+            .get(id)
+            .copied()
+            .ok_or(QuantityCaptureIssue::MissingIncarnation)?;
+        self.prepare_quantity_candidate_inputs(
+            authority,
+            entry_hash,
+            authorization_context,
+            std::iter::once(Ok(QuantityKindInput::Retire(id, incarnation))),
+        )
+    }
+
+    /// Prepare an exact complete-removal burn without changing its original write order.
     /// The existing signed invocation and quota checks still own every captured fact.
-    pub(crate) fn prepare_quantity_account_removal_candidate(
+    pub(crate) fn prepare_quantity_removal_candidate(
         &self,
         authority: &AccountId,
         entry_hash: Hash,

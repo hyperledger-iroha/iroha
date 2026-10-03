@@ -764,9 +764,12 @@ fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     }
 }
 fn seed_completion_anchor(state: &State) {
-    let mut committed_hashes = state.block_hashes.block();
-    committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
-    committed_hashes.commit_for_tests();
+    // This component fixture owns synthetic empty membership and its exact
+    // header. It does not claim a signed, network-finalized completion anchor.
+    state
+        .block(completion_anchor_header())
+        .commit_empty_block_for_testing()
+        .expect("commit the component completion prefix");
 }
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
@@ -980,6 +983,21 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         }
     }
     seed_public_pin_fee_assets(tx);
+    // Two concurrently active one-GiB manifests occur in successor tests.
+    // Supply exact-profile capacity for both without weakening min_replicas.
+    let consensus_epoch = tx.block_unix_timestamp_ms() / 1_000;
+    let providers = iroha_core::smartcontracts::isi::sorafs::seed_eligible_auto_replication_providers_for_test(
+        tx,
+        &alice,
+        default_policy().min_replicas,
+        default_policy().storage_class,
+        &default_chunker(),
+        consensus_epoch,
+        u64::from(iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+        2,
+    )
+    .expect("seed canonical capacity and matching completion owners");
+    assert_eq!(providers.len(), usize::from(default_policy().min_replicas));
     for provider_id in [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),

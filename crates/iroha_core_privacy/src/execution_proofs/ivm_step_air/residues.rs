@@ -22,6 +22,25 @@ impl Sink for Vec<F> {
     }
 }
 
+/// Multiply each equation as it is emitted, preserving append-only streaming.
+pub(super) struct Scaled<'a, S: Sink> {
+    sink: &'a mut S,
+    factor: F,
+}
+impl<'a, S: Sink> Scaled<'a, S> {
+    pub(super) fn new(sink: &'a mut S, factor: F) -> Self {
+        Self { sink, factor }
+    }
+}
+impl<S: Sink> Sink for Scaled<'_, S> {
+    fn len(&self) -> usize {
+        self.sink.len()
+    }
+    fn push(&mut self, value: F) {
+        self.sink.push(self.factor.mul(value));
+    }
+}
+
 /// One history row is the largest repeatedly evaluated bank.
 pub(super) const CAPACITY: usize = 721;
 
@@ -102,6 +121,23 @@ impl<E, C: FnMut(&[F]) -> Result<(), E>> Drop for Stream<'_, E, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scaling_preserves_equation_count_order_and_streaming_cleanup() {
+        let mut scratch = Scratch::new();
+        let mut values = Vec::new();
+        let mut consume = |batch: &[F]| {
+            values.extend_from_slice(batch);
+            Ok::<_, ()>(())
+        };
+        let mut stream = Stream::new(&mut scratch, &mut consume);
+        stream.push(F(7));
+        let mut scaled = Scaled::new(&mut stream, F(3));
+        scaled.extend([F(2), F(4), F(6)]);
+        assert_eq!(scaled.len(), 4);
+        stream.finish().unwrap();
+        assert_eq!(values, [F(7), F(6), F(12), F(18)]);
+        assert!(scratch.0.iter().all(|value| *value == F::ZERO));
+    }
     #[test]
     fn streams_exact_order_without_growing_and_wipes_scratch() {
         let mut scratch = Scratch::new();

@@ -61,9 +61,69 @@ impl FileIdentity {
 ///
 /// Binds kernel identity, length, timestamps and native custody-relevant metadata. A later open
 /// must independently pass native ownership, link and access validation before comparison.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileSnapshot {
     inner: platform::FileSnapshot,
+}
+
+impl FileSnapshot {
+    /// Capture exact writable private journal custody (Unix mode 0600, or the actual
+    /// protected current-user Windows DACL and non-read-only native object).
+    /// # Errors
+    /// Refuses non-writable private originals, shared links or native I/O errors.
+    pub fn private_journal(file: &File) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::journal_snapshot(file)?,
+        })
+    }
+    /// Read exact native file identity, length, timestamps and custody metadata.
+    ///
+    /// This validates a regular single-link file and its native access restrictions. The
+    /// retained directory/file owner must separately revalidate the pathname and ancestors.
+    /// # Errors
+    /// Refuses unsafe custody, links, changed native metadata or native I/O errors.
+    pub fn of(file: &File, private: bool) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::snapshot_file(file, private)?,
+        })
+    }
+}
+
+/// Read bytes at an exact offset, independently of its prior cursor.
+/// Unix uses native `pread`; Windows uses native `seek_read`, which moves the physical cursor.
+/// A mutable owner must reanchor its write cursor before appending; descriptor identity is retained.
+/// This is a DATA operation; callers retain and revalidate the original native custody.
+/// # Errors
+/// Returns the genuine native I/O error.
+pub fn read_at(file: &File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::FileExt::read_at(file, buffer, offset)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::FileExt::seek_read(file, buffer, offset)
+    }
+}
+
+/// Fill an exact offset range independently of its prior cursor.
+/// # Errors
+/// Refuses truncation, offset overflow or native I/O failure.
+pub fn read_exact_at(file: &File, mut buffer: &mut [u8], mut offset: u64) -> io::Result<()> {
+    while !buffer.is_empty() {
+        match read_at(file, buffer, offset) {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(count) => {
+                offset = offset
+                    .checked_add(count as u64)
+                    .ok_or_else(|| io::Error::other("native read offset overflow"))?;
+                buffer = &mut buffer[count..];
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// An owner-private directory and the retained authority for all of its ancestors.
@@ -308,6 +368,37 @@ impl PrivateDirectory {
     /// Returns an error if custody changed or native durability cannot be completed.
     pub fn sync(&self) -> io::Result<()> {
         self.inner.sync()
+    }
+}
+
+/// Read-only directory authority retaining every native ancestor and exact namespace.
+/// This creates no directory, file or writable owner capability.
+#[derive(Debug)]
+pub struct ReaderDirectory {
+    inner: platform::Directory,
+}
+impl ReaderDirectory {
+    /// Retain an existing regular directory under genuine native custody.
+    /// # Errors
+    /// Refuses links, unsafe native permissions, foreign mutation or unavailable storage.
+    pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::Directory::open_reader(&absolute(path.as_ref())?)?,
+        })
+    }
+    /// Recheck the original directory and all retained ancestors.
+    /// # Errors
+    /// Refuses replaced namespace or changed native custody.
+    pub fn revalidate(&self) -> io::Result<()> {
+        self.inner.revalidate()
+    }
+    /// Capture exact native directory metadata while retaining its original authority.
+    /// # Errors
+    /// Refuses changed custody or native I/O errors.
+    pub fn snapshot(&self) -> io::Result<FileSnapshot> {
+        Ok(FileSnapshot {
+            inner: self.inner.snapshot_directory()?,
+        })
     }
 }
 
@@ -557,6 +648,17 @@ impl RetainedFile {
         Self::open(path.as_ref(), false, false)
     }
 
+    /// Retain one public original with Unix 0644/0444 or the equivalent native Windows
+    /// read access without foreign mutation. This authenticates custody, never its contents.
+    /// # Errors
+    /// Refuses unsafe permission shape, links, changed ancestors or native errors.
+    pub fn open_public_original(path: impl AsRef<Path>) -> io::Result<Self> {
+        let original = Self::open_regular(path)?;
+        platform::validate_public_original(original.file())?;
+        original.revalidate()?;
+        Ok(original)
+    }
+
     /// Open an existing private regular file for read-only streaming.
     ///
     /// # Errors
@@ -766,3 +868,59 @@ fn bounded_read(file: &mut File, length: u64, maximum: usize) -> io::Result<Zero
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod native_offset_custody_tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+
+    #[test]
+    fn offset_read_then_tail_append_retains_exact_native_original() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+        let mut file = root.create_lock("journal").unwrap();
+        file.try_lock().unwrap();
+        file.write_all(b"first").unwrap();
+        file.sync_all().unwrap();
+        let identity = FileIdentity::of(&file).unwrap();
+        let mut buffer = [0; 3];
+        read_exact_at(&file, &mut buffer, 1).unwrap();
+        assert_eq!(&buffer, b"irs");
+        // The real native journal always selects and checks its acknowledged tail first.
+        assert_eq!(file.seek(SeekFrom::End(0)).unwrap(), 5);
+        file.write_all(b"second").unwrap();
+        file.sync_all().unwrap();
+        let mut complete = [0; 11];
+        read_exact_at(&file, &mut complete, 0).unwrap();
+        assert_eq!(&complete, b"firstsecond");
+        assert_eq!(FileIdentity::of(&file).unwrap(), identity);
+        assert!(FileSnapshot::private_journal(&file).is_ok());
+        assert!(read_exact_at(&file, &mut [0; 1], 11).is_err());
+        root.revalidate().unwrap();
+    }
+
+    #[test]
+    fn reader_directory_keeps_namespace_and_original_public_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let owner = OwnerDirectory::open(&root).unwrap();
+        owner
+            .write_atomic("public", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let directory = ReaderDirectory::open(&root).unwrap();
+        let namespace = directory.snapshot().unwrap();
+        let original = RetainedFile::open_regular(root.join("public")).unwrap();
+        let before = original.snapshot().unwrap();
+        let mut bytes = [0; 8];
+        read_exact_at(original.file(), &mut bytes, 0).unwrap();
+        assert_eq!(&bytes, b"original");
+        assert_eq!(original.snapshot().unwrap(), before);
+        assert_eq!(directory.snapshot().unwrap(), namespace);
+        assert!(
+            owner
+                .write_atomic("public", b"replacement", PublishMode::CreateNew)
+                .is_err()
+        );
+        assert_eq!(original.snapshot().unwrap(), before);
+    }
+}

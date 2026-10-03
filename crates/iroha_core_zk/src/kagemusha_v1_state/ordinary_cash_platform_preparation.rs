@@ -198,7 +198,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         recipient_key: DigestV1,
         effect_digest: DigestV1,
     ) -> Result<TransitionProofStatementV1, KagemushaStateErrorV1> {
-        let before = &self.state;
         let pending = self
             .pending
             .as_ref()
@@ -206,67 +205,20 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         if pending.operation != operation {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
-        let prepared = KagemushaOrdinaryPreparedTransitionV1 {
-            version: 1,
-            operation: if kind == KagemushaTransitionKindV1::SendSplit {
-                2
-            } else {
-                4
-            },
-            lifecycle_digest: lifecycle,
-            request_digest: request,
-            predecessor_state: before.state_commitment,
-            successor_state: after.state_commitment,
-            amount,
-            reservation_digest: pending
-                .reservation
-                .canonical_commitment()
-                .map_err(material)?,
-            native_preparation_operation_id: operation,
-        };
-        let statement = TransitionProofStatementV1 {
-            version: 1,
-            protocol_version: before.protocol_version,
-            predecessor_suite_id: before.suite_id,
-            predecessor_vk_digest: before.vk_digest,
-            successor_suite_id: after.suite_id,
-            successor_vk_digest: after.vk_digest,
+        derive_preparation_statement_from_originals_v1(
+            &self.state,
+            after,
+            operation,
             kind,
             amount,
-            mint_finality_semantic_digest: [0; 32],
-            mint_finality_proof_binding_digest: [0; 32],
+            lifecycle,
+            request,
             peer_credit_id,
-            recipient_encryption_key_binding: recipient_key,
-            lifecycle_binding_digest: lifecycle,
-            prepared_transition_binding_digest: prepared.binding_digest().map_err(material)?,
-            receive_credit_binding_digest: [0; 32],
-            predecessor_release_id: before.release_id,
-            release_id: after.release_id,
-            asset_incarnation: before.asset_incarnation,
-            liability_pool_id: before.liability_pool_id,
-            hardware_profile_id: before.hardware_profile_id,
-            policy_epoch: before.policy_epoch,
-            lane: before.lane.clone(),
-            predecessor_commitment: before.state_commitment,
-            successor_commitment: after.state_commitment,
-            predecessor_sequence: before.logical_sequence,
-            successor_sequence: after.logical_sequence,
-            predecessor_epoch: before.hardware_epoch,
-            successor_epoch: after.hardware_epoch,
-            predecessor_device_policy_binding: before.device_policy_binding,
-            successor_device_policy_binding: after.device_policy_binding,
-            predecessor_state_nonce_commitment: before.state_nonce_commitment,
-            successor_state_nonce_commitment: after.state_nonce_commitment,
-            journal_revision_before: u128::from(self.financial_journal_revision),
-            journal_revision_after: u128::from(
-                self.financial_journal_revision
-                    .checked_add(1)
-                    .ok_or(KagemushaStateErrorV1::JournalRevisionOverflow)?,
-            ),
+            recipient_key,
             effect_digest,
-        };
-        require_outgoing(before, after, &statement, self.financial_journal_revision)?;
-        Ok(statement)
+            &pending.reservation,
+            self.financial_journal_revision,
+        )
     }
 
     pub(super) fn recheck_native_preparation_derivation(
@@ -732,3 +684,160 @@ fn derive_successor(
 #[cfg(test)]
 #[path = "ordinary_cash_platform_preparation_tests.rs"]
 mod tests;
+
+#[allow(clippy::too_many_arguments)]
+fn derive_preparation_statement_from_originals_v1(
+    before: &KagemushaStateV1,
+    after: &KagemushaStateV1,
+    operation: DigestV1,
+    kind: KagemushaTransitionKindV1,
+    amount: u128,
+    lifecycle: DigestV1,
+    request: DigestV1,
+    peer_credit_id: DigestV1,
+    recipient_key: DigestV1,
+    effect_digest: DigestV1,
+    reservation: &KagemushaOutboxReservationV1,
+    journal_revision: u64,
+) -> Result<TransitionProofStatementV1, KagemushaStateErrorV1> {
+    let prepared = KagemushaOrdinaryPreparedTransitionV1 {
+        version: 1,
+        operation: if kind == KagemushaTransitionKindV1::SendSplit {
+            2
+        } else {
+            4
+        },
+        lifecycle_digest: lifecycle,
+        request_digest: request,
+        predecessor_state: before.state_commitment,
+        successor_state: after.state_commitment,
+        amount,
+        reservation_digest: reservation.canonical_commitment().map_err(material)?,
+        native_preparation_operation_id: operation,
+    };
+    let statement = TransitionProofStatementV1 {
+        version: 1,
+        protocol_version: before.protocol_version,
+        predecessor_suite_id: before.suite_id,
+        predecessor_vk_digest: before.vk_digest,
+        successor_suite_id: after.suite_id,
+        successor_vk_digest: after.vk_digest,
+        kind,
+        amount,
+        mint_finality_semantic_digest: [0; 32],
+        mint_finality_proof_binding_digest: [0; 32],
+        peer_credit_id,
+        recipient_encryption_key_binding: recipient_key,
+        lifecycle_binding_digest: lifecycle,
+        prepared_transition_binding_digest: prepared.binding_digest().map_err(material)?,
+        receive_credit_binding_digest: [0; 32],
+        predecessor_release_id: before.release_id,
+        release_id: after.release_id,
+        asset_incarnation: before.asset_incarnation,
+        liability_pool_id: before.liability_pool_id,
+        hardware_profile_id: before.hardware_profile_id,
+        policy_epoch: before.policy_epoch,
+        lane: before.lane.clone(),
+        predecessor_commitment: before.state_commitment,
+        successor_commitment: after.state_commitment,
+        predecessor_sequence: before.logical_sequence,
+        successor_sequence: after.logical_sequence,
+        predecessor_epoch: before.hardware_epoch,
+        successor_epoch: after.hardware_epoch,
+        predecessor_device_policy_binding: before.device_policy_binding,
+        successor_device_policy_binding: after.device_policy_binding,
+        predecessor_state_nonce_commitment: before.state_nonce_commitment,
+        successor_state_nonce_commitment: after.state_nonce_commitment,
+        journal_revision_before: u128::from(journal_revision),
+        journal_revision_after: u128::from(
+            journal_revision
+                .checked_add(1)
+                .ok_or(KagemushaStateErrorV1::JournalRevisionOverflow)?,
+        ),
+        effect_digest,
+    };
+    require_outgoing(before, after, &statement, journal_revision)?;
+    Ok(statement)
+}
+
+/// Pure mathematical qualification operands. No Native owner or authorization is constructed.
+#[cfg(test)]
+pub(crate) struct OrdinarySendPreviewForQualificationV1 {
+    pub(crate) successor: KagemushaStateV1,
+    pub(crate) statement: TransitionProofStatementV1,
+    pub(crate) normalized: KagemushaNormalizedGuardStatementV1,
+    pub(crate) guard_context: KagemushaGuardContextV1,
+    pub(crate) credit_opening: iroha_data_model::kagemusha::KagemushaCreditOpeningV1,
+    pub(crate) encrypted_credit: Vec<u8>,
+    pub(crate) output: KagemushaOrdinaryPaymentOutputV1,
+}
+/// Run the same State/subtraction, real AEAD, lifecycle, statement and normalization kernel
+/// over known-public test data, without fabricating FI/control, clock or durable reservation caps.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ordinary_send_preview_for_qualification_v1(
+    before: &KagemushaStateV1,
+    request: &KagemushaOrdinaryPaymentRequestV1,
+    clock: &KagemushaOrdinaryCashClockContextV1,
+    reservation: &KagemushaOutboxReservationV1,
+    journal: u64,
+    nonce: DigestV1,
+    operation: DigestV1,
+    entropy: &[u8; 152],
+    artifacts: KagemushaRecursionArtifactsV1,
+) -> Result<OrdinarySendPreviewForQualificationV1, KagemushaStateErrorV1> {
+    let successor = derive_successor(before, nonce, operation, request.body.amount)?;
+    let nullifier = iroha_data_model::kagemusha::kagemusha_ordinary_transition_nullifier_v1(
+        before.state_commitment,
+        before.secure_index,
+        before.hardware_epoch.epoch_id,
+        *before.lane.network_id.as_bytes(),
+        before.lane.device_lane_id,
+        before.liability_pool_id,
+    )
+    .map_err(material)?;
+    let (credit_opening, encrypted_credit, output) =
+        super::send_credit::derive_credit_for_qualification_v1(
+            before.state_commitment,
+            successor.state_commitment,
+            nullifier,
+            request,
+            clock,
+            entropy,
+        )?;
+    let mut lifecycle = terminal_lifecycle_binding_v1(
+        before,
+        KagemushaOperationKindV1::SendSplit,
+        request.body.request_id,
+        request.body.recipient_lane_id,
+        output.encrypted_credit_digest,
+    );
+    lifecycle.credit_id = output.credit_id;
+    let statement = derive_preparation_statement_from_originals_v1(
+        before,
+        &successor,
+        operation,
+        KagemushaTransitionKindV1::SendSplit,
+        output.amount,
+        lifecycle.canonical_digest().map_err(material)?,
+        output.request_digest,
+        output.credit_id,
+        request.body.recipient_encryption_key,
+        output.binding_digest().map_err(material)?,
+        reservation,
+        journal,
+    )?;
+    let guard_context = transition_guard_context(artifacts, &statement, clock.upper_at_ms)?;
+    let normalized =
+        KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, guard_context)
+            .map_err(material)?;
+    Ok(OrdinarySendPreviewForQualificationV1 {
+        successor,
+        statement,
+        normalized,
+        guard_context,
+        credit_opening,
+        encrypted_credit,
+        output,
+    })
+}

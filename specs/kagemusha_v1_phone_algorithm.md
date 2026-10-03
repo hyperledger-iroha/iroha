@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 phone algorithm and release contract
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 Status: design draft for the first release, 2026-09-23. This document states
 the required algorithm and the current implementation boundary. It is not a
 claim that any phone profile is qualified or that production monetary

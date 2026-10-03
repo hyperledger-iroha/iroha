@@ -239,10 +239,29 @@ impl KagemushaRetainedOrdinaryNativeClockOriginalsV1 {
     }
 }
 impl KagemushaOrdinaryNativeClockOwnerV1 {
+    /// Copy complete public signed data from this owner's genuine acknowledged observation WAL.
+    /// A transported context cannot insert an observation, establish elapsed time, replace the
+    /// installed roots or grant a financial effect. This lookup deliberately works historically.
+    /// # Errors
+    /// Refuses absent/ambiguous genuine WAL observation, foreign context or changed custody.
+    pub fn retained_signed_clock_original_data(
+        &self,
+        context: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<Vec<u8>> {
+        let loan = self.retained_cash_clock_originals(context)?;
+        loan.recheck(self)?;
+        let raw = loan.canonical_original().to_vec();
+        loan.recheck(self)?;
+        Ok(raw)
+    }
+
     /// Authenticate received historical samples under this actual installed clock root/prefix.
     /// Offered samples cannot enter the clock WAL, renew elapsed time or construct a retained
     /// Native nonce loan. This lends only independently checked signed/finality original data.
-    pub(crate) fn authenticate_received_historical_signed_original(
+    /// # Errors
+    /// Refuses an oversized/noncanonical original, foreign installed policy/finality prefix,
+    /// invalid reporter signatures or changed custody; it never renews elapsed time.
+    pub fn authenticate_received_historical_signed_original(
         &self,
         raw: &[u8],
     ) -> Result<KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1> {

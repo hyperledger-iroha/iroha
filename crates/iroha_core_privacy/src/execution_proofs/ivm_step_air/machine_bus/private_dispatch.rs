@@ -12,8 +12,10 @@
 // production adapter, verifier registration or complete-State authority.
 
 mod code_words;
+mod load_success;
 pub(super) mod native_witness;
 mod scalar;
+mod store_success;
 
 use super::{F, bit, frame_lifecycle, packet, wide};
 use ivm::{PreparedContract, limits::MAX_CONTRACT_CALL_DEPTH};
@@ -45,7 +47,7 @@ const SCALAR: usize = RETURN_DELTA + 2;
 pub(super) const WIDTH: usize = SCALAR + scalar::WIDTH;
 /// Exhaustive original producers owned by this dispatcher, in native order.
 pub(super) const PORTS: usize = 21;
-/// Architectural control owner indexes; frame indexes 0..21 stay disjoint.
+/// Architectural control owner indexes; frame/memory-policy owners 0..23 stay disjoint.
 const PC_OWNER: u32 = 32;
 const GAS_OWNER: u32 = 33;
 const CYCLE_OWNER: u32 = 34;
@@ -225,6 +227,7 @@ pub(super) struct Decoded<'a> {
     pub(super) store: F,
     pub(super) load: F,
     pub(super) load_destination: F,
+    pub(super) load_destination_index: F,
     pub(super) target: [F; 4],
     pub(super) memory_address: [F; 4],
     pub(super) destination: &'a [F; packet::WIDTH],
@@ -333,7 +336,7 @@ fn header(
     }
 }
 
-/// Constrain canonical private fetch, native base debit and one-cycle commit,
+/// Constrain canonical private fetch, native base debit and exact-cycle commit,
 /// exact source registers and artifact literals, CALL fresh-parent state, protected RETURN target and
 /// the native bounded return-stack depth transition.
 ///
@@ -382,6 +385,7 @@ fn append_control_residues<'a>(
         select(&|_, w| role(w) == Some(Role::Scalar) && wide::opcode(w) != wide::system::GETGAS);
     let scalar_extra_gas = select(&|_, w| {
         scalar::is_rotate(w)
+            || scalar::is_mean(w)
             || matches!(
                 wide::opcode(w),
                 wide::arithmetic::SLT
@@ -393,6 +397,14 @@ fn append_control_residues<'a>(
     let multiply_extra_gas = select(&|_, w| scalar::is_multiply(w)).mul(F(2));
     let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
     let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
+    let division_extra_gas = select(&|_, w| scalar::is_division(w)).mul(F(9));
+    let ceiling_selected = select(&|_, w| scalar::is_division_ceiling(w));
+    let ceiling_extra_gas = ceiling_selected.mul(F(2));
+    let ceiling_extra_cycles = ceiling_selected.mul(F(11));
+    let square_extra_gas = select(&|_, w| scalar::is_square_root(w)).mul(F(5));
+    let square_extra_cycles = square_extra_gas;
+    let mean_extra_cycles = select(&|_, w| scalar::is_mean(w)).mul(F(2));
+    let gcd_extra = select(&|_, w| scalar::is_gcd(w)).mul(F(11));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let jumping = select(&|_, w| role(w) == Some(Role::Jump));
     let mut fetched = F::ZERO;
@@ -407,8 +419,7 @@ fn append_control_residues<'a>(
     out.push(
         child
             .add(returning)
-            .add(store)
-            .add(load)
+            .add(memory)
             .add(literal)
             .add(scalar)
             .add(branching)
@@ -499,9 +510,12 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: two for CALL/RETURN/direct jumps, three for LOAD64/STORE64, one
-        // for LDI64, scalar arithmetic and conditional branches, plus one for comparisons/rotates
-        // and two for the four multiply variants. GETGAS has zero native cost.
+        // Native base cost: zero for GETGAS, two for CALL/RETURN/direct jumps,
+        // three for LOAD64/STORE64, one for LDI64 and other scalars/branches.
+        // Comparisons/rotates/MEAN add one, multiply adds two, bit counts/ISQRT
+        // add five, ordinary division adds nine and DIV_CEIL adds eleven.
+        // GCD uses twelve gas/cycles, DIV_CEIL twelve cycles, ISQRT six and
+        // MEAN three; all other roles consume one cycle.
         // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
@@ -520,6 +534,10 @@ fn append_control_residues<'a>(
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)
                 .add(move_extra_gas)
+                .add(division_extra_gas)
+                .add(ceiling_extra_gas)
+                .add(square_extra_gas)
+                .add(gcd_extra)
                 .add(branching)
         } else {
             F::ZERO
@@ -533,6 +551,10 @@ fn append_control_residues<'a>(
         );
         let carry_in = if i == 0 {
             active
+                .add(mean_extra_cycles)
+                .add(square_extra_cycles)
+                .add(ceiling_extra_cycles)
+                .add(gcd_extra)
         } else {
             row[CARRIES + 4 + i - 1]
         };
@@ -841,6 +863,13 @@ fn append_control_residues<'a>(
         store,
         load,
         load_destination: select(&|_, w| role(w) == Some(Role::Load) && wide::rd(w) != 0),
+        load_destination_index: weighted(&|_, w| {
+            if role(w) == Some(Role::Load) {
+                F(wide::rd(w) as u64)
+            } else {
+                F::ZERO
+            }
+        }),
         destination: &p[SCALAR_DESTINATION],
         target: core::array::from_fn(|i| p[PC_WRITE][AFTER + i]),
         memory_address: core::array::from_fn(|i| limb(row, 7, i)),

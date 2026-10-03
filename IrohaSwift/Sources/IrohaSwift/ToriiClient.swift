@@ -18531,6 +18531,9 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
     case kagemushaVerifierReleaseActivate(
         ToriiGovernanceKagemushaVerifierReleaseActivateProposalV1
     )
+    case kagemushaVerifierReleaseRetire(
+        ToriiGovernanceKagemushaVerifierReleaseRetireProposalV1
+    )
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case kind
@@ -18624,6 +18627,13 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
             self = .kagemushaVerifierReleaseActivate(
                 try container.decode(
                     ToriiGovernanceKagemushaVerifierReleaseActivateProposalV1.self,
+                    forKey: .payload
+                )
+            )
+        case "KagemushaVerifierReleaseRetire":
+            self = .kagemushaVerifierReleaseRetire(
+                try container.decode(
+                    ToriiGovernanceKagemushaVerifierReleaseRetireProposalV1.self,
                     forKey: .payload
                 )
             )

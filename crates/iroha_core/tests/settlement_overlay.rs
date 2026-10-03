@@ -2,10 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::unwrap_used)]
 use iroha_core::{
-    kura::Kura,
     pipeline::overlay::TxOverlay,
-    query::store::LiveQueryStore,
-    state::{State, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::{
     Registrable,
@@ -33,7 +32,11 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::str::FromStr as _;
-fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
+fn settlement_state() -> (
+    Box<CertifiedTestChain>,
+    AssetDefinitionId,
+    AssetDefinitionId,
+) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -77,14 +80,19 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         [alice_delivery, bob_payment],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
-    (state, delivery_def_id, payment_def_id)
+    let chain = Box::new(
+        CertifiedTestChain::start(TestChainConfig::new(world, 0))
+            .expect("apply original signed settlement genesis"),
+    );
+    (chain, delivery_def_id, payment_def_id)
 }
 fn settlement_state_with_payment_spec(
     payment_spec: NumericSpec,
-) -> (State, AssetDefinitionId, AssetDefinitionId) {
+) -> (
+    Box<CertifiedTestChain>,
+    AssetDefinitionId,
+    AssetDefinitionId,
+) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -130,10 +138,11 @@ fn settlement_state_with_payment_spec(
         [alice_delivery, bob_payment],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
-    (state, delivery_def_id, payment_def_id)
+    let chain = Box::new(
+        CertifiedTestChain::start(TestChainConfig::new(world, 0))
+            .expect("apply original signed settlement genesis"),
+    );
+    (chain, delivery_def_id, payment_def_id)
 }
 fn apply_overlay(
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
@@ -174,10 +183,31 @@ fn grant_exact_settlement_consent(
 }
 #[test]
 fn dvp_overlay_rejects_underfunded_leg() {
-    let (state, delivery_def_id, payment_def_id) = settlement_state();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let (chain, delivery_def_id, payment_def_id) = settlement_state();
+    let state = chain.state();
+    let view = state.view();
+    assert_eq!(
+        view.height(),
+        1,
+        "the original genesis must already be applied"
+    );
+    assert_eq!(
+        view.latest_block_hash(),
+        Some(chain.genesis().header().hash())
+    );
+    let time = chain
+        .genesis()
+        .header()
+        .creation_time_ms
+        .checked_add(1)
+        .expect("fixture time");
+    let header = BlockHeader::new(nonzero!(2_u64), view.latest_block_hash(), None, time, 0);
+    drop(view);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    // This bounded component owner exercises TxOverlay admission directly. It
+    // grants no authenticated Network input, block publication, or finality.
+    let mut stx = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::new(b"settlement-overlay-component"));
     let instruction = DvpIsi {
         settlement_id: "overlay_underfunded".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
@@ -227,10 +257,31 @@ fn dvp_overlay_rejects_underfunded_leg() {
 }
 #[test]
 fn pvp_overlay_executes_when_funded() {
-    let (state, primary_def_id, counter_def_id) = settlement_state();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let (chain, primary_def_id, counter_def_id) = settlement_state();
+    let state = chain.state();
+    let view = state.view();
+    assert_eq!(
+        view.height(),
+        1,
+        "the original genesis must already be applied"
+    );
+    assert_eq!(
+        view.latest_block_hash(),
+        Some(chain.genesis().header().hash())
+    );
+    let time = chain
+        .genesis()
+        .header()
+        .creation_time_ms
+        .checked_add(1)
+        .expect("fixture time");
+    let header = BlockHeader::new(nonzero!(2_u64), view.latest_block_hash(), None, time, 0);
+    drop(view);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    // This bounded component owner exercises TxOverlay admission directly. It
+    // grants no authenticated Network input, block publication, or finality.
+    let mut stx = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::new(b"settlement-overlay-component"));
     let instruction = PvpIsi {
         settlement_id: "overlay_funded_fx".parse().unwrap(),
         primary_leg: SettlementLeg::new(
@@ -275,11 +326,32 @@ fn pvp_overlay_executes_when_funded() {
 }
 #[test]
 fn dvp_overlay_rejects_commit_first_without_moving_assets() {
-    let (state, delivery_def_id, payment_def_id) =
+    let (chain, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = chain.state();
+    let view = state.view();
+    assert_eq!(
+        view.height(),
+        1,
+        "the original genesis must already be applied"
+    );
+    assert_eq!(
+        view.latest_block_hash(),
+        Some(chain.genesis().header().hash())
+    );
+    let time = chain
+        .genesis()
+        .header()
+        .creation_time_ms
+        .checked_add(1)
+        .expect("fixture time");
+    let header = BlockHeader::new(nonzero!(2_u64), view.latest_block_hash(), None, time, 0);
+    drop(view);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    // This bounded component owner exercises TxOverlay admission directly. It
+    // grants no authenticated Network input, block publication, or finality.
+    let mut stx = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::new(b"settlement-overlay-component"));
     let instruction = DvpIsi {
         settlement_id: "overlay_commit_first".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
@@ -325,11 +397,32 @@ fn dvp_overlay_rejects_commit_first_without_moving_assets() {
 }
 #[test]
 fn dvp_overlay_rejects_commit_second_without_moving_assets() {
-    let (state, delivery_def_id, payment_def_id) =
+    let (chain, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = chain.state();
+    let view = state.view();
+    assert_eq!(
+        view.height(),
+        1,
+        "the original genesis must already be applied"
+    );
+    assert_eq!(
+        view.latest_block_hash(),
+        Some(chain.genesis().header().hash())
+    );
+    let time = chain
+        .genesis()
+        .header()
+        .creation_time_ms
+        .checked_add(1)
+        .expect("fixture time");
+    let header = BlockHeader::new(nonzero!(2_u64), view.latest_block_hash(), None, time, 0);
+    drop(view);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    // This bounded component owner exercises TxOverlay admission directly. It
+    // grants no authenticated Network input, block publication, or finality.
+    let mut stx = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::new(b"settlement-overlay-component"));
     let alice_delivery_before = asset_balance(&stx, &delivery_def_id, &ALICE_ID);
     let bob_delivery_before = asset_balance(&stx, &delivery_def_id, &BOB_ID);
     let bob_cash_before = asset_balance(&stx, &payment_def_id, &BOB_ID);

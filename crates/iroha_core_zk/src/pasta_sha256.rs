@@ -1,8 +1,8 @@
 //! Fixed-shape Table8 SHA-256 jobs for paired-Pasta circuits.
 //!
 //! The Base circuit records each hash relation while it is built. After Base
-//! synthesis has established the virtual-to-physical cell map, five Table8
-//! lanes realize those relations. Source bytes and digest words are
+//! synthesis has established the virtual-to-physical cell map, the circuit
+//! family's fixed Table8 lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
 use super::pasta_sha256_table8::IV;
 use super::pasta_sha256_table8::{
@@ -719,8 +719,17 @@ where
     /// Return the exact queued-job, compression-block, and per-lane row
     /// geometry used by the authenticated composite-circuit capacity check.
     pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
+        self.capacity_profile_for_lanes::<PASTA_SHA256_LANES_V1>()
+    }
+    /// Bound every queued compression and intermediate snapshot for the selected fixed circuit.
+    pub(crate) fn capacity_profile_for_lanes<const LANES: usize>(
+        &self,
+    ) -> Result<(usize, usize, usize), String> {
+        if LANES == 0 {
+            return Err("Paired Pasta SHA-256 requires at least one fixed lane".to_owned());
+        }
         let blocks = self.compression_blocks()?;
-        let lane_blocks = blocks.div_ceil(PASTA_SHA256_LANES_V1);
+        let lane_blocks = blocks.div_ceil(LANES);
         let extra_snapshots = self.jobs.iter().try_fold(0_usize, |count, job| {
             count.checked_add(
                 job.bounded
@@ -747,11 +756,18 @@ where
     }
     /// Conservative per-lane capacity bound for authenticated usable rows.
     pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
-        let (_, blocks, required) = self.capacity_profile()?;
+        self.validate_capacity_for_lanes::<PASTA_SHA256_LANES_V1>(usable_rows)
+    }
+    /// Refuse overflow using exactly the lanes reconstructed by the circuit configuration.
+    pub(crate) fn validate_capacity_for_lanes<const LANES: usize>(
+        &self,
+        usable_rows: usize,
+    ) -> Result<(), String> {
+        let (_, blocks, required) = self.capacity_profile_for_lanes::<LANES>()?;
         if required > usable_rows {
             return Err(format!(
                 "Paired Pasta SHA-256 requires {required} rows per Table8 lane for {blocks} blocks, \
-                 exceeding {usable_rows} authenticated usable rows"
+                 exceeding {usable_rows} authenticated usable rows with {LANES} fixed lanes"
             ));
         }
         Ok(())
@@ -792,17 +808,17 @@ where
     }
     /// Realize all jobs after Base synthesis populated the physical cell map.
     ///
-    /// Blocks are routed globally in job/block order across lanes 0..4.
+    /// Blocks are routed globally in job/block order across the configured lanes.
     /// Every job starts from the standard IV; multi-block chaining is
     /// copy-constrained even when consecutive blocks use different lanes.
-    pub(crate) fn synthesize(
+    pub(crate) fn synthesize<const LANES: usize>(
         &self,
-        config: &PastaSha256ConfigV1,
+        config: &PastaSha256ConfigV1<LANES>,
         layouter: &mut impl Layouter<F>,
         copy_manager: &SharedCopyConstraintManager<F>,
         usable_rows: usize,
     ) -> Result<(), Error> {
-        self.validate_capacity(usable_rows)
+        self.validate_capacity_for_lanes::<LANES>(usable_rows)
             .map_err(|_| Error::Synthesis)?;
         Table8Chip::<F>::load(config.lanes[0].clone(), layouter)?;
         let chips = config.lanes.clone().map(Table8Chip::<F>::construct);
@@ -918,7 +934,7 @@ where
             if !blocks.remainder().is_empty() {
                 return Err(Error::Synthesis);
             }
-            let first_lane = global_block_index % PASTA_SHA256_LANES_V1;
+            let first_lane = global_block_index % LANES;
             let first_block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
                 first.to_vec().try_into().map_err(|_| Error::Synthesis)?;
             let first_words =
@@ -951,7 +967,7 @@ where
             let mut final_lane = first_lane;
             global_block_index += 1;
             for (block_index, block) in blocks.enumerate() {
-                let lane = global_block_index % PASTA_SHA256_LANES_V1;
+                let lane = global_block_index % LANES;
                 let block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
                     block.to_vec().try_into().map_err(|_| Error::Synthesis)?;
                 let words = chips[lane].assign_padded_block(layouter, block, global_block_index)?;
@@ -1030,18 +1046,22 @@ fn bind_sha256_digest_v1<F: BigPrimeField>(
         },
     )
 }
-/// Five Table8 lanes sharing one spread table and one fixed constant column.
+/// Fixed circuit-family Table8 lanes sharing one spread table and constant column.
 #[derive(Clone, Debug)]
-pub(crate) struct PastaSha256ConfigV1 {
-    lanes: [Table8Config; PASTA_SHA256_LANES_V1],
+pub(crate) struct PastaSha256ConfigV1<const LANES: usize = PASTA_SHA256_LANES_V1> {
+    lanes: [Table8Config; LANES],
 }
-impl PastaSha256ConfigV1 {
+impl<const LANES: usize> PastaSha256ConfigV1<LANES> {
     pub(crate) fn configure<F>(meta: &mut ConstraintSystem<F>) -> Self
     where
         F: PrimeField,
     {
+        assert!(
+            LANES != 0,
+            "SHA circuit configuration requires fixed nonzero lanes"
+        );
         Self {
-            lanes: Table8Chip::<F>::configure_lanes::<PASTA_SHA256_LANES_V1>(meta),
+            lanes: Table8Chip::<F>::configure_lanes::<LANES>(meta),
         }
     }
 }
@@ -1062,20 +1082,23 @@ mod tests {
     const TEST_K: u32 = 17;
     const TEST_UNUSABLE_ROWS: usize = 9;
     #[derive(Clone, Debug)]
-    struct QueueConfig<F: ScalarField> {
+    struct QueueConfig<F: ScalarField, const LANES: usize = PASTA_SHA256_LANES_V1> {
         base: BaseConfig<F>,
-        sha: PastaSha256ConfigV1,
+        sha: PastaSha256ConfigV1<LANES>,
     }
     #[derive(Clone)]
-    struct QueueCircuit<F: BigPrimeField + PrimeField + From<u64>> {
+    struct QueueCircuit<
+        F: BigPrimeField + PrimeField + From<u64>,
+        const LANES: usize = PASTA_SHA256_LANES_V1,
+    > {
         builder: BaseCircuitBuilder<F>,
         jobs: PastaSha256JobsV1<F>,
     }
-    impl<F> Circuit<F> for QueueCircuit<F>
+    impl<F, const LANES: usize> Circuit<F> for QueueCircuit<F, LANES>
     where
         F: BigPrimeField + PrimeField + From<u64>,
     {
-        type Config = QueueConfig<F>;
+        type Config = QueueConfig<F, LANES>;
         type FloorPlanner = V1;
         type Params = BaseCircuitParams;
         fn params(&self) -> Self::Params {
@@ -1096,7 +1119,7 @@ mod tests {
             base.set_usable_rows(usable_rows);
             QueueConfig {
                 base,
-                sha: PastaSha256ConfigV1::configure(meta),
+                sha: PastaSha256ConfigV1::<LANES>::configure(meta),
             }
         }
         fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
@@ -1116,7 +1139,7 @@ mod tests {
                 &config.sha,
                 &mut layouter,
                 &self.builder.core().copy_manager,
-                (1_usize << TEST_K) - TEST_UNUSABLE_ROWS,
+                (1_usize << self.builder.config_params.k) - TEST_UNUSABLE_ROWS,
             )
         }
     }
@@ -1264,6 +1287,115 @@ mod tests {
             .into_iter()
             .sum();
         (preimage, output_words, lookup_rows)
+    }
+    fn family_lane_case<F: BigPrimeField + PrimeField + From<u64>, const LANES: usize>(
+        mutation: Mutation,
+    ) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(16)
+            .use_lookup_bits(15);
+        let range = builder.range_chip();
+        let mut jobs = PastaSha256JobsV1::default();
+        // Output words are allocated while digest queues the job, so mutate before enqueue.
+        if matches!(mutation, Mutation::Output) {
+            jobs = jobs.with_output_word_xor(0, 0, 1);
+        }
+        let message_len = BLOCK_BYTE_SIZE * LANES + 1;
+        let message = (0..message_len)
+            .map(|index| (index as u8).wrapping_mul(17).wrapping_add(0x57))
+            .collect::<Vec<_>>();
+        let native: [u8; 32] = Sha256::digest(&message).into();
+        // The first job crosses the final lane -> lane0 in one message. Next job resets IV.
+        for message in [message, b"next original".to_vec()] {
+            let bytes = builder
+                .main(0)
+                .assign_witnesses(message.into_iter().map(|byte| F::from(u64::from(byte))));
+            jobs.digest(builder.main(0), &range, &bytes).unwrap();
+        }
+        assert_eq!(jobs.shape(), vec![message_len, 13]);
+        assert_eq!(jobs.compression_blocks().unwrap(), LANES + 2);
+        let original_word = u32::from_be_bytes(native[..4].try_into().unwrap());
+        let expected_word = if matches!(mutation, Mutation::Output) {
+            original_word ^ 1
+        } else {
+            original_word
+        };
+        assert_eq!(
+            u32::try_from(fe_to_biguint(jobs.jobs[0].output_words[0].value())).unwrap(),
+            expected_word,
+            "changed output must be an actual Base word, not an unused post-enqueue flag"
+        );
+        jobs = match mutation {
+            Mutation::None | Mutation::Output => jobs,
+            Mutation::Padding => jobs.with_padding_xor(message_len, 1),
+            Mutation::Source => jobs.with_source_xor(0, 0, 1),
+            Mutation::Endian => jobs.with_swapped_block_endian(0),
+            Mutation::Chain => jobs.with_broken_chain(LANES),
+            Mutation::IvReset => jobs.with_skipped_iv_reset(1),
+        };
+        let usable = (1_usize << 16) - TEST_UNUSABLE_ROWS;
+        let profile = jobs.capacity_profile_for_lanes::<LANES>().unwrap();
+        assert_eq!(profile.0, 2);
+        assert_eq!(profile.1, LANES + 2);
+        assert_eq!(
+            profile.2,
+            (2 * SHA256_ROWS_PER_BLOCK_V1 + 2 * SHA256_ROWS_PER_JOB_V1).max(SHA256_TABLE_ROWS_V1)
+        );
+        jobs.validate_capacity_for_lanes::<LANES>(usable).unwrap();
+        assert_eq!(
+            jobs.capacity_profile_for_lanes::<LANES>(),
+            jobs.unknown().capacity_profile_for_lanes::<LANES>()
+        );
+        builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
+        let circuit = QueueCircuit::<F, LANES> { builder, jobs };
+        MockProver::run(16, &circuit, vec![])
+            .expect("actual fixed-family k16 queue")
+            .verify()
+            .is_ok()
+    }
+    fn assert_family_lane_mutations<const LANES: usize>() {
+        use halo2_proofs::halo2curves::pasta::Fq;
+        for mutation in [
+            Mutation::None,
+            Mutation::Padding,
+            Mutation::Source,
+            Mutation::Output,
+            Mutation::Endian,
+            Mutation::Chain,
+            Mutation::IvReset,
+        ] {
+            let expected = matches!(mutation, Mutation::None);
+            assert_eq!(family_lane_case::<Fp, LANES>(mutation), expected);
+            assert_eq!(family_lane_case::<Fq, LANES>(mutation), expected);
+        }
+    }
+    #[test]
+    fn ten_lane_k16_queue_retains_cross_lane_chaining_sources_outputs_and_job_iv_in_both_fields() {
+        assert_family_lane_mutations::<10>();
+    }
+    #[test]
+    fn eleven_lane_k16_queue_retains_cross_lane_chaining_sources_outputs_and_job_iv_in_both_fields()
+    {
+        assert_family_lane_mutations::<11>();
+    }
+    #[test]
+    fn circuit_selected_sha_lane_geometry_reconstructs_identical_pasta_constraints() {
+        use halo2_proofs::halo2curves::pasta::Fq;
+        fn check<F: PrimeField, const LANES: usize>() {
+            let mut meta = ConstraintSystem::<F>::default();
+            let _ = PastaSha256ConfigV1::<LANES>::configure(&mut meta);
+            assert_eq!(meta.num_advice_columns(), 14 * LANES);
+            assert_eq!(meta.num_fixed_columns(), 6);
+            assert_eq!(meta.num_instance_columns(), 0);
+            assert_eq!(meta.num_selectors(), 22 * LANES);
+            assert_eq!(meta.permutation().get_columns().len(), 8 * LANES + 1);
+            assert_eq!(meta.lookups().len(), 2 * LANES);
+            assert_eq!(meta.degree(), 9);
+        }
+        check::<Fp, 10>();
+        check::<Fq, 10>();
+        check::<Fp, 11>();
+        check::<Fq, 11>();
     }
     #[test]
     fn five_lane_round_robin_cross_lane_chaining_and_job_iv_reset_are_valid() {

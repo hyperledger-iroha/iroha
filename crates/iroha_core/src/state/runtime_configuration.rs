@@ -2,7 +2,8 @@ impl State {
     /// Return a handle to the original State-owned execution allocation pool.
     ///
     /// Cloning this handle preserves pool identity across pipeline reloads;
-    /// observed counters do not grant an execution reservation.
+    /// observed counters do not grant an execution reservation. Accessing the
+    /// immutable owner acquires no cache lock or notifying reader.
     pub fn ivm_execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.ivm_execution_budget.clone()
     }

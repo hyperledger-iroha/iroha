@@ -1336,6 +1336,32 @@ pub mod kagemusha {
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Exact payer-authenticated ordinary debit original and native receipt membership.
+    pub const ORDINARY_MINT_FINALIZED: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.ordinary_mint_finalized",
+        HttpMethod::Post,
+        "/v1/kagemusha/ordinary/top-up/finality",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Exact payer-authenticated ordinary credit published by the genuine background owner.
+    pub const ORDINARY_MINT_CREDIT: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.ordinary_mint_credit",
+        HttpMethod::Post,
+        "/v1/kagemusha/ordinary/top-up/credit",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Complete first-release KAGEMUSHA route descriptor inventory.
     pub const ROUTES: &[RouteDescriptor] = &[
         READINESS,
@@ -1347,6 +1373,8 @@ pub mod kagemusha {
         AUTHORITY_ORIGINALS,
         ORDINARY_WALLET_CURRENT,
         ORDINARY_MINT_ISSUER_PURPOSE,
+        ORDINARY_MINT_FINALIZED,
+        ORDINARY_MINT_CREDIT,
     ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.

@@ -661,7 +661,7 @@ pub struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     publication: PublicationAuthority,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileSnapshot {
     identity: FileIdentity,
     mode: u32,
@@ -671,6 +671,63 @@ pub struct FileSnapshot {
     length: u64,
     modified: (i64, i64),
     changed: (i64, i64),
+}
+
+impl FileSnapshot {
+    fn from_metadata(value: &fs::Metadata) -> Self {
+        let mut object = [0; 16];
+        object[..8].copy_from_slice(&value.ino().to_le_bytes());
+        Self {
+            identity: FileIdentity {
+                volume: value.dev(),
+                object,
+            },
+            mode: value.mode(),
+            owner: value.uid(),
+            group: value.gid(),
+            links: value.nlink(),
+            length: value.len(),
+            modified: (value.mtime(), value.mtime_nsec()),
+            changed: (value.ctime(), value.ctime_nsec()),
+        }
+    }
+}
+
+/// Capture a revalidated private journal with exact owner-only mode.
+pub fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
+    let value = validate_file(file, true)?;
+    if value.mode() & 0o7777 != 0o600 {
+        return Err(denied("private journal requires mode 0600"));
+    }
+    Ok(FileSnapshot::from_metadata(&value))
+}
+/// Validate retained public-file custody and its accepted read modes.
+pub fn validate_public_original(file: &File) -> io::Result<()> {
+    let value = validate_file(file, false)?;
+    if !matches!(value.mode() & 0o7777, 0o644 | 0o444) {
+        return Err(denied("public original requires mode 0644 or 0444"));
+    }
+    Ok(())
+}
+impl Directory {
+    pub(super) fn snapshot_directory(&self) -> io::Result<FileSnapshot> {
+        self.revalidate()?;
+        let file = &self.current().file;
+        validate_directory(file, false)?;
+        let value = file.metadata()?;
+        let snapshot = FileSnapshot::from_metadata(&value);
+        self.revalidate()?;
+        if !unchanged(&value, &file.metadata()?) {
+            return Err(changed());
+        }
+        Ok(snapshot)
+    }
+}
+
+/// Capture current metadata after validating the retained file authority.
+pub fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
+    let value = validate_file(file, private)?;
+    Ok(FileSnapshot::from_metadata(&value))
 }
 
 impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
@@ -713,16 +770,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     pub(super) fn snapshot(&self) -> io::Result<FileSnapshot> {
         self.revalidate()?;
         let value = validate_file(&self.file, self.private)?;
-        let snapshot = FileSnapshot {
-            identity: self.identity()?,
-            mode: value.mode(),
-            owner: value.uid(),
-            group: value.gid(),
-            links: value.nlink(),
-            length: value.len(),
-            modified: (value.mtime(), value.mtime_nsec()),
-            changed: (value.ctime(), value.ctime_nsec()),
-        };
+        let snapshot = FileSnapshot::from_metadata(&value);
         self.revalidate()?;
         Ok(snapshot)
     }
@@ -797,4 +845,59 @@ pub fn read_external(
     private: bool,
 ) -> io::Result<Zeroizing<Vec<u8>>> {
     Directory::open_with_policy(parent, false, false, 0, true)?.read(name, maximum, private)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn journal_snapshot_requires_exact_writable_private_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("journal");
+        fs::write(&path, b"original").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = File::open(&path).unwrap();
+        let original = journal_snapshot(&file).unwrap();
+        assert_eq!(original, snapshot_file(&file, true).unwrap());
+        assert_eq!(original.identity, identity(&file).unwrap());
+        assert_eq!(original.length, 8);
+        assert_eq!(original.mode & 0o7777, 0o600);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(snapshot_file(&file, true).is_ok());
+        assert!(journal_snapshot(&file).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(journal_snapshot(&file).is_err());
+    }
+
+    #[test]
+    fn public_original_requires_exact_public_read_modes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("public");
+        fs::write(&path, b"original").unwrap();
+        let file = File::open(&path).unwrap();
+        for mode in [0o644, 0o444] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            validate_public_original(&file).unwrap();
+        }
+        for mode in [0o600, 0o400, 0o640, 0o664] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(validate_public_original(&file).is_err());
+        }
+    }
+
+    #[test]
+    fn directory_snapshot_revalidates_original_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("original");
+        fs::create_dir(&path).unwrap();
+        let directory = Directory::open_reader(&path).unwrap();
+        let original = directory.snapshot_directory().unwrap();
+        assert_eq!(original, directory.snapshot_directory().unwrap());
+        fs::rename(&path, root.path().join("retired")).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(directory.snapshot_directory().is_err());
+    }
 }

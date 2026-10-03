@@ -334,7 +334,10 @@ final class KagemushaOrdinaryAppIdentityFrameV1Tests:XCTestCase {
     func contract() throws -> [UInt32] { [2,25,3,6,54,8,7,22,16,0xffff,1,21] }
     func install(storagePath:Data) throws {}
     func open(storagePath:Data) throws -> UInt64 { 1 }
-    func close(handle:UInt64) throws { XCTAssertEqual(handle,1);closeCalls += 1 }
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func close(handle: UInt64) throws { XCTAssertEqual(handle,1);closeCalls += 1 }
     func invoke(handle:UInt64,method:UInt8,request:Data) throws -> Data {
       XCTAssertEqual(handle,1);XCTAssertEqual(method,21)
       let q=try KagemushaCoreCoordinatorFrameV1.decodeRequest(.preparedOrdinaryAppIdentity,frame:request)
@@ -386,7 +389,7 @@ final class KagemushaOrdinaryAppIdentityFrameV1Tests:XCTestCase {
     let path=URL(fileURLWithPath:#filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/kagemusha_ordinary_enrollment_native_vectors_v1.json")
     let raw=try Data(contentsOf:path)
-    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("d398cbdbdb79d5216f202457404d32381d867caf208aeb360c9b8157a56b5e7a"))
+    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("44ecdc467c6d43d6d52cdd294ff1fe24313899db19ee6a77a40f9b6ae89b4951"))
     let json=try XCTUnwrap(JSONSerialization.jsonObject(with:raw) as? [String:Any])
     XCTAssertEqual(json["codec_only"] as? Bool,true)
     for key in ["native_authority","hardware_qualified","monetary_authority"] { XCTAssertEqual(json[key] as? Bool,false) }

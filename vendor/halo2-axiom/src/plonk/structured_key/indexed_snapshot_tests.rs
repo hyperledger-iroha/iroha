@@ -1,10 +1,11 @@
-//! Indexed coefficient snapshots against the frozen original dense structured decoder.
+//! Indexed coefficient snapshots compared with original real Processed-key coefficient banks.
 //!
 //! The writer records plaintext only for test assertions. Its padding and drop observations
 //! model the trait contract; they do not qualify Core authentication, key provenance, storage
 //! cleanup, process RSS, or production proof admission.
 
 use super::super::indexed::{reads::IndexedKeyPolynomialV1 as PolynomialId, snapshot};
+use super::super::indexed_io_test_plan as io_plan;
 use super::*;
 use crate::poly::stored_advice::{
     STORED_SCALARS_PER_CHUNK_V1, StoredKeyMaskV1, StoredPastaFieldV1,
@@ -311,11 +312,14 @@ where
             let unit = if f.mode == 1 { 1 } else { 32 };
             (f.payload.offset, f.payload.length as usize, unit)
         }
-        PolynomialId::PermutationLagrange(column) => (
-            m.permutation_targets.offset + (column * m.rows * 4) as u64,
-            m.rows * 4,
-            4,
-        ),
+        PolynomialId::PermutationLagrange(column) => {
+            let r = &m.permutations[column];
+            (
+                r.targets.offset + if r.mode == Mode::Sparse { 4 } else { 0 },
+                r.targets.length as usize,
+                4,
+            )
+        }
     }
 }
 fn assert_cleanup(rows: usize, allocated: Option<bool>) {
@@ -338,9 +342,21 @@ fn oracle<C: SerdeCurveAffine, const EMPTY: bool>()
 where
     C::Scalar: StoredAssignmentFieldV1 + SerdePrimeField + FromUniformBytes<64>,
 {
-    for (k, compressed, arbitrary) in [(4, false, false), (4, true, true), (9, true, true)] {
-        let (_, bytes) = fixture::<C, EMPTY>(k, compressed, arbitrary);
-        let old = old::<C, EMPTY>(&bytes, k, bytes.len() as u64).unwrap();
+    let mut cases = vec![
+        (4, false, false, false),
+        (4, true, true, false),
+        (9, true, true, false),
+    ];
+    if !EMPTY {
+        cases.push((7, true, true, true));
+    }
+    for (k, compressed, arbitrary, all_modes) in cases {
+        let (generated, bytes) = if all_modes {
+            super::permutation_tests::mode_fixture::<C>(k)
+        } else {
+            fixture::<C, EMPTY>(k, compressed, arbitrary)
+        };
+        let old = processed::<C, EMPTY>(&generated);
         let key = index::<C, EMPTY, _, _>(
             &mut bytes.as_slice(),
             k,
@@ -380,13 +396,15 @@ where
                     .unwrap();
             }
             let r = record.borrow();
-            let (at, bytes, unit) = interval(&key, id);
-            assert_eq!((r.seeks, r.delivered, r.reads), (1, bytes, bytes / unit));
-            assert_eq!(r.largest_request, unit);
+            let plan = io_plan::plan(&bytes, &key, id, 0, key.rows());
+            let o = io_plan::observation(&plan, usize::MAX, None);
             assert_eq!(
-                (r.first_byte, r.last_byte),
-                (Some(at), Some(at + bytes as u64))
+                (r.seeks, r.delivered, r.reads),
+                (o.seeks, o.delivered, o.reads)
             );
+            assert_eq!(r.largest_request, o.largest);
+            assert_eq!((r.first_byte, r.last_byte), (o.first, o.last));
+            assert_eq!(source.cursor.position(), o.position);
             assert_eq!(r.writes.len(), expected.chunk_count());
             for ((chunk, logical), padded) in r.writes.iter().zip(&r.padded) {
                 assert_eq!(logical.len(), expected.chunk_scalar_count(*chunk).unwrap());
@@ -412,7 +430,7 @@ fn invalid<C: SerdeCurveAffine>()
 where
     C::Scalar: StoredAssignmentFieldV1 + SerdePrimeField + FromUniformBytes<64>,
 {
-    let (_, bytes) = fixture::<C, false>(4, true, true);
+    let (generated, bytes) = fixture::<C, false>(4, true, true);
     let key = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -517,7 +535,7 @@ fn faults<C: SerdeCurveAffine>()
 where
     C::Scalar: StoredAssignmentFieldV1 + SerdePrimeField + FromUniformBytes<64>,
 {
-    let (_, bytes) = fixture::<C, false>(9, true, true);
+    let (generated, bytes) = fixture::<C, false>(9, true, true);
     let key = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         9,
@@ -719,8 +737,8 @@ where
         CoefficientTransformBoundaryPanic, with_coefficient_transform_panic,
     };
 
-    let (_, bytes) = fixture::<C, false>(4, true, true);
-    let old = old::<C, false>(&bytes, 4, bytes.len() as u64).unwrap();
+    let (generated, bytes) = fixture::<C, false>(4, true, true);
+    let old = processed::<C, false>(&generated);
     let key = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -770,15 +788,16 @@ where
                 .count(),
         );
         assert!(boundary.nonzero > 0);
-        let (at, bytes, unit) = interval(&key, id);
+        let plan = io_plan::plan(&bytes, &key, id, 0, key.rows());
+        let o = io_plan::observation(&plan, usize::MAX, None);
         let r = record.borrow();
-        assert_eq!((r.seeks, r.delivered, r.reads), (1, bytes, bytes / unit));
-        assert_eq!(r.largest_request, unit);
         assert_eq!(
-            (r.first_byte, r.last_byte),
-            (Some(at), Some(at + bytes as u64)),
+            (r.seeks, r.delivered, r.reads),
+            (o.seeks, o.delivered, o.reads)
         );
-        assert_eq!(source.cursor.position(), at + bytes as u64);
+        assert_eq!(r.largest_request, o.largest);
+        assert_eq!((r.first_byte, r.last_byte), (o.first, o.last));
+        assert_eq!(source.cursor.position(), o.position);
         assert!(r.writes.is_empty());
         assert!(r.padded.is_empty());
         assert_eq!((r.seals, r.writer_drops, r.snapshot_drops), (0, 1, 0));

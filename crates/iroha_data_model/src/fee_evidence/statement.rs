@@ -14,6 +14,11 @@ pub const MAX_RETAIL_FEE_RECEIPT_PAGE_COUNT_V1: usize = 100;
 pub const MAX_RETAIL_FEE_RECEIPT_PAGE_BYTES_V1: usize = 1024 * 1024;
 
 /// Canonical execution-witness-compatible leaf for an authenticated current head.
+///
+/// # Errors
+///
+/// Returns an error if the head cannot be canonically encoded or its state key
+/// cannot be represented.
 pub fn retail_fee_head_leaf_hash_v1(head: &RetailFeeReceiptHeadV1) -> Result<Hash, String> {
     let key = retail_fee_receipt_head_state_key_v1(&head.wallet_id)?;
     let mut bytes = vec![0];
@@ -24,6 +29,10 @@ pub fn retail_fee_head_leaf_hash_v1(head: &RetailFeeReceiptHeadV1) -> Result<Has
     Ok(Hash::new(bytes))
 }
 /// Canonical sparse key path of the original wallet identity.
+///
+/// # Errors
+///
+/// Returns an error if the wallet receipt-head state key cannot be represented.
 pub fn retail_fee_head_path_v1(wallet: &AccountId) -> Result<[u8; 32], String> {
     Ok(Hash::new(
         retail_fee_receipt_head_state_key_v1(wallet)?
@@ -83,6 +92,11 @@ pub struct RetailFeeCurrentHeadProofV1 {
 }
 impl RetailFeeCurrentHeadProofV1 {
     /// Verify against independent native finality and obtain the first history cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid snapshot, identity or checkpoint mismatch,
+    /// incoherent cursor, invalid sparse proof, or canonical encoding failure.
     pub fn verify(
         &self,
         ordinary_root: Hash,
@@ -145,6 +159,12 @@ pub struct RetailFeeReceiptPageV1 {
 impl RetailFeeReceiptPageV1 {
     /// Verify every receipt against a cursor derived from a verified head or page.
     /// Never trust a cursor supplied solely by an unverified history response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, oversized or incoherent page, canonical
+    /// encoding failure, or a wallet, sequence, hash-chain or amount-conservation
+    /// mismatch.
     pub fn verify(
         &self,
         cursor: &RetailFeeReceiptCursorV1,

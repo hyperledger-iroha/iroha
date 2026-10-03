@@ -2,7 +2,8 @@
 //!
 //! These values are never serialized and are not trusted UTC, MiBank approval, or monetary
 //! commit-time authority. They only bound a native-owned challenge. Apple uses the public
-//! `mach_continuous_time` clock; Android/Linux use `CLOCK_BOOTTIME`. There is no wall-clock,
+//! `mach_continuous_time` clock; Android/Linux use `CLOCK_BOOTTIME`; Windows uses the
+//! native Windows 10+ `QueryInterruptTimePrecise` boot counter. There is no wall-clock,
 //! uptime-only or unsupported-platform fallback.
 //!
 //! Platform contracts: <https://developer.apple.com/documentation/kernel/mach> and
@@ -170,37 +171,12 @@ impl NativeDeadlineV1 {
     }
 }
 
-#[cfg(target_vendor = "apple")]
 fn platform_nanos() -> Result<u128> {
-    // Verified against the current public SDK's mach/mach_time.h. The conversion ratio
-    // is immutable for this boot; rejection is cached too, never replaced by a weak clock.
-    #[repr(C)]
-    struct MachTimebase {
-        numer: u32,
-        denom: u32,
-    }
-    unsafe extern "C" {
-        fn mach_continuous_time() -> u64;
-        fn mach_timebase_info(info: *mut MachTimebase) -> i32;
-    }
-    static TIMEBASE: std::sync::OnceLock<Result<(u32, u32)>> = std::sync::OnceLock::new();
-    let (numer, denom) = *TIMEBASE
-        .get_or_init(|| {
-            let mut info = MachTimebase { numer: 0, denom: 0 };
-            // SAFETY: writable correctly laid-out struct lives for the complete C call.
-            if unsafe { mach_timebase_info(&mut info) } != 0 || info.numer == 0 || info.denom == 0 {
-                Err(NativeDeadlineErrorV1::Unavailable)
-            } else {
-                Ok((info.numer, info.denom))
-            }
-        })
-        .as_ref()
-        .map_err(|error| *error)?;
-    // SAFETY: the SDK function takes no pointers and is available on all supported iPhones.
-    mach_ticks_to_nanos(unsafe { mach_continuous_time() }, numer, denom)
+    iroha_primitives::time::native_continuous_clock_nanos()
+        .map_err(|_| NativeDeadlineErrorV1::Unavailable)
 }
 
-#[cfg(any(target_vendor = "apple", test))]
+#[cfg(test)]
 fn mach_ticks_to_nanos(ticks: u64, numer: u32, denom: u32) -> Result<u128> {
     if numer == 0 || denom == 0 {
         return Err(NativeDeadlineErrorV1::Unavailable);
@@ -211,18 +187,7 @@ fn mach_ticks_to_nanos(ticks: u64, numer: u32, denom: u32) -> Result<u128> {
         .ok_or(NativeDeadlineErrorV1::Invalid)
 }
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
-fn platform_nanos() -> Result<u128> {
-    let mut time: libc::timespec = unsafe { std::mem::zeroed() };
-    // SAFETY: native libc supplies the target's exact timespec layout, including 32-bit ABIs.
-    // A denied/absent BOOTTIME clock is unavailable, never replaced with MONOTONIC or REALTIME.
-    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) } != 0 {
-        return Err(NativeDeadlineErrorV1::Unavailable);
-    }
-    timespec_to_nanos(i128::from(time.tv_sec), i128::from(time.tv_nsec))
-}
-
-#[cfg(any(target_os = "android", target_os = "linux", test))]
+#[cfg(test)]
 fn timespec_to_nanos(seconds: i128, nanos: i128) -> Result<u128> {
     if seconds < 0 || !(0..1_000_000_000).contains(&nanos) {
         return Err(NativeDeadlineErrorV1::Invalid);
@@ -231,11 +196,6 @@ fn timespec_to_nanos(seconds: i128, nanos: i128) -> Result<u128> {
         .checked_mul(NANOS_PER_SECOND)
         .and_then(|value| value.checked_add(nanos as u128))
         .ok_or(NativeDeadlineErrorV1::Invalid)
-}
-
-#[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "linux")))]
-fn platform_nanos() -> Result<u128> {
-    Err(NativeDeadlineErrorV1::Unavailable)
 }
 
 #[cfg(test)]
@@ -423,7 +383,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_vendor = "apple", target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "linux",
+        windows
+    ))]
     fn actual_platform_continuous_clock_supports_a_native_owned_deadline() {
         let deadline = NativeDeadlineV1::start(Duration::from_secs(1)).unwrap();
         let first = deadline.check().unwrap();

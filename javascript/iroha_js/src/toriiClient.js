@@ -14375,6 +14375,8 @@ async function parseGovernanceProposalRecord(payload) {
     proposalOperator = kind.kagemusha_verifier_release_install.proposal_operator;
   } else if (kind.variant === "KagemushaVerifierReleaseActivate") {
     proposalOperator = kind.kagemusha_verifier_release_activate.proposal_operator;
+  } else if (kind.variant === "KagemushaVerifierReleaseRetire") {
+    proposalOperator = kind.kagemusha_verifier_release_retire.proposal_operator;
   }
   if (proposalOperator !== null && proposalOperator !== proposer) {
     rejectType("governance proposal operator must match the retained proposer");
@@ -14504,6 +14506,16 @@ async function parseGovernanceProposalKind(payload, context) {
       return {
         variant,
         kagemusha_verifier_release_activate: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "KagemushaVerifierReleaseRetire": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        kagemusha_verifier_release_retire: normalizeGovernanceProposalWireV1(
           record,
           context,
         ).payload,

@@ -7,13 +7,10 @@
 //! hardware custody.
 
 use std::collections::BTreeMap;
-#[cfg(unix)]
 use std::path::Path;
 
-#[cfg(unix)]
 #[path = "testnet_mint_journal.rs"]
 mod mint_journal;
-#[cfg(unix)]
 use mint_journal::{
     JournalAnchor, Record as JournalRecord, TestnetMintJournal,
     decode_value as decode_journal_value, encode_value as encode_journal_value,
@@ -635,11 +632,8 @@ pub struct KagemushaTestnetProofObservationOwnerV1 {
     non_mint_observations: BTreeMap<DigestV1, RetainedTestnetNonMintObservationV1>,
     finalized_mints: BTreeMap<DigestV1, RetainedTestnetMintObservationV1>,
     mint_credit_owners: BTreeMap<DigestV1, DigestV1>,
-    #[cfg(unix)]
     reserved_mints: BTreeMap<DigestV1, MintInboxReservationV1>,
-    #[cfg(unix)]
     pinned_anchors: BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
-    #[cfg(unix)]
     journal: Option<TestnetMintJournal>,
 }
 
@@ -689,11 +683,8 @@ impl KagemushaTestnetProofObservationOwnerV1 {
             non_mint_observations: BTreeMap::new(),
             finalized_mints: BTreeMap::new(),
             mint_credit_owners: BTreeMap::new(),
-            #[cfg(unix)]
             reserved_mints: BTreeMap::new(),
-            #[cfg(unix)]
             pinned_anchors: BTreeMap::new(),
-            #[cfg(unix)]
             journal: None,
         })
     }
@@ -705,7 +696,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     ///
     /// # Errors
     /// Rejects an unauthenticated release, existing/unsafe path, or uncertain journal write.
-    #[cfg(unix)]
     pub fn create_durable(
         verifier: KagemushaAuthenticatedRecursiveVerifierV1,
         scope: KagemushaTestnetStateObservationScopeV1,
@@ -729,7 +719,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     /// # Errors
     /// Rejects a corrupt/unsafe WAL, any changed release/scope, invalid finality or proof,
     /// missing reservation, forked lineage, duplicate credit, or uncertain journal storage.
-    #[cfg(unix)]
     pub fn recover_durable(
         verifier: KagemushaAuthenticatedRecursiveVerifierV1,
         scope: KagemushaTestnetStateObservationScopeV1,
@@ -843,7 +832,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     /// # Errors
     /// Rejects a process-local owner, wrong scope, changed retry, duplicate credit, bad shape,
     /// unsafe storage, or uncertain append. Submission must not follow an error.
-    #[cfg(unix)]
     pub fn reserve_mint_before_submission(
         &mut self,
         reservation: &MintInboxReservationV1,
@@ -892,7 +880,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     /// # Errors
     /// Rejects a missing pre-submission reservation, wrong network, malformed or changed pin,
     /// process-local owner, or compromised/uncertain journal descriptor.
-    #[cfg(unix)]
     pub fn pin_authenticated_finality_anchor(
         &mut self,
         operation_id: DigestV1,
@@ -931,7 +918,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     ///
     /// # Errors
     /// Rejects an absent reservation or any finality, proof, scope, lineage, or storage mismatch.
-    #[cfg(unix)]
     pub fn observe_retained_finalized_mint_and_advance(
         &mut self,
         operation_id: DigestV1,
@@ -968,7 +954,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         proof: &KagemushaPairedProofV1,
     ) -> Result<KagemushaTestnetStateProofObservationV1, KagemushaRecursionErrorV1> {
         require_non_mint_observation(public_inputs.operation)?;
-        #[cfg(unix)]
         if let Some(journal) = self.journal.as_ref() {
             journal.check_owned()?;
         }
@@ -989,7 +974,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         )?;
         let mut next_trial = self.trial.clone();
         next_trial.record_verified(public_inputs, observation)?;
-        #[cfg(unix)]
         if let Some(journal) = self.journal.as_mut() {
             journal.append(&JournalRecord::ObserveNonMint {
                 public_inputs: encode_journal_value(public_inputs)?,
@@ -1028,7 +1012,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         public_inputs: &KagemushaStateRelationPublicInputsV1,
         proof: &KagemushaPairedProofV1,
     ) -> Result<KagemushaTestnetFinalizedMintObservationV1, KagemushaRecursionErrorV1> {
-        #[cfg(unix)]
         {
             require_durable_mint_observation_owner_v1(self.journal.as_ref())?;
             self.observe_finalized_mint_and_advance_inner(
@@ -1039,16 +1022,8 @@ impl KagemushaTestnetProofObservationOwnerV1 {
                 proof,
             )
         }
-        #[cfg(not(unix))]
-        {
-            let _ = (reservation, status, trust_anchor, public_inputs, proof);
-            Err(KagemushaRecursionErrorV1::MintFinalityBinding(
-                "finalized testnet mint observation requires a durable Unix journal".to_owned(),
-            ))
-        }
     }
 
-    #[cfg(unix)]
     fn observe_finalized_mint_and_advance_inner(
         &mut self,
         reservation: &MintInboxReservationV1,
@@ -1159,7 +1134,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     /// # Errors
     /// Rejects a process-only owner, missing or changed reservation/anchor, absent finalized
     /// proof, nonpositive amount, or duplicate credit ownership.
-    #[cfg(unix)]
     pub fn admit_finalized_testnet_value(
         &self,
         operation_id: DigestV1,
@@ -1204,7 +1178,6 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         )
     }
 
-    #[cfg(unix)]
     fn replay_reservation(
         &mut self,
         reservation: MintInboxReservationV1,
@@ -1227,12 +1200,10 @@ impl KagemushaTestnetProofObservationOwnerV1 {
     }
 }
 
-#[cfg(unix)]
 fn journal_replay_error(message: &str) -> KagemushaRecursionErrorV1 {
     KagemushaRecursionErrorV1::StateProofRejected(message.to_owned())
 }
 
-#[cfg(unix)]
 fn require_durable_mint_observation_owner_v1(
     journal: Option<&TestnetMintJournal>,
 ) -> Result<(), KagemushaRecursionErrorV1> {
@@ -1241,7 +1212,6 @@ fn require_durable_mint_observation_owner_v1(
         .check_owned()
 }
 
-#[cfg(unix)]
 fn require_exact_mint_owner_pins_v1<R: PartialEq>(
     reservations: &BTreeMap<DigestV1, R>,
     anchors: &BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
@@ -1262,7 +1232,6 @@ fn require_exact_mint_owner_pins_v1<R: PartialEq>(
     Ok(())
 }
 
-#[cfg(unix)]
 fn value_admission_from_retained_v1(
     scope: KagemushaTestnetStateObservationScopeV1,
     operation_id: DigestV1,
@@ -1304,7 +1273,6 @@ fn value_admission_from_retained_v1(
     })
 }
 
-#[cfg(unix)]
 fn check_pinned_anchor(
     scope: KagemushaTestnetStateObservationScopeV1,
     operation_id: DigestV1,
@@ -1319,7 +1287,6 @@ fn check_pinned_anchor(
     Ok(())
 }
 
-#[cfg(unix)]
 fn require_pins_have_reservations<R>(
     pins: &BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
     reservations: &BTreeMap<DigestV1, R>,
@@ -1336,7 +1303,6 @@ fn require_pins_have_reservations<R>(
     }
 }
 
-#[cfg(unix)]
 fn check_reservation_scope(
     scope: KagemushaTestnetStateObservationScopeV1,
     reservation: &MintInboxReservationV1,
@@ -1992,7 +1958,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn finalized_mint_cannot_use_process_local_owner_or_unpinned_anchor() {
         assert!(require_durable_mint_observation_owner_v1(None).is_err());
@@ -2018,7 +1983,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn finality_pin_requires_exact_operation_network_and_valid_context() {
         let anchor = native_anchor();
@@ -2433,7 +2397,6 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
     fn retained_testnet_value_projection_is_idempotent_and_rejects_changed_amount_or_credit() {
         // This tests the projection after the durable owner has verified the Applied proof.

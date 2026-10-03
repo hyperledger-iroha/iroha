@@ -7,7 +7,7 @@ use crate::{
 use blake3::hash as blake3_hash;
 use core::convert::TryFrom;
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
 use iroha_data_model::{
     asset::AssetId,
@@ -2451,8 +2451,14 @@ fn select_auto_replication_providers(
     Ok(providers)
 }
 /// Install canonical capacity and completion-authority fixtures for automatic replication tests.
-#[cfg(test)]
-pub(crate) fn seed_eligible_auto_replication_providers_for_test(
+///
+/// This fixture supplies the prerequisites of pin selection. It does not exercise
+/// governed provider admission, bond custody, or finalized network execution.
+///
+/// # Errors
+/// Returns an error for invalid capacity, overflowing validity, or a malformed declaration.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub fn seed_eligible_auto_replication_providers_for_test(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
     count: u16,

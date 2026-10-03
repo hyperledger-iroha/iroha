@@ -54,10 +54,31 @@ class KagemushaOrdinaryCashApprovalProjectionV1Test {
             val changed = preparation.s.copyOf().also { it[offset] = 1 }
             rejectCoherent(preparation, changed, true)
             val changedTerminal = terminal.s.copyOf().also {
-                if (operation in listOf("send_split", "redeem_split")) it.fill(0, offset, offset + 32)
+                if (operation != "rotate") it.fill(0, offset, offset + 32)
                 else it[offset] = 1
             }
             rejectCoherent(terminal, changedTerminal, false)
+        }
+    }
+
+    @Test
+    fun `incoming model terminal fixtures retain separate generic grammar`() {
+        for (operation in listOf("mint_fold", "receive_fold")) {
+            for (before in listOf("9", BigInteger.ONE.shiftLeft(128).subtract(BigInteger.valueOf(2)).toString())) {
+                val original = specimen(operation, before, false)
+                assertEquals(BigInteger(before), project(original, false).logicalIndexBefore())
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaOrdinaryCashApprovalProjectionV1.requireTerminal(original.w, original.s, binding(original.w, original.s))
+                }
+                for (offset in listOf(364, 396)) {
+                    val changed = original.s.copyOf().also { it[offset] = (it[offset].toInt() xor 1).toByte() }
+                    assertFailsWith<IllegalArgumentException> {
+                        KagemushaOrdinaryCashApprovalProjectionV1.requireModelMessageShape(
+                            KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION, original.w, changed)
+                    }
+                    rejectCoherent(original, original.s.copyOf().also { it.fill(0, offset, offset + 32) }, false)
+                }
+            }
         }
     }
 
@@ -183,6 +204,8 @@ class KagemushaOrdinaryCashApprovalProjectionV1Test {
     private fun project(original: Specimen, preparation: Boolean): KagemushaOrdinaryCashApprovalProjectionV1 {
         val binding = binding(original.w, original.s)
         return if (preparation) KagemushaOrdinaryCashApprovalProjectionV1.requirePreparation(original.w, original.s, binding)
+        else if (original.s[331].toInt() == 1 || original.s[331].toInt() == 3)
+            KagemushaOrdinaryCashApprovalProjectionV1.requireIncomingTerminal(original.w, original.s, binding)
         else KagemushaOrdinaryCashApprovalProjectionV1.requireTerminal(original.w, original.s, binding)
     }
 

@@ -120,14 +120,27 @@ fn invoke_originals(
             .map_err(|_| Error::Rejected)?
             .recheck()
             .map_err(|_| Error::Rejected)?;
+        if !material.integrity_leases.is_empty()
+            && !same_integrity_catalog(&material.integrity_leases, &owner.integrity_catalog)
+        {
+            return Err(Error::Rejected);
+        }
         owner.cash_started = true;
         let initial = owner.bootstrap.take().ok_or(Error::Unavailable)?;
         owner.cash = Some(
             initial
                 .into_cash_owner(
                     &material.lineage_policy_original,
-                    material.disposition == KagemushaOrdinaryEnrollmentDispositionV1::Recover,
-                    &material.integrity_leases,
+                    backend.source.exact_local_disposition(
+                        material.disposition,
+                        &backend
+                            .path
+                            .join(hex::encode(
+                                backend.source.original_enrollment_id(&backend.path)?,
+                            ))
+                            .join("cash-approvals/ordinary-cash.norito.wal"),
+                    )? == KagemushaOrdinaryEnrollmentDispositionV1::Recover,
+                    &owner.integrity_catalog,
                     &material.receivers,
                 )
                 .map_err(|_| Error::Rejected)?,
@@ -238,7 +251,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_current_control_v1(
         Ok(Err(Error::Rejected)) | Err(_) => crate::ERR_KAGEMUSHA_V1,
     }
 }
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeCurrentControlV1(
     mut env: jni::JNIEnv<'_>,

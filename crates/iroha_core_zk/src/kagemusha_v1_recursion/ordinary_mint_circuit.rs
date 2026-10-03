@@ -25,8 +25,12 @@ use halo2_proofs::{
 };
 
 pub(super) const ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1: usize = 113;
+// The complete fixed ordinary Mint relation queues282 compression blocks at k16.
+// Eleven lanes retain every relation under the existing conservative per-lane row bound.
+pub(super) const ORDINARY_MINT_SHA_LANES_V1: usize = 11;
 const UNUSABLE: usize = 9;
-const MODE: u64 = 0x4f_4d_49_01;
+// Concrete first-release ordinary Mint body and eleven-lane SHA graph identity.
+const MODE: u64 = 0x4f_4d_49_02;
 
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaOrdinaryMintCircuitParamsV1 {
@@ -47,7 +51,7 @@ impl Default for KagemushaOrdinaryMintCircuitParamsV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct OrdinaryMintConfig<F: KagemushaPoseidonFieldV1> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
+    sha: PastaSha256ConfigV1<ORDINARY_MINT_SHA_LANES_V1>,
     provider: ProviderPolicyRootConfigV1,
     issuer: OrdinaryIssuerConfigV1,
     mode: Column<Advice>,
@@ -73,7 +77,7 @@ impl<F: KagemushaPoseidonFieldV1> OrdinaryMintConfig<F> {
         });
         Self {
             base,
-            sha: PastaSha256ConfigV1::configure(meta),
+            sha: PastaSha256ConfigV1::<ORDINARY_MINT_SHA_LANES_V1>::configure(meta),
             provider: ProviderPolicyRootConfigV1::configure(meta, params.provider_policy_root),
             issuer: OrdinaryIssuerConfigV1::configure(meta, &params.issuer_table),
             mode,

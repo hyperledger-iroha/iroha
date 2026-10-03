@@ -1,6 +1,5 @@
 //! Canonical host preparation for one KAGEMUSHA `ReceiveFold` credit.
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -8,7 +7,6 @@ use super::{CreditIdV1, DigestV1};
 
 /// Domain separating the canonical KAGEMUSHA V1 receive-credit transcript.
 pub const KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:receive-fold\0";
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 /// Exact byte length of one canonical receive-credit transcript.
 pub const KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1: usize = 16 + 32 + 32 + 32 + 32 + 32 + 32;
 
@@ -65,7 +63,6 @@ impl ReceiveFoldCreditV1 {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
     /// Encode the exact canonical receive-credit transcript.
     #[must_use]
     pub fn canonical_transcript_bytes(self) -> [u8; KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1] {
@@ -91,14 +88,12 @@ pub struct ReceiveFoldReplayRootUpdateInputV1 {
     pub envelope_digest: DigestV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 /// Validated fixed-shape input for one `ReceiveFold` transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReceiveFoldV1 {
     credit: ReceiveFoldCreditV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
 impl ReceiveFoldV1 {
     /// Validate and construct one singular receive fold.
     pub fn try_new(credit: ReceiveFoldCreditV1) -> Result<Self, ReceiveFoldErrorV1> {
@@ -118,14 +113,12 @@ impl ReceiveFoldV1 {
         self.credit.amount
     }
 
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
     /// Encode the fixed receive-credit transcript.
     #[must_use]
     pub fn canonical_body_bytes(&self) -> [u8; KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1] {
         self.credit.canonical_transcript_bytes()
     }
 
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness", unix))]
     /// Hash the domain and singular credit transcript.
     #[must_use]
     pub fn canonical_transcript_digest(&self) -> DigestV1 {

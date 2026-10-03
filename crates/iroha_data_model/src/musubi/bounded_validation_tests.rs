@@ -358,16 +358,15 @@ fn replication_order_binding_streamed_length_matches_original_canonical_wire_and
         commitment.archive_id(),
         commitment,
     );
-    assert_eq!(
-        canonical_frame_len(&binding).unwrap(),
-        binding.encode().len()
-    );
-    assert!(
-        binding.encode().len() <= MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1
-    );
+    // Encode::encode is the fixed bare payload. The bound covers the canonical
+    // frame, including its explicit Norito header and alignment padding.
+    let encoded = norito::encode_canonical(&binding).unwrap();
+    assert_eq!(canonical_frame_len(&binding).unwrap(), encoded.len());
+    assert!(encoded.len() > binding.encode().len());
+    assert!(encoded.len() <= MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1);
     binding.validate().unwrap();
-    let encoded = binding.encode();
-    let decoded = MusubiReplicationOrderArchiveBindingV1::decode(&mut encoded.as_slice()).unwrap();
+    let decoded: MusubiReplicationOrderArchiveBindingV1 =
+        norito::decode_canonical(&encoded).unwrap();
     assert_eq!(decoded, binding);
     for mutate in 0..3 {
         let mut bad = binding.clone();

@@ -65,6 +65,43 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
         }
     }
 
+    @Synchronized internal fun invokeOrdinaryIncoming(endpoint: KagemushaOrdinaryNativeIncomingEndpointV1,
+        phase: Int, originals: List<ByteArray>): List<ByteArray> {
+        requireOrdinaryRuntimeJniOwnerClassV1(endpoint.javaClass)
+        KagemushaOrdinaryIncomingFrameV1.requireRequest(phase, originals)
+        requireOrdinaryDescriptorOpen()
+        val selected = handle
+        return try {
+            val response = endpoint.incoming(phase, selected, originals.map(ByteArray::copyOf).toTypedArray())
+                ?: error("Actual Native ordinary incoming lifecycle is unavailable")
+            val fields = KagemushaOrdinaryIncomingFrameV1.responseFields(phase, selected, response.toList())
+            check(handle == selected)
+            fields
+        } catch (failure: Throwable) {
+            val closing = handle; handle = 0L
+            try { this.endpoint.close(closing) } catch (_: Throwable) { }
+            if (failure is LinkageError) throw IllegalStateException("Actual Native ordinary incoming lifecycle is unavailable", failure)
+            throw failure
+        }
+    }
+
+    @Synchronized internal fun invokeOrdinaryIntegrity(endpoint:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1,
+        phase:Int,original:ByteArray):List<ByteArray> {
+        requireOrdinaryRuntimeJniOwnerClassV1(endpoint.javaClass)
+        KagemushaOrdinaryIntegrityRefreshFrameV1.requireRequest(phase,original)
+        requireOrdinaryDescriptorOpen();val selected=handle
+        return try {
+            val response=endpoint.integrityRefresh(phase,selected,original.copyOf())
+                ?:error("Actual Native retained Integrity custody is unavailable")
+            KagemushaOrdinaryIntegrityRefreshFrameV1.responseFields(phase,selected,response.toList())
+                .also {check(handle==selected)}
+        } catch(failure:Throwable) {
+            val closing=handle;handle=0L
+            try{this.endpoint.close(closing)}catch(_:Throwable){}
+            throw failure
+        }
+    }
+
     /** Startup shares the descriptor monitor with close; no owner callback runs here. */
     @Synchronized
     internal fun invokeOrdinaryStartup(endpoint: KagemushaOrdinaryNativeStartupEndpointV1,
@@ -110,6 +147,24 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
             val closing = handle; handle = 0L
             try { this.endpoint.close(closing) } catch (_: Throwable) { }
             if (failure is LinkageError) throw IllegalStateException("Actual Native outgoing Cash owner is unavailable", failure)
+            throw failure
+        }
+    }
+
+    /** Dedicated fixed funding JNI over the same measured descriptor/retirement monitor. */
+    @Synchronized internal fun invokeOrdinaryMintFunding(endpoint:KagemushaOrdinaryNativeMintFundingEndpointV1,
+        phase:Int,originals:List<ByteArray>):List<ByteArray> {
+        requireOrdinaryRuntimeJniOwnerClassV1(endpoint.javaClass)
+        KagemushaOrdinaryMintFundingFrameV1.requireRequest(phase,originals);requireOrdinaryDescriptorOpen()
+        val selected=handle
+        return try {
+            val response=endpoint.mintFunding(phase,selected,originals.map(ByteArray::copyOf).toTypedArray())
+                ?:error("Actual Native Mint funding owner is unavailable")
+            val fields=KagemushaOrdinaryMintFundingFrameV1.responseFields(phase,selected,response.toList())
+            check(handle==selected);fields
+        }catch(failure:Throwable){val closing=handle;handle=0L
+            try{this.endpoint.close(closing)}catch(_:Throwable){}
+            if(failure is LinkageError)throw IllegalStateException("Actual Native Mint funding owner is unavailable",failure)
             throw failure
         }
     }

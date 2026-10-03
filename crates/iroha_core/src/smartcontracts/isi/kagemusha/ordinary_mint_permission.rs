@@ -4,7 +4,7 @@
 //! token for the policy's Ed issuer account. Ordinary Mint proof admission, account consent,
 //! global predecessor reservation and actual reserve debit are separate mandatory gates.
 
-use crate::state::{StateReadOnly as _, StateTransaction, WorldReadOnly};
+use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId, kagemusha::KagemushaRetailEnrollmentIssuerPolicyV1, permission::Permission,
 };
@@ -47,6 +47,13 @@ impl KagemushaWorldOrdinaryMintIssuerPurposeV1 {
     ) -> &iroha_data_model::kagemusha::KagemushaOrdinaryLineageDataAuthorityV1 {
         &self.token.lineage_data_authority
     }
+    /// Recheck exact retained World purpose for immutable proof publication only.
+    /// Historical signed windows are checked against their original observations by the
+    /// source admission. This method supplies no current debit, elapsed time or FI loan.
+    pub(super) fn recheck_retained_scope(&self, view: &impl StateReadOnly) -> Result<(), String> {
+        require_retained_scope(view, &self.token)
+    }
+
     /// Recheck the same scope at actual deterministic transaction execution time.
     /// # Errors
     /// Refuses revocation, issuer expiry, another network or asset incarnation.
@@ -70,6 +77,48 @@ pub fn admit_ordinary_mint_issuer_purpose_v1(
         token: token.clone(),
     })
 }
+pub(super) fn admit_retained_ordinary_mint_issuer_purpose_v1(
+    view: &impl StateReadOnly,
+    token: &CanAuthorizeKagemushaOrdinaryMint,
+) -> Result<KagemushaWorldOrdinaryMintIssuerPurposeV1, String> {
+    require_retained_scope(view, token)?;
+    Ok(KagemushaWorldOrdinaryMintIssuerPurposeV1 {
+        token: token.clone(),
+    })
+}
+
+// Independently held World still selects the full policy roots, release and DATA pool.
+// An expired signature interval is never renewed: only the source's authentic old clock
+// endpoints may authenticate it. Revoked/rebound scope cannot start proof publication.
+fn require_retained_scope(
+    view: &impl StateReadOnly,
+    token: &CanAuthorizeKagemushaOrdinaryMint,
+) -> Result<(), String> {
+    token.validate_scope()?;
+    let runtime = &token.issuer_policy.runtime;
+    if runtime.network_id != *view.network_id()
+        || view
+            .world()
+            .axt_asset_incarnations()
+            .get(&runtime.asset)
+            .copied()
+            != Some(runtime.asset_incarnation)
+    {
+        return Err("retained ordinary Mint purpose network/incarnation differs".into());
+    }
+    let definition = view
+        .world()
+        .asset_definition(&runtime.asset)
+        .map_err(|e| e.to_string())?;
+    token
+        .lineage_data_authority
+        .require_asset_definition_metadata(&definition)?;
+    if !world_has_exact_ordinary_mint_issuer_permission_v1(view.world(), token)? {
+        return Err("retained ordinary Mint issuer lacks the exact World purpose".into());
+    }
+    Ok(())
+}
+
 fn require_current_scope(
     transaction: &StateTransaction<'_, '_>,
     token: &CanAuthorizeKagemushaOrdinaryMint,

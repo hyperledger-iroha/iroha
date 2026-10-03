@@ -221,3 +221,22 @@ fn committed_readonly_interface_uses_the_same_retained_current_generation() {
     assert_eq!(range.next(), None);
     assert!(!retained.try_matches_current(&source).unwrap());
 }
+
+#[test]
+fn first_empty_original_map_pair_on_cold_thread_allocates_no_rust_backing() {
+    use crate::allocation_test_support::without_allocations;
+    let source = Storage::<u64, u64>::default();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let original =
+                    without_allocations(|| source.try_committed_view_nonblocking().unwrap());
+                assert!(original.current().is_empty());
+                assert!(original.undo().is_empty());
+                without_allocations(|| assert!(original.try_matches_current(&source).unwrap()));
+                without_allocations(|| drop(original));
+            })
+            .join()
+            .unwrap();
+    });
+}

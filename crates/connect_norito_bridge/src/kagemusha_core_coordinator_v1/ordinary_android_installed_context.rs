@@ -7,15 +7,15 @@ use std::{path::Path, sync::Arc};
 /// Closed real Android package + signed ordinary originals owner, held by actual Native startup.
 /// No public constructor, decoder, managed callback or caller Root/measurement setter exists.
 pub(super) struct AndroidOrdinaryInstalledContextOwnerV1 {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", all(test, unix)))]
     package: android::PackageOwner,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", all(test, unix)))]
     directories: Vec<android::HeldDirectory>,
     originals: Arc<ContextOriginals>,
 }
 impl AndroidOrdinaryInstalledContextOwnerV1 {
     pub(super) fn recheck(&self) -> Result<(), Error> {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", all(test, unix)))]
         {
             self.package.recheck().map_err(|_| Error::Rejected)?;
             for directory in &self.directories {
@@ -41,6 +41,12 @@ impl AndroidOrdinaryInstalledContextOwnerV1 {
             .recursive_profile()
             .map_err(|_| Error::Rejected)
     }
+    pub(super) fn inventory(
+        &self,
+    ) -> Result<Arc<iroha::client::KagemushaAdmittedOrdinaryNativeInventoryV1>, Error> {
+        self.recheck()?;
+        self.originals.inventory().map_err(|_| Error::Rejected)
+    }
     pub(super) fn inventory_path(&self) -> &Path {
         self.originals.inventory_path()
     }
@@ -50,7 +56,7 @@ impl AndroidOrdinaryInstalledContextOwnerV1 {
     pub(super) fn public_original_root(&self) -> &Path {
         self.originals.public_original_root()
     }
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", all(test, unix)))]
     pub(super) fn from_application<'local>(
         env: &mut jni::JNIEnv<'local>,
         application: &jni::objects::JObject<'local>,
@@ -59,7 +65,7 @@ impl AndroidOrdinaryInstalledContextOwnerV1 {
     }
     /// Bind the actual static JNI caller to the retained installed package and defining loader.
     /// The class is a JVM-provided JNI receiver, never a decoded/offered authority field.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", all(test, unix)))]
     pub(super) fn require_jni_owner<'local>(
         &self,
         env: &mut jni::JNIEnv<'local>,
@@ -71,9 +77,24 @@ impl AndroidOrdinaryInstalledContextOwnerV1 {
             .map_err(|_| Error::Rejected)?;
         self.recheck()
     }
+    /// Create only the fixed continuation through the actual measured product class loader.
+    #[cfg(any(target_os = "android", all(test, unix)))]
+    pub(super) fn existing_account_storage_continuation<'local>(
+        &self,
+        env: &mut jni::JNIEnv<'local>,
+        application: &jni::objects::JObject<'local>,
+    ) -> Result<jni::objects::JObject<'local>, Error> {
+        self.recheck()?;
+        let original = self
+            .package
+            .existing_account_storage_continuation(env, application)
+            .map_err(|_| Error::Rejected)?;
+        self.recheck()?;
+        Ok(original)
+    }
     /// Identity-only check for cancellation, close and logout after source admission fails.
     /// It grants no source/current-read capability and never refreshes signed authority.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", all(test, unix)))]
     pub(super) fn require_retained_jni_class<'local>(
         &self,
         env: &mut jni::JNIEnv<'local>,
@@ -566,6 +587,74 @@ mod java_owner {
             }
             Ok(())
         }
+        pub(super) fn existing_account_storage_continuation<'local>(
+            &self,
+            env: &mut JNIEnv<'local>,
+            app: &JObject<'local>,
+        ) -> Result<JObject<'local>> {
+            self.recheck(env, app)?;
+            let class = resolve_class(
+                env,
+                "org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryExistingAccountIntakeV1",
+                self.loader.as_obj(),
+            )?;
+            let class = env.auto_local(class);
+            let loader = class_loader(env, &class)?;
+            let loader = env.auto_local(loader);
+            if !env
+                .is_same_object(&loader, self.loader.as_obj())
+                .map_err(|_| ())?
+            {
+                return Err(());
+            }
+            // The class and product method are final and defined in the actual installed owner;
+            // no supplied callback, subclass or ambient calling-thread classpath is used.
+            let modifiers = env
+                .call_method(&class, "getModifiers", "()I", &[])
+                .and_then(|v| v.i())
+                .map_err(|_| ())?;
+            if modifiers & 0x10 == 0 {
+                return Err(());
+            }
+            let class_class = resolve_class(env, "java.lang.Class", &JObject::null())?;
+            let parameters = env
+                .new_object_array(1, class_class, JObject::null())
+                .map_err(|_| ())?;
+            env.set_object_array_element(&parameters, 0, &class)
+                .map_err(|_| ())?;
+            let name = env
+                .new_string("withKagemushaExistingAccountKeyOriginal")
+                .map_err(|_| ())?;
+            let method = env
+                .call_method(
+                    self.application_class.as_obj(),
+                    "getDeclaredMethod",
+                    "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+                    &[JValue::Object(&name), JValue::Object(&parameters)],
+                )
+                .and_then(|v| v.l())
+                .map_err(|_| ())?;
+            let method = env.auto_local(method);
+            let modifiers = env
+                .call_method(&method, "getModifiers", "()I", &[])
+                .and_then(|v| v.i())
+                .map_err(|_| ())?;
+            if modifiers & 0x11 != 0x11 || modifiers & 0x08 != 0 {
+                return Err(());
+            }
+            let declaring = env
+                .call_method(&method, "getDeclaringClass", "()Ljava/lang/Class;", &[])
+                .and_then(|v| v.l())
+                .map_err(|_| ())?;
+            let declaring = env.auto_local(declaring);
+            if !env
+                .is_same_object(&declaring, self.application_class.as_obj())
+                .map_err(|_| ())?
+            {
+                return Err(());
+            }
+            env.new_object(&*class, "()V", &[]).map_err(|_| ())
+        }
         pub(super) fn base_context(&self) -> &JObject<'static> {
             self.base_context.as_obj()
         }
@@ -671,7 +760,7 @@ mod java_owner {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", all(test, unix)))]
 mod android {
     use super::java_owner::{EARLY_APPLICATION, EarlyApplicationOwner};
     use super::*;
@@ -843,6 +932,16 @@ mod android {
                 file.recheck().map_err(|_| ())?;
             }
             Ok(())
+        }
+        pub(super) fn existing_account_storage_continuation<'local>(
+            &self,
+            env: &mut JNIEnv<'local>,
+            app: &JObject<'local>,
+        ) -> Result<JObject<'local>> {
+            self.identity.require_application(env, app)?;
+            self.identity
+                .java
+                .existing_account_storage_continuation(env, app)
         }
         pub(super) fn require_retained_jni_class<'local>(
             &self,

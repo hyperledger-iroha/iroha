@@ -353,7 +353,7 @@ pub(super) fn identity(file: &File) -> io::Result<FileIdentity> {
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Snapshot {
     id: FileIdentity,
     length: u64,
@@ -362,8 +362,29 @@ struct Snapshot {
     attributes: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FileSnapshot(Snapshot);
+
+pub(super) fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
+    let value = snapshot(file, true, false)?;
+    if value.attributes & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY != 0 {
+        return Err(denied("private journal is read-only"));
+    }
+    Ok(FileSnapshot(value))
+}
+pub(super) fn validate_public_original(file: &File) -> io::Result<()> {
+    snapshot(file, false, false).map(|_| ())
+}
+impl Directory {
+    pub(super) fn snapshot_directory(&self) -> io::Result<FileSnapshot> {
+        self.revalidate()?;
+        snapshot(&self.current().file, false, true).map(FileSnapshot)
+    }
+}
+
+pub(super) fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
+    snapshot(file, private, false).map(FileSnapshot)
+}
 
 fn snapshot(file: &File, private: bool, directory: bool) -> io::Result<Snapshot> {
     let basic: FILE_BASIC_INFO = info(file, FileBasicInfo)?;

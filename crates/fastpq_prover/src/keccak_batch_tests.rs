@@ -2,7 +2,7 @@
 use super::*;
 use zeroize::Zeroizing;
 fn bytes(len: usize) -> Vec<u8> {
-    (0..len).map(|i| ((i * 73 + len) & 255) as u8).collect()
+    (0..len).map(|i| (i * 73 + len).to_le_bytes()[0]).collect()
 }
 #[test]
 fn paired_cpu_matches_scalar_for_different_partial_rates_lengths_and_worker_counts() {
@@ -42,7 +42,7 @@ fn fixed_independent_hashlib_vectors_match_batched_paths() {
         // The shared independent hashlib fixture uses this exact byte pattern;
         // the heterogeneous paired-parity fixture above has a different one.
         let message = (0..length)
-            .map(|index| ((index * 37 + 11) & 255) as u8)
+            .map(|index| (index * 37 + 11).to_le_bytes()[0])
             .collect::<Vec<_>>();
         let expected = hex::decode(fields[1]).unwrap();
         for split in [0, 1, 135, 136, 137, length].map(|n| n.min(length)) {

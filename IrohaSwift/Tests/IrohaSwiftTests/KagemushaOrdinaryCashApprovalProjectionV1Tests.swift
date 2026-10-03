@@ -47,9 +47,56 @@ final class KagemushaOrdinaryCashApprovalProjectionV1Tests: XCTestCase {
         var changed = preparation.s; changed[offset] = 1
         XCTAssertThrowsError(try project(coherent(preparation, changed), preparation: true))
         changed = terminal.s
-        if ["send_split", "redeem_split"].contains(operation) { clear(&changed, offset, 32) }
+        if operation != "rotate" { clear(&changed, offset, 32) }
         else { changed[offset] = 1 }
         XCTAssertThrowsError(try project(coherent(terminal, changed), preparation: false))
+      }
+    } }
+  }
+
+  func testIncomingTerminalKeepsGenericGrammarSeparateAndBindsBothSelectors() throws {
+    for operation in ["mint_fold", "receive_fold"] { for before in indices {
+      let original = try specimen(operation, before, false)
+      XCTAssertNoThrow(try project(original, preparation: false))
+      XCTAssertThrowsError(try KagemushaOrdinaryCashApprovalProjectionV1.requireTerminal(
+        nativeSigningBytes: original.w, nativeFinancialSubject: original.s, binding: binding(original)))
+      for offset in [364, 396] {
+        var changed = original.s; changed[offset] ^= 1
+        XCTAssertThrowsError(try KagemushaOrdinaryCashApprovalProjectionV1.requireModelMessageShape(
+          .monetaryTransition, nativeSigningBytes: original.w, nativeFinancialSubject: changed))
+        clear(&changed, offset, 32)
+        XCTAssertThrowsError(try project(coherent(original, changed), preparation: false))
+      }
+      for tag: UInt8 in [0, 2, 4, 5] {
+        var changed = original.s; changed[331] = tag
+        let value = coherent(original, changed)
+        XCTAssertThrowsError(try KagemushaOrdinaryCashApprovalProjectionV1.requireIncomingTerminal(
+          nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: binding(value)))
+      }
+    } }
+  }
+
+  func testIncomingPreparationHasDistinctOperationPurposeAndTenSecondBound() throws {
+    for operation in ["mint_fold", "receive_fold"] { for before in indices {
+      let original = try specimen(operation, before, true)
+      func incoming(_ value: Specimen) throws -> KagemushaOrdinaryCashApprovalProjectionV1 {
+        try .requireIncomingPreparation(nativeSigningBytes: value.w,
+          nativeFinancialSubject: value.s, binding: binding(value))
+      }
+      XCTAssertNoThrow(try incoming(original))
+      var boundary = original; put64(&boundary.w, 317, 11_000)
+      XCTAssertNoThrow(try incoming(boundary))
+      put64(&boundary.w, 317, 11_001)
+      XCTAssertThrowsError(try incoming(boundary))
+      var terminal = original; terminal.w[52] = 1
+      XCTAssertThrowsError(try incoming(terminal))
+      for tag: UInt8 in [0, 2, 4, 5] {
+        var changed = original.s; changed[331] = tag
+        XCTAssertThrowsError(try incoming(coherent(original, changed)))
+      }
+      for offset in [364, 396, 428, 444] {
+        var changed = original.s; changed[offset] ^= 1
+        XCTAssertThrowsError(try incoming(coherent(original, changed)))
       }
     } }
   }
@@ -208,8 +255,13 @@ final class KagemushaOrdinaryCashApprovalProjectionV1Tests: XCTestCase {
   }
   private func project(_ value: Specimen, preparation: Bool) throws -> KagemushaOrdinaryCashApprovalProjectionV1 {
     let retained = try binding(value)
-    return preparation ? try .requirePreparation(nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: retained) :
-      try .requireTerminal(nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: retained)
+    if preparation {
+      return try .requirePreparation(nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: retained)
+    }
+    if [UInt8(1), 3].contains(value.s[331]) {
+      return try .requireIncomingTerminal(nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: retained)
+    }
+    return try .requireTerminal(nativeSigningBytes: value.w, nativeFinancialSubject: value.s, binding: retained)
   }
   private func approval(_ preimage: Data, _ preparation: Bool) throws -> KagemushaOrdinaryCashApprovalProjectionV1 {
     var value = try specimen("send_split", "9", preparation)

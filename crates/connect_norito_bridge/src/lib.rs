@@ -193,42 +193,37 @@ pub use kagemusha_core_coordinator_v1::{
     register_kagemusha_native_incoming_evidence_source_v1,
     register_kagemusha_native_redemption_finality_source_v1, verify_signed_app_preparation_v1,
 };
-#[cfg(unix)]
 pub use kagemusha_core_coordinator_v1::{
-    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryRuntimeStartupV1,
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryFiHttpKeyLoanV1,
+    KagemushaNativeOrdinaryRuntimeStartupV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
     KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
-    KagemushaOrdinaryNativeStartupRequestV1, KagemushaOrdinaryNativeStartupResponseV1,
-    bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    KagemushaOrdinaryNativeIntegrityRefreshRequestV1,
+    KagemushaOrdinaryNativeIntegrityRefreshResponseV1, KagemushaOrdinaryNativeStartupRequestV1,
+    KagemushaOrdinaryNativeStartupResponseV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
+    invoke_kagemusha_native_ordinary_integrity_refresh_v1,
     invoke_kagemusha_native_ordinary_runtime_startup_v1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,
     recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod kagemusha_device_bridge_v1;
-#[cfg(unix)]
 mod kagemusha_hardware_evidence_v1;
-#[cfg(unix)]
 pub use kagemusha_hardware_evidence_v1::{
     KagemushaNativeHardwareEvidenceSourceV1, bootstrap_kagemusha_native_hardware_evidence_v1,
     register_kagemusha_native_hardware_evidence_source_v1,
 };
-#[cfg(unix)]
 mod kagemusha_mobile_bootstrap_online_v1;
 mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
 mod kagemusha_testnet_finality_chain_v1;
-#[cfg(unix)]
 mod kagemusha_testnet_native_mint_runtime_v1;
-#[cfg(unix)]
 mod kagemusha_testnet_native_mobile_host_v1;
-#[cfg(unix)]
 mod kagemusha_testnet_native_startup_v1;
-#[cfg(unix)]
 mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
 mod kagemusha_testnet_publication_v1;
-#[cfg(unix)]
 pub use kagemusha_mobile_bootstrap_online_v1::{
     KagemushaNativeBootstrapFreshnessAttemptV1, KagemushaOnlineBootstrapFreshnessV1,
 };
@@ -241,14 +236,11 @@ pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
 pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
-#[cfg(unix)]
 pub use kagemusha_testnet_native_mint_runtime_v1::KagemushaTestnetNativeMintInstallV1;
-#[cfg(unix)]
 pub use kagemusha_testnet_native_mobile_host_v1::{
     KagemushaTestnetNativeMobileHostAccessV1, KagemushaTestnetNativeMobileHostV1,
     KagemushaTestnetNativePinnedMintV1, KagemushaTestnetNativeReservedMintV1,
 };
-#[cfg(unix)]
 pub use kagemusha_testnet_native_startup_v1::{
     KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1, KagemushaTestnetNativeStartupContextV1,
     KagemushaTestnetNativeStartupFreshnessProviderV1, KagemushaTestnetNativeStartupFreshnessV1,
@@ -257,7 +249,6 @@ pub use kagemusha_testnet_native_startup_v1::{
     install_kagemusha_testnet_native_startup_context_v1,
     with_kagemusha_testnet_native_mobile_host_v1,
 };
-#[cfg(unix)]
 pub use kagemusha_testnet_native_value_ledger_v1::{
     KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1, KagemushaTestnetMintLedgerCreditArchiveV1,
     connect_norito_kagemusha_testnet_value_credit_v1, credit_kagemusha_testnet_native_value_v1,
@@ -273,7 +264,6 @@ pub use kagemusha_testnet_observation_v1::{
     install_kagemusha_testnet_state_observation_owner_v1,
     load_and_install_kagemusha_testnet_state_observation_owner_v1,
 };
-#[cfg(unix)]
 pub use kagemusha_testnet_observation_v1::{
     KagemushaTestnetDurableObservationModeV1, KagemushaTestnetValueAdmissionArchiveV1,
     connect_norito_kagemusha_testnet_finalized_mint_observe_v1,

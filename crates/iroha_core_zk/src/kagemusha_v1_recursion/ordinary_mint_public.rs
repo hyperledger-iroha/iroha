@@ -55,6 +55,16 @@ pub(crate) fn ordinary_mint_public_data_v1(
         KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => raw_assertion,
     };
     let canonical_account = norito::encode_canonical(&o.account_id).map_err(|e| e.to_string())?;
+    // These account hashes are sole-verifier public preprocessing. Keep the original
+    // canonical-byte ceiling here; neither a supplied digest nor a circuit witness can
+    // substitute a different account for either domain-separated identity.
+    if canonical_account.len() > 4096 {
+        return Err("ordinary Mint account original capacity differs".into());
+    }
+    let account_binding = kagemusha_ordinary_app_account_binding_v1(&o.account_id);
+    if account_binding != c.subject.account_binding {
+        return Err("ordinary Mint public account differs from original credential".into());
+    }
     let digests = [
         s.binding_digest()?,
         x.binding_digest()?,
@@ -76,7 +86,7 @@ pub(crate) fn ordinary_mint_public_data_v1(
         kagemusha_liability_pool_id_v1(&rt.network_id, &rt.asset, rt.asset_incarnation)
             .map_err(|e| e.to_string())?,
         o.lane_id,
-        kagemusha_ordinary_app_account_binding_v1(&o.account_id),
+        account_binding,
         digest_framed(b"iroha:kagemusha:v1:account-identity\0", &canonical_account),
         x.lineage.financial_epoch_id,
         x.lineage.financial_authority_commitment,

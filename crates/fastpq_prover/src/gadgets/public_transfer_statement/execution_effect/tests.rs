@@ -633,3 +633,130 @@ fn genuine_core_capture_preserves_all_effects_and_refuses_substitution() {
     }
     assert_eq!(norito::encode_canonical(&(effects, inputs)).unwrap(), bytes);
 }
+
+fn retire() -> FastpqExecutionEffectKindV1 {
+    FastpqExecutionEffectKindV1::Retire(balance(&ALICE_ID).asset)
+}
+
+#[test]
+fn retirement_binds_zero_supply_and_actual_distinct_lifecycle_absence() {
+    for effects in [
+        tape(vec![retire()]),
+        tape(vec![supply(false, 10, 10, 10), retire()]),
+    ] {
+        let built = materialize(&effects).unwrap();
+        let prepared = check(&built.statement).unwrap();
+        assert_eq!(prepared.rows().len(), effects.effects.len() * 2);
+        assert_eq!(
+            prepared.build_smt_witnesses(trees()).unwrap(),
+            built.witnesses
+        );
+        let lifecycle = execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Lifecycle(
+            balance(&ALICE_ID).asset,
+        ))
+        .unwrap();
+        let index = prepared
+            .keys()
+            .iter()
+            .position(|key| key.key == lifecycle)
+            .unwrap();
+        let row = prepared
+            .rows()
+            .iter()
+            .find(|row| row.key_index == index)
+            .unwrap();
+        assert_eq!(row.before.to_quantity(), Some(Quantity::from(1_u32)));
+        assert_eq!(row.after.to_quantity(), Some(Quantity::zero()));
+        assert_eq!(row.scale, 0);
+        assert_eq!(row.effect_ordinal as usize, effects.effects.len() - 1);
+    }
+}
+
+#[test]
+fn retirement_rejects_nonzero_remaining_supply_and_all_reused_or_reordered_lifecycles() {
+    for effects in [
+        tape(vec![supply(false, 5, 10, 10), retire()]),
+        tape(vec![retire(), supply(false, 10, 10, 10)]),
+        tape(vec![retire(), supply(true, 1, 0, 0)]),
+        tape(vec![retire(), transfer(0, 0, 0)]),
+        tape(vec![retire(), retire()]),
+        tape(vec![transfer(1, 10, 0), retire()]),
+    ] {
+        assert!(materialize(&effects).is_err());
+    }
+}
+
+#[test]
+fn retirement_semantics_reject_coherent_offered_row_substitutions_and_forged_source_expectations() {
+    let built = materialize(&tape(vec![supply(false, 10, 10, 10), retire()])).unwrap();
+    let trusted = expected(&built.statement);
+    let lifecycle = execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Lifecycle(
+        balance(&ALICE_ID).asset.clone(),
+    ))
+    .unwrap();
+    for attack in 0..7 {
+        let mut changed = built.statement.clone();
+        let row = changed
+            .transitions
+            .iter_mut()
+            .find(|row| row.key == lifecycle)
+            .unwrap();
+        match attack {
+            0 => row.pre_value = row.post_value.clone(),
+            1 => row.post_value = row.pre_value.clone(),
+            2 => {
+                row.key = execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Supply(
+                    balance(&ALICE_ID).asset.clone(),
+                ))
+                .unwrap()
+            }
+            3 => row.operation = FastpqOperationKind::Burn,
+            4 => changed.effects.effects.pop().map(|_| ()).unwrap(),
+            5 => {
+                let FastpqExecutionEffectKindV1::Retire(asset) =
+                    &mut changed.effects.effects[1].kind
+                else {
+                    panic!("retire");
+                };
+                asset.incarnation =
+                    AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"foreign lifecycle").into())
+                        .unwrap();
+            }
+            _ => {
+                changed.effects.effects[1].authorization_context =
+                    Hash::new(b"different original teardown")
+            }
+        }
+        assert!(
+            prepare_execution_effect_statement(&changed, trusted, ExecutionEffectLimits::default())
+                .is_err()
+        );
+        if attack < 5 {
+            assert!(check(&changed).is_err());
+        }
+    }
+}
+
+#[test]
+fn retirement_lifecycle_uses_boolean_scale_while_decimal_supply_keeps_original_scale() {
+    let mut burn = supply(false, 1, 1, 1);
+    let FastpqExecutionEffectKindV1::Burn(change) = &mut burn else {
+        panic!("burn");
+    };
+    change.amount = "0.01".parse().unwrap();
+    change.balance_before = change.amount.clone();
+    change.supply_before = change.amount.clone();
+    let built = materialize(&tape(vec![burn, retire()])).unwrap();
+    let prepared = check(&built.statement).unwrap();
+    assert!(prepared.rows().iter().any(|row| row.scale == 2));
+    assert!(
+        prepared
+            .rows()
+            .iter()
+            .any(|row| row.effect_ordinal == 1 && row.scale == 0)
+    );
+    assert_eq!(
+        prepared.build_smt_witnesses(trees()).unwrap(),
+        built.witnesses
+    );
+}

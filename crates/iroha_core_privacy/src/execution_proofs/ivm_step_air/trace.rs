@@ -32,12 +32,12 @@
 
 mod absolute;
 pub(super) mod bit_count;
-mod ceiling;
-mod division;
+pub(super) mod ceiling;
+pub(super) mod division;
 mod gcd;
-mod mean;
+pub(super) mod mean;
 pub(super) mod multiply;
-mod square_root;
+pub(super) mod square_root;
 
 use ivm::{
     PreparedContract,
@@ -1318,6 +1318,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             multiply: multiply_selected,
             division: division_workspace,
             square: square_selected,
+            other: F::ZERO,
             signed: division_signed.add(gcd_entry),
             success: division_selected
                 .sub(division_trap)

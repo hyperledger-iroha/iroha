@@ -7,7 +7,9 @@
 
 use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
-use crate::privacy_engines::transparent_stark::{goldilocks_fft_v1, goldilocks_ifft_v1};
+use crate::privacy_engines::transparent_stark::{
+    goldilocks_fft_coarse_v1, goldilocks_ifft_coarse_v1,
+};
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
     GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
@@ -172,9 +174,10 @@ impl MainFixedCosetV1 {
         for batch in self.columns.0.chunks_mut(batch_columns) {
             check_completion_v1(uncertain())?;
             if device_columns == 0 {
+                // The bounded outer batch owns parallelism on the CPU path.
                 batch.par_iter_mut().try_for_each(|column| {
                     if previous.is_some() {
-                        goldilocks_ifft_v1(column, stripe.root)
+                        goldilocks_ifft_coarse_v1(column, stripe.root)
                             .map_err(map_transparent_error_v1)?;
                     }
                     let mut power = F::ONE;
@@ -182,7 +185,7 @@ impl MainFixedCosetV1 {
                         *value = value.mul(power);
                         power = power.mul(diagonal);
                     }
-                    goldilocks_fft_v1(column, stripe.root).map_err(map_transparent_error_v1)
+                    goldilocks_fft_coarse_v1(column, stripe.root).map_err(map_transparent_error_v1)
                 })?;
                 #[cfg(test)]
                 {

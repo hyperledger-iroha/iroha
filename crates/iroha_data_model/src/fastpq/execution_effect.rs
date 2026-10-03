@@ -53,7 +53,7 @@ pub struct FastpqExecutionBalanceV1 {
     pub scope: AssetBalanceScope,
 }
 
-/// Domain-separated balance or total-supply key for the complete effect relation.
+/// Domain-separated balance, total-supply or lifecycle key for the effect relation.
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, IntoSchema, norito::NoritoSchema,
 )]
@@ -65,6 +65,10 @@ pub enum FastpqExecutionQuantityKeyV1 {
     /// Definition-wide circulating supply for one exact lifecycle.
     #[codec(index = 1)]
     Supply(FastpqExecutionAssetV1),
+    /// Presence of the exact definition/incarnation: one while live, zero after retirement.
+    /// This key never aliases a zero circulating-supply quantity.
+    #[codec(index = 2)]
+    Lifecycle(FastpqExecutionAssetV1),
 }
 
 /// Original exact quantity facts for a transfer; self-transfer legs remain sequential.
@@ -124,6 +128,11 @@ pub enum FastpqExecutionEffectKindV1 {
     /// Balance and supply decrease by the same amount.
     #[codec(index = 2)]
     Burn(FastpqExecutionSupplyChangeV1),
+    /// Retire this exact live incarnation after its circulating supply reaches zero.
+    /// The closed relation requires zero supply and changes lifecycle presence from one
+    /// to zero. It cannot register, resurrect or substitute a different incarnation.
+    #[codec(index = 3)]
+    Retire(FastpqExecutionAssetV1),
 }
 
 /// One original committed effect in complete execution order.

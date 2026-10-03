@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 physical-evidence closure
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 This records the implementation-coupled contract enforced by
 `scripts/verify_kagemusha_v1_release_evidence.py`,
 `scripts/verify_kagemusha_v1_physical_device.py`, and

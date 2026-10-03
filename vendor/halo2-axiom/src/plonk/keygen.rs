@@ -293,6 +293,12 @@ pub struct KeygenCircuitResourceProfile {
     pub raw_fixed_columns: usize,
     /// Columns participating in the permutation argument.
     pub permutation_columns: usize,
+    /// Exact canonical structured permutation payload bytes, including per-column mode tags.
+    ///
+    /// Computed from the synthesized directed copy mapping before polynomial expansion.
+    /// `None` means the domain or complete cell count exceeds the structured codec's bounds;
+    /// it does not substitute a dense estimate or authorize key serialization.
+    pub structured_permutation_bytes: Option<u64>,
     /// Whether selector compression is selected for key construction.
     pub compress_selectors: bool,
 }
@@ -312,15 +318,17 @@ pub struct KeygenSelectorProfiles {
 fn keygen_circuit_resource_profile<F: Field>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
-    assembly: &Assembly<F>,
+    assembly: &mut Assembly<F>,
     compress_selectors: bool,
 ) -> KeygenCircuitResourceProfile {
+    let structured_permutation_bytes = assembly.permutation.structured_permutation_bytes();
     keygen_circuit_resource_profile_with_fixed_modes(
         domain_rows,
         cs,
         assembly,
         compress_selectors,
         configured_fixed_modes(assembly),
+        structured_permutation_bytes,
     )
 }
 
@@ -342,6 +350,7 @@ fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
     assembly: &Assembly<F>,
     compress_selectors: bool,
     mut fixed_modes: FixedColumnModeCounts,
+    structured_permutation_bytes: Option<u64>,
 ) -> KeygenCircuitResourceProfile {
     let selector_modes = if compress_selectors {
         cs.compressed_selector_modes(&assembly.selectors)
@@ -361,6 +370,7 @@ fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
         binary_fixed_columns: fixed_modes.binary,
         raw_fixed_columns: fixed_modes.raw,
         permutation_columns: cs.permutation().get_columns().len(),
+        structured_permutation_bytes,
         compress_selectors,
     }
 }
@@ -368,10 +378,12 @@ fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
 fn keygen_selector_profiles<F: Field>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
-    assembly: &Assembly<F>,
+    assembly: &mut Assembly<F>,
 ) -> KeygenSelectorProfiles {
     // Both alternatives share the same configured fixed assignments. Scan those only once.
     let fixed_modes = configured_fixed_modes(assembly);
+    // Both selector strategies use the same directed copy mapping; count it only once.
+    let structured_permutation_bytes = assembly.permutation.structured_permutation_bytes();
     KeygenSelectorProfiles {
         compressed: keygen_circuit_resource_profile_with_fixed_modes(
             domain_rows,
@@ -379,6 +391,7 @@ fn keygen_selector_profiles<F: Field>(
             assembly,
             true,
             fixed_modes,
+            structured_permutation_bytes,
         ),
         direct: keygen_circuit_resource_profile_with_fixed_modes(
             domain_rows,
@@ -386,6 +399,7 @@ fn keygen_selector_profiles<F: Field>(
             assembly,
             false,
             fixed_modes,
+            structured_permutation_bytes,
         ),
     }
 }
@@ -614,11 +628,15 @@ where
     Extractor:
         FnOnce(&ConcreteCircuit, KeygenCircuitResourceProfile) -> Result<Extracted, ExtractError>,
 {
-    let (cs, assembly, generated_domain) =
+    let (cs, mut assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profile =
-        keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, compress_selectors);
+    let profile = keygen_circuit_resource_profile(
+        params.n() as usize,
+        &cs,
+        &mut assembly,
+        compress_selectors,
+    );
     let extracted = extractor(&circuit, profile).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
     // The synthesized assembly is the only live owner needed below. On
@@ -659,10 +677,10 @@ where
     Extractor:
         FnOnce(&ConcreteCircuit, KeygenSelectorProfiles) -> Result<(bool, Extracted), ExtractError>,
 {
-    let (cs, assembly, generated_domain) =
+    let (cs, mut assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &assembly);
+    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &mut assembly);
     let (compress_selectors, extracted) =
         extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
@@ -810,11 +828,15 @@ where
     Extractor:
         FnOnce(&ConcreteCircuit, KeygenCircuitResourceProfile) -> Result<Extracted, ExtractError>,
 {
-    let (cs, assembly, generated_domain) =
+    let (cs, mut assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profile =
-        keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, compress_selectors);
+    let profile = keygen_circuit_resource_profile(
+        params.n() as usize,
+        &cs,
+        &mut assembly,
+        compress_selectors,
+    );
     let extracted = extractor(&circuit, profile).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
     release_allocator_slack();
@@ -857,10 +879,10 @@ where
     Extractor:
         FnOnce(&ConcreteCircuit, KeygenSelectorProfiles) -> Result<(bool, Extracted), ExtractError>,
 {
-    let (cs, assembly, generated_domain) =
+    let (cs, mut assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &assembly);
+    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &mut assembly);
     let (compress_selectors, extracted) =
         extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
@@ -1140,7 +1162,7 @@ mod fixed_column_profile_tests {
             ),
         ];
         for (selectors, compressed_expected, direct_expected) in schedules {
-            let assembly = Assembly {
+            let mut assembly = Assembly {
                 k: 3,
                 fixed: values
                     .iter()
@@ -1152,14 +1174,14 @@ mod fixed_column_profile_tests {
                 usable_rows: 0..rows,
                 _marker: std::marker::PhantomData,
             };
-            let profiles = keygen_selector_profiles(rows, &cs, &assembly);
+            let profiles = keygen_selector_profiles(rows, &cs, &mut assembly);
             assert_eq!(
                 profiles.compressed,
-                keygen_circuit_resource_profile(rows, &cs, &assembly, true)
+                keygen_circuit_resource_profile(rows, &cs, &mut assembly, true)
             );
             assert_eq!(
                 profiles.direct,
-                keygen_circuit_resource_profile(rows, &cs, &assembly, false)
+                keygen_circuit_resource_profile(rows, &cs, &mut assembly, false)
             );
             for (profile, expected) in [
                 (profiles.compressed, compressed_expected),
@@ -1171,6 +1193,7 @@ mod fixed_column_profile_tests {
                 assert_eq!(profile.configured_fixed_columns, 5);
                 assert_eq!(profile.selector_columns, 4);
                 assert_eq!(profile.permutation_columns, 2);
+                assert_eq!(profile.structured_permutation_bytes, Some(2));
                 let (_, selector_values) = if profile.compress_selectors {
                     cs.clone().compress_selectors(selectors.clone())
                 } else {
@@ -1195,7 +1218,7 @@ mod fixed_column_profile_tests {
                     profile.configured_fixed_columns + profile.materialized_selector_columns
                 );
             }
-            // Profiling only borrows the still-owned assembly and configured constraint system.
+            // Profiling preserves assignments and the directed mapping in the still-owned assembly.
             assert_eq!(assembly.selectors, selectors);
             for (polynomial, original) in assembly.fixed.iter().zip(&values) {
                 assert_eq!(polynomial.values, *original);
@@ -1214,7 +1237,7 @@ mod fixed_column_profile_tests {
     #[test]
     fn profiles_with_no_fixed_columns_or_selectors_have_zero_mode_counts() {
         let cs = ConstraintSystem::<Fp>::default();
-        let assembly = Assembly {
+        let mut assembly = Assembly {
             k: 3,
             fixed: vec![],
             permutation: permutation::keygen::Assembly::new(8, &cs.permutation),
@@ -1222,9 +1245,10 @@ mod fixed_column_profile_tests {
             usable_rows: 0..8,
             _marker: std::marker::PhantomData,
         };
-        let profiles = keygen_selector_profiles(8, &cs, &assembly);
+        let profiles = keygen_selector_profiles(8, &cs, &mut assembly);
         for profile in [profiles.compressed, profiles.direct] {
             assert_eq!(profile.materialized_selector_columns, 0);
+            assert_eq!(profile.structured_permutation_bytes, Some(0));
             assert_eq!(
                 (
                     profile.constant_fixed_columns,

@@ -1,7 +1,7 @@
 //! Explicit structured key storage; the normal two-basis runtime key is preserved.
 //!
-//! Fixed columns have canonical constant/bitset/raw modes; permutation cells store exact u32
-//! target IDs. There is no implicit codec fallback. Authentication, circuit/role binding and
+//! Fixed columns have canonical constant/bitset/raw modes; permutation columns store exact directed
+//! u32 target IDs in canonical identity/sparse/bitmap/dense modes. There is no implicit codec fallback. Authentication, circuit/role binding and
 //! outer EOF remain caller duties. The ordinary reader retains both polynomial banks; the indexed
 //! reader retains checked range metadata for the caller-owned original frame. Neither authenticates it.
 
@@ -13,7 +13,14 @@ use blake2b_simd::Params as Blake2bParams;
 use group::ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use std::io::{self, Read, Write};
 
-const MAGIC: &[u8; 16] = b"Halo2StructPK1\0\0";
+pub(crate) mod permutation_column_codec;
+mod permutation_columns;
+use permutation_column_codec::{
+    PermutationColumnMode as Mode, canonical_permutation_column_encoding,
+};
+use permutation_columns::*;
+
+const MAGIC: &[u8; 16] = b"Halo2SparsePK1\0\0";
 const HEADER_BYTES: u64 = 16 + 32 + 8;
 const CONSTANT: u8 = 0;
 const BITSET: u8 = 1;
@@ -33,7 +40,7 @@ fn curve_domain<C: SerdeCurveAffine>() -> [u8; 32] {
     let scalar_one = C::Scalar::ONE.to_repr();
     let mut digest = Blake2bParams::new()
         .hash_length(32)
-        .personal(b"Halo2-PK-Struct1")
+        .personal(b"Halo2-PK-Sparse1")
         .to_state();
     for bytes in [
         MAGIC.as_slice(),
@@ -439,7 +446,7 @@ where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
     let rows = checked_rows(vk)?;
-    let cells = permutation_cells(rows, vk.cs.permutation.columns.len(), vk.domain.get_omega())?;
+    permutation_cells(rows, vk.cs.permutation.columns.len(), vk.domain.get_omega())?;
     let mut vk_bytes = ByteCounter::default();
     vk.write(&mut vk_bytes, SerdeFormat::Processed)?;
     let masks = (rows as u64)
@@ -451,7 +458,7 @@ where
         .checked_add(vk_bytes.0)
         .and_then(|n| n.checked_add(masks))
         .and_then(|n| n.checked_add(8))
-        .and_then(|n| n.checked_add((cells as u64) * 4))
+        .and_then(|n| n.checked_add(vk.cs.permutation.columns.len() as u64))
         .ok_or_else(|| invalid("structured key size overflow"))?;
     Ok((bytes, rows))
 }
@@ -487,6 +494,7 @@ struct StructuredMetadata {
     fixed: Vec<FixedRecord>,
     permutation_targets: CheckedRange,
     permutation_columns: usize,
+    permutations: Vec<PermutationRecord>,
 }
 
 struct ScannedStructuredKey<C: SerdeCurveAffine, V> {
@@ -695,6 +703,7 @@ where
     let maximum = columns
         .checked_mul(1 + constant.max(binary).max(raw))
         .and_then(|n| base_bytes.checked_add(n))
+        .and_then(|n| n.checked_add((rows as u64) * (vk.cs.permutation.columns.len() as u64) * 4))
         .ok_or_else(|| invalid("structured maximum size overflow"))?;
     if expected_bytes < minimum || expected_bytes > maximum {
         return Err(invalid(
@@ -779,23 +788,25 @@ where
     drop(classes);
     values.begin_permutations(rows, columns, vk.domain.get_omega())?;
     let offset = frame_position(&frame, expected_bytes)?;
-    for _ in 0..columns {
-        values.begin_permutation(rows)?;
-        for _ in 0..rows {
-            let mut bytes = [0; 4];
-            frame.read_exact(&mut bytes)?;
-            let target = u32::from_le_bytes(bytes);
-            seen.mark(target)?;
-            output.write_all(&target.to_le_bytes())?;
-            values.permutation_target(target, rows)?;
-        }
+    let mut permutations = reserved(columns)?;
+    for column in 0..columns {
+        permutations.push(scan_permutation_column::<C::Scalar, _, _, _>(
+            &mut frame,
+            expected_bytes,
+            rows,
+            column,
+            &mut output,
+            &mut seen,
+            &mut values,
+        )?);
     }
     drop(seen);
     values.end_permutations();
-    let target_bytes = (cells as u64)
-        .checked_mul(4)
-        .ok_or_else(|| invalid("structured target size overflow"))?;
-    let permutation_targets = CheckedRange::new(offset, target_bytes, expected_bytes)?;
+    let permutation_targets = CheckedRange::new(
+        offset,
+        frame_position(&frame, expected_bytes)? - offset,
+        expected_bytes,
+    )?;
     if frame.limit() != 0 {
         return Err(invalid("structured frame was not fully consumed"));
     }
@@ -811,6 +822,7 @@ where
             fixed,
             permutation_targets,
             permutation_columns: columns,
+            permutations,
         },
         values,
     })
@@ -820,32 +832,25 @@ impl<C: SerdeCurveAffine> ProvingKey<C>
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
-    /// Return the exact structured-v1 length from configured dimensions and fixed-column values.
+    /// Return the exact sparse structured-v1 frame length after complete validation.
     ///
-    /// This checks shape and fixed modes; the writer also validates both polynomial bases and
-    /// exact permutation membership/bijection before emitting any bytes.
+    /// Checks all shapes and both bases, exact directed permutation membership and global
+    /// bijection, then chooses each column's canonical encoding using its actual exception count.
     pub fn structured_v1_bytes_length(&self) -> io::Result<u64> {
-        let (mut length, rows) = shape_bytes(&self.vk)?;
-        if self.fixed_values.len() != self.vk.cs.num_fixed_columns
-            || self.fixed_values.iter().any(|p| p.len() != rows)
-        {
-            return Err(invalid("structured fixed shape is inconsistent"));
-        }
-        for polynomial in &self.fixed_values {
-            let payload = fixed_payload_bytes::<C::Scalar>(fixed_mode(polynomial)?, rows)?;
-            length = length
-                .checked_add(1)
-                .and_then(|n| n.checked_add(payload))
-                .ok_or_else(|| invalid("structured fixed size overflow"))?;
-        }
-        Ok(length)
+        Ok(self.validated_structured_v1()?.0)
     }
 
-    /// Validate both bases, masks and the complete permutation before either writer emits bytes.
-    /// The returned inverse labels own no key buffers; the bijection bitmap is already dropped.
-    fn validated_structured_v1(&self) -> io::Result<(u64, InverseIndex<C::Scalar>)> {
-        let length = self.structured_v1_bytes_length()?;
-        let rows = checked_rows(&self.vk)?;
+    /// Finish every basis, mask and permutation check before either writer emits its first byte.
+    /// Scratch is O(n+P) inverse labels plus the n*P-bit bijection bitmap and O(P) encodings.
+    /// The complete bitmap is dropped on return; no dense target-ID map is retained.
+    fn validated_structured_v1(
+        &self,
+    ) -> io::Result<(
+        u64,
+        InverseIndex<C::Scalar>,
+        Vec<ValidatedPermutationColumn>,
+    )> {
+        let (mut length, rows) = shape_bytes(&self.vk)?;
         if [&self.l0, &self.l_last, &self.l_active_row]
             .iter()
             .any(|p| p.len() != rows)
@@ -859,6 +864,13 @@ where
             self.vk.cs.num_fixed_columns,
             rows,
         )?;
+        for polynomial in &self.fixed_values {
+            let payload = fixed_payload_bytes::<C::Scalar>(fixed_mode(polynomial)?, rows)?;
+            length = length
+                .checked_add(1)
+                .and_then(|n| n.checked_add(payload))
+                .ok_or_else(|| invalid("structured fixed size overflow"))?;
+        }
         let columns = self.vk.cs.permutation.columns.len();
         validate_bases(
             &self.vk.domain,
@@ -869,23 +881,25 @@ where
         )?;
         let index = InverseIndex::new(rows, columns, self.vk.domain.get_omega())?;
         let cells = permutation_cells(rows, columns, self.vk.domain.get_omega())?;
-        let mut seen = Seen::new(cells)?;
-        for polynomial in &self.permutation.permutations {
-            for value in polynomial.iter() {
-                seen.mark(index.target(*value)?)?;
-            }
-        }
-        drop(seen);
-        Ok((length, index))
+        let (encodings, permutation_bytes) =
+            validate_permutation_columns(&self.permutation.permutations, &index, cells)?;
+        length = length
+            .checked_add(permutation_bytes)
+            .ok_or_else(|| invalid("structured key size overflow"))?;
+        Ok((length, index, encodings))
     }
 
     /// Write a distinct structured-v1 frame, preserving the exact Processed PK on reconstruction.
     ///
     /// The frame is magic[16], curve-domain[32], total-u64-LE, Processed VK, three Processed
     /// coefficient masks, fixed-count-u32-BE and each fixed column's tag/data, then
-    /// permutation-count-u32-BE and one target-u32-LE per cell in column-major order.
+    /// permutation-count-u32-BE and each column's canonical mode tag and payload.
     /// Fixed tags are constant=0 (one scalar), bitset=1 (low-bit-first rows), raw=2 (n scalars),
-    /// with constant > bitset > raw priority. Counts and rows derive from the trusted VK shape.
+    /// with constant > bitset > raw priority. Permutation tags are identity=0 (no payload),
+    /// sparse=1 (u32-LE E and ascending u32-LE row/target pairs), bitmap=2 (low-bit-first row
+    /// bitmap then u32-LE exceptional targets), dense=3 (all exact u32-LE targets). E counts
+    /// directed targets differing from their own source cell. Choose the smallest payload,
+    /// breaking ties identity, sparse, bitmap, dense. Counts and rows derive from trusted VK.
     ///
     /// Before output, this compares all bases by exact inverse FFT and checks permutation
     /// membership/bijection using O(n+m) inverse-label scratch and an n*m-bit validation bitmap.
@@ -898,7 +912,7 @@ where
     /// equality with the trusted standalone VK remain caller duties.
     // TODO: qualify and optimize generic inverse-label time before production caller migration.
     pub fn write_structured_v1<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        let (length, index) = self.validated_structured_v1()?;
+        let (length, index, encodings) = self.validated_structured_v1()?;
         let columns = self.vk.cs.permutation.columns.len();
         writer.write_all(MAGIC)?;
         writer.write_all(&curve_domain::<C>())?;
@@ -912,10 +926,14 @@ where
             write_fixed(writer, polynomial)?;
         }
         writer.write_all(&(columns as u32).to_be_bytes())?;
-        for polynomial in &self.permutation.permutations {
-            for value in polynomial.iter() {
-                writer.write_all(&index.target(*value)?.to_le_bytes())?;
-            }
+        for (column, (polynomial, encoding)) in self
+            .permutation
+            .permutations
+            .iter()
+            .zip(encodings)
+            .enumerate()
+        {
+            write_permutation_column(writer, polynomial, column, &index, encoding)?;
         }
         Ok(())
     }
@@ -926,7 +944,8 @@ where
     /// the evaluator are then dropped before the header is emitted. The VK is released after its
     /// bytes, each mask after its bytes, and each fixed/permutation Lagrange polynomial after its
     /// payload. The O(n+m) inverse-label index is the only mapping scratch retained during ID
-    /// output; the bijection bitmap was dropped during validation. No n*m ID vector or second
+    /// output, together with O(P) validated column modes/counts; the bijection bitmap was dropped
+    /// during validation. No n*m ID vector or second
     /// artifact buffer is kept.
     ///
     /// Validation still needs the complete input key, a temporary inverse-FFT polynomial and its
@@ -934,7 +953,7 @@ where
     /// I/O errors and unwinding drop all remaining owned buffers. The caller owns flushing and
     /// atomic publication, since sink failure may leave a partial frame.
     pub fn write_structured_v1_consuming<W: Write>(self, writer: &mut W) -> io::Result<()> {
-        let (length, index) = self.validated_structured_v1()?;
+        let (length, index, encodings) = self.validated_structured_v1()?;
         let Self {
             vk,
             l0,
@@ -966,10 +985,9 @@ where
             write_fixed(writer, &polynomial)?;
         }
         writer.write_all(&(permutations.len() as u32).to_be_bytes())?;
-        for polynomial in permutations {
-            for value in polynomial.iter() {
-                writer.write_all(&index.target(*value)?.to_le_bytes())?;
-            }
+        for (column, (polynomial, encoding)) in permutations.into_iter().zip(encodings).enumerate()
+        {
+            write_permutation_column(writer, &polynomial, column, &index, encoding)?;
         }
         Ok(())
     }
@@ -981,7 +999,8 @@ where
     /// Reconstructs both normal polynomial banks; no cell map is retained. Bytes beyond the exact
     /// frame remain for enclosing EOF policy. Complete authentication, role/parity binding, and
     /// embedded-VK equality with an authenticated standalone VK are required before use. Existing
-    /// compact-v1 and Core canonical reencoding/authentication paths are unchanged by this API.
+    /// compact-v1 and Processed PK readers cannot decode this format. Retired structured magic
+    /// is rejected; there is one first-release sparse decoder and no compatibility fallback.
     pub fn read_structured_v1_checked<R: Read, ConcreteCircuit: Circuit<C::Scalar>>(
         reader: &mut R,
         expected_k: u32,
@@ -1037,6 +1056,8 @@ where
 mod indexed;
 pub use indexed::IndexedStructuredProvingKeyV1;
 
+#[cfg(test)]
+mod indexed_io_test_plan;
 #[cfg(test)]
 mod indexed_tests;
 #[cfg(test)]
