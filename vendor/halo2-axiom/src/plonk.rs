@@ -25,6 +25,7 @@ mod circuit;
 mod compact_key;
 mod error;
 mod evaluation;
+mod fixed_column_codec;
 mod keygen;
 mod lookup;
 pub mod permutation;

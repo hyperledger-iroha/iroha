@@ -2,14 +2,14 @@
 
 use std::{fmt, ops::Range};
 
-use ff::{Field, FromUniformBytes, WithSmallOrderMulGroup};
+use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use group::Curve;
 
 use super::{
     Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
     circuit::{
         Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed,
-        FixedColumnModeAccumulator, FixedColumnModeCounts, FloorPlanner, Instance, Selector,
+        FixedColumnModeAccumulator, FixedColumnResourceProfile, FloorPlanner, Instance, Selector,
     },
     evaluation::Evaluator,
     permutation,
@@ -279,18 +279,21 @@ pub struct KeygenCircuitResourceProfile {
     pub materialized_selector_columns: usize,
     /// Constant fixed columns, including configured and materialized selector columns.
     ///
-    /// Constant zero, one, and other values all use one scalar payload and take precedence
-    /// over the binary mode. No rational inversions or selector field expansion are required.
+    /// This diagnostic class takes precedence over binary; storage separately chooses the
+    /// canonical smallest payload. No rational inversions or selector field expansion are required.
     pub constant_fixed_columns: usize,
     /// Nonconstant fixed columns containing only field zero and one.
     ///
-    /// Each column uses `domain_rows.div_ceil(8)` payload bytes.
+    /// Storage chooses its canonical smallest eligible bitset, sparse, constant or raw payload.
     pub binary_fixed_columns: usize,
-    /// Remaining fixed columns, each using `domain_rows` scalar payloads.
+    /// Nonconstant, nonbinary fixed-value classes, stored as canonical sparse zero or raw.
     ///
     /// The three mode counts are disjoint and sum to `configured_fixed_columns` plus
     /// `materialized_selector_columns` for this selector strategy.
     pub raw_fixed_columns: usize,
+    /// Exact canonical fixed payload bytes including one mode tag per serialized column.
+    /// None refuses an overflowing or unrepresentable inventory; it never substitutes a bound.
+    pub structured_fixed_bytes: Option<u64>,
     /// Columns participating in the permutation argument.
     pub permutation_columns: usize,
     /// Exact canonical structured permutation payload bytes, including per-column mode tags.
@@ -315,7 +318,7 @@ pub struct KeygenSelectorProfiles {
     pub direct: KeygenCircuitResourceProfile,
 }
 
-fn keygen_circuit_resource_profile<F: Field>(
+fn keygen_circuit_resource_profile<F: PrimeField>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
     assembly: &mut Assembly<F>,
@@ -327,37 +330,40 @@ fn keygen_circuit_resource_profile<F: Field>(
         cs,
         assembly,
         compress_selectors,
-        configured_fixed_modes(assembly),
+        configured_fixed_profile(assembly),
         structured_permutation_bytes,
     )
 }
 
-fn configured_fixed_modes<F: Field>(assembly: &Assembly<F>) -> FixedColumnModeCounts {
-    let mut modes = FixedColumnModeCounts::default();
+fn configured_fixed_profile<F: PrimeField>(assembly: &Assembly<F>) -> FixedColumnResourceProfile {
+    let mut profile = FixedColumnResourceProfile::default();
     for polynomial in &assembly.fixed {
         let mut column = FixedColumnModeAccumulator::new();
         for &value in polynomial.iter() {
             column.observe(value, 1);
         }
-        modes.add(column.finish());
+        profile.observe(&column, F::Repr::default().as_ref().len());
     }
-    modes
+    profile
 }
 
-fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
+fn keygen_circuit_resource_profile_with_fixed_modes<F: PrimeField>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
     assembly: &Assembly<F>,
     compress_selectors: bool,
-    mut fixed_modes: FixedColumnModeCounts,
+    mut fixed_modes: FixedColumnResourceProfile,
     structured_permutation_bytes: Option<u64>,
 ) -> KeygenCircuitResourceProfile {
     let selector_modes = if compress_selectors {
-        cs.compressed_selector_modes(&assembly.selectors)
+        cs.compressed_selector_resource_profile(
+            &assembly.selectors,
+            F::Repr::default().as_ref().len(),
+        )
     } else {
-        cs.direct_selector_modes(&assembly.selectors)
+        cs.direct_selector_resource_profile(&assembly.selectors, F::Repr::default().as_ref().len())
     };
-    let materialized_selector_columns = selector_modes.total();
+    let materialized_selector_columns = selector_modes.modes.total();
     fixed_modes.add(selector_modes);
     KeygenCircuitResourceProfile {
         domain_rows,
@@ -366,22 +372,23 @@ fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
         configured_fixed_columns: cs.num_fixed_columns(),
         selector_columns: cs.num_selectors(),
         materialized_selector_columns,
-        constant_fixed_columns: fixed_modes.constant,
-        binary_fixed_columns: fixed_modes.binary,
-        raw_fixed_columns: fixed_modes.raw,
+        constant_fixed_columns: fixed_modes.modes.constant,
+        binary_fixed_columns: fixed_modes.modes.binary,
+        raw_fixed_columns: fixed_modes.modes.raw,
+        structured_fixed_bytes: fixed_modes.encoded_bytes,
         permutation_columns: cs.permutation().get_columns().len(),
         structured_permutation_bytes,
         compress_selectors,
     }
 }
 
-fn keygen_selector_profiles<F: Field>(
+fn keygen_selector_profiles<F: PrimeField>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
     assembly: &mut Assembly<F>,
 ) -> KeygenSelectorProfiles {
-    // Both alternatives share the same configured fixed assignments. Scan those only once.
-    let fixed_modes = configured_fixed_modes(assembly);
+    // Both alternatives share the same configured fixed assignments and canonical byte plan. Scan once.
+    let fixed_modes = configured_fixed_profile(assembly);
     // Both selector strategies use the same directed copy mapping; count it only once.
     let structured_permutation_bytes = assembly.permutation.structured_permutation_bytes();
     KeygenSelectorProfiles {
@@ -1093,7 +1100,7 @@ mod fixed_column_profile_tests {
         result
     }
 
-    fn profile_cases<F: WithSmallOrderMulGroup<3>>() {
+    fn profile_cases<F: PrimeField + WithSmallOrderMulGroup<3>>() {
         let rows = 8;
         let mut cs = ConstraintSystem::<F>::default();
         let advice = cs.advice_column();
@@ -1213,6 +1220,11 @@ mod fixed_column_profile_tests {
                 );
                 assert_eq!(actual, expected);
                 assert_eq!(actual, materialized_modes(&materialized));
+                let mut encoded = Vec::new();
+                for values in &materialized {
+                    crate::plonk::structured_key::write_fixed(&mut encoded, values).unwrap();
+                }
+                assert_eq!(profile.structured_fixed_bytes, Some(encoded.len() as u64));
                 assert_eq!(
                     actual.0 + actual.1 + actual.2,
                     profile.configured_fixed_columns + profile.materialized_selector_columns
@@ -1249,6 +1261,7 @@ mod fixed_column_profile_tests {
         for profile in [profiles.compressed, profiles.direct] {
             assert_eq!(profile.materialized_selector_columns, 0);
             assert_eq!(profile.structured_permutation_bytes, Some(0));
+            assert_eq!(profile.structured_fixed_bytes, Some(0));
             assert_eq!(
                 (
                     profile.constant_fixed_columns,

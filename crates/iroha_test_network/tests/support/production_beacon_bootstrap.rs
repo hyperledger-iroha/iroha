@@ -2047,7 +2047,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             &launcher,
             native_finality_limits(),
             5,
-            move |expected| {
+            move |expected, _public_snapshot| {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");
                 let canary = canary_ref;

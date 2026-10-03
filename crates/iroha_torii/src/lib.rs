@@ -13601,11 +13601,27 @@ async fn handler_health(
     check_access(&app, &headers, Some(remote.ip()), "v1/health").await?;
     Ok(routing::handle_health().await.into_response())
 }
+/// Await the native bounded diagnostic on a blocking worker under the same deadline.
+/// The operation must retain this deadline through its own blocking lock admission.
+async fn wait_for_consensus_readiness(
+    deadline: Instant,
+    observe: impl FnOnce(Instant) -> bool + Send + 'static,
+) -> bool {
+    if Instant::now() >= deadline {
+        return false;
+    }
+    let observation = tokio::task::spawn_blocking(move || observe(deadline));
+    matches!(
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), observation).await,
+        Ok(Ok(true))
+    ) && Instant::now() < deadline
+}
+
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Consensus admission must be available. Beacon setup
-/// is installed through that admission path and does not gate this probe.
+/// probe. Consensus admission and the current authenticated beacon custody observation
+/// must be available. A refresh is awaited within the ordinary route execution budget.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
@@ -13614,16 +13630,18 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         )
             .into_response();
     }
-    if app
-        .sumeragi
-        .as_ref()
-        .is_some_and(|sumeragi| !sumeragi.ready())
-    {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Consensus admission is unavailable",
-        )
-            .into_response();
+    if let Some(sumeragi) = &app.sumeragi {
+        let sumeragi = sumeragi.clone();
+        let deadline = Instant::now() + DEFAULT_ROUTE_TIMEOUT;
+        if !wait_for_consensus_readiness(deadline, move |deadline| sumeragi.ready_until(deadline))
+            .await
+        {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Consensus admission is unavailable",
+            )
+                .into_response();
+        }
     }
     if app
         .iso_bridge
@@ -13638,6 +13656,62 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     }
     (StatusCode::OK, "Ready").into_response()
 }
+
+#[cfg(test)]
+mod consensus_readiness_wait_tests {
+    //! Verify that native readiness waiting releases the async worker and fails closed.
+
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_keeps_async_runtime_responsive_during_native_probe() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let waiting = tokio::spawn(wait_for_consensus_readiness(deadline, move |deadline| {
+            entered_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .is_ok()
+        }));
+        tokio::time::timeout(Duration::from_secs(1), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert!(!waiting.is_finished());
+        release_tx.send(()).unwrap();
+        assert!(waiting.await.unwrap());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_preserves_native_negative_result_and_expired_deadline() {
+        assert!(
+            !wait_for_consensus_readiness(Instant::now() + Duration::from_secs(1), |_| false).await
+        );
+        assert!(
+            !wait_for_consensus_readiness(Instant::now(), |_| {
+                panic!("an expired request cannot start a readiness observation")
+            })
+            .await
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_rejects_completion_after_original_deadline() {
+        let deadline = Instant::now() + Duration::from_millis(30);
+        assert!(
+            !wait_for_consensus_readiness(deadline, move |deadline| {
+                while Instant::now() < deadline {
+                    std::thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
+                }
+                true
+            })
+            .await
+        );
+    }
+}
+
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
 async fn handler_livez() -> impl IntoResponse {
     (StatusCode::OK, "Alive")

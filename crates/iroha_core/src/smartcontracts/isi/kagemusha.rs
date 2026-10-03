@@ -330,6 +330,12 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         Err("genuine ordinary finalized Mint readback verifier unavailable".into())
     }
 
+    /// Prove the zero-value bootstrap for an authenticated release and its pinned authorization.
+    ///
+    /// This runs only when Kura has no durable checkpoint. The proof is generated after release
+    /// authentication, then terminally reverified before persistence; it is deliberately absent
+    /// from the profile digest so the release identity cannot depend on a proof that embeds that
+    /// same release identity.
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],

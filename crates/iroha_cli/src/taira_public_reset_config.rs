@@ -5,6 +5,8 @@ use iroha::data_model::NetworkId;
 use zeroize::Zeroizing;
 
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+// Checked NetworkId display (74 ASCII bytes) plus exactly one LF.
+const MAX_CLIENT_NETWORK_ID_BYTES: u64 = 75;
 
 #[derive(clap::Args, Debug)]
 pub(super) struct ConfigRebase {
@@ -31,17 +33,51 @@ pub(super) struct ConfigRebase {
     output: PathBuf,
 }
 
+/// Rebase an inline client NetworkId, or project a checked loopback route without changing it.
+///
+/// Route projection consumes an inherited read-only descriptor and checks its original path.
+/// The paired routes must come from explicit owner-approved public metadata. Use the same
+/// checked NetworkId twice and a fresh file in a separate existing 0700 directory:
+///
+/// ```text
+/// iroha --machine taira public-reset client-config-rebase --config-fd 3 \
+///   --expected-network-id <CURRENT_CHECKED_NETWORK_ID> \
+///   --network-id <CURRENT_CHECKED_NETWORK_ID> \
+///   --expected-torii-url http://127.0.0.1:8080 --torii-url http://127.0.0.1:18080 \
+///   --config-source-path /private/runtime/original/client.toml \
+///   --output /private/runtime/projected/client.toml
+/// ```
+///
+/// A native launcher passes descriptor 3; profile contents, keys and passwords never enter
+/// argv or stdout. The original file and owned private ancestors stay unchanged. Native
+/// source-relative key, namespace-proof, queue and witness references retain their source
+/// base when the new profile is written elsewhere. A public `network_id_file` is accepted
+/// only by this route-only operation: native code retains its owner-controlled descriptor,
+/// checks exactly one canonical NetworkId plus LF against the explicit unchanged identity,
+/// and anchors its original source path absolutely. That public identity file remains a live
+/// dependency and must stay under custody during later use. Extends and competing inline/file
+/// sources are refused. Inline network-only rebinding retains its separate existing policy.
+/// No environment route override is used.
 #[derive(clap::Args, Debug)]
 pub(super) struct ClientConfigRebase {
     /// Inherited owner-controlled regular config descriptor; contents never enter argv/stdout.
     #[arg(long, value_name = "FD", value_parser = clap::value_parser!(u32).range(3..=65535))]
     config_fd: u32,
-    /// Exact current inline checked network identity; drift fails before creating output.
+    /// Exact current checked network identity; route projection also admits a held public file.
     #[arg(long, value_name = "NETWORK_ID", value_parser = canonical_network_id)]
     expected_network_id: NetworkId,
     /// Explicit checked identity of the new genesis.
     #[arg(long, value_name = "NETWORK_ID", value_parser = canonical_network_id)]
     network_id: NetworkId,
+    /// Exact current loopback Torii root; paired with --torii-url and original provenance.
+    #[arg(long, value_name = "URL", requires = "torii_url", value_parser = canonical_client_torii_url)]
+    expected_torii_url: Option<String>,
+    /// Project only the Torii route while keeping the exact current NetworkId.
+    #[arg(long, value_name = "URL", requires_all = ["expected_torii_url", "config_source_path"], value_parser = canonical_client_torii_url)]
+    torii_url: Option<String>,
+    /// Absolute original profile path; metadata/provenance only, never reopened for its body.
+    #[arg(long, value_name = "ABSOLUTE_PATH", requires = "torii_url")]
+    config_source_path: Option<PathBuf>,
     /// Fresh 0600 config in an existing owner-only directory; never overwritten.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -52,6 +88,29 @@ pub(super) struct OperatorKeygen {
     /// Fresh absolute runtime key file in a direct owner-only directory outside repositories.
     #[arg(long, value_name = "PATH")]
     private_key_file: PathBuf,
+}
+
+/// Admit only one explicit canonical IPv4 loopback listener root, never a credential or path.
+fn canonical_client_torii_url(value: &str) -> Result<String, String> {
+    let failure =
+        || "client Torii route must be an explicit normalized http IPv4 loopback root".to_owned();
+    let digits = value
+        .strip_prefix("http://127.0.0.1:")
+        .ok_or_else(failure)?;
+    let digits = digits.strip_suffix('/').unwrap_or(digits);
+    let port = digits.parse::<u16>().map_err(|_| failure())?;
+    if port == 0 || digits != port.to_string() {
+        return Err(failure());
+    }
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+#[derive(Clone, Copy)]
+struct ClientRouteProjection<'a> {
+    expected: &'a str,
+    replacement: &'a str,
+    source_path: &'a Path,
+    output_path: &'a Path,
 }
 
 fn canonical_operator_public_key(value: &str) -> Result<PublicKey, String> {
@@ -212,13 +271,511 @@ pub(super) fn config_rebase(args: &ConfigRebase) -> Result<()> {
 }
 
 pub(super) fn client_config_rebase(args: &ClientConfigRebase) -> Result<()> {
+    let route = match (
+        args.expected_torii_url.as_deref(),
+        args.torii_url.as_deref(),
+        args.config_source_path.as_deref(),
+    ) {
+        (None, None, None) => None,
+        (Some(expected), Some(replacement), Some(source_path)) => Some(ClientRouteProjection {
+            expected,
+            replacement,
+            source_path,
+            output_path: &args.output,
+        }),
+        _ => {
+            return Err(eyre!(
+                "client route projection requires paired roots and original provenance"
+            ));
+        }
+    };
+    if let Some(route) = route {
+        return project_client_config(args, route);
+    }
     let source = crate::client_config::read_inherited_private_file(
         args.config_fd,
         MAX_CONFIG_BYTES,
         "client config",
     )?;
-    let output = rebase_client_network_id(&source, &args.expected_network_id, &args.network_id)?;
+    let output =
+        rebase_client_network_id(&source, &args.expected_network_id, &args.network_id, None)?;
     super::inputs::write_new_private(&args.output, &output)
+}
+
+#[cfg(unix)]
+fn private_client_snapshot(
+    metadata: &std::fs::Metadata,
+) -> (u64, u64, u32, u32, u32, u64, u64, i64, i64, i64, i64) {
+    use std::os::unix::fs::MetadataExt as _;
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mode(),
+        metadata.uid(),
+        metadata.gid(),
+        metadata.nlink(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
+}
+
+#[cfg(unix)]
+struct RetainedClientSourceDirectory {
+    path: PathBuf,
+    directory: File,
+    before: std::fs::Metadata,
+    private: bool,
+}
+
+#[cfg(unix)]
+fn client_directory_core(metadata: &std::fs::Metadata) -> (u64, u64, u32, u32, u32) {
+    use std::os::unix::fs::MetadataExt as _;
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mode(),
+        metadata.uid(),
+        metadata.gid(),
+    )
+}
+
+/// Compare private ancestors in full and shared ancestors by stable core identity.
+#[cfg(unix)]
+fn client_directory_unchanged(
+    before: &std::fs::Metadata,
+    observed: &std::fs::Metadata,
+    private: bool,
+) -> bool {
+    if private {
+        private_client_snapshot(before) == private_client_snapshot(observed)
+    } else {
+        client_directory_core(before) == client_directory_core(observed)
+    }
+}
+
+/// Freeze all owned private input ancestors, retaining shared ancestors by stable identity.
+#[cfg(unix)]
+fn retain_client_source_directories(source: &Path) -> Result<Vec<RetainedClientSourceDirectory>> {
+    retain_client_input_directories(source, true)
+}
+
+/// Public NetworkId files may use safe shared parents; private profiles require mode0700.
+#[cfg(unix)]
+fn retain_client_input_directories(
+    source: &Path,
+    private_parent: bool,
+) -> Result<Vec<RetainedClientSourceDirectory>> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
+    validate_absolute_normal_path(source, "original client provenance")?;
+    validate_no_symlink_ancestors(source, "original client provenance")?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| eyre!("original client provenance has no parent"))?;
+    if private_parent {
+        validate_owner_private_dir(parent, "original client directory")?;
+    }
+    let owner = rustix::process::geteuid().as_raw();
+    let mut retained = Vec::new();
+    for path in parent.ancestors() {
+        let named = fs::symlink_metadata(path)?;
+        if !named.is_dir()
+            || named.file_type().is_symlink()
+            || (named.uid() != 0 && named.uid() != owner)
+            || named.mode() & 0o022 != 0
+        {
+            return Err(eyre!("original client ancestor has unsafe custody"));
+        }
+        let private = named.uid() == owner && named.mode() & 0o7777 == 0o700;
+        let directory = File::from(rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let before = directory.metadata()?;
+        if !client_directory_unchanged(&named, &before, private) {
+            return Err(eyre!("original client ancestor changed during retention"));
+        }
+        retained.push(RetainedClientSourceDirectory {
+            path: path.to_owned(),
+            private,
+            directory,
+            before,
+        });
+    }
+    check_client_source_directories(&retained)?;
+    Ok(retained)
+}
+
+#[cfg(unix)]
+fn check_client_source_directories(retained: &[RetainedClientSourceDirectory]) -> Result<()> {
+    for ancestor in retained {
+        let opened = ancestor.directory.metadata()?;
+        let named = fs::symlink_metadata(&ancestor.path)?;
+        let changed = !client_directory_unchanged(&ancestor.before, &opened, ancestor.private)
+            || !client_directory_unchanged(&ancestor.before, &named, ancestor.private);
+        if changed || !named.is_dir() || named.file_type().is_symlink() {
+            return Err(eyre!(
+                "original client ancestor custody changed during route projection"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Retain an explicitly selected public identity source through final route publication.
+#[cfg(unix)]
+struct RetainedClientNetworkFile {
+    path: PathBuf,
+    file: File,
+    before: std::fs::Metadata,
+    directories: Vec<RetainedClientSourceDirectory>,
+}
+
+#[cfg(unix)]
+impl RetainedClientNetworkFile {
+    fn check(&self) -> Result<()> {
+        check_client_source_directories(&self.directories)?;
+        let opened = self.file.metadata()?;
+        let named = fs::symlink_metadata(&self.path)?;
+        if private_client_snapshot(&opened) != private_client_snapshot(&self.before)
+            || private_client_snapshot(&named) != private_client_snapshot(&self.before)
+            || !named.is_file()
+            || named.file_type().is_symlink()
+        {
+            return Err(eyre!("public client NetworkId file custody changed"));
+        }
+        Ok(())
+    }
+}
+
+/// Parse only in native code; no profile values or identity file contents enter diagnostics.
+#[cfg(unix)]
+fn retain_client_network_file(
+    bytes: &[u8],
+    source_path: &Path,
+    expected: &NetworkId,
+) -> Result<Option<RetainedClientNetworkFile>> {
+    use rustix::fs::{Mode, OFlags};
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    let text = std::str::from_utf8(bytes).map_err(|_| eyre!("client config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("client config is not valid TOML"))?;
+    let result = (|| {
+        if table.contains_key("extends") {
+            return Err(eyre!("client route projection cannot use extends"));
+        }
+        let Some(value) = table.get("network_id_file") else {
+            return Ok(None);
+        };
+        if table.contains_key("network_id") {
+            return Err(eyre!(
+                "client config has competing inline and file network identities"
+            ));
+        }
+        let literal = value
+            .as_str()
+            .filter(|value| !value.is_empty() && value.trim() == *value && !value.contains('\0'))
+            .ok_or_else(|| eyre!("client NetworkId file must be an explicit unambiguous path"))?;
+        let selected = Path::new(literal);
+        let path = if selected.is_absolute() {
+            selected.to_owned()
+        } else {
+            source_path
+                .parent()
+                .ok_or_else(|| eyre!("original client provenance has no parent"))?
+                .join(selected)
+        };
+        validate_absolute_normal_path(&path, "public client NetworkId file")?;
+        let directories = retain_client_input_directories(&path, false)
+            .map_err(|_| eyre!("public client NetworkId file has unsafe ancestor custody"))?;
+        let named = fs::symlink_metadata(&path)?;
+        if !named.is_file()
+            || named.file_type().is_symlink()
+            || named.uid() != rustix::process::geteuid().as_raw()
+            || !matches!(named.mode() & 0o7777, 0o600 | 0o644)
+            || named.nlink() != 1
+            || named.len() == 0
+            || named.len() > MAX_CLIENT_NETWORK_ID_BYTES
+        {
+            return Err(eyre!(
+                "public client NetworkId file has unsafe custody or size"
+            ));
+        }
+        let file = File::from(rustix::fs::open(
+            &path,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let before = file.metadata()?;
+        if private_client_snapshot(&named) != private_client_snapshot(&before) {
+            return Err(eyre!(
+                "public client NetworkId file changed during retention"
+            ));
+        }
+        let retained = RetainedClientNetworkFile {
+            path,
+            file,
+            before,
+            directories,
+        };
+        retained.check()?;
+        let mut body = Zeroizing::new(Vec::new());
+        (&retained.file)
+            .take(MAX_CLIENT_NETWORK_ID_BYTES + 1)
+            .read_to_end(&mut body)?;
+        retained.check()?;
+        let literal = std::str::from_utf8(&body)
+            .map_err(|_| eyre!("public client NetworkId file is not canonical UTF-8"))?
+            .strip_suffix('\n')
+            .ok_or_else(|| {
+                eyre!("public client NetworkId file requires exactly one canonical LF")
+            })?;
+        let actual = canonical_network_id(literal)
+            .map_err(|_| eyre!("public client NetworkId file is not canonical checked identity"))?;
+        if body.len() as u64 != retained.before.len()
+            || body.as_slice() != format!("{actual}\n").as_bytes()
+            || &actual != expected
+        {
+            return Err(eyre!(
+                "public client NetworkId file differs from the explicit retained identity"
+            ));
+        }
+        retained.check()?;
+        Ok(Some(retained))
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
+#[cfg(unix)]
+fn project_client_config(
+    args: &ClientConfigRebase,
+    route: ClientRouteProjection<'_>,
+) -> Result<()> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::MetadataExt as _;
+    validate_absolute_normal_path(&args.output, "projected client output")?;
+    let source_directories = retain_client_source_directories(route.source_path)?;
+    let output_parent = args
+        .output
+        .parent()
+        .ok_or_else(|| eyre!("projected client output has no parent"))?;
+    if source_directories
+        .iter()
+        .any(|ancestor| ancestor.private && ancestor.path == output_parent)
+    {
+        // Creating a file there would change an owned private input ancestor snapshot.
+        return Err(eyre!(
+            "client route projection requires a separate private output directory"
+        ));
+    }
+    if args.expected_network_id != args.network_id {
+        return Err(eyre!(
+            "client route projection must preserve the exact current NetworkId"
+        ));
+    }
+    let retained = crate::client_config::duplicate_inherited_descriptor(args.config_fd)?;
+    let before = retained
+        .metadata()
+        .map_err(|_| eyre!("cannot inspect retained client descriptor"))?;
+    if !before.is_file()
+        || before.uid() != rustix::process::geteuid().as_raw()
+        || before.mode() & 0o7777 != 0o600
+        || before.nlink() != 1
+    {
+        return Err(eyre!(
+            "projected client source must be an owner-private single-link regular file"
+        ));
+    }
+    let check = || -> Result<()> {
+        check_client_source_directories(&source_directories)?;
+        let opened = retained
+            .metadata()
+            .map_err(|_| eyre!("cannot revalidate retained client descriptor"))?;
+        let named = fs::symlink_metadata(route.source_path)
+            .map_err(|_| eyre!("cannot inspect original client provenance"))?;
+        if private_client_snapshot(&opened) != private_client_snapshot(&before)
+            || private_client_snapshot(&named) != private_client_snapshot(&before)
+            || !named.is_file()
+            || named.file_type().is_symlink()
+        {
+            return Err(eyre!(
+                "original client custody changed during route projection"
+            ));
+        }
+        Ok(())
+    };
+    check()?;
+    // Read through the retained descriptor, not the caller's mutable descriptor number.
+    let source = crate::client_config::read_inherited_private_file(
+        retained.as_raw_fd() as u32,
+        MAX_CONFIG_BYTES,
+        "client config",
+    )?;
+    check()?;
+    let network_file =
+        retain_client_network_file(&source, route.source_path, &args.expected_network_id)?;
+    if network_file.as_ref().is_some_and(|retained| {
+        retained
+            .directories
+            .iter()
+            .any(|ancestor| ancestor.private && ancestor.path == output_parent)
+    }) {
+        // Publication must not change any retained private identity-file ancestor.
+        return Err(eyre!(
+            "client route projection requires a separate private output directory"
+        ));
+    }
+    let check_all = || -> Result<()> {
+        check()?;
+        if let Some(retained) = &network_file {
+            retained.check()?;
+        }
+        Ok(())
+    };
+    check_all()?;
+    let output = materialize_client_network_source(
+        &source,
+        &args.expected_network_id,
+        &args.network_id,
+        Some(route),
+        network_file
+            .as_ref()
+            .map(|retained| retained.path.as_path()),
+    )?;
+    check_all()?;
+    write_projected_client_private(&args.output, &output, check_all)
+}
+
+#[cfg(not(unix))]
+fn project_client_config(_: &ClientConfigRebase, _: ClientRouteProjection<'_>) -> Result<()> {
+    Err(eyre!(
+        "client route projection requires Unix private-file custody"
+    ))
+}
+
+/// Retain the fresh output through final source checks and refuse to remove a foreign replacement.
+///
+/// The output directory is owner-private and must not be concurrently modified by another owner
+/// process. The metadata check followed by unlink is not an atomic conditional unlink; a same-owner
+/// actor racing between those operations is outside that private-directory concurrency contract.
+#[cfg(unix)]
+fn write_projected_client_private(
+    path: &Path,
+    bytes: &[u8],
+    check_source: impl Fn() -> Result<()>,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
+    validate_absolute_normal_path(path, "projected client output")?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("projected client output has no parent"))?;
+    validate_owner_private_dir(parent, "projected client output directory")?;
+    for ancestor in parent.ancestors() {
+        match fs::symlink_metadata(ancestor.join(".git")) {
+            Ok(_) => {
+                return Err(eyre!(
+                    "projected client output must be outside repositories"
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(eyre!(
+                    "cannot establish projected client repository exclusion"
+                ));
+            }
+        }
+    }
+    let directory = File::from(rustix::fs::open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    let before = directory.metadata()?;
+    let core = |m: &std::fs::Metadata| (m.dev(), m.ino(), m.mode(), m.uid(), m.gid());
+    let check_parent = || -> Result<()> {
+        validate_owner_private_dir(parent, "projected client output directory")?;
+        let named = fs::symlink_metadata(parent)?;
+        if core(&directory.metadata()?) != core(&before) || core(&named) != core(&before) {
+            return Err(eyre!("projected client output directory changed"));
+        }
+        Ok(())
+    };
+    check_source()?;
+    check_parent()?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| eyre!("projected client output has no filename"))?;
+    let mut file = File::from(
+        rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )
+        .map_err(|_| eyre!("cannot create fresh private client projection"))?,
+    );
+    let result = (|| -> Result<()> {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        check_source()?;
+        check_parent()?;
+        let published = file.metadata()?;
+        let check_output = || -> Result<()> {
+            let named = File::from(rustix::fs::openat(
+                &directory,
+                name,
+                OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?);
+            let opened = file.metadata()?;
+            let named_metadata = named.metadata()?;
+            if private_client_snapshot(&opened) != private_client_snapshot(&published)
+                || private_client_snapshot(&named_metadata) != private_client_snapshot(&published)
+                || !opened.is_file()
+                || opened.uid() != rustix::process::geteuid().as_raw()
+                || opened.mode() & 0o7777 != 0o600
+                || opened.nlink() != 1
+                || opened.len() != bytes.len() as u64
+            {
+                return Err(eyre!(
+                    "private client projection custody changed during publication"
+                ));
+            }
+            Ok(())
+        };
+        check_output()?;
+        directory.sync_all()?;
+        check_source()?;
+        check_parent()?;
+        check_output()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        if let Ok(named) = rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            let named = File::from(named);
+            let ours = file.metadata()?;
+            let current = named.metadata()?;
+            if current.is_file() && (current.dev(), current.ino()) == (ours.dev(), ours.ino()) {
+                rustix::fs::unlinkat(&directory, name, AtFlags::empty())
+                    .map_err(|_| eyre!("cannot remove refused owned client projection"))?;
+                directory.sync_all()?;
+            }
+        }
+    }
+    result
 }
 
 fn inherited_config(fd: u32) -> Result<Zeroizing<Vec<u8>>> {
@@ -327,6 +884,18 @@ fn rebase_client_network_id(
     bytes: &[u8],
     expected: &NetworkId,
     replacement: &NetworkId,
+    route: Option<ClientRouteProjection<'_>>,
+) -> Result<Zeroizing<Vec<u8>>> {
+    materialize_client_network_source(bytes, expected, replacement, route, None)
+}
+
+/// A file source is admitted only after native FD custody, never by network-only rebinding.
+fn materialize_client_network_source(
+    bytes: &[u8],
+    expected: &NetworkId,
+    replacement: &NetworkId,
+    route: Option<ClientRouteProjection<'_>>,
+    retained_network_file: Option<&Path>,
 ) -> Result<Zeroizing<Vec<u8>>> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_CONFIG_BYTES {
         return Err(eyre!("client config exceeds its materialization bound"));
@@ -335,12 +904,62 @@ fn rebase_client_network_id(
     let mut table: toml::Table =
         toml::from_str(text).map_err(|_| eyre!("client config is not valid TOML"))?;
     let result = (|| {
-        if table.contains_key("extends") || table.contains_key("network_id_file") {
-            return Err(eyre!(
-                "client identity rebind cannot use extends or network_id_file"
-            ));
+        if table.contains_key("extends") {
+            return Err(eyre!("client identity rebind cannot use extends"));
         }
-        rebind_inline_network_id(&mut table, "network_id", expected, replacement)?;
+        if table.contains_key("network_id_file") {
+            let (Some(route), Some(retained_path)) = (route, retained_network_file) else {
+                return Err(eyre!(
+                    "client network-only rebind cannot use network_id_file"
+                ));
+            };
+            if table.contains_key("network_id") || expected != replacement {
+                return Err(eyre!(
+                    "file network source requires an unchanged single selected identity"
+                ));
+            }
+            let literal = table
+                .get("network_id_file")
+                .and_then(toml::Value::as_str)
+                .ok_or_else(|| eyre!("client NetworkId file must be an explicit path"))?;
+            let selected = Path::new(literal);
+            let selected = if selected.is_absolute() {
+                selected.to_owned()
+            } else {
+                route
+                    .source_path
+                    .parent()
+                    .ok_or_else(|| eyre!("original client provenance has no parent"))?
+                    .join(selected)
+            };
+            if selected != retained_path {
+                return Err(eyre!(
+                    "client NetworkId file differs from its retained source"
+                ));
+            }
+            let anchored = retained_path
+                .to_str()
+                .ok_or_else(|| eyre!("public client NetworkId path is not UTF-8"))?;
+            table.insert(
+                "network_id_file".to_owned(),
+                toml::Value::String(anchored.to_owned()),
+            );
+        } else {
+            if retained_network_file.is_some() {
+                return Err(eyre!(
+                    "client inline network identity cannot use a retained file"
+                ));
+            }
+            rebind_inline_network_id(&mut table, "network_id", expected, replacement)?;
+        }
+        if let Some(route) = route {
+            if expected != replacement {
+                return Err(eyre!(
+                    "client route projection must preserve the exact current NetworkId"
+                ));
+            }
+            project_client_route(&mut table, route)?;
+        }
         let rendered = Zeroizing::new(
             toml::to_string_pretty(&table)
                 .map_err(|_| eyre!("cannot materialize client config"))?,
@@ -352,6 +971,78 @@ fn rebase_client_network_id(
     })();
     crate::soracloud::zeroize_taira_toml_table(&mut table);
     result
+}
+
+/// Preserve the source path base explicitly when the route projection is written elsewhere.
+fn anchor_client_reference(
+    table: &mut toml::Table,
+    keys: &[&str],
+    source_parent: &Path,
+) -> Result<()> {
+    let mut value = table;
+    for key in &keys[..keys.len() - 1] {
+        let Some(child) = value.get_mut(*key) else {
+            return Ok(());
+        };
+        value = child
+            .as_table_mut()
+            .ok_or_else(|| eyre!("client path reference has an invalid parent table"))?;
+    }
+    let Some(reference) = value.get_mut(keys[keys.len() - 1]) else {
+        return Ok(());
+    };
+    let text = reference
+        .as_str()
+        .filter(|text| !text.is_empty() && !text.contains('\0'))
+        .ok_or_else(|| eyre!("client path reference must be a nonempty path"))?;
+    if keys == &["musubi", "publication", "namespace_delegation_file"][..] && text.trim() != text {
+        return Err(eyre!("client namespace proof path must be unambiguous"));
+    }
+    let path = Path::new(text);
+    if !path.is_absolute() {
+        // Preserve filesystem resolution (including any .. component) rather than canonicalizing or following it.
+        let anchored = source_parent.join(path);
+        let text = anchored
+            .to_str()
+            .ok_or_else(|| eyre!("client path reference is not UTF-8"))?;
+        *reference = toml::Value::String(text.to_owned());
+    }
+    Ok(())
+}
+
+fn project_client_route(table: &mut toml::Table, route: ClientRouteProjection<'_>) -> Result<()> {
+    validate_absolute_normal_path(route.source_path, "original client provenance")?;
+    validate_absolute_normal_path(route.output_path, "projected client output")?;
+    let expected = canonical_client_torii_url(route.expected).map_err(|error| eyre!(error))?;
+    let replacement =
+        canonical_client_torii_url(route.replacement).map_err(|error| eyre!(error))?;
+    let current = table
+        .get("torii_url")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("client config requires its current explicit Torii root"))?;
+    let current = canonical_client_torii_url(current)
+        .map_err(|_| eyre!("client config has no admissible loopback Torii root"))?;
+    if current != expected {
+        return Err(eyre!(
+            "client Torii root differs from the explicitly retained route"
+        ));
+    }
+    let source_parent = route
+        .source_path
+        .parent()
+        .ok_or_else(|| eyre!("original client provenance has no parent"))?;
+    if route.output_path.parent() != Some(source_parent) {
+        for keys in [
+            &["account", "private_key_file"][..],
+            &["musubi", "publication", "namespace_delegation_file"][..],
+            &["connect", "queue_root"][..],
+            &["soracloud", "http_witness_file"][..],
+        ] {
+            anchor_client_reference(table, keys, source_parent)?;
+        }
+    }
+    table.insert("torii_url".to_owned(), toml::Value::String(replacement));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -375,6 +1066,1035 @@ mod tests {
 
     fn client_network_fixture(network: &NetworkId) -> Vec<u8> {
         format!("network_id = '{network}'\ntorii_url = 'https://taira.sora.org'\n[account]\nprivate_key = 'fixture-secret-not-runtime'\npublic_key = 'retained-public-fixture'\n").into_bytes()
+    }
+
+    fn route_fixture(network: &NetworkId) -> Vec<u8> {
+        format!(
+            r#"chain = "fc56984b-2be7-431d-840e-21514d1883f0"
+network_id = "{network}"
+torii_url = "http://127.0.0.1:8080/"
+api_token = "fixture-token-not-runtime"
+[account]
+domain = "wonderland.universal"
+profile = "taira"
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+[basic_auth]
+web_login = "fixture-reader"
+password = "fixture-password-not-runtime"
+"#
+        )
+        .into_bytes()
+    }
+
+    fn route_projection<'a>(source: &'a Path, output: &'a Path) -> ClientRouteProjection<'a> {
+        ClientRouteProjection {
+            expected: "http://127.0.0.1:8080",
+            replacement: "http://127.0.0.1:18080",
+            source_path: source,
+            output_path: output,
+        }
+    }
+
+    #[test]
+    fn client_route_roots_are_normalized_loopback_and_never_credentials_or_paths() {
+        for port in [1, 80, 8080, 18080, 65535] {
+            let root = format!("http://127.0.0.1:{port}");
+            assert_eq!(canonical_client_torii_url(&root).unwrap(), root);
+            assert_eq!(
+                canonical_client_torii_url(&format!("{root}/")).unwrap(),
+                root
+            );
+        }
+        for invalid in [
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:018080",
+            "http://127.0.0.1:+18080",
+            "http://127.0.0.1:18080 ",
+            "http://127.0.0.1:18080\n",
+            "http://127.0.0.1",
+            "http://localhost:18080",
+            "http://0.0.0.0:18080",
+            "http://127.0.0.2:18080",
+            "http://[::1]:18080",
+            "https://127.0.0.1:18080",
+            "http://user:secret@127.0.0.1:18080",
+            "http://127.0.0.1:18080/path",
+            "http://127.0.0.1:18080?query=1",
+            "http://127.0.0.1:18080#fragment",
+            "http://127.0.0.1:18080//",
+            "http://127.0.0.1:18080\\path",
+        ] {
+            let error = canonical_client_torii_url(invalid).unwrap_err();
+            assert!(!error.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn client_route_cli_requires_both_roots_and_original_provenance() {
+        use clap::Parser as _;
+        let network = network_fixture(b"route CLI unchanged network").to_string();
+        let base = [
+            "iroha",
+            "--machine",
+            "taira",
+            "public-reset",
+            "client-config-rebase",
+            "--config-fd",
+            "3",
+            "--expected-network-id",
+            network.as_str(),
+            "--network-id",
+            network.as_str(),
+            "--output",
+            "/private/runtime/projected/client.toml",
+        ];
+        let mut complete = base.to_vec();
+        complete.extend([
+            "--expected-torii-url",
+            "http://127.0.0.1:8080",
+            "--torii-url",
+            "http://127.0.0.1:18080",
+            "--config-source-path",
+            "/private/runtime/original/client.toml",
+        ]);
+        assert!(crate::Args::try_parse_from(complete).is_ok());
+        for partial in [
+            vec!["--expected-torii-url", "http://127.0.0.1:8080"],
+            vec!["--torii-url", "http://127.0.0.1:18080"],
+            vec![
+                "--config-source-path",
+                "/private/runtime/original/client.toml",
+            ],
+            vec![
+                "--expected-torii-url",
+                "http://127.0.0.1:8080",
+                "--torii-url",
+                "http://127.0.0.1:18080",
+            ],
+            vec![
+                "--torii-url",
+                "http://127.0.0.1:18080",
+                "--config-source-path",
+                "/private/runtime/original/client.toml",
+            ],
+        ] {
+            let mut arguments = base.to_vec();
+            arguments.extend(partial);
+            assert!(crate::Args::try_parse_from(arguments).is_err());
+        }
+    }
+
+    fn file_route_fixture(network: &NetworkId, file: &str) -> Vec<u8> {
+        String::from_utf8(route_fixture(network))
+            .unwrap()
+            .replace(
+                &format!("network_id = \"{network}\""),
+                &format!("network_id_file = '{file}'"),
+            )
+            .into_bytes()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_directory_opening_preserves_shared_core_and_private_full_metadata() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        for (mode, private) in [(0o755, false), (0o700, true)] {
+            let parent = root.join(format!("directory-{mode:o}"));
+            fs::create_dir(&parent).unwrap();
+            fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).unwrap();
+            let before = fs::symlink_metadata(&parent).unwrap();
+            fs::write(
+                parent.join("unrelated-public-child"),
+                b"public metadata fixture",
+            )
+            .unwrap();
+            let after = fs::symlink_metadata(&parent).unwrap();
+            assert_ne!(
+                private_client_snapshot(&before),
+                private_client_snapshot(&after)
+            );
+            assert_eq!(
+                client_directory_unchanged(&before, &after, private),
+                !private
+            );
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o750)).unwrap();
+            assert!(!client_directory_unchanged(
+                &before,
+                &fs::symlink_metadata(&parent).unwrap(),
+                private
+            ));
+            fs::rename(&parent, root.join(format!("displaced-{mode:o}"))).unwrap();
+            fs::create_dir(&parent).unwrap();
+            fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(!client_directory_unchanged(
+                &before,
+                &fs::symlink_metadata(&parent).unwrap(),
+                private
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    fn file_route_args(
+        fd: &File,
+        source: &Path,
+        output: &Path,
+        network: NetworkId,
+    ) -> ClientConfigRebase {
+        use std::os::fd::AsRawFd as _;
+        ClientConfigRebase {
+            config_fd: fd.as_raw_fd() as u32,
+            expected_network_id: network,
+            network_id: network,
+            expected_torii_url: Some("http://127.0.0.1:8080".into()),
+            torii_url: Some("http://127.0.0.1:18080".into()),
+            config_source_path: Some(source.to_owned()),
+            output: output.to_owned(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_roundtrip_preserves_source_selection_and_native_identity() {
+        for mode in [0o600, 0o644] {
+            let directory = operator_runtime_fixture();
+            let root = directory.path().canonicalize().unwrap();
+            let original = root.join("original");
+            let projected = root.join("projected");
+            for parent in [&original, &projected] {
+                fs::create_dir(parent).unwrap();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let network = network_fixture(b"file route unchanged network");
+            let identity = original.join("genesis.expected_hash");
+            fs::write(&identity, format!("{network}\n")).unwrap();
+            fs::set_permissions(&identity, fs::Permissions::from_mode(mode)).unwrap();
+            let source = file_route_fixture(&network, "genesis.expected_hash");
+            let source_path = original.join("client.toml");
+            fs::write(&source_path, &source).unwrap();
+            fs::set_permissions(&source_path, fs::Permissions::from_mode(0o600)).unwrap();
+            let source_before = fs::symlink_metadata(&source_path).unwrap();
+            let identity_before = fs::symlink_metadata(&identity).unwrap();
+            let mut fd = File::open(&source_path).unwrap();
+            fd.seek(std::io::SeekFrom::Start(7)).unwrap();
+            let output = projected.join("client.toml");
+            let command = super::super::PublicReset {
+                command: super::super::PublicResetCommand::ClientConfigRebase(file_route_args(
+                    &fd,
+                    &source_path,
+                    &output,
+                    network,
+                )),
+            };
+            let mut stdout = Vec::new();
+            command.run_without_client_config(&mut stdout).unwrap();
+            assert!(stdout.is_empty());
+            assert_eq!(fd.stream_position().unwrap(), 7);
+            let result = Zeroizing::new(fs::read(&output).unwrap());
+            let table: toml::Table = toml::from_str(std::str::from_utf8(&result).unwrap()).unwrap();
+            assert!(!table.contains_key("network_id"));
+            assert_eq!(table["network_id_file"].as_str(), identity.to_str());
+            let (before, _) =
+                iroha::config::Config::load_bytes_with_musubi_publication(&source_path, &source)
+                    .unwrap();
+            let (after, _) =
+                iroha::config::Config::load_bytes_with_musubi_publication(&output, &result)
+                    .unwrap();
+            assert!(
+                before.network_id == after.network_id
+                    && before.account == after.account
+                    && before.chain == after.chain
+            );
+            assert_eq!(before.key_pair.public_key(), after.key_pair.public_key());
+            assert_eq!(after.torii_api_url.as_str(), "http://127.0.0.1:18080/");
+            assert_eq!(
+                private_client_snapshot(&source_before),
+                private_client_snapshot(&fs::symlink_metadata(&source_path).unwrap())
+            );
+            assert_eq!(
+                private_client_snapshot(&identity_before),
+                private_client_snapshot(&fs::symlink_metadata(&identity).unwrap())
+            );
+            assert_eq!(fs::read(&source_path).unwrap(), source);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_wrong_or_noncanonical_identity_refuses_before_output() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let original = root.join("original");
+        let projected = root.join("projected");
+        for parent in [&original, &projected] {
+            fs::create_dir(parent).unwrap();
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let network = network_fixture(b"expected file identity");
+        let other = network_fixture(b"wrong file identity");
+        let source = original.join("client.toml");
+        fs::write(
+            &source,
+            file_route_fixture(&network, "genesis.expected_hash"),
+        )
+        .unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let fd = File::open(&source).unwrap();
+        let output = projected.join("client.toml");
+        let args = file_route_args(&fd, &source, &output, network);
+        for body in [
+            format!("{other}\n").into_bytes(),
+            network.to_string().into_bytes(),
+            format!("{network}\n\n").into_bytes(),
+            format!("{network}\r\n").into_bytes(),
+            format!(" {network}\n").into_bytes(),
+            b"malformed-public-fixture\n".to_vec(),
+            vec![0xff; 75],
+            vec![b'x'; 76],
+        ] {
+            let identity = original.join("genesis.expected_hash");
+            fs::write(&identity, body).unwrap();
+            fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+            let error = client_config_rebase(&args).unwrap_err();
+            assert!(!format!("{error:#}").contains("fixture-token-not-runtime"));
+            assert!(!output.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_competing_inherited_or_unbound_sources_refuse() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let network = network_fixture(b"single file network selection");
+        for source in [
+            [
+                b"extends = 'fixture-secret-not-runtime'\n".as_slice(),
+                file_route_fixture(&network, "missing").as_slice(),
+            ]
+            .concat(),
+            [
+                format!("network_id = '{network}'\n").as_bytes(),
+                file_route_fixture(&network, "missing").as_slice(),
+            ]
+            .concat(),
+            file_route_fixture(&network, "../identity"),
+            file_route_fixture(&network, " identity "),
+        ] {
+            let error = retain_client_network_file(&source, &root.join("client.toml"), &network)
+                .err()
+                .unwrap();
+            assert!(!format!("{error:#}").contains("fixture-secret-not-runtime"));
+        }
+        let source = file_route_fixture(&network, "genesis.expected_hash");
+        // Network-only rebinding never opens or silently replaces a file source.
+        assert!(rebase_client_network_id(&source, &network, &network, None).is_err());
+        assert!(
+            rebase_client_network_id(
+                &source,
+                &network,
+                &network,
+                Some(route_projection(
+                    &root.join("client.toml"),
+                    &root.join("out.toml")
+                ))
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_unsafe_symlink_hardlink_and_nonregular_sources_refuse() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let network = network_fixture(b"safe file custody");
+        let identity = root.join("genesis.expected_hash");
+        let target = root.join("target");
+        fs::write(&target, format!("{network}\n")).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let source = file_route_fixture(&network, "genesis.expected_hash");
+        std::os::unix::fs::symlink(&target, &identity).unwrap();
+        assert!(retain_client_network_file(&source, &root.join("client.toml"), &network).is_err());
+        fs::remove_file(&identity).unwrap();
+        fs::hard_link(&target, &identity).unwrap();
+        assert!(retain_client_network_file(&source, &root.join("client.toml"), &network).is_err());
+        fs::remove_file(&identity).unwrap();
+        fs::write(&identity, format!("{network}\n")).unwrap();
+        for mode in [0o666, 0o622, 0o400] {
+            fs::set_permissions(&identity, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(
+                retain_client_network_file(&source, &root.join("client.toml"), &network).is_err()
+            );
+        }
+        fs::remove_file(&identity).unwrap();
+        fs::create_dir(&identity).unwrap();
+        assert!(retain_client_network_file(&source, &root.join("client.toml"), &network).is_err());
+        fs::remove_dir(&identity).unwrap();
+        fs::write(&identity, format!("{network}\n")).unwrap();
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let aliased = file_route_fixture(&network, "alias/genesis.expected_hash");
+        assert!(retain_client_network_file(&aliased, &root.join("client.toml"), &network).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_inode_and_restored_body_mtime_drift_refuse() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let network = network_fixture(b"retained file identity");
+        let identity = root.join("genesis.expected_hash");
+        let body = format!("{network}\n");
+        fs::write(&identity, &body).unwrap();
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        let source = file_route_fixture(&network, "genesis.expected_hash");
+        let retained = retain_client_network_file(&source, &root.join("client.toml"), &network)
+            .unwrap()
+            .unwrap();
+        let replacement = root.join("replacement");
+        fs::write(&replacement, &body).unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::rename(&replacement, &identity).unwrap();
+        assert!(retained.check().is_err());
+        let retained = retain_client_network_file(&source, &root.join("client.toml"), &network)
+            .unwrap()
+            .unwrap();
+        let before = fs::metadata(&identity).unwrap();
+        fs::write(&identity, vec![b'x'; body.len()]).unwrap();
+        fs::write(&identity, &body).unwrap();
+        File::open(&identity)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+            .unwrap();
+        assert!(retained.check().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_restored_ancestor_refuses_even_when_leaf_is_unchanged() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let parent = root.join("original");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        let network = network_fixture(b"retained ancestor file identity");
+        let identity = parent.join("genesis.expected_hash");
+        fs::write(&identity, format!("{network}\n")).unwrap();
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        let source = file_route_fixture(&network, "genesis.expected_hash");
+        let retained = retain_client_network_file(&source, &parent.join("client.toml"), &network)
+            .unwrap()
+            .unwrap();
+        let before = private_client_snapshot(&fs::metadata(&identity).unwrap());
+        let displaced = root.join("displaced");
+        fs::rename(&parent, &displaced).unwrap();
+        fs::set_permissions(&displaced, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&displaced, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(&displaced, &parent).unwrap();
+        assert_eq!(
+            before,
+            private_client_snapshot(&fs::metadata(&identity).unwrap())
+        );
+        assert!(retained.check().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_final_publication_drift_removes_only_owned_output() {
+        use std::cell::Cell;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let original = root.join("original");
+        let projected = root.join("projected");
+        for parent in [&original, &projected] {
+            fs::create_dir(parent).unwrap();
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let network = network_fixture(b"final file publication identity");
+        let identity = original.join("genesis.expected_hash");
+        fs::write(&identity, format!("{network}\n")).unwrap();
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        let source = file_route_fixture(&network, "genesis.expected_hash");
+        let retained = retain_client_network_file(&source, &original.join("client.toml"), &network)
+            .unwrap()
+            .unwrap();
+        let output = projected.join("client.toml");
+        let calls = Cell::new(0);
+        let check = || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 3 {
+                fs::write(&identity, vec![b'x'; 75])?;
+            }
+            retained.check()
+        };
+        assert!(
+            write_projected_client_private(&output, b"opaque projected unit fixture", check)
+                .is_err()
+        );
+        assert_eq!(calls.get(), 3);
+        assert!(!output.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_private_output_ancestor_refuses_before_publication() {
+        for nested_identity in [false, true] {
+            let directory = operator_runtime_fixture();
+            let root = directory.path().canonicalize().unwrap();
+            let original = root.join("original");
+            let projected = root.join("projected");
+            for parent in [&original, &projected] {
+                fs::create_dir(parent).unwrap();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let identity_parent = if nested_identity {
+                let parent = projected.join("network");
+                fs::create_dir(&parent).unwrap();
+                fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+                parent
+            } else {
+                projected.clone()
+            };
+            let network = network_fixture(b"separate identity-file output ancestor");
+            let identity = identity_parent.join("genesis.expected_hash");
+            let identity_body = format!("{network}\n");
+            fs::write(&identity, &identity_body).unwrap();
+            fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+            let source = file_route_fixture(&network, identity.to_str().unwrap());
+            let source_path = original.join("client.toml");
+            fs::write(&source_path, &source).unwrap();
+            fs::set_permissions(&source_path, fs::Permissions::from_mode(0o600)).unwrap();
+            let paths = [
+                &original,
+                &source_path,
+                &identity,
+                &identity_parent,
+                &projected,
+            ];
+            let before =
+                paths.map(|path| private_client_snapshot(&fs::symlink_metadata(path).unwrap()));
+            let fd = File::open(&source_path).unwrap();
+            let output = projected.join("client.toml");
+            let command = super::super::PublicReset {
+                command: super::super::PublicResetCommand::ClientConfigRebase(file_route_args(
+                    &fd,
+                    &source_path,
+                    &output,
+                    network,
+                )),
+            };
+            let mut stdout = Vec::new();
+            let error = command.run_without_client_config(&mut stdout).unwrap_err();
+            assert!(format!("{error:#}").contains("separate private output directory"));
+            assert!(stdout.is_empty());
+            assert!(!output.exists());
+            for (path, snapshot) in paths.into_iter().zip(before) {
+                assert_eq!(
+                    snapshot,
+                    private_client_snapshot(&fs::symlink_metadata(path).unwrap())
+                );
+            }
+            assert_eq!(fs::read(&source_path).unwrap(), source);
+            assert_eq!(fs::read(&identity).unwrap(), identity_body.as_bytes());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_network_file_private_selected_path_never_enters_errors() {
+        const MARKER: &str = "fixture-private-path-marker-not-runtime";
+        for case in ["missing", "unsafe", "noncanonical"] {
+            let directory = operator_runtime_fixture();
+            let root = directory.path().canonicalize().unwrap();
+            let original = root.join("original");
+            let projected = root.join("projected");
+            for parent in [&original, &projected] {
+                fs::create_dir(parent).unwrap();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let selected_parent = root.join(MARKER);
+            if case == "unsafe" {
+                fs::create_dir(&selected_parent).unwrap();
+                fs::set_permissions(&selected_parent, fs::Permissions::from_mode(0o777)).unwrap();
+            }
+            let selected = if case == "noncanonical" {
+                selected_parent.join("..").join("genesis.expected_hash")
+            } else {
+                selected_parent.join("genesis.expected_hash")
+            };
+            let network = network_fixture(b"private path stays native");
+            let source = file_route_fixture(&network, selected.to_str().unwrap());
+            let source_path = original.join("client.toml");
+            fs::write(&source_path, &source).unwrap();
+            fs::set_permissions(&source_path, fs::Permissions::from_mode(0o600)).unwrap();
+            let before = [&original, &source_path, &projected]
+                .map(|path| private_client_snapshot(&fs::symlink_metadata(path).unwrap()));
+            let fd = File::open(&source_path).unwrap();
+            let output = projected.join("client.toml");
+            let command = super::super::PublicReset {
+                command: super::super::PublicResetCommand::ClientConfigRebase(file_route_args(
+                    &fd,
+                    &source_path,
+                    &output,
+                    network,
+                )),
+            };
+            let mut stdout = Vec::new();
+            let error = command.run_without_client_config(&mut stdout).unwrap_err();
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("NetworkId"));
+            assert!(!diagnostic.contains(MARKER));
+            assert!(stdout.is_empty());
+            assert!(!output.exists());
+            for (path, snapshot) in [&original, &source_path, &projected]
+                .into_iter()
+                .zip(before)
+            {
+                assert_eq!(
+                    snapshot,
+                    private_client_snapshot(&fs::symlink_metadata(path).unwrap())
+                );
+            }
+            assert_eq!(fs::read(&source_path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn client_route_roundtrip_preserves_account_network_and_signing_identity() {
+        let network = network_fixture(b"route unchanged network");
+        let source_path = Path::new("/private/runtime/original/client.toml");
+        let output_path = Path::new("/private/runtime/projected/client.toml");
+        let source = route_fixture(&network);
+        let projected = rebase_client_network_id(
+            &source,
+            &network,
+            &network,
+            Some(route_projection(source_path, output_path)),
+        )
+        .unwrap();
+        let (before, _) =
+            iroha::config::Config::load_bytes_with_musubi_publication(source_path, &source)
+                .unwrap();
+        let (after, _) =
+            iroha::config::Config::load_bytes_with_musubi_publication(output_path, &projected)
+                .unwrap();
+        assert!(before.chain == after.chain && before.network_id == after.network_id);
+        assert!(
+            before.account == after.account
+                && before.account_chain_discriminant == after.account_chain_discriminant
+        );
+        assert!(before.key_pair.public_key() == after.key_pair.public_key());
+        assert_eq!(after.torii_api_url.as_str(), "http://127.0.0.1:18080/");
+        let mut original: toml::Table =
+            toml::from_str(std::str::from_utf8(&source).unwrap()).unwrap();
+        let mut actual: toml::Table =
+            toml::from_str(std::str::from_utf8(&projected).unwrap()).unwrap();
+        // Boolean assertions do not dump either secret-bearing table on failure.
+        assert!(original["account"]["private_key"] == actual["account"]["private_key"]);
+        original.remove("torii_url");
+        actual.remove("torii_url");
+        assert!(original == actual);
+    }
+
+    #[test]
+    fn client_route_refuses_wrong_route_identity_or_unbound_sources_without_secret_errors() {
+        let network = network_fixture(b"route unchanged network");
+        let other = network_fixture(b"unapproved changed network");
+        let source = route_fixture(&network);
+        let original = Path::new("/private/runtime/original/client.toml");
+        let output = Path::new("/private/runtime/projected/client.toml");
+        let mut route = route_projection(original, output);
+        route.expected = "http://127.0.0.1:8081";
+        assert!(rebase_client_network_id(&source, &network, &network, Some(route)).is_err());
+        route.expected = "http://127.0.0.1:8080";
+        assert!(rebase_client_network_id(&source, &network, &other, Some(route)).is_err());
+        assert!(rebase_client_network_id(&source, &other, &other, Some(route)).is_err());
+        for invalid in [
+            [
+                b"extends = '/unbound/client.toml'\n".as_slice(),
+                source.as_slice(),
+            ]
+            .concat(),
+            [
+                b"network_id_file = '/unbound/network-id'\n".as_slice(),
+                source.as_slice(),
+            ]
+            .concat(),
+            b"private_key = 'fixture-secret-not-runtime\n".to_vec(),
+            b"network_id = 'fixture-secret-not-runtime'\n".to_vec(),
+        ] {
+            let error =
+                rebase_client_network_id(&invalid, &network, &network, Some(route)).unwrap_err();
+            assert!(!format!("{error:#}").contains("fixture-secret"));
+        }
+    }
+
+    #[test]
+    fn client_route_preserves_relative_key_proof_and_filesystem_source_semantics() {
+        let network = network_fixture(b"relative route unchanged network");
+        let original = Path::new("/private/runtime/original/client.toml");
+        let output = Path::new("/private/runtime/projected/client.toml");
+        let mut table: toml::Table =
+            toml::from_str(std::str::from_utf8(&route_fixture(&network)).unwrap()).unwrap();
+        let account = table.get_mut("account").unwrap().as_table_mut().unwrap();
+        account.remove("private_key");
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String("keys/account.key".into()),
+        );
+        table.insert(
+            "connect".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "queue_root".into(),
+                toml::Value::String("../queues".into()),
+            )])),
+        );
+        table.insert(
+            "soracloud".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "http_witness_file".into(),
+                toml::Value::String("proofs/witness.json".into()),
+            )])),
+        );
+        table.insert(
+            "musubi".into(),
+            toml::Value::Table(toml::toml! {
+                [publication]
+                namespace_delegation_file = "proofs/delegation.json"
+            }),
+        );
+        let source = Zeroizing::new(toml::to_string(&table).unwrap());
+        let projected = rebase_client_network_id(
+            source.as_bytes(),
+            &network,
+            &network,
+            Some(route_projection(original, output)),
+        )
+        .unwrap();
+        let actual: toml::Table = toml::from_str(std::str::from_utf8(&projected).unwrap()).unwrap();
+        let parent = original.parent().unwrap();
+        assert_eq!(
+            actual["account"]["private_key_file"].as_str(),
+            parent.join("keys/account.key").to_str()
+        );
+        assert_eq!(
+            actual["connect"]["queue_root"].as_str(),
+            parent.join("../queues").to_str()
+        );
+        assert_eq!(
+            actual["soracloud"]["http_witness_file"].as_str(),
+            parent.join("proofs/witness.json").to_str()
+        );
+        assert_eq!(
+            actual["musubi"]["publication"]["namespace_delegation_file"].as_str(),
+            parent.join("proofs/delegation.json").to_str()
+        );
+        let same_parent = Path::new("/private/runtime/original/projected.toml");
+        let same = rebase_client_network_id(
+            source.as_bytes(),
+            &network,
+            &network,
+            Some(route_projection(original, same_parent)),
+        )
+        .unwrap();
+        let same: toml::Table = toml::from_str(std::str::from_utf8(&same).unwrap()).unwrap();
+        assert!(same["account"] == table["account"] && same["musubi"] == table["musubi"]);
+    }
+
+    #[test]
+    fn client_route_relative_public_proof_refuses_whitespace_instead_of_readmitting_it() {
+        let network = network_fixture(b"route public proof validation");
+        let original = Path::new("/private/runtime/original/client.toml");
+        let output = Path::new("/private/runtime/projected/client.toml");
+        for proof in [
+            " delegation.json",
+            "delegation.json ",
+            "delegation.json\n",
+            "",
+        ] {
+            let mut table: toml::Table =
+                toml::from_str(std::str::from_utf8(&route_fixture(&network)).unwrap()).unwrap();
+            table.insert(
+                "musubi".into(),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "publication".into(),
+                    toml::Value::Table(toml::Table::from_iter([(
+                        "namespace_delegation_file".into(),
+                        toml::Value::String(proof.into()),
+                    )])),
+                )])),
+            );
+            let source = Zeroizing::new(toml::to_string(&table).unwrap());
+            assert!(
+                rebase_client_network_id(
+                    source.as_bytes(),
+                    &network,
+                    &network,
+                    Some(route_projection(original, output))
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_native_fd_roundtrip_retains_offset_source_and_public_proof() {
+        use std::os::fd::AsRawFd as _;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let original_dir = root.join("original");
+        let projected_dir = root.join("projected");
+        for parent in [&original_dir, &projected_dir] {
+            fs::create_dir(parent).unwrap();
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let public_proof = original_dir.join("delegation.json");
+        fs::write(&public_proof, b"{\"public_fixture\":true}\n").unwrap();
+        let network = network_fixture(b"native route unchanged network");
+        let mut source = route_fixture(&network);
+        source.extend_from_slice(
+            b"\n[musubi.publication]\nnamespace_delegation_file = 'delegation.json'\n",
+        );
+        let source_path = original_dir.join("client.toml");
+        fs::write(&source_path, &source).unwrap();
+        fs::set_permissions(&source_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut fd = File::open(&source_path).unwrap();
+        fd.seek(std::io::SeekFrom::Start(7)).unwrap();
+        let output_path = projected_dir.join("client.toml");
+        let command = super::super::PublicReset {
+            command: super::super::PublicResetCommand::ClientConfigRebase(ClientConfigRebase {
+                config_fd: fd.as_raw_fd() as u32,
+                expected_network_id: network,
+                network_id: network,
+                expected_torii_url: Some("http://127.0.0.1:8080".into()),
+                torii_url: Some("http://127.0.0.1:18080".into()),
+                config_source_path: Some(source_path.clone()),
+                output: output_path.clone(),
+            }),
+        };
+        let mut stdout = Vec::new();
+        command.run_without_client_config(&mut stdout).unwrap();
+        assert!(stdout.is_empty());
+        assert_eq!(fd.stream_position().unwrap(), 7);
+        assert!(fs::read(&source_path).unwrap() == source);
+        let projected = Zeroizing::new(fs::read(&output_path).unwrap());
+        let (before, _) =
+            iroha::config::Config::load_bytes_with_musubi_publication(&source_path, &source)
+                .unwrap();
+        let (after, publication) =
+            iroha::config::Config::load_bytes_with_musubi_publication(&output_path, &projected)
+                .unwrap();
+        assert!(
+            before.account == after.account
+                && before.chain == after.chain
+                && before.network_id == after.network_id
+        );
+        assert!(before.key_pair.public_key() == after.key_pair.public_key());
+        assert_eq!(after.torii_api_url.as_str(), "http://127.0.0.1:18080/");
+        let retained_proof = Path::new(publication.namespace_delegation_file.as_deref().unwrap());
+        assert_eq!(retained_proof, public_proof);
+        assert_eq!(
+            fs::metadata(retained_proof).unwrap().ino(),
+            fs::metadata(&public_proof).unwrap().ino()
+        );
+        let published = fs::symlink_metadata(&output_path).unwrap();
+        assert_eq!(published.mode() & 0o7777, 0o600);
+        assert_eq!(published.nlink(), 1);
+        assert!(command.run_without_client_config(&mut stdout).is_err());
+        assert!(stdout.is_empty());
+        assert!(fs::read(&output_path).unwrap() == projected.as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_native_refuses_wrong_provenance_and_unsafe_or_existing_output() {
+        use std::os::fd::AsRawFd as _;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let network = network_fixture(b"route custody unchanged network");
+        let source = root.join("source.toml");
+        let identical = root.join("identical.toml");
+        for path in [&source, &identical] {
+            fs::write(path, route_fixture(&network)).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let projected_dir = root.join("projected");
+        fs::create_dir(&projected_dir).unwrap();
+        fs::set_permissions(&projected_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let fd = File::open(&source).unwrap();
+        let output = projected_dir.join("projected.toml");
+        let mut args = ClientConfigRebase {
+            config_fd: fd.as_raw_fd() as u32,
+            expected_network_id: network,
+            network_id: network,
+            expected_torii_url: Some("http://127.0.0.1:8080".into()),
+            torii_url: Some("http://127.0.0.1:18080".into()),
+            config_source_path: Some(identical),
+            output: output.clone(),
+        };
+        assert!(client_config_rebase(&args).is_err());
+        assert!(!output.exists());
+        args.config_source_path = Some(source.clone());
+        fs::write(&output, b"existing fixture must remain").unwrap();
+        assert!(client_config_rebase(&args).is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"existing fixture must remain");
+        fs::remove_file(&output).unwrap();
+        std::os::unix::fs::symlink(&source, &output).unwrap();
+        assert!(client_config_rebase(&args).is_err());
+        assert!(
+            fs::symlink_metadata(&output)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&output).unwrap();
+        let unsafe_parent = root.join("unsafe");
+        fs::create_dir(&unsafe_parent).unwrap();
+        fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o755)).unwrap();
+        args.output = unsafe_parent.join("projected.toml");
+        assert!(client_config_rebase(&args).is_err());
+        assert!(!args.output.exists());
+        let repository = root.join("repository");
+        fs::create_dir(&repository).unwrap();
+        fs::set_permissions(&repository, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(repository.join(".git")).unwrap();
+        args.output = repository.join("projected.toml");
+        assert!(client_config_rebase(&args).is_err());
+        assert!(!args.output.exists());
+        fs::hard_link(&source, root.join("source-alias.toml")).unwrap();
+        args.output = output;
+        assert!(client_config_rebase(&args).is_err());
+        assert!(!args.output.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_final_source_check_refusal_removes_only_owned_fresh_output() {
+        use std::cell::Cell;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("projected.toml");
+        let calls = Cell::new(0);
+        let check = || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 3 {
+                Err(eyre!("injected final source refusal"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(write_projected_client_private(&output, b"opaque fixture only", check).is_err());
+        assert_eq!(calls.get(), 3);
+        assert!(!output.exists());
+        assert!(!output.is_symlink());
+        fs::write(&output, b"preexisting fixture").unwrap();
+        assert!(
+            write_projected_client_private(&output, b"replacement fixture", || Ok(())).is_err()
+        );
+        assert_eq!(fs::read(&output).unwrap(), b"preexisting fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_retained_source_refuses_restored_private_grandparent() {
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let grandparent = root.join("original");
+        let parent = grandparent.join("network");
+        fs::create_dir(&grandparent).unwrap();
+        fs::create_dir(&parent).unwrap();
+        for path in [&grandparent, &parent] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let source = parent.join("client.toml");
+        fs::write(&source, b"opaque fixture only").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let leaf_before = fs::symlink_metadata(&source).unwrap();
+        let retained = retain_client_source_directories(&source).unwrap();
+        let before = fs::symlink_metadata(&grandparent).unwrap();
+        let displaced = root.join("displaced");
+        fs::rename(&grandparent, &displaced).unwrap();
+        fs::set_permissions(&displaced, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&displaced, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(&displaced, &grandparent).unwrap();
+        let restored = fs::symlink_metadata(&grandparent).unwrap();
+        assert_eq!(
+            client_directory_core(&before),
+            client_directory_core(&restored)
+        );
+        assert_ne!(
+            private_client_snapshot(&before),
+            private_client_snapshot(&restored)
+        );
+        assert_eq!(
+            private_client_snapshot(&leaf_before),
+            private_client_snapshot(&fs::symlink_metadata(&source).unwrap())
+        );
+        assert!(check_client_source_directories(&retained).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_native_refuses_same_parent_to_keep_source_ancestors_exact() {
+        use std::os::fd::AsRawFd as _;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let network = network_fixture(b"route same parent unchanged network");
+        let source = root.join("client.toml");
+        fs::write(&source, route_fixture(&network)).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let fd = File::open(&source).unwrap();
+        let output = root.join("projected.toml");
+        let parent_before = fs::symlink_metadata(&root).unwrap();
+        let args = ClientConfigRebase {
+            config_fd: fd.as_raw_fd() as u32,
+            expected_network_id: network,
+            network_id: network,
+            expected_torii_url: Some("http://127.0.0.1:8080".into()),
+            torii_url: Some("http://127.0.0.1:18080".into()),
+            config_source_path: Some(source),
+            output: output.clone(),
+        };
+        let error = client_config_rebase(&args).unwrap_err();
+        assert!(format!("{error:#}").contains("separate private output directory"));
+        assert!(!output.exists());
+        assert_eq!(
+            private_client_snapshot(&parent_before),
+            private_client_snapshot(&fs::symlink_metadata(&root).unwrap())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_route_final_refusal_leaves_unrelated_output_replacement_untouched() {
+        use std::cell::Cell;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("projected.toml");
+        let calls = Cell::new(0);
+        let check = || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 3 {
+                fs::remove_file(&output).unwrap();
+                fs::write(&output, b"unrelated owner fixture must remain").unwrap();
+                fs::set_permissions(&output, fs::Permissions::from_mode(0o600)).unwrap();
+                Err(eyre!("injected final source refusal after replacement"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(write_projected_client_private(&output, b"owned opaque fixture", check).is_err());
+        assert_eq!(calls.get(), 3);
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            b"unrelated owner fixture must remain"
+        );
     }
 
     #[test]
@@ -529,7 +2249,7 @@ mod tests {
         let old = network_fixture(b"retained test genesis");
         let next = network_fixture(b"replacement test genesis");
         let source = client_network_fixture(&old);
-        let output = rebase_client_network_id(&source, &old, &next).unwrap();
+        let output = rebase_client_network_id(&source, &old, &next, None).unwrap();
         let mut expected: toml::Table =
             toml::from_str(std::str::from_utf8(&source).unwrap()).unwrap();
         expected.insert(
@@ -538,8 +2258,8 @@ mod tests {
         );
         let actual: toml::Table = toml::from_str(std::str::from_utf8(&output).unwrap()).unwrap();
         assert_eq!(actual, expected);
-        assert!(rebase_client_network_id(&source, &next, &old).is_err());
-        assert!(rebase_client_network_id(&output, &old, &next).is_err());
+        assert!(rebase_client_network_id(&source, &next, &old, None).is_err());
+        assert!(rebase_client_network_id(&output, &old, &next, None).is_err());
         for invalid in [
             [
                 b"extends = '/unbound/config.toml'\n".as_slice(),
@@ -555,7 +2275,7 @@ mod tests {
             b"private_key = 'fixture-secret-not-runtime'\n".to_vec(),
             b"private_key = 'fixture-secret-not-runtime\n".to_vec(),
         ] {
-            let error = rebase_client_network_id(&invalid, &old, &next).unwrap_err();
+            let error = rebase_client_network_id(&invalid, &old, &next, None).unwrap_err();
             assert!(!format!("{error:#}").contains("fixture-secret"));
         }
     }
@@ -580,6 +2300,9 @@ mod tests {
                 config_fd: file.as_raw_fd() as u32,
                 expected_network_id: old,
                 network_id: next,
+                expected_torii_url: None,
+                torii_url: None,
+                config_source_path: None,
                 output: output.clone(),
             }),
         };
@@ -620,6 +2343,9 @@ mod tests {
             config_fd: file.as_raw_fd() as u32,
             expected_network_id: next,
             network_id: old,
+            expected_torii_url: None,
+            torii_url: None,
+            config_source_path: None,
             output: output.clone(),
         };
         assert!(client_config_rebase(&args).is_err());

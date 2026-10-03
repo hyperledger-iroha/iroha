@@ -27,12 +27,25 @@ convergence evidence when they do.
 | Permutation column count | u32 big endian, equal to the trusted circuit permutation count |
 | Each permutation column | One mode byte, then the unique canonical payload below |
 
-Fixed modes have a unique priority: a constant column uses mode 0 and one canonical
-scalar; a nonconstant column containing only zero/one uses mode 1 and
-`ceil(n/8)` bytes with rows in low-bit-first order; every other column uses mode 2
-and `n` canonical scalars. Constant takes precedence even at tiny domains where a
-bitset would be shorter. Unknown modes, redundant encodings and nonzero unused
-bitset bits are errors.
+For fixed columns, n is the nonzero full commitment-domain row count, w is the
+canonical scalar width, and T is the number of nonzero values. Every column has
+one tag followed by the selected payload:
+
+| Mode | Eligibility and payload | Payload bytes |
+| --- | --- | --- |
+| 0: constant | All values equal; one canonical scalar | w |
+| 1: bitset | Every value is zero or one; low-bit-first row bits | `ceil(n/8)` |
+| 2: raw | Any column; one canonical scalar per row | `w*n` |
+| 3: sparse zero | u32 little-endian T, then T strictly increasing u32 little-endian row IDs and canonical nonzero scalars | `4 + (4+w)*T` |
+
+Choose the smallest eligible payload, with ties broken by the table's tag order.
+Constants and uniform binary columns participate in all eligible candidates: at
+large domains an all-zero column uses sparse count zero; at tiny domains a uniform
+binary column can use a shorter bitset. Omitted sparse rows are exactly field zero.
+The parser rejects nonminimal modes, malformed or out-of-domain counts and rows,
+duplicated or unordered rows, explicit sparse zeros, noncanonical scalars, unknown
+tags, nonzero unused bitset bits and truncated payloads. This is the sole first
+release layout; there is no previous-layout decoder or alias.
 
 A permutation target identifies `column*n + row` for the domain label
 `DELTA^column * omega^row`. Each column has E nonidentity targets. Source rows
@@ -54,14 +67,18 @@ n is a nonzero power of two that fits u32. The decoder reconstructs the exact
 Lagrange and coefficient bases without retaining a dense target map. The curve
 digest uses the sole `Halo2-PK-Sparse1` BLAKE2b personalization and codec magic.
 
-For Pasta, domain `n = 2^k`, permutation columns P, exact Processed VK length V,
-and disjoint fixed-mode counts C (constant), B (binary), R (raw), let S be the sum
-of each permutation column's mode byte and canonical payload. The frame size is:
+For Pasta, domain `n = 2^k`, permutation columns P and exact Processed VK length V,
+let F be the sum of each fixed column's tag and canonical payload, and S the sum
+of each permutation column's tag and canonical payload. The exact frame size is:
 
-`56 + V + 3*(32*n + 4) + 8 + S + 33*C + (1 + ceil(n/8))*B + (1 + 32*n)*R`.
+`56 + V + 3*(32*n + 4) + 8 + F + S`.
 
-The sound configure-only bounds are `P <= S <= P*(1 + 4*n)`; exact S requires the
-synthesized directed mapping, including identity columns.
+For each fixed column the sound lower bound is `1 + min(32, ceil(n/8), 4)` and
+the upper bound is `1 + 32*n`. For permutation columns, `P <= S <= P*(1 + 4*n)`;
+exact S requires the synthesized directed mapping, including identity columns.
+Constant/binary/other value-class counts alone cannot determine F. Exact F observes
+the actual assigned fields and selector roots using the same canonical size planner
+as the writer and parser, without materializing full selector field arrays.
 
 ## Admission and early sizing
 
@@ -76,13 +93,15 @@ the separately authenticated standalone VK remains mandatory.
 
 Configure-only preflight uses sound optimistic bounds for each selector strategy.
 A pass permits synthesis; it never establishes exact artifact feasibility. The
-fixed-column payload lower bound is `min(32, ceil(n/8))` plus its mode byte, and
+fixed-column payload lower bound is `min(32, ceil(n/8), 4)` plus its mode byte, and
 permutation columns contribute their possible identity tags. After synthesis, the
 backend counts actual nonidentity targets once for both selector alternatives,
 before allocating permutation field polynomials; unsupported codec dimensions
-produce an unavailable inventory and fail admission. Exact configured-column modes use normalized `Assigned` field
-equality, including rational values with zero denominators. Compressed-selector
-modes follow the same deterministic combination plan and actual root values as key
+produce an unavailable inventory and fail admission. Both exact fixed and permutation
+byte inventories are required; a missing inventory never substitutes a bound. Fixed
+values use normalized `Assigned` field equality, including rational values with zero
+denominators. Compressed-selector fixed bytes follow the same deterministic combination
+plan and actual root values as key
 construction, without expanding selector field arrays. The callback checks both
 unchanged PK/VK caps before key polynomial expansion. Selection is deterministic:
 smallest feasible PK, then VK, then compressed mode on an exact tie. Separate
@@ -109,7 +128,11 @@ k16/P133 the two passes require about 279 million field squarings, plus searches
 and basis-validation FFTs. Canonical authenticated loading invokes this writer, so
 actual load timing must be qualified alongside key generation and proving.
 
-Indexed reads keep scanner-derived original-frame ranges. Sparse reads search
+Indexed reads keep scanner-derived original-frame ranges. Sparse fixed reads retain
+the validated count/range, search original row/scalar pairs and restore zero gaps;
+no dense fixed bank is retained. Every reread checks count, bounds, canonical nonzero
+scalars and encountered ordering, and outer authenticated source freshness remains
+mandatory. Sparse permutation reads search
 original source-row pairs; bitmap reads use cumulative ranks every 4096 rows and
 bounded 512-byte bitmap reads before fetching original directed targets. No caller
 can replace the authenticated source through those index records. Failed or
