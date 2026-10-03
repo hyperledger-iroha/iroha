@@ -315,9 +315,6 @@ impl SendCreditOriginals {
     pub(super) fn output(&self) -> &KagemushaOrdinaryPaymentOutputV1 {
         &self.output
     }
-    pub(super) fn preparation_clock(&self) -> &KagemushaOrdinaryCashClockContextV1 {
-        &self.preparation_clock
-    }
     pub(super) fn encrypted_credit(&self) -> &[u8] {
         &self.encrypted_credit
     }

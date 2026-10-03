@@ -49,7 +49,13 @@ def test_proof_binary_is_an_explicit_non_default_target() -> None:
         "path": "src/bin/kagemusha_real_proof.rs",
         "required-features": [MODULE.PROOF_FEATURE],
     }
-    assert manifest["features"][MODULE.PROOF_FEATURE] == ["zk-halo2-ipa"]
+    assert manifest["features"][MODULE.PROOF_FEATURE] == []
+    assert "zk-halo2-ipa" not in manifest["features"]
+    for dependency in (
+        "halo2_proofs", "halo2-base", "halo2-ecc", "snark-verifier",
+        "iroha_zkp_halo2", "iroha_zkp_poseidon",
+    ):
+        assert manifest["dependencies"][dependency].get("optional", False) is False
     assert MODULE.PROOF_FEATURE not in manifest["features"]["default"]
 
 

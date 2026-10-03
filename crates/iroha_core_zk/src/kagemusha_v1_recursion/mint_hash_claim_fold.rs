@@ -16,7 +16,7 @@
 #[path = "mint_hash_claim_global_inventory.rs"]
 mod global_inventory;
 
-use ff::{Field as _, PrimeField as _};
+use ff::Field as _;
 #[cfg(test)]
 use halo2_base::QuantumCell::Witness;
 use halo2_base::{
@@ -48,10 +48,9 @@ use snark_verifier::{
 
 use super::carrier_binding::{
     KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1 as ClaimCarrierBindingV1,
-    KagemushaCarrierCommitmentsV1 as ClaimCarrierCommitmentsV1,
     placeholder_carrier_binding_v1 as placeholder_claim_carrier_binding_v1,
 };
-use super::carrier_rlc::{streaming as rlc_streaming, *};
+use super::carrier_rlc::*;
 const CLAIM_CARRIER_BINDING_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {
         domain: CLAIM_CARRIER_RLC_DOMAIN_V1,
@@ -4523,12 +4522,14 @@ mod tests {
                             + profile.raw_fixed_columns,
                         fixed,
                     );
+                    let fixed_bytes = usize::try_from(profile.structured_fixed_bytes
+                        .expect("actual canonical fixed encoding was measured")).unwrap();
+                    let permutation_bytes = usize::try_from(profile.structured_permutation_bytes
+                        .expect("actual directed permutation encoding was measured")).unwrap();
                     let predicted_pk = 56 + predicted_vk + 8
                         + 3 * (32 * profile.domain_rows + 4)
-                        + 4 * profile.domain_rows * permutation
-                        + 33 * profile.constant_fixed_columns
-                        + (1 + profile.domain_rows.div_ceil(8)) * profile.binary_fixed_columns
-                        + (1 + 32 * profile.domain_rows) * profile.raw_fixed_columns;
+                        + permutation_bytes + fixed_bytes;
+                    eprintln!("KAGEMUSHA shared RLC exact {} shared={shared} profile={profile:?} pk={pk_bytes} vk={vk_bytes}", stringify!($curve));
                     assert_eq!(vk_bytes, predicted_vk);
                     assert_eq!(pk_bytes, predicted_pk);
 
@@ -4549,8 +4550,19 @@ mod tests {
                 assert_eq!(owned.constant_fixed_columns, shared.constant_fixed_columns);
                 assert_eq!(owned.binary_fixed_columns, shared.binary_fixed_columns);
                 assert_eq!(owned.raw_fixed_columns, shared.raw_fixed_columns + 1);
-                // One raw k16 table tag/payload plus its Processed VK commitment is removed.
-                assert_eq!(owned_pk - shared_pk, 2_097_185);
+                // The full 15-bit range has 32,767 nonzero rows followed by canonical
+                // zero fill. SPARSE_ZERO is smaller than its raw k16 scalar array.
+                let range_nonzero_rows = (1_usize << CARRIER_RLC_RADIX_BITS) - 1;
+                let removed_fixed_bytes = 1 + 4 + range_nonzero_rows * (4 + 32);
+                assert_eq!(
+                    owned.structured_fixed_bytes.unwrap() - shared.structured_fixed_bytes.unwrap(),
+                    u64::try_from(removed_fixed_bytes).unwrap(),
+                    "sharing removes exactly one canonical sparse range column",
+                );
+                assert_eq!(owned.structured_permutation_bytes, shared.structured_permutation_bytes,
+                    "sharing the fixed range does not change the directed copy relation");
+                assert_eq!(owned_pk - shared_pk, removed_fixed_bytes + (owned_vk - shared_vk));
+                assert_eq!(owned_pk - shared_pk, 1_179_649);
                 eprintln!(
                     "KAGEMUSHA shared RLC range {} owned_pk={owned_pk} shared_pk={shared_pk} owned_vk={owned_vk} shared_vk={shared_vk}",
                     stringify!($curve)

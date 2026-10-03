@@ -14,7 +14,7 @@ use iroha_data_model::kagemusha::{
     KagemushaVerifiedOrdinaryAppCredentialV1, KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
     kagemusha_asset_identity_digest_v1,
 };
-use rand_core_06::{OsRng, RngCore as _};
+use rand_core_06::OsRng;
 use zeroize::{Zeroize as _, Zeroizing};
 
 #[path = "ordinary_received_credit_opening.rs"]

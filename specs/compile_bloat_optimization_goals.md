@@ -60,16 +60,16 @@ inputs unchanged through their runtime endpoints. The CA check binds a synthetic
 paired MAIN record. The optimized constructor, full ordinary suite, upstream strict
 lint and merged-source qualification remain open. Maximum-proof external time/RSS evidence and enforced
 address-space limits remain separate cryptographic release gates.
-After the shared Norito derive correction, the current debug-profile Privacy
-libtest compiles at the closed merged revision with all 8,374 captured source,
-literal and control inputs unchanged, including all 433 actual dep-info inputs.
-Its actual registry contains 2,541 tests, including 65 ignored cases; all 61
-original ignores remain. The renamed shift test preserves the original running
-checks and adds admission and forgery coverage. The 2,476 ordinary cases are
-running serially after a current resource review. The derive library, strict JSON
-and UI regressions pass, preserving the original diagnostics. Full runtime and
-final merged-source qualification remain open; the running Privacy artifact
-retains its original source epoch across the separate test-fixture repair.
+The latest focused Privacy validation lists 2,628 tests: 2,560 ordinary cases
+and 68 ignores. It preserves all original 65 ignores, including the original 61;
+the three additional ignores are reviewed cost diagnostics. Renamed scalar
+tests retain ordinary coverage without retired aliases. All five corrected
+GETGAS/scalar-history regressions pass, with captured source, Git, toolchain,
+managed inputs and artifacts unchanged through their build and runtime intervals.
+The earlier retained ordinary suite continues in its original source epoch and
+records the five original failures. Full current ordinary and final merged-source
+qualification remain open, including changes applied after the focused run.
+The derive library, strict JSON and UI regressions pass, preserving diagnostics.
 Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
@@ -104,15 +104,16 @@ retired Norito flag-name constant is removed after confirming its protected
 consumer no longer exists. The committee-test owner migrated its protected ZK
 import directly to `iroha_core_zk`, and Core's temporary public test adapter is
 removed. Core uses a crate-local owner alias for every feature selection. The
-development-only fee-evidence test now imports the actual Kotodama compiler owner;
-fresh focused compilation and runtime validation remain in progress.
+development-only fee-evidence test imports the actual Kotodama compiler owner.
 The signed-clock type path, Core ZK URL dependency and shared request-codec
 derive are corrected. The current normal Core ZK library frontend passes with
-its four default features and an unchanged source/Git interval. The latest
-fee-target build stopped before emitting its harness on two shipping Core errors:
-a missing ordinary-mint submission-limit import and checkpoint genesis-error
-conversion. The repair chat installed both fixes; a fresh fee-target build and
-runtime validation remain pending. The current metadata sequence stops at its
-first build on three wallet custody types missing required canonical Norito
-schema names. Its source/Git interval is unchanged; the second build and strict
-freshness comparison have not run.
+its four default features and an unchanged source/Git interval. The `dev-tools`
+fee target compiles and its two ordinary tests pass, with captured sources and
+managed inputs unchanged through build and runtime. Wallet custody now declares
+its three canonical Norito identities and
+has its missing test module. Additional identity, root-frame roundtrip and
+wrong-schema controls preserve every original custody-test byte. The default
+Wallet library's 78 ordinary tests pass, including all eight custody controls,
+with captured source and managed inputs unchanged. The last metadata sequence stopped at its first build
+before the wallet correction; the second build and strict freshness comparison
+have not run.

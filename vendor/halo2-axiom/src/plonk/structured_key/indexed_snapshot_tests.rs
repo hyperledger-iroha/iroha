@@ -310,7 +310,12 @@ where
         PolynomialId::FixedLagrange(column) => {
             let f = &m.fixed[column];
             let unit = if f.mode == 1 { 1 } else { 32 };
-            (f.payload.offset, f.payload.length as usize, unit)
+            let prefix = if f.mode == SPARSE_ZERO { 8 } else { 0 };
+            (
+                f.payload.offset + prefix,
+                f.payload.length as usize - prefix as usize,
+                unit,
+            )
         }
         PolynomialId::PermutationLagrange(column) => {
             let r = &m.permutations[column];
@@ -694,9 +699,18 @@ where
         &mut io::sink(),
     )
     .unwrap();
+    let sparse_fixed = key
+        .metadata()
+        .fixed
+        .iter()
+        .enumerate()
+        .find(|(_, record)| record.mode == SPARSE_ZERO && record.nonzero > 0)
+        .unwrap()
+        .0;
     for id in [
         PolynomialId::MaskCoefficient(0),
         PolynomialId::PermutationLagrange(0),
+        PolynomialId::FixedLagrange(sparse_fixed),
     ] {
         let mut bytes = original.clone();
         let (at, _, width) = interval(&key, id);

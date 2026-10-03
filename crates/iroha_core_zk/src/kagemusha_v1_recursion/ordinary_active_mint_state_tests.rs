@@ -22,7 +22,6 @@ use crate::kagemusha_v1_state::{
     CreditIdV1, KagemushaStateV1, KagemushaTransitionKindV1,
     OrdinaryConsumedCreditsForQualificationV1, ordinary_incoming_preview_for_qualification_v1,
 };
-use ff::Field as _;
 
 /// Retained genuine common family and its actually funded predecessor for the next Send step.
 /// Private mathematical fixture data cannot become an authenticated Native financial owner.
@@ -32,7 +31,8 @@ pub(in super::super) struct OrdinaryFundedStateForTestingV1 {
     pub(in super::super) state: KagemushaStateV1,
     pub(in super::super) generated: KagemushaGeneratedRecursiveStateProofV1,
     pub(in super::super) public_original: Vec<u8>,
-    pub(in super::super) consumed_credits: OrdinaryConsumedCreditsForQualificationV1,
+    // Hold the exact consumed-credit replay index for the funded fixture lifetime.
+    pub(in super::super) _consumed_credits: OrdinaryConsumedCreditsForQualificationV1,
     pub(in super::super) mint_source: ProvenMintForTesting,
 }
 
@@ -138,24 +138,6 @@ fn prove_mint_source(
         authorization,
         source,
     }
-}
-
-/// Execute real zero State and active Mint using one retained inner/outer State key family.
-/// Final held Wrapper protocols must be passed by the complete Send→Receive qualification.
-/// A shape seed may discover topology, but can never satisfy that final held-descriptor gate.
-pub(in super::super) fn prove_funded_ordinary_state_for_testing_v1(
-    apple: bool,
-    release: DigestV1,
-    vk: DigestV1,
-    manifest: DigestV1,
-    hash_eq: KagemushaLoadedEqMintHashArtifactsV1,
-    hash_ep: KagemushaLoadedEpMintHashArtifactsV1,
-    wrapper_eq: &PlonkProtocol<EqAffine>,
-    wrapper_ep: &PlonkProtocol<EpAffine>,
-) -> OrdinaryFundedStateForTestingV1 {
-    prove_funded_ordinary_state_with_held_keys_for_testing_v1(
-        apple, release, vk, manifest, hash_eq, hash_ep, wrapper_eq, wrapper_ep, None,
-    )
 }
 
 /// Same active Mint body using the caller's immutable already generated State keys.
@@ -925,7 +907,7 @@ pub(in super::super) fn prove_funded_ordinary_state_with_held_keys_for_testing_v
         state: preview.successor,
         generated,
         public_original,
-        consumed_credits: consumed,
+        _consumed_credits: consumed,
         mint_source: mint,
     }
 }

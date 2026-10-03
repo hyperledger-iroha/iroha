@@ -1081,6 +1081,10 @@ pub fn validation_fee_policy_from_json_value(
 }
 
 /// Validate first-release fee policy invariants.
+///
+/// # Errors
+///
+/// Returns an error when the policy violates a fee policy invariant.
 pub fn validate_validation_fee_policy_proposal(policy: &ValidationFeePolicyV1) -> CodecResult<()> {
     if let Some(reason) = policy.policy_invariant_error() {
         return Err(CodecError::new(

@@ -40,10 +40,7 @@ pub(crate) use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
-    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
-    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
-    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 

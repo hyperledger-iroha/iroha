@@ -98,7 +98,8 @@ def test_compiler_errors_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_invalid_catalog_cannot_produce_an_inventory(tmp_path: Path) -> None:
     exporter = Path("scripts/sdk_operation_inventory.rs")
     catalog = Path("crates/iroha_torii_shared/src/route_catalog.rs")
-    for relative in (exporter, catalog):
+    canonical_path = Path("crates/iroha_torii_shared/src/multisig_execution_evidence/path.rs")
+    for relative in (exporter, catalog, canonical_path):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(inventory.ROOT / relative, target)
@@ -134,3 +135,41 @@ def test_mandatory_kagemusha_catalog_preserves_authentication_and_private_reads(
         assert tuple(row[field] for field in (
             "method", "authentication", "admission", "effect", "mcp", "private_no_store")) == policy
     assert operations["kagemusha.ordinary_wallet_current"]["path"] == "/v1/kagemusha/ordinary/current-wallet"
+
+
+@pytest.mark.parametrize(
+    "route_id,method,path,feature_gate,authentication,admission,mcp,private_no_store",
+    [
+        ('kagemusha.ordinary_mint_issuer_purpose', 'POST', '/v1/kagemusha/ordinary/mint-issuer-purpose', 'always', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('kagemusha.ordinary_mint_finalized', 'POST', '/v1/kagemusha/ordinary/top-up/finality', 'always', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('kagemusha.ordinary_mint_credit', 'POST', '/v1/kagemusha/ordinary/top-up/credit', 'always', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('validation_fee.retail.quote', 'POST', '/v1/validation-fee/quote', 'feature(app_api)', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('validation_fee.retail.status', 'GET', '/v1/validation-fee/accounts/{account_id}/status', 'feature(app_api)', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('validation_fee.retail.receipts', 'GET', '/v1/validation-fee/accounts/{account_id}/receipts', 'feature(app_api)', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('validation_fee.retail.statement_head', 'GET', '/v1/validation-fee/accounts/{account_id}/statement/head', 'feature(app_api)', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('validation_fee.retail.statement', 'POST', '/v1/validation-fee/accounts/{account_id}/statement', 'feature(app_api)', 'canonical_account_signature', 'authenticated_account', 'false', 'true'),
+        ('multisig.execution_evidence', 'GET', '/v1/multisig/execution-evidence/{multisig_account_id}/{entrypoint_hash}/{instructions_hash}', 'always', 'torii_default', 'public', 'true', 'false'),
+    ],
+)
+def test_current_original_reads_preserve_their_exact_route_policy(
+    generated: bytes, route_id: str, method: str, path: str, feature_gate: str,
+    authentication: str, admission: str, mcp: str, private_no_store: str,
+) -> None:
+    """Keep private signed reads distinct from public certified evidence reads."""
+    operations = {row["route_id"]: row for row in csv.DictReader(
+        generated.decode().splitlines()[1:], delimiter="\t")}
+    row = operations[route_id]
+    assert tuple(row[field] for field in (
+        "method", "path", "feature_gate", "authentication", "admission",
+        "mcp", "private_no_store")) == (
+            method, path, feature_gate, authentication, admission, mcp, private_no_store)
+    assert row["surface"] == "public" and row["transport"] == "http"
+    assert row["effect"] == "read"
+    assert row["sdk"] == row["openapi"] == "true"
+
+
+def test_retired_hijiri_quote_is_absent_from_every_projection(generated: bytes) -> None:
+    """The retail quote is the sole current quote owner, without a retired alias."""
+    rows = list(csv.DictReader(generated.decode().splitlines()[1:], delimiter="\t"))
+    assert all(row["route_id"] != "validation_fee.hijiri.quote" for row in rows)
+    assert all(row["path"] != "/v1/validation-fee/hijiri/quote" for row in rows)

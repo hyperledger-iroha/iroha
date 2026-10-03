@@ -1760,12 +1760,16 @@ where
     controls.protocol_armed.store(true, Ordering::SeqCst);
     crate::plonk::prover::stored::quotient_inverse::take_clear_observations();
     let result = input.stage_quotient_coefficients(1 << 26);
-    assert!(matches!(
-        result,
-        Err(StoredLookupErrorV1::Store(
-            StoredPolynomialErrorV1::Capacity
-        ))
-    ));
+    let expected = if preflight {
+        StoredLookupErrorV1::Store(StoredPolynomialErrorV1::Capacity)
+    } else {
+        StoredLookupErrorV1::Phase(
+            crate::poly::stored_advice::phase::StoredPhaseErrorV1::Store(
+                StoredPolynomialErrorV1::Capacity,
+            ),
+        )
+    };
+    assert_eq!(result.as_ref().err(), Some(&expected));
     let bank = controls.bank.lock().unwrap();
     assert_eq!(bank.live.len(), usize::from(with_sentinel));
     if preflight {

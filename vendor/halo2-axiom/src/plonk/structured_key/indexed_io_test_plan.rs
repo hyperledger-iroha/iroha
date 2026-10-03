@@ -8,6 +8,7 @@ pub(super) struct Operation {
     pub(super) at: u64,
     pub(super) bytes: usize,
     pub(super) unit: usize,
+    pub(super) prefix: usize,
 }
 #[derive(Debug)]
 pub(super) struct Observation {
@@ -39,14 +40,20 @@ pub(super) fn observation(
     for p in plan {
         o.seeks += 1;
         o.position = p.at;
-        for at in (0..p.bytes).step_by(p.unit) {
-            o.largest = o.largest.max(p.unit);
+        let mut at = 0;
+        while at < p.bytes {
+            let unit = if at == 0 && p.prefix != 0 {
+                p.prefix
+            } else {
+                p.unit
+            };
+            o.largest = o.largest.max(unit);
             if boundary == Some(o.delivered) {
                 o.reads += 1;
                 return o;
             }
-            for from in (0..p.unit).step_by(chunk.min(p.unit)) {
-                let size = chunk.min(p.unit - from);
+            for from in (0..unit).step_by(chunk.min(unit)) {
+                let size = chunk.min(unit - from);
                 if boundary == Some(o.delivered) {
                     o.reads += 1;
                     return o;
@@ -57,11 +64,12 @@ pub(super) fn observation(
                 o.delivered += size;
                 o.position += size as u64;
                 o.last = Some(o.position);
-                if boundary == Some(o.delivered) && size < chunk.min(p.unit - from) {
+                if boundary == Some(o.delivered) && size < chunk.min(unit - from) {
                     o.reads += 1;
                     return o;
                 }
             }
+            at += unit;
         }
     }
     o
@@ -83,7 +91,12 @@ where
     let m = key.metadata();
     let end = start + length;
     let width = scalar_bytes::<C::Scalar>();
-    let op = |at, bytes, unit| Operation { at, bytes, unit };
+    let op = |at, bytes, unit| Operation {
+        at,
+        bytes,
+        unit,
+        prefix: 0,
+    };
     match id {
         Id::MaskCoefficient(mask) => vec![op(
             m.masks[mask].offset + (start * width) as u64,
@@ -104,6 +117,41 @@ where
                     length * width,
                     width,
                 )],
+                SPARSE_ZERO => {
+                    let stride = 4 + width;
+                    let pairs = bytes[r.payload.offset as usize + 4
+                        ..(r.payload.offset + r.payload.length) as usize]
+                        .chunks_exact(stride)
+                        .map(|pair| u32::from_le_bytes(pair[..4].try_into().unwrap()) as usize)
+                        .collect::<Vec<_>>();
+                    let pair = |at: usize| Operation {
+                        at: r.payload.offset + 4 + (at * stride) as u64,
+                        bytes: stride,
+                        unit: width,
+                        prefix: 4,
+                    };
+                    let mut operations = vec![op(r.payload.offset, 4, 4)];
+                    let (mut first, mut last) = (0, pairs.len());
+                    while first < last {
+                        let mid = first + (last - first) / 2;
+                        operations.push(pair(mid));
+                        if pairs[mid] < start {
+                            first = mid + 1;
+                        } else {
+                            last = mid;
+                        }
+                    }
+                    if first > 0 {
+                        operations.push(pair(first - 1));
+                    }
+                    for (at, row) in pairs.iter().enumerate().skip(first) {
+                        operations.push(pair(at));
+                        if *row >= end {
+                            break;
+                        }
+                    }
+                    operations
+                }
                 _ => unreachable!(),
             }
         }

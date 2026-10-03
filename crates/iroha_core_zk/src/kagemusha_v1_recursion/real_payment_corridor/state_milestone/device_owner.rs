@@ -27,8 +27,8 @@ pub(super) struct DiagnosticDeviceV1<'a> {
     pub(super) recursive_verifier: DiagnosticVerifier<'a>,
     pub(super) device_key: SigningKey,
     pub(super) journal_key: SigningKey,
-    pub(super) coordinator: KagemushaCoordinatorOperationStoreV1,
-    pub(super) responses: KagemushaResponseEvidenceArchiveV1,
+    pub(super) _coordinator: KagemushaCoordinatorOperationStoreV1,
+    pub(super) _responses: KagemushaResponseEvidenceArchiveV1,
     // Fields drop in declaration order: close both journal owners before removing their directory.
     _bootstrap_storage: tempfile::TempDir,
 }
@@ -207,8 +207,8 @@ impl<'a> DiagnosticDeviceV1<'a> {
             recursive_verifier: shared_verifier,
             device_key,
             journal_key,
-            coordinator,
-            responses,
+            _coordinator: coordinator,
+            _responses: responses,
             _bootstrap_storage: bootstrap_storage,
         })
     }

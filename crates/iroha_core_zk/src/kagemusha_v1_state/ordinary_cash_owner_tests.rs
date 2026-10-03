@@ -431,3 +431,50 @@ fn native_cash_record_limit_rejects_complete_frame_before_encoding() {
     assert!(decode(&raw, whole - 1).is_err());
     assert_eq!(decode(&raw, whole).unwrap(), record);
 }
+
+#[test]
+fn native_mint_funding_records_roundtrip_with_complete_canonical_frame_limits() {
+    // Codec DATA only: these inert originals confer no funding, finality or Native custody.
+    use super::mint_funding::MintFundingRecord;
+    let rows = [
+        MintFundingRecord::ConsentFence,
+        MintFundingRecord::Consent([3; 64]),
+        MintFundingRecord::PreDebit(vec![vec![1], vec![2, 3]]),
+        MintFundingRecord::PreDebitInvoked,
+        MintFundingRecord::Decision {
+            signed: vec![1],
+            clock: vec![2],
+            control: vec![3],
+            data: vec![4],
+        },
+        MintFundingRecord::NodeSubmission(vec![5]),
+        MintFundingRecord::TransactionFence {
+            clock: KagemushaOrdinaryCashClockContextV1 {
+                version: 1,
+                request_nonce: [6; 32],
+                signed_observations_original_digest: [7; 32],
+                lower_at_ms: 10,
+                upper_at_ms: 20,
+            },
+        },
+        MintFundingRecord::TransactionOriginal {
+            canonical: vec![8],
+            wire: vec![9],
+        },
+        MintFundingRecord::TransactionDispatched,
+        MintFundingRecord::FinalizedOriginal(vec![10]),
+        MintFundingRecord::FinalizedAcknowledged,
+    ];
+    for row in rows {
+        let record = Record::Mint(MintRecord::Funding(Box::new(row)));
+        let whole = u64::try_from(norito::canonical_frame_len(&record).unwrap()).unwrap();
+        assert!(encode(&record, whole - 1).is_err());
+        let raw = encode(&record, whole).unwrap();
+        assert_eq!(u64::try_from(raw.len()).unwrap(), whole);
+        assert!(decode(&raw, whole - 1).is_err());
+        assert_eq!(decode(&raw, whole).unwrap(), record);
+        let mut trailing = raw;
+        trailing.push(0);
+        assert!(decode(&trailing, whole + 1).is_err());
+    }
+}

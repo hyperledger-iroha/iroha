@@ -1086,6 +1086,7 @@ impl<T> OwnedVec<T> {
         self.values.insert(index, value);
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_at(&mut self, index: usize) -> T {
         self.values.remove(index)
     }
@@ -1110,6 +1111,7 @@ impl<T> OwnedVec<T> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn try_copy_exact(&self) -> Result<Self, OwnedVecGrowthError>
     where
         T: Copy,

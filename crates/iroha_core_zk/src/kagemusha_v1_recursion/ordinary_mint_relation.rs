@@ -43,7 +43,6 @@ use halo2_proofs::{
     poly::ipa::commitment::ParamsIPA,
 };
 use iroha_data_model::kagemusha::*;
-use sha2::{Digest as _, Sha256};
 type Bytes<F> = [PastaSha256ByteV1<F>; 32];
 const DIGEST_COUNT: usize = 34;
 /// Proof witness only; construction lends no Native funding/debit or global lineage capability.

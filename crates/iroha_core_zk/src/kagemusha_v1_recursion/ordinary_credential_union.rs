@@ -171,22 +171,6 @@ pub(super) fn assign_ordinary_credential_union_v1<F: KagemushaPoseidonFieldV1>(
     })
 }
 
-pub(super) fn select_ordinary_digest_v1<F: KagemushaPoseidonFieldV1>(
-    builder: &mut BaseCircuitBuilder<F>,
-    bit: AssignedValue<F>,
-    yes: &[PastaSha256ByteV1<F>; 32],
-    no: &[PastaSha256ByteV1<F>; 32],
-) -> [PastaSha256ByteV1<F>; 32] {
-    let range = builder.range_chip();
-    let ctx = builder.main(0);
-    core::array::from_fn(|i| {
-        let selected = range
-            .gate()
-            .select(ctx, yes[i].quantum_cell(), no[i].quantum_cell(), bit);
-        PastaSha256ByteV1::range_checked(ctx, &range, selected)
-    })
-}
-
 /// Compute both model-owned canonical frames, including their CRCs and full issuer originals.
 /// `full` is a caller-fixed relation choice, never a witness-selected circuit construction branch.
 pub(super) fn reconstruct_ordinary_credential_union_v1<F: KagemushaPoseidonFieldV1>(

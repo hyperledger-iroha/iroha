@@ -20,10 +20,7 @@ use crate::{
 };
 use halo2_proofs::{
     arithmetic::best_multiexp,
-    halo2curves::{
-        CurveExt as _,
-        group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
-    },
+    halo2curves::CurveExt as _,
     plonk::{create_proof, keygen_pk, keygen_vk},
     poly::{
         commitment::ParamsProver as _,

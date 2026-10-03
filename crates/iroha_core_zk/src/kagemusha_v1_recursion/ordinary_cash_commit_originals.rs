@@ -74,15 +74,6 @@ impl GeneratedOrdinaryCashCommitOriginalsV1 {
     pub(crate) fn successor_public_state_original(&self) -> &[u8] {
         &self.successor_public_state_original
     }
-    /// Data-only decoded complete bundle from this already genuinely admitted immutable cap.
-    /// No offered/decoded bundle can construct the cap or substitute for its retained full original.
-    pub(crate) fn proof_bundle(
-        &self,
-    ) -> Result<KagemushaOrdinaryLineageCommitProofBundleV1, KagemushaArtifactGenerationErrorV1>
-    {
-        KagemushaOrdinaryLineageCommitProofBundleV1::decode_original(&self.private_service_original)
-            .map_err(proving_error)
-    }
     pub(crate) fn successor_private_checkpoint_original(&self) -> &[u8] {
         &self.successor_private_checkpoint_original
     }

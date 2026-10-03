@@ -18,7 +18,6 @@
 //! rejected. The Guard transport column has 44 fields: normalized digest, both audits, both exact
 //! credential statement digests, and history. Guard and descendant keys must be regenerated.
 
-use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
     gates::{
@@ -69,27 +68,20 @@ use snark_verifier::{
 };
 
 use super::deferred_parent::accumulator_limb_count;
-use super::deferred_parent::{DeferredAccumulator, ordinary_ipa_proof_profile_v1};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::deferred_parent::{
-    KagemushaDeferredParentOutputV1, KagemushaNativeDeferredBatchV1, bind_accumulator_limbs,
-    constrain_reciprocal_native_batch_v1, constrain_reciprocal_output_with_u128_binding_v1,
-    deferred_field_chips_v1, deferred_loader_v1, derive_native_deferred_batch_with_u128_binding_v1,
+    KagemushaNativeDeferredBatchV1, bind_accumulator_limbs, constrain_reciprocal_native_batch_v1,
+    constrain_reciprocal_output_with_u128_binding_v1, deferred_field_chips_v1, deferred_loader_v1,
+    derive_native_deferred_batch_with_u128_binding_v1,
     finalize_tagged_deferred_audit_with_u128_binding_v1, kagemusha_protocol_structure_digest_v1,
     load_and_constrain_parent_protocol_v1, load_native_accumulator,
     native_parent_protocol_digest_v1, verify_fold,
     verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::{
-    carrier_binding::{
-        KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1, carrier_binding_values_v1,
-        constrain_carrier_challenge_v1, derive_carrier_binding_v1, placeholder_carrier_binding_v1,
-    },
-    carrier_rlc::{
-        CARRIER_RLC_CHALLENGE_BITS_V1, CarrierRlcCarrierV1, KagemushaCarrierRlcConfigV1,
-        KagemushaCarrierRlcMachineV1, assigned_u128_cell_v1,
-    },
+    carrier_binding::KagemushaCarrierBindingLayoutV1, carrier_rlc::KagemushaCarrierRlcMachineV1,
 };
 
 /// Fixed provider-profile registry depth.
@@ -572,12 +564,14 @@ pub(crate) mod platform_credential_public_instance {
     pub(crate) const EQ_PROOF_EP_CARRIER_COMMITMENT_LO: usize = 44;
     pub(crate) const EP_PROOF_EQ_CARRIER_COMMITMENT_LO: usize = 46;
     pub(crate) const EP_PROOF_EP_CARRIER_COMMITMENT_LO: usize = 48;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CARRIER_RLC_EQ_CHALLENGE: usize = 50;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CARRIER_RLC_EP_CHALLENGE: usize = 51;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EQ_CARRIER_AT_EQ_CHALLENGE: usize = 52;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EQ_CARRIER_AT_EP_CHALLENGE: usize = 53;
-    pub(crate) const EP_CARRIER_AT_EQ_CHALLENGE: usize = 54;
-    pub(crate) const EP_CARRIER_AT_EP_CHALLENGE: usize = 55;
 }
 
 /// Exact PlatformCredential public width for one parity.
@@ -589,6 +583,7 @@ pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1:
     KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 14;
 /// Complete source-major carrier capacity, retaining the original four-lane 2016-source envelope.
 pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1: usize = 4 * 2016 + 98;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {
         domain: u64::from_le_bytes(*b"kgpcrlc1"),
@@ -596,6 +591,7 @@ const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
         capacity: KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
         semantic_prefix: KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
     };
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 type CredentialCarrierRlcMachineV1<F> = KagemushaCarrierRlcMachineV1<F, 8162, 1, 103>;
 
 #[derive(Clone, Debug)]

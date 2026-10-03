@@ -211,8 +211,7 @@ where
         let mut position = fixed_start + 4;
         for polynomial in &template.fixed_values {
             boundaries.extend([position, position + 1]);
-            position += 1 + fixed_payload_bytes::<C::Scalar>(fixed_mode(polynomial).unwrap(), 64)
-                .unwrap() as usize;
+            position += 1 + fixed_encoding(polynomial).unwrap().payload_bytes as usize;
         }
         boundaries.extend([position, position + 4, expected.len() - 1]);
         for offset in boundaries {

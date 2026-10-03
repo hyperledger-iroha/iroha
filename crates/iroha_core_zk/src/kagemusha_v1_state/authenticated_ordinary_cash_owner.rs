@@ -1185,16 +1185,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         Ok(retained.captured.original().to_vec())
     }
 
-    /// Lend the actual fsynced receiver request and current custody to Native proof admission.
-    /// The key remains private and retained; this creates no Receive or global head effect.
-    pub(crate) fn receiver_request_custody(
-        &self,
-        request_id: DigestV1,
-    ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1>
-    {
-        receiver_request::loan_main_request(self, request_id)
-    }
-
     /// Cancel only an unfenced request. Its identity remains in the global never-reuse set.
     /// No captured/uncertain key can be consumed or recycled through this operation.
     /// # Errors

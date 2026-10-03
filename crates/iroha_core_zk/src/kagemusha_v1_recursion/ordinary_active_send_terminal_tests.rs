@@ -23,7 +23,6 @@ use super::ordinary_cash_family_qualification::{
 };
 use super::ordinary_mint_genuine_qualification_tests::sign_message_with_counter;
 use super::*;
-use ff::Field as _;
 use iroha_data_model::kagemusha::*;
 
 /// Full actual outgoing proofs and same original data, without installing a financial owner.
@@ -33,7 +32,8 @@ pub(super) struct OrdinarySendTerminalForTestingV1 {
     pub(super) record: KagemushaOrdinaryCashTerminalRecordV1,
     pub(super) approval: KagemushaAppOperationApprovalV1,
     pub(super) admission_clock_original: Vec<u8>,
-    pub(super) terminal_guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
+    // Retain the genuine purpose-1 Guard pair with the complete outgoing proof owner.
+    pub(super) _terminal_guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
     pub(super) inner: OrdinaryCashProofForTestingV1,
     pub(super) wrapper: OrdinaryCashProofForTestingV1,
 }
@@ -636,7 +636,7 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
         record,
         approval,
         admission_clock_original,
-        terminal_guard,
+        _terminal_guard: terminal_guard,
         inner,
         wrapper,
     }

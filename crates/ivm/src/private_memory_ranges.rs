@@ -59,6 +59,7 @@ impl PrivateMemoryRanges {
             .map_err(VMError::AllocationDeferred)
     }
 
+    #[cfg(test)]
     pub(super) fn try_clone(&self) -> Result<Self, VMError> {
         let mut lease = self
             .active_budget

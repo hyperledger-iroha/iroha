@@ -10,10 +10,7 @@ use iroha_core_zk::{
         KagemushaOrdinaryPreparationSelectedOriginalsV1,
     },
 };
-use iroha_data_model::{
-    kagemusha::*,
-    sumeragi_finality::{SumeragiFinalityCheckpoint, SumeragiFinalityVerifier},
-};
+use iroha_data_model::{kagemusha::*, sumeragi_finality::SumeragiFinalityCheckpoint};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},

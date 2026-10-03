@@ -75,24 +75,10 @@ impl KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_> {
         self.owner.journal.check_owned().map_err(storage)
     }
 
-    /// Actual owned closed Wrapper admission, independently reconstructed on cold Main replay.
-    pub(crate) fn received_source(
-        &self,
-    ) -> Result<&KagemushaVerifiedOrdinaryReceivedCashOutputV1, KagemushaStateErrorV1> {
-        self.recheck_source_custody()?;
-        Ok(&self.source()?.admitted)
-    }
-
     /// Full immutable receipt envelope, including signature, exact DATA and genuine finality.
     pub(crate) fn received_assertion_original(&self) -> Result<&[u8], KagemushaStateErrorV1> {
         self.recheck_source_custody()?;
         Ok(&self.source()?.originals.received_assertion_original)
-    }
-
-    /// Native operation identity already retained before any incoming head selection.
-    pub(crate) fn operation_id(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.recheck_source_custody()?;
-        Ok(self.source()?.originals.operation_id)
     }
 
     /// Lend the genuine received proof together with its exact historical Main RequestCapture.
@@ -530,23 +516,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         Ok(total)
-    }
-}
-
-// Actual Main-only historical proof custody; no current FI, funds or platform grant.
-impl KagemushaNativeOrdinaryCashOwnerV1 {
-    pub(super) fn historical_received_source_custody(
-        &self,
-        request_id: DigestV1,
-    ) -> Result<KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_>, KagemushaStateErrorV1>
-    {
-        let loan = KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1 {
-            owner: self,
-            request_id,
-            prefix: self.prefix,
-        };
-        loan.recheck_source_custody()?;
-        Ok(loan)
     }
 }
 

@@ -46,18 +46,6 @@ pub(super) struct KagemushaOrdinaryPreparedIntentSourcesV1<F: KagemushaPoseidonF
     pub(super) candidate_preparation_id: [AssignedValue<F>; 2],
 }
 
-/// Queue the complete ordinary preparation transcript and join its SHA to the actual candidate ID.
-/// SHA realization/typed claim and all preparation Guard proofs remain mandatory at the consumer.
-pub(super) fn constrain_ordinary_prepared_intent_v1<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut Context<F>,
-    range: &RangeChip<F>,
-    jobs: &mut PastaSha256JobsV1<F>,
-    sources: KagemushaOrdinaryPreparedIntentSourcesV1<F>,
-) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    let enabled = ctx.load_constant(F::ONE);
-    constrain_ordinary_prepared_intent_if_v1(ctx, range, jobs, enabled, sources)
-}
-
 /// Same fixed SHA graph for all ordinary State operations. Inactive results carry no authority;
 /// the actual State operation selects this gate and its public prepared carriers must be zero.
 pub(super) fn constrain_ordinary_prepared_intent_if_v1<F: KagemushaPoseidonFieldV1>(
@@ -173,18 +161,6 @@ pub(super) struct KagemushaOrdinaryPreparedTransitionSourcesV1<F: KagemushaPosei
     /// Same State field included in the transition SHA, normalized preparation Guard and ID.
     pub(super) state_prepared_transition_binding_digest: [AssignedValue<F>; 2],
 }
-/// Open the acyclic ordinary prepared-transition binding against the actual candidate State.
-/// Original C/W/PI, all Guard proofs and complete SHA realization remain mandatory separately.
-pub(super) fn constrain_ordinary_prepared_transition_v1<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut Context<F>,
-    range: &RangeChip<F>,
-    jobs: &mut PastaSha256JobsV1<F>,
-    sources: KagemushaOrdinaryPreparedTransitionSourcesV1<F>,
-) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    let enabled = ctx.load_constant(F::ONE);
-    constrain_ordinary_prepared_transition_if_v1(ctx, range, jobs, enabled, sources)
-}
-
 /// Same fixed SHA graph for all ordinary State operations. Inactive results carry no authority;
 /// the actual State operation selects this gate and its public prepared carriers must be zero.
 pub(super) fn constrain_ordinary_prepared_transition_if_v1<F: KagemushaPoseidonFieldV1>(

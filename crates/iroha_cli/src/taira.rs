@@ -807,7 +807,7 @@ impl WriteCanary {
     }
 }
 
-fn parse_write_canary_faucet_policy(
+pub(super) fn parse_write_canary_faucet_policy(
     authority_raw: Option<&str>,
     asset_raw: Option<&str>,
     amount_raw: Option<&str>,
@@ -900,7 +900,7 @@ fn validate_sha256_argument(value: &str) -> Result<String, String> {
     validate_lower_hex_argument(value, "SHA-256", 64)
 }
 
-fn validate_authorization_nonce_argument(value: &str) -> Result<String, String> {
+pub(super) fn validate_authorization_nonce_argument(value: &str) -> Result<String, String> {
     if value.len() != 32
         || !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')

@@ -3,6 +3,9 @@
 //! All signing material stays in the approved guest's owner-only runtime tree. The
 //! generated public-input bundle is the independent authority for genesis and canary
 //! identity; Kagami's private localnet files supply only the matching signer keys.
+//! An explicit staging root and both generated base ports select a separate private
+//! network. All three `--staging-*` arguments are required together; absent them,
+//! the public reset retains its existing origins and storage selection.
 
 use super::*;
 use iroha::data_model::NetworkId;
@@ -13,9 +16,267 @@ const RUNTIME_ROOT: &str = "/private/runtime/taira-public-reset";
 const MAX_CLIENT_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_KEY_BYTES: u64 = 128;
 
+/// Independent private-root and generated-port selection shared by native staging commands.
+#[derive(clap::Args, Debug, Default)]
+pub(super) struct StagedRuntimeArgs {
+    /// Existing direct owner-only child of the approved Taira runtime root.
+    #[arg(long, value_name = "DIR", requires_all = ["staging_api_base_port", "staging_p2p_base_port"])]
+    staging_root: Option<PathBuf>,
+    /// Independently approved first generated Torii port; reserves four consecutive ports.
+    #[arg(long, value_name = "PORT", requires_all = ["staging_root", "staging_p2p_base_port"], value_parser = clap::value_parser!(u16).range(1..=65532))]
+    staging_api_base_port: Option<u16>,
+    /// Independently approved first generated P2P port; reserves four consecutive ports.
+    #[arg(long, value_name = "PORT", requires_all = ["staging_root", "staging_api_base_port"], value_parser = clap::value_parser!(u16).range(1..=65532))]
+    staging_p2p_base_port: Option<u16>,
+}
+
+/// Validated public selection for a private four-validator successor.
+#[derive(Clone, Debug)]
+pub(super) struct StagedRuntimeLayout {
+    root: PathBuf,
+    api_base_port: u16,
+    p2p_base_port: u16,
+}
+
+impl StagedRuntimeArgs {
+    /// Validate the complete independent selection without reading any signing input.
+    pub(super) fn layout(&self) -> Result<Option<StagedRuntimeLayout>> {
+        match (
+            &self.staging_root,
+            self.staging_api_base_port,
+            self.staging_p2p_base_port,
+        ) {
+            (None, None, None) => Ok(None),
+            (Some(root), Some(api), Some(p2p)) => {
+                runtime_path(root, "staging root")?;
+                validate_staged_normal_path(root, "staging root")?;
+                if root.parent() != Some(Path::new(RUNTIME_ROOT)) {
+                    return Err(eyre!(
+                        "staging root must be a direct child of the approved runtime root"
+                    ));
+                }
+                validate_staged_ports(api, p2p)?;
+                Ok(Some(StagedRuntimeLayout {
+                    root: root.clone(),
+                    api_base_port: api,
+                    p2p_base_port: p2p,
+                }))
+            }
+            _ => Err(eyre!(
+                "staging requires its root and both generated base ports"
+            )),
+        }
+    }
+}
+
+fn validate_staged_ports(api: u16, p2p: u16) -> Result<()> {
+    let ranges = [api, p2p]
+        .into_iter()
+        .map(|base| {
+            base.checked_add(3)
+                .filter(|_| base != 0)
+                .map(|end| base..=end)
+                .ok_or_else(|| eyre!("staging ports must select complete nonzero four-peer ranges"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if ranges[0].clone().any(|port| ranges[1].contains(&port))
+        || ranges.iter().any(|range| {
+            range.clone().any(|port| {
+                (8080..=8083).contains(&port) || (1337..=1340).contains(&port) || port == 8088
+            })
+        })
+    {
+        return Err(eyre!(
+            "staging ports overlap each other or the serving Taira listeners"
+        ));
+    }
+    Ok(())
+}
+
+impl StagedRuntimeLayout {
+    /// Exact selected owner-private root; it is never a serving validator state root.
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Require one normalized path strictly beneath the independent selected root.
+    pub(super) fn validate_path(&self, path: &Path, label: &str) -> Result<()> {
+        validate_staged_normal_path(path, label)?;
+        if path == self.root || !path.starts_with(&self.root) {
+            return Err(eyre!(
+                "{label} must be beneath the exact selected staging root"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Explicit generated Torii port for the ordered validator slot.
+    pub(super) fn api_port(&self, index: usize) -> Result<u16> {
+        self.slot_port(self.api_base_port, index)
+    }
+
+    /// Explicit generated P2P port for the ordered validator slot.
+    pub(super) fn p2p_port(&self, index: usize) -> Result<u16> {
+        self.slot_port(self.p2p_base_port, index)
+    }
+
+    fn slot_port(&self, base: u16, index: usize) -> Result<u16> {
+        if index >= VALIDATOR_SLUGS.len() {
+            return Err(eyre!(
+                "staging port slot is outside the four-validator committee"
+            ));
+        }
+        Ok(base + u16::try_from(index)?)
+    }
+
+    /// Private canary and validator HTTP origin from the approved generated port.
+    pub(super) fn local_origin(&self, index: usize) -> Result<String> {
+        Ok(format!("http://127.0.0.1:{}/", self.api_port(index)?))
+    }
+
+    /// Private validator state location separated from the serving `/var/lib/taira` tree.
+    pub(super) fn validator_state_root(&self, validator: &str) -> Result<PathBuf> {
+        if !VALIDATOR_SLUGS.contains(&validator) {
+            return Err(eyre!("unknown canonical staging validator role"));
+        }
+        Ok(self.root.join("validators").join(validator))
+    }
+
+    /// Hold the selected root's native directory identity through one operation.
+    pub(super) fn hold_root(&self) -> Result<StagedRuntimeRoot> {
+        StagedRuntimeRoot::open(self.root())
+    }
+}
+
+fn validate_staged_normal_path(path: &Path, label: &str) -> Result<()> {
+    validate_absolute_normal_path(path, label)?;
+    if path.to_str().is_none()
+        || path.components().collect::<PathBuf>().as_os_str() != path.as_os_str()
+    {
+        return Err(eyre!("{label} must use its exact normalized UTF-8 path"));
+    }
+    Ok(())
+}
+
+/// Descriptor-held staging-root custody; child publication may change directory timestamps.
+pub(super) struct StagedRuntimeRoot {
+    path: PathBuf,
+    #[cfg(unix)]
+    file: File,
+    #[cfg(unix)]
+    identity: (u64, u64, u32, u32, u32),
+}
+
+impl StagedRuntimeRoot {
+    #[cfg(unix)]
+    fn open(path: &Path) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+        validate_owner_private_dir(path, "staging root")?;
+        let file = File::from(rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?);
+        let metadata = file.metadata()?;
+        let root = Self {
+            path: path.to_path_buf(),
+            identity: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+            ),
+            file,
+        };
+        root.check()?;
+        Ok(root)
+    }
+
+    #[cfg(not(unix))]
+    fn open(_path: &Path) -> Result<Self> {
+        Err(eyre!("staging requires Unix directory custody"))
+    }
+
+    /// Revalidate the direct selected directory against its retained native descriptor.
+    #[cfg(unix)]
+    pub(super) fn check(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+        validate_owner_private_dir(&self.path, "staging root")?;
+        for metadata in [self.file.metadata()?, fs::symlink_metadata(&self.path)?] {
+            if (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+            ) != self.identity
+            {
+                return Err(eyre!(
+                    "selected staging root was substituted or changed custody"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse staging when native directory custody is unavailable.
+    #[cfg(not(unix))]
+    pub(super) fn check(&self) -> Result<()> {
+        Err(eyre!("staging requires Unix directory custody"))
+    }
+}
+
+fn validate_separate_directories(paths: &[&Path]) -> Result<()> {
+    for (index, path) in paths.iter().enumerate() {
+        if paths[index + 1..]
+            .iter()
+            .any(|other| path.starts_with(other) || other.starts_with(path))
+        {
+            return Err(eyre!(
+                "staging input and output directories must be separate"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Bind all generated listener slots to the independent private staging selection.
+pub(super) fn validate_staged_config_ports(
+    table: &toml::Table,
+    index: usize,
+    layout: &StagedRuntimeLayout,
+) -> Result<()> {
+    for (fields, port) in [
+        (&["torii", "address"][..], layout.api_port(index)?),
+        (&["network", "address"][..], layout.p2p_port(index)?),
+        (&["network", "public_address"][..], layout.p2p_port(index)?),
+    ] {
+        let (field, parents) = fields
+            .split_last()
+            .ok_or_else(|| eyre!("listener path is empty"))?;
+        let text = toml_text(toml_table(table, parents)?, field)?;
+        let address: iroha_primitives::addr::SocketAddr =
+            json::from_value(Value::String(text.to_owned()))
+                .map_err(|_| eyre!("generated staging listener is not canonical"))?;
+        if address != iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], port)) {
+            return Err(eyre!(
+                "generated staging listener differs from the independent port selection"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Produce one complete owner-private client bundle without contacting validators.
 #[derive(clap::Args, Debug)]
 pub(super) struct PrepareRuntimeClients {
+    /// Optional independently approved private successor layout.
+    #[command(flatten)]
+    staging: StagedRuntimeArgs,
     /// Exact new Kagami localnet directory on the approved guest.
     #[arg(long, value_name = "DIR")]
     localnet_dir: PathBuf,
@@ -53,6 +314,15 @@ struct ClientBundleReceipt {
     output_dir: String,
     validator_clients: u8,
     genesis_hash: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    staging: Option<StagedClientSelection>,
+}
+
+#[derive(JsonSerialize)]
+struct StagedClientSelection {
+    runtime_root: String,
+    api_base_port: u16,
+    p2p_base_port: u16,
 }
 
 fn runtime_path(path: &Path, label: &str) -> Result<()> {
@@ -159,18 +429,21 @@ fn checked_key_pair(public: &str, private: &str, label: &str) -> Result<PublicKe
     Ok(public_key)
 }
 
-fn parse_base(bytes: &[u8]) -> Result<toml::Table> {
+fn parse_base(bytes: &[u8], staging: Option<&StagedRuntimeLayout>) -> Result<toml::Table> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| eyre!("generated client config is not UTF-8"))?;
     let mut table: toml::Table =
         toml::from_str(text).map_err(|_| eyre!("generated client config is not TOML"))?;
     let result = (|| {
+        let origin = staging
+            .map(|layout| layout.local_origin(0))
+            .transpose()?
+            .unwrap_or_else(|| "http://127.0.0.1:8080/".into());
         if table.len() != 6
             || table.get("chain").and_then(toml::Value::as_str) != Some(CHAIN_ID)
             || table.get("network_id_file").and_then(toml::Value::as_str)
                 != Some("genesis.expected_hash")
-            || table.get("torii_url").and_then(toml::Value::as_str)
-                != Some("http://127.0.0.1:8080/")
+            || table.get("torii_url").and_then(toml::Value::as_str) != Some(origin.as_str())
         {
             return Err(eyre!(
                 "generated base client is not the exact selected localnet"
@@ -283,6 +556,7 @@ fn peer_config(
     config: &[u8],
     row: &LaneManifestValidator,
     index: usize,
+    staging: Option<&StagedRuntimeLayout>,
 ) -> Result<(PublicKey, FaucetPolicyV1)> {
     let text = std::str::from_utf8(config)
         .map_err(|_| eyre!("generated validator config is not UTF-8"))?;
@@ -350,7 +624,12 @@ fn peer_config(
         if policy.authority == row.validator {
             return Err(eyre!("faucet authority must differ from validator signer"));
         }
-        let expected_port = 8080_u16 + u16::try_from(index)?;
+        let expected_port = if let Some(layout) = staging {
+            validate_staged_config_ports(&table, index, layout)?;
+            layout.api_port(index)?
+        } else {
+            8080_u16 + u16::try_from(index)?
+        };
         let address = toml_table(&table, &["torii"])?;
         let address: iroha_primitives::addr::SocketAddr =
             json::from_slice(&json::to_vec(toml_text(address, "address")?)?)
@@ -420,6 +699,11 @@ fn existing_matches(path: &Path, files: &[(&str, Zeroizing<Vec<u8>>)]) -> Result
 pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let staging = args.staging.layout()?;
+    let staging_root = staging
+        .as_ref()
+        .map(StagedRuntimeLayout::hold_root)
+        .transpose()?;
     for (path, label) in [
         (&args.localnet_dir, "generated network directory"),
         (&args.public_inputs_dir, "native public input directory"),
@@ -427,6 +711,17 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
         (&args.output_dir, "runtime client output directory"),
     ] {
         runtime_path(path, label)?;
+        if let Some(layout) = &staging {
+            layout.validate_path(path, label)?;
+        }
+    }
+    if staging.is_some() {
+        validate_separate_directories(&[
+            &args.localnet_dir,
+            &args.public_inputs_dir,
+            &args.canary_key_dir,
+            &args.output_dir,
+        ])?;
     }
     let runtime_dir = args.localnet_dir.join("runtime");
     let signer_dir = runtime_dir.join("taira-runtime-signers");
@@ -459,7 +754,7 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
         MAX_CLIENT_INPUT_BYTES,
         "generated base client",
     )?;
-    let mut base = parse_base(&base_bytes)?;
+    let mut base = parse_base(&base_bytes, staging.as_ref())?;
     let result = (|| {
         let admin = toml_text(toml_table(&base, &["account"])?, "public_key")?;
         let canary_public_text = parse_private_text(
@@ -485,12 +780,17 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
             ));
         }
         let manifest = public_manifest(&args.localnet_dir.join("lane-manifests/is.manifest.json"))?;
+        let canary_origin = staging
+            .as_ref()
+            .map(|layout| layout.local_origin(0))
+            .transpose()?
+            .unwrap_or_else(|| "https://taira.sora.org/".into());
         let mut files: Vec<(&'static str, Zeroizing<Vec<u8>>)> = vec![(
             "runtime-client.toml",
             render_client(
                 &base,
                 &public.network_id,
-                "https://taira.sora.org/",
+                &canary_origin,
                 &canary_public,
                 &canary_private,
             )?,
@@ -503,7 +803,7 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
             let path = args.localnet_dir.join(format!("peer{index}.toml"));
             let config =
                 private_bytes(&path, MAX_CLIENT_INPUT_BYTES, "generated validator config")?;
-            let (signer_public, policy) = peer_config(&config, row, index)?;
+            let (signer_public, policy) = peer_config(&config, row, index, staging.as_ref())?;
             let private = parse_private_text(
                 &private_bytes(
                     &args.localnet_dir.join(format!(
@@ -532,7 +832,16 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
                 return Err(eyre!("generated validator faucet policies differ"));
             }
             faucet = Some(policy);
-            let origin = format!("https://{}.sora.org/", VALIDATOR_SLUGS[index]);
+            let probe_origin = staging
+                .as_ref()
+                .map(|layout| layout.local_origin(index))
+                .transpose()?
+                .unwrap_or_else(|| format!("http://127.0.0.1:{}/", 8080 + index));
+            let origin = if staging.is_some() {
+                probe_origin.clone()
+            } else {
+                format!("https://{}.sora.org/", VALIDATOR_SLUGS[index])
+            };
             files.push((
                 [
                     "validator-client-1.toml",
@@ -545,7 +854,7 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
             clients.push(ValidatorClientV1 {
                 slug: VALIDATOR_SLUGS[index].into(),
                 torii_origin: origin,
-                probe_origin: format!("http://127.0.0.1:{}/", 8080 + index),
+                probe_origin,
                 account_id: row.validator.clone(),
                 peer_id: row.peer_id.clone(),
             });
@@ -564,6 +873,9 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
                 return Err(eyre!("runtime client output exceeds its byte bound"));
             }
         }
+        if let Some(root) = &staging_root {
+            root.check()?;
+        }
         if args.output_dir.try_exists()? {
             existing_matches(&args.output_dir, &files)?;
         } else {
@@ -577,6 +889,9 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
             }
             File::open(temporary.path())?.sync_all()?;
             validate_owner_private_dir(parent, "runtime client output parent")?;
+            if let Some(root) = &staging_root {
+                root.check()?;
+            }
             match rustix::fs::renameat_with(
                 rustix::fs::CWD,
                 temporary.path(),
@@ -594,6 +909,9 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
         }
         File::open(parent)?.sync_all()?;
         existing_matches(&args.output_dir, &files)?;
+        if let Some(root) = &staging_root {
+            root.check()?;
+        }
         let receipt = ClientBundleReceipt {
             schema: "iroha.taira.public-reset.runtime-clients.v1".into(),
             output_dir: args
@@ -603,6 +921,15 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
                 .into(),
             validator_clients: 4,
             genesis_hash: public.genesis_hash,
+            staging: staging.as_ref().map(|layout| StagedClientSelection {
+                runtime_root: layout
+                    .root()
+                    .to_str()
+                    .expect("validated UTF-8 staging root")
+                    .into(),
+                api_base_port: layout.api_base_port,
+                p2p_base_port: layout.p2p_base_port,
+            }),
         };
         writeln!(output, "{}", json::to_json(&receipt)?)?;
         Ok(())
@@ -706,7 +1033,7 @@ mod tests {
             AccountId::new(faucet.public_key().clone()).to_string(),
             crate::taira::DEFAULT_GAS_ASSET_ID,
         );
-        let (actual_signer, policy) = peer_config(config.as_bytes(), &row, 0).unwrap();
+        let (actual_signer, policy) = peer_config(config.as_bytes(), &row, 0, None).unwrap();
         assert_eq!(actual_signer, *signer.public_key());
         assert_eq!(policy.amount, Quantity::from(100_u32));
         let wrong_address = json::to_json(&iroha_primitives::addr::SocketAddr::from((
@@ -715,12 +1042,27 @@ mod tests {
         )))
         .unwrap();
         let wrong_port = config.replace(&address, &wrong_address);
-        assert!(peer_config(wrong_port.as_bytes(), &row, 0).is_err());
+        assert!(peer_config(wrong_port.as_bytes(), &row, 0, None).is_err());
         let wrong_account = LaneManifestValidator {
             validator: AccountId::new(faucet.public_key().clone()).to_string(),
             peer_id: row.peer_id.clone(),
         };
-        assert!(peer_config(config.as_bytes(), &wrong_account, 0).is_err());
+        assert!(peer_config(config.as_bytes(), &wrong_account, 0, None).is_err());
+        let layout = staged_selection(28080, 21337).layout().unwrap().unwrap();
+        let staging_address =
+            iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], 28080)).to_literal();
+        let p2p_address =
+            iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], 21337)).to_literal();
+        let staging_config = format!(
+            "{}\n[network]\naddress = {p2p_address:?}\npublic_address = {p2p_address:?}\n",
+            config.replace(&address, &format!("{staging_address:?}"))
+        );
+        let (staged_signer, staged_policy) =
+            peer_config(staging_config.as_bytes(), &row, 0, Some(&layout)).unwrap();
+        assert_eq!(staged_signer, actual_signer);
+        assert_eq!(staged_policy, policy);
+        assert!(peer_config(config.as_bytes(), &row, 0, Some(&layout)).is_err());
+        assert!(peer_config(staging_config.as_bytes(), &row, 1, Some(&layout)).is_err());
     }
 
     #[test]
@@ -733,7 +1075,7 @@ mod tests {
             "chain = {CHAIN_ID:?}\nnetwork_id_file = \"genesis.expected_hash\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[transaction]\ntime_to_live_ms = 30000\nstatus_timeout_ms = 30000\nnonce = false\n[account]\ndomain = \"wonderland.universal\"\nchain_discriminant = 369\npublic_key = {:?}\nprivate_key = \"fixture-secret-invalid\"\n[basic_auth]\nweb_login = \"fixture-user\"\npassword = \"fixture-password\"\n",
             kp.public_key().to_string(),
         );
-        let error = parse_base(base.as_bytes()).unwrap_err();
+        let error = parse_base(base.as_bytes(), None).unwrap_err();
         assert!(!format!("{error:#}").contains("fixture-secret"));
         let valid = base.replace(
             "fixture-secret-invalid",
@@ -741,7 +1083,7 @@ mod tests {
                 .try_to_multihash_string()
                 .unwrap(),
         );
-        let mut parsed = parse_base(valid.as_bytes()).unwrap();
+        let mut parsed = parse_base(valid.as_bytes(), None).unwrap();
         for foreign in [
             valid.replace(
                 "network_id_file = \"genesis.expected_hash\"",
@@ -749,8 +1091,33 @@ mod tests {
             ),
             valid.replace("genesis.expected_hash", "../foreign.expected_hash"),
         ] {
-            assert!(parse_base(foreign.as_bytes()).is_err());
+            assert!(parse_base(foreign.as_bytes(), None).is_err());
         }
+        let layout = staged_selection(28080, 21337).layout().unwrap().unwrap();
+        assert!(parse_base(valid.as_bytes(), Some(&layout)).is_err());
+        let staging_client = valid.replace("http://127.0.0.1:8080/", "http://127.0.0.1:28080/");
+        let mut staged_base = parse_base(staging_client.as_bytes(), Some(&layout)).unwrap();
+        assert!(parse_base(staging_client.as_bytes(), None).is_err());
+        let private_client = render_client(
+            &staged_base,
+            &network,
+            &layout.local_origin(0).unwrap(),
+            kp.public_key(),
+            "fixture-secret-marker",
+        )
+        .unwrap();
+        let mut private_client: toml::Table =
+            toml::from_str(std::str::from_utf8(&private_client).unwrap()).unwrap();
+        assert_eq!(
+            private_client["torii_url"].as_str(),
+            Some("http://127.0.0.1:28080/")
+        );
+        assert_eq!(
+            private_client["network_id"].as_str(),
+            Some(network.to_string().as_str())
+        );
+        crate::soracloud::zeroize_taira_toml_table(&mut private_client);
+        crate::soracloud::zeroize_taira_toml_table(&mut staged_base);
         let output = render_client(
             &parsed,
             &network,
@@ -778,6 +1145,150 @@ mod tests {
         );
         assert!(!rendered.contains_key("network_id_file"));
         crate::soracloud::zeroize_taira_toml_table(&mut parsed);
+    }
+
+    fn staged_selection(api: u16, p2p: u16) -> StagedRuntimeArgs {
+        StagedRuntimeArgs {
+            staging_root: Some(PathBuf::from(
+                "/private/runtime/taira-public-reset/private-candidate",
+            )),
+            staging_api_base_port: Some(api),
+            staging_p2p_base_port: Some(p2p),
+        }
+    }
+
+    #[test]
+    fn staging_requires_complete_independent_selection_and_disjoint_four_peer_ports() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Command {
+            #[command(flatten)]
+            staging: StagedRuntimeArgs,
+        }
+        assert!(
+            Command::try_parse_from(["iroha"])
+                .unwrap()
+                .staging
+                .layout()
+                .unwrap()
+                .is_none()
+        );
+        let arguments = [
+            "iroha",
+            "--staging-root",
+            "/private/runtime/taira-public-reset/private-candidate",
+            "--staging-api-base-port",
+            "28080",
+            "--staging-p2p-base-port",
+            "21337",
+        ];
+        let selected = Command::try_parse_from(arguments)
+            .unwrap()
+            .staging
+            .layout()
+            .unwrap()
+            .unwrap();
+        for index in 0..4 {
+            assert_eq!(selected.api_port(index).unwrap(), 28080 + index as u16);
+            assert_eq!(selected.p2p_port(index).unwrap(), 21337 + index as u16);
+            assert_eq!(
+                selected.local_origin(index).unwrap(),
+                format!("http://127.0.0.1:{}/", 28080 + index)
+            );
+        }
+        assert!(selected.api_port(4).is_err());
+        assert!(selected.p2p_port(4).is_err());
+        for range in [1..3, 3..5, 5..7] {
+            let mut missing = arguments.to_vec();
+            missing.drain(range);
+            assert!(Command::try_parse_from(missing).is_err());
+        }
+        for (api, p2p) in [
+            (0, 21337),
+            (65533, 21337),
+            (28080, 65535),
+            (28080, 28082),
+            (8079, 21337),
+            (28080, 1335),
+            (8086, 21337),
+            (28080, 8080),
+        ] {
+            assert!(staged_selection(api, p2p).layout().is_err(), "{api}/{p2p}");
+        }
+        let mut incomplete = staged_selection(28080, 21337);
+        incomplete.staging_p2p_base_port = None;
+        assert!(incomplete.layout().is_err());
+    }
+
+    #[test]
+    fn staging_paths_reject_other_candidates_serving_storage_and_input_output_overlap() {
+        let selected = staged_selection(28080, 21337).layout().unwrap().unwrap();
+        let network = selected.root().join("network");
+        let clients = selected.root().join("clients");
+        selected.validate_path(&network, "network").unwrap();
+        validate_separate_directories(&[&network, &clients]).unwrap();
+        for other in [
+            selected.root().to_path_buf(),
+            PathBuf::from("/var/lib/taira/taira-validator-1"),
+            PathBuf::from("/private/runtime/taira-public-reset/other-candidate/clients"),
+            selected.root().join("network/../clients"),
+            PathBuf::from("/private/runtime/taira-public-reset/private-candidate//clients"),
+        ] {
+            assert!(
+                selected.validate_path(&other, "selected input").is_err(),
+                "{}",
+                other.display()
+            );
+        }
+        assert!(validate_separate_directories(&[&network, &network]).is_err());
+        assert!(validate_separate_directories(&[&network, &network.join("clients")]).is_err());
+        for root in [
+            "/private/runtime/taira-public-reset/private-candidate/nested",
+            "/private/runtime/taira-public-reset-foreign/candidate",
+            "/private/runtime/taira-public-reset//candidate",
+            "/private/runtime/taira-public-reset/candidate/",
+        ] {
+            let mut selection = staged_selection(28080, 21337);
+            selection.staging_root = Some(root.into());
+            assert!(selection.layout().is_err(), "{root}");
+        }
+        assert!(selected.validator_state_root("taira-validator-5").is_err());
+        for role in VALIDATOR_SLUGS {
+            assert_eq!(
+                selected.validator_state_root(role).unwrap(),
+                selected.root().join("validators").join(role)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_root_custody_rejects_directory_and_symlink_substitution() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let temporary = tempfile::Builder::new()
+            .prefix("staged-root-custody-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let root = temporary.path().join("candidate");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let held = StagedRuntimeRoot::open(&root).unwrap();
+        fs::create_dir(root.join("clients")).unwrap();
+        held.check().unwrap();
+        let retained = temporary.path().join("retained");
+        fs::rename(&root, &retained).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(held.check().is_err());
+        fs::remove_dir(&root).unwrap();
+        symlink(&retained, &root).unwrap();
+        assert!(held.check().is_err());
+        assert!(StagedRuntimeRoot::open(&root).is_err());
+        fs::remove_file(&root).unwrap();
+        fs::rename(&retained, &root).unwrap();
+        held.check().unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(held.check().is_err());
     }
 
     #[cfg(unix)]

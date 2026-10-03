@@ -922,12 +922,6 @@ impl KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_> {
         self.recheck_selected_originals_and_current_custody()?;
         Ok(&self.pending()?.selected.body)
     }
-    pub(crate) fn normalized_guard_context(
-        &self,
-    ) -> Result<&KagemushaGuardContextV1, KagemushaStateErrorV1> {
-        self.recheck_selected_originals_and_current_custody()?;
-        Ok(&self.pending()?.selected.context)
-    }
     pub(crate) fn normalized_guard_statement(
         &self,
     ) -> Result<&KagemushaNormalizedGuardStatementV1, KagemushaStateErrorV1> {

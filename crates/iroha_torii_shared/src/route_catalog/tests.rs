@@ -389,8 +389,10 @@ mod tests {
             "ledger.authority_originals",
             "kagemusha.ordinary_wallet_current",
             "kagemusha.ordinary_mint_issuer_purpose",
+            "kagemusha.ordinary_mint_finalized",
+            "kagemusha.ordinary_mint_credit",
         ]);
-        assert_eq!(complete.len(), 9);
+        assert_eq!(complete.len(), 11);
         for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
             for projection in [
                 CatalogProjection::Mounted,
@@ -405,7 +407,7 @@ mod tests {
                         .map(|route| route.stable_route_id())
                         .collect::<BTreeSet<_>>(),
                     complete,
-                    "every node and authored client surface must expose all nine native KAGEMUSHA and original-carrier routes"
+                    "every node and authored client surface must expose all eleven native KAGEMUSHA and original-carrier routes"
                 );
             }
         }
@@ -489,6 +491,38 @@ mod tests {
         assert_eq!(
             kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.effect(),
             RouteEffect::ReadOnly
+        );
+        for (route, signed_target, exact_path) in [
+            (
+                kagemusha::ORDINARY_MINT_FINALIZED,
+                crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
+                "/v1/kagemusha/ordinary/top-up/finality",
+            ),
+            (
+                kagemusha::ORDINARY_MINT_CREDIT,
+                crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1,
+                "/v1/kagemusha/ordinary/top-up/credit",
+            ),
+        ] {
+            assert_eq!(signed_target, exact_path);
+            assert_eq!(route.path(), signed_target);
+            assert_eq!(route.route_match(), RouteMatch::Exact);
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(route.listener(), Listener::Torii);
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert!(route.cors_options());
+        }
+        assert_ne!(
+            crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
+            crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1
         );
         let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());
         assert_eq!(mcp.len(), 5);

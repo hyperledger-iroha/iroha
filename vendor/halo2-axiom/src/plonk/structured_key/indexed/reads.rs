@@ -243,6 +243,9 @@ where
                             }
                         }
                     }
+                    SPARSE_ZERO => {
+                        self.copy_sparse_fixed_interval(reader, record, start, destination.values)?;
+                    }
                     _ => return Err(invalid("unknown indexed fixed mode")),
                 }
             }
@@ -257,3 +260,111 @@ where
 }
 
 mod permutation;
+
+fn sparse_fixed_pair<F: PrimeField, R: Read + Seek>(
+    reader: &mut R,
+    record: &FixedRecord,
+    at: usize,
+    rows: usize,
+    frame: u64,
+) -> io::Result<(usize, F)> {
+    if at >= record.nonzero as usize {
+        return Err(invalid("indexed sparse fixed entry is invalid"));
+    }
+    let width = scalar_bytes::<F>() as u64;
+    let stride = width
+        .checked_add(4)
+        .ok_or_else(|| invalid("indexed sparse fixed stride overflow"))?;
+    let offset = (at as u64)
+        .checked_mul(stride)
+        .and_then(|n| n.checked_add(4))
+        .ok_or_else(|| invalid("indexed sparse fixed offset overflow"))?;
+    let range = subrange(record.payload, offset, stride, frame)?;
+    seek(reader, range)?;
+    let mut row = [0; 4];
+    reader.read_exact(&mut row)?;
+    let row = u32::from_le_bytes(row) as usize;
+    let value = read_scalar::<F, _>(reader)?;
+    if row >= rows || value == F::ZERO {
+        return Err(invalid("invalid indexed sparse fixed entry"));
+    }
+    Ok((row, value))
+}
+
+impl<C: SerdeCurveAffine> IndexedStructuredProvingKeyV1<C>
+where
+    C::Scalar: SerdePrimeField + FromUniformBytes<64>,
+{
+    fn copy_sparse_fixed_interval<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        record: &FixedRecord,
+        start: usize,
+        output: &mut [C::Scalar],
+    ) -> io::Result<()> {
+        let n = self.metadata.rows;
+        let end = start
+            .checked_add(output.len())
+            .filter(|end| *end <= n)
+            .ok_or_else(|| invalid("indexed fixed interval is invalid"))?;
+        if start == end {
+            return Ok(());
+        }
+        output.fill(C::Scalar::ZERO);
+        let prefix = subrange(record.payload, 0, 4, self.frame_bytes())?;
+        seek(reader, prefix)?;
+        let mut count = [0; 4];
+        reader.read_exact(&mut count)?;
+        if u32::from_le_bytes(count) != record.nonzero {
+            return Err(invalid("changed indexed sparse fixed count"));
+        }
+        let stride = 4 + scalar_bytes::<C::Scalar>() as u64;
+        let bytes = u64::from(record.nonzero)
+            .checked_mul(stride)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| invalid("indexed sparse fixed length overflow"))?;
+        if record.payload.length != bytes {
+            return Err(invalid("indexed sparse fixed payload length mismatch"));
+        }
+        let (mut lo, mut hi) = (0, record.nonzero as usize);
+        let (mut lower, mut upper) = (None, None);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let (row, _) =
+                sparse_fixed_pair::<C::Scalar, _>(reader, record, mid, n, self.frame_bytes())?;
+            if lower.is_some_and(|lower| row <= lower) || upper.is_some_and(|upper| row >= upper) {
+                return Err(invalid("unordered indexed sparse fixed search"));
+            }
+            if row < start {
+                lo = mid + 1;
+                lower = Some(row);
+            } else {
+                hi = mid;
+                upper = Some(row);
+            }
+        }
+        let mut previous = if lo > 0 {
+            let (row, _) =
+                sparse_fixed_pair::<C::Scalar, _>(reader, record, lo - 1, n, self.frame_bytes())?;
+            if row >= start {
+                return Err(invalid("indexed sparse fixed predecessor exceeds interval"));
+            }
+            Some(row)
+        } else {
+            None
+        };
+        for at in lo..record.nonzero as usize {
+            let (row, value) =
+                sparse_fixed_pair::<C::Scalar, _>(reader, record, at, n, self.frame_bytes())?;
+            if row < start || previous.is_some_and(|previous| row <= previous) {
+                return Err(invalid("unordered indexed sparse fixed interval"));
+            }
+            if row >= end {
+                break;
+            }
+            output[row - start] = value;
+            previous = Some(row);
+        }
+        Ok(())
+    }
+}

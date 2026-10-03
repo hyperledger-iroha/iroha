@@ -10,7 +10,11 @@
 mod configuration;
 pub use configuration::consensus_configuration_fingerprint;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use iroha_config::parameters::actual::SumeragiLocalOverrides;
 
@@ -327,26 +331,58 @@ impl NodeHandle {
     }
 
     /// The core started, has not halted, and the instance runs.
+    /// A beacon refresh leaves this immediate diagnostic unavailable until its result is ready.
     pub fn ready(&self) -> bool {
-        self.driver.ready()
+        self.ready_with_deadline(None)
+    }
+
+    /// Wait for current beacon readiness until the caller's original monotonic deadline.
+    /// Expiry fails closed; source generation, core height, applied height and custody remain
+    /// mandatory. Call this bounded blocking observation only from a blocking worker.
+    pub fn ready_until(&self, deadline: Instant) -> bool {
+        self.ready_with_deadline(Some(deadline))
+    }
+
+    fn ready_with_deadline(&self, deadline: Option<Instant>) -> bool {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return false;
+        }
+        let ready = self.driver.ready()
             && self.status().is_some_and(|status| {
                 // Observers have no signing obligation and the core does not drive their
                 // partial producer. An unanchored local validator cannot use this exemption.
                 (status.abstaining && !status.unanchored)
                     || self
-                        .beacon_observation(&status)
+                        .beacon_observation_with_deadline(&status, deadline)
                         .is_some_and(|(_, ready)| ready)
-            })
+            });
+        ready && deadline.is_none_or(|deadline| Instant::now() < deadline)
     }
 
     fn beacon_observation(
         &self,
         status: &CoreStatus,
     ) -> Option<(iroha_data_model::sumeragi::BeaconHorizonStatusV1, bool)> {
+        self.beacon_observation_with_deadline(status, None)
+    }
+
+    fn beacon_observation_with_deadline(
+        &self,
+        status: &CoreStatus,
+        deadline: Option<Instant>,
+    ) -> Option<(iroha_data_model::sumeragi::BeaconHorizonStatusV1, bool)> {
         let generation = self.state.state_view_generation();
-        let observed =
-            self.beacon_readiness
-                .read(generation, status.height, status.applied_height)?;
+        let observed = match deadline {
+            Some(deadline) => self.beacon_readiness.read_until(
+                generation,
+                status.height,
+                status.applied_height,
+                deadline,
+            ),
+            None => self
+                .beacon_readiness
+                .read(generation, status.height, status.applied_height),
+        }?;
         (self.state.state_view_generation() == generation).then_some(observed)
     }
 
@@ -1670,6 +1706,26 @@ mod tests {
                 "orderly shutdown retains completed recovery"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn readiness_until_expired_deadline_refuses_live_node() {
+        let chain = chain(4, 200);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        let startup_deadline = Instant::now() + Duration::from_secs(5);
+        for validator in &validators {
+            let handle = validator.node.handle();
+            while !handle.driver.ready() && Instant::now() < startup_deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(handle.driver.ready(), "the native driver must be running");
+            assert!(
+                !handle.ready_until(Instant::now()),
+                "an expired diagnostic cannot use any readiness shortcut"
+            );
+        }
+        shutdown(validators);
     }
 
     #[test]

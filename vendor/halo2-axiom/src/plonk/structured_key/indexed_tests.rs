@@ -5,6 +5,7 @@
 
 use super::indexed::IndexedStructuredProvingKeyV1;
 use super::*;
+use crate::poly::commitment::{Blind, Params as _};
 use crate::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
@@ -13,6 +14,7 @@ use crate::{
     },
     poly::{Rotation, commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
 };
+use group::Curve as _;
 use std::{
     marker::PhantomData,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -45,7 +47,13 @@ impl<F: PrimeField, const EMPTY: bool> Circuit<F> for ScanCircuit<F, EMPTY> {
             };
         }
         let advice = vec![cs.advice_column(), cs.advice_column()];
-        let fixed = vec![cs.fixed_column(), cs.fixed_column(), cs.fixed_column()];
+        let fixed = vec![
+            cs.fixed_column(),
+            cs.fixed_column(),
+            cs.fixed_column(),
+            cs.fixed_column(),
+            cs.fixed_column(),
+        ];
         let instance = vec![cs.instance_column()];
         let selector = vec![cs.selector(), cs.selector(), cs.complex_selector()];
         for column in &advice {
@@ -120,6 +128,32 @@ where
         compressed,
     )
     .unwrap();
+    if !EMPTY {
+        // Explicit parser-only unused-column fixtures retain constant and raw coverage even
+        // when the generated zero/blinding tails now canonically choose sparse or bitset.
+        // Update both bases AND real commitments/transcript identity; no authenticated
+        // circuit-role/proof qualification is claimed by these plaintext range tests.
+        pk.fixed_values[3].values.fill(C::Scalar::from(41));
+        for (row, value) in pk.fixed_values[4].values.iter_mut().enumerate() {
+            *value = C::Scalar::from(5 + (row % 2) as u64);
+        }
+        for column in [3, 4] {
+            pk.fixed_polys[column] = coefficients(&pk.vk.domain, &pk.fixed_values[column]).unwrap();
+        }
+        let commitments = pk
+            .fixed_values
+            .iter()
+            .map(|values| params.commit_lagrange(values, Blind::default()).to_affine())
+            .collect();
+        pk.vk = VerifyingKey::from_parts(
+            pk.vk.domain.clone(),
+            commitments,
+            pk.vk.permutation.clone(),
+            pk.vk.cs.clone(),
+            pk.vk.selectors.clone(),
+            compressed,
+        );
+    }
     if arbitrary_masks {
         for (mask, polynomial) in [&mut pk.l0, &mut pk.l_last, &mut pk.l_active_row]
             .into_iter()
@@ -298,17 +332,7 @@ fn check_index<C: SerdeCurveAffine>(
         .zip(&pk.fixed_values)
         .zip(&pk.fixed_polys)
     {
-        let first = lagrange[0];
-        let mode = if lagrange.iter().all(|x| *x == first) {
-            0
-        } else if lagrange
-            .iter()
-            .all(|x| *x == C::Scalar::ZERO || *x == C::Scalar::ONE)
-        {
-            1
-        } else {
-            2
-        };
+        let mode = fixed_encoding(lagrange).unwrap().mode;
         assert_eq!(record.mode, mode);
         assert_eq!(bytes[cursor], mode);
         cursor += 1;
@@ -328,6 +352,17 @@ fn check_index<C: SerdeCurveAffine>(
             2 => {
                 assert_eq!(payload.len(), width * n);
                 scalar_vec::<C::Scalar>(payload)
+            }
+            SPARSE_ZERO => {
+                let count = u32::from_le_bytes(payload[..4].try_into().unwrap()) as usize;
+                assert_eq!(count, record.nonzero as usize);
+                assert_eq!(payload.len(), 4 + count * (4 + width));
+                let mut values = vec![C::Scalar::ZERO; n];
+                for pair in payload[4..].chunks_exact(4 + width) {
+                    let row = u32::from_le_bytes(pair[..4].try_into().unwrap()) as usize;
+                    values[row] = scalar::<C::Scalar>(&pair[4..]);
+                }
+                values
             }
             _ => unreachable!(),
         };
@@ -442,7 +477,7 @@ where
                 assert_eq!(canonical, bytes);
                 check_index(&pk, &bytes, &actual);
                 if !EMPTY {
-                    for mode in [0, 1, 2] {
+                    for mode in [0, 1, 2, 3] {
                         assert!(
                             actual
                                 .metadata()
@@ -560,12 +595,14 @@ where
             ));
         }
     }
-    for fill in [0, 255] {
+    assert_eq!(binary.payload.length, 2);
+    // At this tiny domain uniform zero and one canonically use a two-byte bitset.
+    // Preserve both nonminimal uniform-binary refusals through the 32-byte constant mode.
+    for value in [0, 1] {
         let mut bad = bytes.clone();
-        bad[binary.payload.offset as usize
-            ..(binary.payload.offset + binary.payload.length) as usize]
-            .fill(fill);
-        cases.push((format!("nonminimal binary {fill}"), bad, 4, length));
+        let offset = constant.payload.offset as usize;
+        bad[offset..offset + 32].copy_from_slice(C::Scalar::from(value).to_repr().as_ref());
+        cases.push((format!("nonminimal uniform binary {value}"), bad, 4, length));
     }
     for alternating in [false, true] {
         let mut bad = bytes.clone();
@@ -641,8 +678,8 @@ where
     }
     assert_eq!(
         cases.len(),
-        92,
-        "original91 boundaries plus explicit retired-magic refusal"
+        100,
+        "original92 cases plus mode and truncation boundaries for two added parser-only columns"
     );
     for (label, bad, k, length) in cases {
         rejection::<C>(&bad, k, length, &label);
@@ -708,20 +745,14 @@ fn fixed_cases<F: PrimeField>() {
                 write_fixed(&mut encoded, &values).unwrap();
                 let mut padded = encoded.clone();
                 padded.extend_from_slice(&[91, 92]);
-                let mode = if rows == 1 || variant < 3 {
-                    CONSTANT
-                } else if variant == 3 {
-                    BITSET
-                } else {
-                    RAW
-                };
+                let mode = fixed_encoding(&values).unwrap().mode;
                 assert_eq!(
                     encoded[0], mode,
                     "fixed grammar mode at rows{rows}/variant{variant}"
                 );
                 assert_eq!(
                     encoded.len() as u64,
-                    1 + fixed_payload_bytes::<F>(mode, rows).unwrap()
+                    1 + fixed_encoding(&values).unwrap().payload_bytes
                 );
                 let mut source = padded.as_slice();
                 assert_eq!(read_fixed::<F, _>(&mut source, rows).unwrap(), values);
@@ -734,11 +765,22 @@ fn fixed_cases<F: PrimeField>() {
         let mut noncanonical = vec![0];
         noncanonical.extend_from_slice(&vec![255; F::Repr::default().as_ref().len()]);
         inputs.push(noncanonical);
-        for fill in [0, 255] {
-            let mut v = vec![1];
-            v.extend_from_slice(&vec![fill; rows.div_ceil(8)]);
-            inputs.push(v);
+        // Uniform binary encodings now also choose the smallest payload. Preserve both
+        // nonminimal-zero/nonminimal-one controls with current first-release candidates.
+        let mut zero = vec![CONSTANT];
+        zero.extend_from_slice(F::ZERO.to_repr().as_ref());
+        inputs.push(zero);
+        let mut one = if rows < 256 {
+            vec![CONSTANT]
+        } else {
+            vec![BITSET]
+        };
+        if rows < 256 {
+            one.extend_from_slice(F::ONE.to_repr().as_ref());
+        } else {
+            one.extend_from_slice(&vec![255; rows.div_ceil(8)]);
         }
+        inputs.push(one);
         for alternating in [false, true] {
             let mut v = vec![2];
             for row in 0..rows {
@@ -899,7 +941,11 @@ where
     }
     boundaries.sort_unstable();
     boundaries.dedup();
-    assert_eq!(boundaries.len(), 29);
+    assert_eq!(
+        boundaries.len(),
+        33,
+        "original29 I/O boundaries plus two edges for each added parser-only fixed column"
+    );
     // Single-byte successful I/O is independent of production write sizes or read_exact splits.
     let mut reader = Source {
         bytes: &outer,
@@ -1039,3 +1085,58 @@ mod indexed_snapshot_tests;
 
 #[path = "permutation_tests.rs"]
 mod permutation_tests;
+
+fn sparse_index_corruptions<C: SerdeCurveAffine>()
+where
+    C::Scalar: SerdePrimeField + FromUniformBytes<64>,
+{
+    let (_, bytes) = fixture::<C, false>(6, false, false);
+    let key = index::<C, false, _, _>(
+        &mut bytes.as_slice(),
+        6,
+        bytes.len() as u64,
+        &mut io::sink(),
+    )
+    .unwrap();
+    let record = key
+        .metadata()
+        .fixed
+        .iter()
+        .find(|record| record.mode == SPARSE_ZERO && record.nonzero > 1)
+        .unwrap();
+    let at = record.payload.offset as usize;
+    let stride = 4 + scalar_bytes::<C::Scalar>();
+    let mut cases = Vec::new();
+    for count in [0_u32, record.nonzero - 1, record.nonzero + 1, u32::MAX] {
+        let mut bad = bytes.clone();
+        bad[at..at + 4].copy_from_slice(&count.to_le_bytes());
+        cases.push(bad);
+    }
+    for row in [0_u32, 64, u32::MAX] {
+        let mut bad = bytes.clone();
+        bad[at + 4 + stride..at + 8 + stride].copy_from_slice(&row.to_le_bytes());
+        cases.push(bad);
+    }
+    let mut bad = bytes.clone();
+    bad[at + 8..at + 8 + scalar_bytes::<C::Scalar>()]
+        .copy_from_slice(C::Scalar::ZERO.to_repr().as_ref());
+    cases.push(bad);
+    for bytes in cases {
+        assert!(dense::<C, false>(&bytes, 6, bytes.len() as u64).is_err());
+        assert!(
+            index::<C, false, _, _>(
+                &mut bytes.as_slice(),
+                6,
+                bytes.len() as u64,
+                &mut io::sink()
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+fn both_fields_dense_and_indexed_scan_refuse_sparse_fixed_count_row_order_and_explicit_zero_mutations()
+ {
+    sparse_index_corruptions::<EqAffine>();
+    sparse_index_corruptions::<EpAffine>();
+}

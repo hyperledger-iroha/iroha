@@ -2187,3 +2187,107 @@ def test_compose_candidate_build_forwards_the_same_public_trust_input() -> None:
     source = (REPO / ".github/workflows/pr_docker_compose.yml").read_text()
     assert source.count("docker/build-push-action@") == 1
     assert source.count("IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}") == 1
+
+
+def prepare_android_cargo_envelope_repo(tmp_path: Path, checker):
+    """Copy the real finite Android command owners for parser mutations."""
+    catalog = checker.WorkspaceCatalog(
+        package_features={
+            "connect_norito_bridge": frozenset({"privacy-production-enabled"})
+        },
+        binaries={},
+        native_libraries={"connect_norito_bridge": ("cdylib", "staticlib")},
+        workspace_docker_bins=(),
+    )
+    for relative in (
+        Path(".github/workflows/mobile_sdk_artifacts.yml"),
+        checker.ANDROID_NATIVE_BUILD_OWNER,
+        checker.ANDROID_HERMETIC_RUNNER,
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPO / relative).read_bytes())
+    return catalog
+
+
+def test_android_cargo_uses_canonical_root_manifest_and_lock_custody(tmp_path: Path):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    targets = checker.android_native_artifact_targets(tmp_path, catalog)
+    assert targets == (
+        checker.ShippingTarget(
+            package="connect_norito_bridge",
+            binary="<native-library>",
+            features=("privacy-production-enabled",),
+            default_features=True,
+            source=str(checker.ANDROID_NATIVE_BUILD_OWNER),
+        ),
+    )
+    source = (tmp_path / checker.ANDROID_NATIVE_BUILD_OWNER).read_text()
+    start = source.index("val command = buildList {")
+    command = source[start:source.index("execOperations.exec {", start)]
+    assert '"--lockfile-path"' not in command
+    # The explicit lock selector is still required by the source-seal owner.
+    assert source.count('"--lockfile-path"') == 2
+    assert source.count('tools.cargoLock.toString()') == 2
+
+
+@pytest.mark.parametrize(("original", "replacement"), (
+    ('"build",', '"check",'),
+    ('"--locked",', '"--frozen",'),
+    ('"--offline",', '"--online",'),
+    ('"--jobs",', '"-j",'),
+    ('"--jobs",\n                        "1",', '"--jobs",\n                        "2",'),
+    ('"--jobs",\n                        "1",', '"--jobs=1",'),
+    ('"--manifest-path",', '"--manifest-path=Cargo.toml",'),
+    ('irohaRoot.resolve("Cargo.toml").absolutePath', 'irohaRoot.resolve("other/Cargo.toml").absolutePath'),
+    ('"--locked",\n                        "--offline",', '"--offline",\n                        "--locked",'),
+    ('"--release",', '"--release", "--locked",'),
+    ('"--release",', '"--release", "--offline",'),
+    ('"--release",', '"--release", "--jobs", "1",'),
+    ('"--release",', '"--release", "--manifest-path", "foreign/Cargo.toml",'),
+    ('"--release",', '"--release", "--lockfile-path", tools.cargoLock.toString(),'),
+    ('"--release",', '"--release", "--lockfile-path=foreign/Cargo.lock",'),
+    ('"--release",', '"--release", "--config", "foreign.toml",'),
+    ('"--release",', '"--release", "-Zunstable-options",'),
+    ('val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")', 'val cargoLock = canonicalIrohaRoot.resolve("other/Cargo.lock")'),
+    ('Files.isRegularFile(cargoLock, LinkOption.NOFOLLOW_LINKS)', 'Files.exists(cargoLock)'),
+    ('!Files.isSymbolicLink(cargoLock)', 'true'),
+    ('cargoLock.toRealPath(LinkOption.NOFOLLOW_LINKS) == cargoLock', 'true'),
+))
+def test_android_cargo_canonical_envelope_and_root_lock_mutations_reject(
+    tmp_path: Path, original: str, replacement: str,
+):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    owner = tmp_path / checker.ANDROID_NATIVE_BUILD_OWNER
+    source = owner.read_text()
+    assert original in source
+    owner.write_text(source.replace(original, replacement, 1))
+    with pytest.raises(RuntimeError, match="Android (Cargo envelope|root Cargo.lock custody)"):
+        checker.android_native_artifact_targets(tmp_path, catalog)
+
+
+@pytest.mark.parametrize(("original", "replacement"), (
+    ('authenticated_files["Android root Cargo.lock"] = authenticate_android_cargo_arguments(',
+     'untracked_root_lock = authenticate_android_cargo_arguments('),
+    ('canonical_workspace / "Cargo.lock",', 'canonical_workspace / "other/Cargo.lock",'),
+    ('manifest_position = exact_pair("--manifest-path", str(canonical_workspace / "Cargo.toml"))',
+     'manifest_position = exact_pair("--manifest-path", str(canonical_workspace / "other/Cargo.toml"))'),
+    ('value == "--lockfile-path"', 'False'),
+    ('for name, (path, expected_identity) in authenticated_files.items():',
+     'for name, (path, expected_identity) in {}.items():'),
+    ('_, current_identity = authenticate_regular_file(name, path)',
+     '_, current_identity = (path, expected_identity)'),
+))
+def test_android_cargo_hermetic_root_lock_authentication_and_recheck_reject(
+    tmp_path: Path, original: str, replacement: str,
+):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    owner = tmp_path / checker.ANDROID_HERMETIC_RUNNER
+    source = owner.read_text()
+    assert source.count(original) == 1
+    owner.write_text(source.replace(original, replacement, 1))
+    with pytest.raises(RuntimeError, match="Android Cargo authentication changed"):
+        checker.android_native_artifact_targets(tmp_path, catalog)

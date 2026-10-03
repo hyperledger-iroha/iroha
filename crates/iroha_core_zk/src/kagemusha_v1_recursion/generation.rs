@@ -269,7 +269,7 @@ use super::{
     KagemushaMemoryArtifactResolverV1, KagemushaPastaParityV1,
 };
 use super::{
-    composite::{KagemushaRecursiveStateWitnessV1, build_kagemusha_recursive_state_pair_v1},
+    composite::KagemushaRecursiveStateWitnessV1,
     transport_decider::{
         KagemushaTransportDeciderParityWitnessV1, KagemushaTransportDeciderWitnessV1,
         build_kagemusha_transport_decider_pair_v1,
@@ -3423,7 +3423,7 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
 pub fn prove_kagemusha_recursive_state_hash_claim_v1(
     eq: &KagemushaLoadedEqMintHashArtifactsV1,
     ep: &KagemushaLoadedEpMintHashArtifactsV1,
-    mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
     prove_kagemusha_recursive_state_hash_claim_v1_with_construction(
@@ -11095,6 +11095,10 @@ mod mint_transport_tests;
 #[cfg(test)]
 #[path = "generation_lookup_recovery_tests.rs"]
 mod lookup_recovery_tests;
+
+#[cfg(test)]
+#[path = "ordinary_originals.rs"]
+mod ordinary_originals;
 
 #[cfg(test)]
 #[path = "ordinary_zero_bootstrap_qualification_tests.rs"]

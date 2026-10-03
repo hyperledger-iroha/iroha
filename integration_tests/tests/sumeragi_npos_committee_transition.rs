@@ -1750,7 +1750,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             &network,
             finality_limits(),
             5,
-            |height| {
+            |height, _public_snapshot| {
                 let admin = admin.clone();
                 async move {
                     advance_exact_genesis_phase(network_ref, height).await?;

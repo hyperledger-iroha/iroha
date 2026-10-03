@@ -142,6 +142,7 @@ mod ordinary_integrity_union;
 mod ordinary_issuer_equation;
 mod ordinary_platform_equation;
 mod ordinary_platform_union;
+#[cfg(test)]
 mod ordinary_terminal_subject_binding;
 #[cfg(test)]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
@@ -211,16 +212,7 @@ pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
 pub(crate) use generation::production_prover::GeneratedOrdinaryCashReservationOriginalsV1;
-pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
-    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
-};
-pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
-    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
-    KagemushaRetainedOrdinaryOutgoingAuxiliariesV1, generate_ordinary_outgoing_candidate_v1,
-    readmit_retained_ordinary_outgoing_candidate_v1,
-};
+pub(crate) use generation::production_prover::generate_ordinary_incoming_candidate_v1;
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
@@ -228,6 +220,9 @@ pub use generation::production_prover::{
     KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1, KagemushaProductionProverV1,
     KagemushaProductionTerminalProofV1, KagemushaRetainedOrdinaryBootstrapAuxiliariesV1,
     register_kagemusha_native_outgoing_witness_source_v1,
+};
+pub(crate) use generation::production_prover::{
+    generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
 };
 #[cfg(test)]
 pub use generation::{

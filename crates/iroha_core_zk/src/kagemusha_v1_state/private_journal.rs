@@ -809,8 +809,6 @@ pub(crate) enum TestPersistenceFailure {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use rustix::fs::Mode;
-    use std::os::unix::fs::MetadataExt as _;
     const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
         filename: "test.wal",
         magic: b"IKGTEST1",
