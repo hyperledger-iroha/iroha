@@ -10,7 +10,7 @@ use iroha_crypto::{Algorithm, KeyGenOption, KeyPair, Signature};
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 use sha2::{Digest as _, Sha256};
 
-/// Complete unsigned TopUpRequest and real account consent over known-public synthetic originals.
+/// Complete unsigned `TopUpRequest` and real account consent over known-public synthetic originals.
 /// This type has no conversion to a verified Mint proof, financial owner, DATA or finalized debit.
 pub struct KagemushaOrdinaryMintCodecFixtureV1 {
     /// Complete neutral request with genuinely signed dedicated P-256 approval and inert IPA proof.

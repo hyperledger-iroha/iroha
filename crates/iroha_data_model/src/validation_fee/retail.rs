@@ -93,6 +93,9 @@ impl Default for RetailFeeScheduleV1 {
 }
 impl RetailFeeScheduleV1 {
     /// Validate exact positive rates and unambiguous tier ordering.
+    ///
+    /// # Errors
+    /// Returns an error for nonpositive rates, missing or excessive tiers, a nonzero first threshold, or invalid tier ordering.
     pub fn validate(&self) -> Result<(), String> {
         if self.included_payments == 0
             || self.overage_minor == 0
@@ -118,6 +121,9 @@ impl RetailFeeScheduleV1 {
         Ok(())
     }
     /// Determine the tier without rounding the average across a threshold.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid schedule or a missing applicable maintenance tier.
     pub fn monthly_fee(&self, balance_time_minor_ms: u128, active_ms: u64) -> Result<u64, String> {
         self.validate()?;
         if active_ms == 0 {
@@ -135,6 +141,9 @@ impl RetailFeeScheduleV1 {
             .monthly_fee_minor)
     }
     /// Charge payment legs that lie beyond the monthly inclusion.
+    ///
+    /// # Errors
+    /// Returns an error if the payment counter or computed charge overflows.
     pub fn payment_fee(&self, used: u64, count: u64) -> Result<u64, String> {
         let after = used.checked_add(count).ok_or("payment count overflow")?;
         let included = u64::from(self.included_payments);
@@ -298,6 +307,9 @@ pub struct RetailFeeAssessmentV1 {
     pub expires_at_ms: u64,
 }
 /// Derive a Honiara calendar-month interval, UTC+11 without DST.
+///
+/// # Errors
+/// Returns an error if the timestamp or resulting month boundaries exceed the supported calendar or timestamp range.
 pub fn honiara_month_bounds(timestamp_ms: u64) -> Result<(u64, u64), String> {
     let utc = OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp_ms) * 1_000_000)
         .map_err(|_| "ledger timestamp outside calendar domain")?;
@@ -327,6 +339,9 @@ pub fn honiara_month_bounds(timestamp_ms: u64) -> Result<(u64, u64), String> {
     ))
 }
 /// Require a whole-month activation following at least thirty days' notice.
+///
+/// # Errors
+/// Returns an error for insufficient notice, timestamp overflow, or activation outside an exact Honiara month boundary.
 pub fn validate_retail_activation(notice_ms: u64, effective_ms: u64) -> Result<(), String> {
     if notice_ms
         .checked_add(RETAIL_FEE_NOTICE_MS)
@@ -339,6 +354,9 @@ pub fn validate_retail_activation(notice_ms: u64, effective_ms: u64) -> Result<(
 }
 impl RetailFeeAccountStateV1 {
     /// Create protected enrollment; callers must authorize enrollment on chain.
+    ///
+    /// # Errors
+    /// Returns an error if the enrollment timestamp is outside the supported calendar range.
     pub fn enroll(account_id: AccountId, now_ms: u64, balance_minor: u64) -> Result<Self, String> {
         let (start, end) = honiara_month_bounds(now_ms)?;
         Ok(Self {
@@ -359,6 +377,9 @@ impl RetailFeeAccountStateV1 {
     /// Integrate balances and settle expired months before a later balance mutation.
     /// The callback returns the policy governing the earning period. Collection is
     /// bounded by that boundary's available funds, and every shortfall expires.
+    ///
+    /// # Errors
+    /// Returns an error for backward time, excessive catch-up, calendar or arithmetic overflow, or a policy callback or maintenance assessment failure.
     pub fn settle_until(
         &mut self,
         now_ms: u64,
@@ -433,6 +454,9 @@ impl RetailFeeAccountStateV1 {
         Ok(receipts)
     }
     /// Compute a prorated charge, rounding upward to one cent.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid fee schedule, missing maintenance tier, or charge arithmetic overflow.
     pub fn assess_maintenance(
         &self,
         at_ms: u64,
@@ -461,6 +485,9 @@ impl RetailFeeAccountStateV1 {
         })
     }
     /// Reopen the same canonical wallet without granting another allowance in the same month.
+    ///
+    /// # Errors
+    /// Returns an error for backward time, an unsettled closing month, or a timestamp outside the supported calendar range.
     pub fn reopen(&mut self, now_ms: u64, balance_minor: u64) -> Result<(), String> {
         if self.closed_at_ms.is_none() {
             return Ok(());
@@ -489,6 +516,9 @@ impl RetailFeeAccountStateV1 {
         Ok(())
     }
     /// Bind a quote to the current allowance and policy, independent of elapsed milliseconds.
+    ///
+    /// # Errors
+    /// Returns an error if the quote context cannot be canonically encoded.
     pub fn state_commitment(
         &self,
         policy_hash: [u8; 32],
@@ -514,6 +544,9 @@ fn domain_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
 }
 impl RetailFeeQuoteRequestV1 {
     /// Hash the canonical fee-asset payment intent.
+    ///
+    /// # Errors
+    /// Returns an error if the payment intent cannot be canonically encoded.
     pub fn intent_hash(&self) -> Result<[u8; 32], String> {
         Ok(domain_hash(
             b"iroha.retail_fee.payment_intent.v1",
@@ -563,8 +596,11 @@ mod tests {
             (5_000_000, 1000),
         ] {
             assert_eq!(
-                s.monthly_fee(u128::from(balance as u64) * 100, 100)
-                    .unwrap(),
+                s.monthly_fee(
+                    u128::from(u64::try_from(balance).expect("nonnegative test balance")) * 100,
+                    100
+                )
+                .unwrap(),
                 fee
             );
         }
@@ -686,9 +722,17 @@ mod tests {
 
         // Synthetic codec maintenance data; no ledger state or finality authority.
         assert!(!request.transfers.is_empty() && request.transfers.len() <= 1_000);
-        assert!(request.transfers.iter().all(|leg| leg.amount_minor_units > 0));
+        assert!(
+            request
+                .transfers
+                .iter()
+                .all(|leg| leg.amount_minor_units > 0)
+        );
         assert_eq!(assessment.account_id, request.account_id);
-        assert_eq!(assessment.qualifying_payments, request.qualifying_payments());
+        assert_eq!(
+            assessment.qualifying_payments,
+            request.qualifying_payments()
+        );
         let (start, end) = honiara_month_bounds(assessment.billing_month_start_ms).unwrap();
         assert_eq!(start, assessment.billing_month_start_ms);
         assert!(assessment.policy_revision > 0);
@@ -744,7 +788,10 @@ mod tests {
         println!("ASSESSMENT_HEX={}", generated.assessment_hex);
         println!("ASSESSMENT_CANON_HEX={}", generated.assessment_hex);
         // Capture this exact serialized object for both managed fixture copies.
-        println!("FIXTURE_JSON={}", norito::json::to_json(&generated).unwrap());
+        println!(
+            "FIXTURE_JSON={}",
+            norito::json::to_json(&generated).unwrap()
+        );
     }
     #[test]
     fn javascript_quote_and_marker_match_native_norito() {
@@ -771,7 +818,10 @@ mod tests {
             hex::encode(fixture.request.intent_hash().unwrap()),
             fixture.intent_hash_hex
         );
-        assert_eq!(assessment.intent_hash, fixture.request.intent_hash().unwrap());
+        assert_eq!(
+            assessment.intent_hash,
+            fixture.request.intent_hash().unwrap()
+        );
         let assessment_hex = hex::encode(norito::encode_canonical(&assessment).unwrap());
         assert_eq!(assessment_hex, fixture.assessment_hex);
         assert_eq!(
@@ -1065,6 +1115,9 @@ pub struct RetailFeeReceiptV1 {
     pub assessment: Option<RetailFeeAssessmentV1>,
 }
 /// Derive the native receipt identifier from its immutable context.
+///
+/// # Errors
+/// Returns an error if the immutable receipt context cannot be canonically encoded.
 pub fn retail_fee_receipt_id_v1(
     account: &AccountId,
     kind: RetailFeeReceiptKindV1,
@@ -1125,6 +1178,9 @@ pub struct RetailFeeReceiptHeadV1 {
     pub updated_at_height: u64,
 }
 /// Canonical protected receipt-head state key for a stable wallet identity.
+///
+/// # Errors
+/// Returns an error if the derived receipt-head state path cannot be represented.
 pub fn retail_fee_receipt_head_state_key_v1(wallet_id: &AccountId) -> Result<StatePath, String> {
     format!(
         "retail_fee_heads_v1/{}",
@@ -1134,6 +1190,9 @@ pub fn retail_fee_receipt_head_state_key_v1(wallet_id: &AccountId) -> Result<Sta
     .map_err(|e| format!("invalid native receipt head key: {e}"))
 }
 /// Hash the complete typed receipt, including its sequence and previous hash.
+///
+/// # Errors
+/// Returns an error if the complete receipt cannot be canonically encoded.
 pub fn retail_fee_receipt_chain_hash_v1(receipt: &RetailFeeReceiptV1) -> Result<[u8; 32], String> {
     let bytes = norito::encode_canonical(receipt).map_err(|e| e.to_string())?;
     Ok(domain_hash(b"iroha.retail_fee.receipt_chain.v1", &bytes))

@@ -24,10 +24,6 @@ pub use incoming_driver::{
     KagemushaOrdinaryNativeIncomingRequestV1, KagemushaOrdinaryNativeIncomingResponseV1,
     invoke_kagemusha_native_ordinary_incoming_v1,
 };
-pub use outgoing_driver::{
-    KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
-    KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
-};
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_core_zk::kagemusha_v1_recursion::{
     KagemushaArtifactByteResolverV1, KagemushaProductionProverV1,
@@ -45,6 +41,10 @@ use iroha_core_zk::kagemusha_v1_state::{
 };
 use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+};
+pub use outgoing_driver::{
+    KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
+    KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
 };
 use std::{
     fs::{File, OpenOptions},

@@ -275,7 +275,7 @@ mod tests {
                         iroha_data_model::prelude::Json::default(),
                     )
                 }
-            };
+            }
             assert_ne!(changed.canonical_wire().unwrap(), raw);
         }
         let mut changed = request.clone();
@@ -297,7 +297,7 @@ mod tests {
         let purpose = request.purpose;
         let changed_payload = Permission::new(
             purpose.name().parse().unwrap(),
-            iroha_data_model::prelude::Json::new(&"other-payload"),
+            iroha_data_model::prelude::Json::new("other-payload"),
         );
         let changed_name = Permission::new(
             "other_permission".parse().unwrap(),

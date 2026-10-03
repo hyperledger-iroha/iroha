@@ -41,7 +41,8 @@ pub(crate) use production_ordinary_outgoing_auxiliaries::KagemushaRetainedOrdina
 #[cfg(unix)]
 pub(crate) use production_ordinary_outgoing_state::{
     GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
-    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1, generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
+    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1, generate_ordinary_outgoing_candidate_v1,
+    readmit_retained_ordinary_outgoing_candidate_v1,
 };
 #[path = "production_ordinary_mint.rs"]
 mod production_ordinary_mint;

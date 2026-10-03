@@ -97,7 +97,7 @@ impl ValidatorSetCheckpoint {
         }
     }
 }
-/// Finite protocol ceiling for one canonical parent service CommitQC original.
+/// Finite protocol ceiling for one canonical parent service `CommitQC` original.
 /// The complete verifier still checks the actual bitmap, signature, attestation
 /// geometry and independently authenticated epoch; byte size grants no authority.
 pub const PARENT_SERVICE_COMMIT_QC_MAX_BYTES: usize = 512 * 1024;
@@ -121,7 +121,7 @@ pub const PARENT_SERVICE_COMMIT_QC_MAX_BYTES: usize = 512 * 1024;
 )]
 #[norito(deny_unknown_fields)]
 pub struct NposConsensusEffects {
-    /// Original parent CommitQC selected by this proposal. It is consensus input,
+    /// Original parent `CommitQC` selected by this proposal. It is consensus input,
     /// never the replica's local certificate. None is valid only before H3.
     #[norito(required)]
     pub parent_service_commit_qc: Option<Vec<u8>>,

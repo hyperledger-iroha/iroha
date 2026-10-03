@@ -422,8 +422,12 @@ mod tests {
         Vec<u8>,
         Vec<u8>,
     ) {
-        let keys =
-            std::array::from_fn(|i| KeyPair::from_seed(vec![21 + i as u8; 32], Algorithm::Ed25519));
+        let keys = std::array::from_fn(|i| {
+            KeyPair::from_seed(
+                vec![21 + u8::try_from(i).expect("three synthetic authority keys"); 32],
+                Algorithm::Ed25519,
+            )
+        });
         let public = |i: usize| keys[i].public_key().to_bytes().1.try_into().unwrap();
         let runtime = b"unit-only-runtime-original".to_vec();
         let sdk = b"unit-only-sdk-original".to_vec();
@@ -531,7 +535,7 @@ mod tests {
                 5 => changed.runtime_signature_domain = "unit:foreign:v1".into(),
                 6 => changed.version = 2,
                 _ => changed.purpose = 2,
-            };
+            }
             assert!(
                 changed
                     .authenticate(&compiled, &approvals, &runtime, &sdk)
@@ -551,7 +555,7 @@ mod tests {
     fn ordinary_context_offered_sdk_root_and_parent_substitution_refuse() {
         let (data, compiled, keys, runtime, sdk) = fixture();
         let approvals = approvals(&data, &keys);
-        let mut foreign = compiled.clone();
+        let mut foreign = compiled;
         foreign.sdk_signer = keys[0].public_key().to_bytes().1.try_into().unwrap();
         assert!(
             data.authenticate(&foreign, &approvals, &runtime, &sdk)

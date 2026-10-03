@@ -168,8 +168,10 @@ pub fn execute_last_fields_with_cpu<'a>(
     total_final_field_bytes: usize,
     execution: DigestExecutionV1,
     cpu: impl Fn(usize) -> crate::Result<GoldilocksDigest384V1> + Sync,
-    _prepare_device: impl FnOnce() -> crate::Result<Vec<Digest384LastFieldJob<'a>>>,
+    prepare_device: impl FnOnce() -> crate::Result<Vec<Digest384LastFieldJob<'a>>>,
 ) -> crate::Result<Vec<GoldilocksDigest384V1>> {
+    #[cfg(not(feature = "fastpq-gpu"))]
+    let _ = prepare_device;
     last_fields_charge(job_count, total_final_field_bytes).map_err(native_error)?;
     if job_count == 0 {
         return Ok(Vec::new());
@@ -201,7 +203,7 @@ pub fn execute_last_fields_with_cpu<'a>(
         }
         #[cfg(feature = "fastpq-gpu")]
         DigestExecutionV1::Device(backend) => {
-            let jobs = _prepare_device()?;
+            let jobs = prepare_device()?;
             let actual_bytes = validate_jobs(&jobs).map_err(native_error)?;
             if jobs.len() != job_count || actual_bytes != total_final_field_bytes {
                 return Err(native_error(
@@ -387,29 +389,33 @@ fn try_hash_last_fields_device(
     readiness.ensure_available_v1(backend)?;
     readiness
         .last_fields
-        .execute_last_fields(backend, jobs, &mut |_jobs| match backend {
-            Digest384GpuBackendV1::Metal => {
-                #[cfg(target_os = "macos")]
-                {
-                    crate::metal::digest384::hash_last_fields(_jobs).map_err(|error| {
-                        Digest384GpuErrorV1::Execution {
+        .execute_last_fields(backend, jobs, &mut |device_jobs| {
+            #[cfg(not(target_os = "macos"))]
+            let _ = device_jobs;
+            match backend {
+                Digest384GpuBackendV1::Metal => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        crate::metal::digest384::hash_last_fields(device_jobs).map_err(|error| {
+                            Digest384GpuErrorV1::Execution {
+                                backend,
+                                message: error.to_string(),
+                            }
+                        })
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        Err(Digest384GpuErrorV1::Execution {
                             backend,
-                            message: error.to_string(),
-                        }
-                    })
+                            message: "Metal is unavailable on this platform".to_owned(),
+                        })
+                    }
                 }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    Err(Digest384GpuErrorV1::Execution {
-                        backend,
-                        message: "Metal is unavailable on this platform".to_owned(),
-                    })
-                }
+                Digest384GpuBackendV1::Cuda => Err(Digest384GpuErrorV1::Execution {
+                    backend,
+                    message: "Digest384 continuation execution is unavailable on CUDA".to_owned(),
+                }),
             }
-            Digest384GpuBackendV1::Cuda => Err(Digest384GpuErrorV1::Execution {
-                backend,
-                message: "Digest384 continuation execution is unavailable on CUDA".to_owned(),
-            }),
         })
 }
 

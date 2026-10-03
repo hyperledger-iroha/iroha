@@ -45,12 +45,12 @@ use outgoing_proof_operands::OutgoingProofOperandOriginals;
 #[path = "ordinary_outgoing_reservation_owner.rs"]
 mod outgoing_reservation;
 use outgoing_reservation::OutgoingReservationCandidateOriginals;
-#[path = "ordinary_outgoing_native_driver.rs"]
-mod outgoing_native_driver;
 #[path = "ordinary_incoming_native_driver.rs"]
 mod incoming_native_driver;
 #[path = "ordinary_incoming_terminal.rs"]
 mod incoming_terminal;
+#[path = "ordinary_outgoing_native_driver.rs"]
+mod outgoing_native_driver;
 pub(crate) use incoming_preparation::KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1;
 pub(crate) use incoming_terminal::KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1;
 #[path = "ordinary_cash_lineage_transport.rs"]
@@ -1380,8 +1380,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 operation_kind,
                 KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
             )
-            || u64::from(self.outgoing_completion_slot_bytes()?)
-                > self.capacity.outbox_bytes
+            || u64::from(self.outgoing_completion_slot_bytes()?) > self.capacity.outbox_bytes
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
@@ -1951,8 +1950,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     acknowledgement,
                 )?;
             }
-            Record::OutgoingProofOperands(originals) => self.replay_outgoing_proof_operands(originals)?,
-            Record::OutgoingReservationCandidate(originals) => self.replay_outgoing_reservation_candidate(originals)?,
+            Record::OutgoingProofOperands(originals) => {
+                self.replay_outgoing_proof_operands(originals)?
+            }
+            Record::OutgoingReservationCandidate(originals) => {
+                self.replay_outgoing_reservation_candidate(originals)?
+            }
             Record::PrepareCommit(originals) => self.replay_prepared_commit(originals)?,
             Record::StateAdvance {
                 prepared_original_sha256,
@@ -2001,8 +2004,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                         reservation.expires_at_ms,
                     )
                     .map_err(material)?;
-                if reservation.reserved_outbox_bytes
-                    != self.outgoing_completion_slot_bytes()?
+                if reservation.reserved_outbox_bytes != self.outgoing_completion_slot_bytes()?
                     || u64::from(reservation.reserved_outbox_bytes) > self.capacity.outbox_bytes
                 {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);

@@ -102,7 +102,7 @@ mod compact_quantity_producer;
 
 /// Retain the actual quantity-producer work permit for contention unit controls.
 #[cfg(test)]
-pub(crate) fn hold_quantity_producer_for_test() -> std::sync::MutexGuard<'static, ()> {
+pub fn hold_quantity_producer_for_test() -> std::sync::MutexGuard<'static, ()> {
     compact_quantity_producer::hold_producer_for_test()
 }
 #[cfg(test)]

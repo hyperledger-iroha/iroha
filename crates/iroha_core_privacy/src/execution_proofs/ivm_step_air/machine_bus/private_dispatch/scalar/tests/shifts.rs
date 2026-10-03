@@ -300,7 +300,7 @@ fn every_shift_original_producer_and_workspace_cell_is_constrained() {
 #[test]
 fn shift_fetch_direction_sign_high_amount_bits_and_coherent_zero_forgery_reject() {
     let instruction = enc::encode_rr(wide::arithmetic::SRA, 4, 2, 3);
-    let (program, fixture) = checked_native(
+    let (_program, fixture) = checked_native(
         instruction,
         &[(2, 0x8000_0000_0000_0001, true), (3, 63, true)],
     );
@@ -378,21 +378,38 @@ fn shift_workspace_is_canonical_on_old_scalar_branch_and_padding_rows() {
 
 #[test]
 fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
+    // The authenticated zero-argument Unit fixture admits an eight-byte result
+    // table plus one initialization-bitmap byte before its first opcode.
+    let entry_gas = 9;
     for instruction in instructions(4) {
         let cost = 1 + u64::from(is_rotate(instruction));
         let inputs = [(2, 0x8000_0000_0000_0001, true), (3, 63, true)];
-        for gas in 0..cost {
-            let (_, recorder, outcome) = capture(&[instruction], &inputs, gas, 32);
+        // Root admission pays for the original Unit result table and its bitmap
+        // before the interpreter begins a diagnostic opcode step.
+        for initial_gas in 0..entry_gas {
+            let (_, recorder, outcome) = capture(&[instruction], &inputs, initial_gas, 32);
             assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert!(
+                recorder.records().is_empty(),
+                "unfunded root must not start an opcode"
+            );
+        }
+        for gas in 0..cost {
+            let (_, recorder, outcome) = capture(&[instruction], &inputs, entry_gas + gas, 32);
+            assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert_eq!(recorder.records().len(), 1);
             let record = &recorder.records()[0];
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
+            assert_eq!(record.before.gas_remaining, gas);
             assert_eq!(record.before, record.after);
         }
-        for gas in [cost, 0xffff, 0x10000, u64::MAX] {
-            let (program, recorder, _later_outcome) = capture(&[instruction], &inputs, gas, 32);
+        for initial_gas in [entry_gas + cost, 0xffff, 0x10000, u64::MAX] {
+            let (program, recorder, _later_outcome) =
+                capture(&[instruction], &inputs, initial_gas, 32);
             let record = &recorder.records()[0];
             assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);
-            assert_eq!(record.after.gas_remaining, gas - cost);
+            assert_eq!(record.before.gas_remaining, initial_gas - entry_gas);
+            assert_eq!(record.after.gas_remaining, initial_gas - entry_gas - cost);
             assert!(ScalarFixture::from_record(&program, record).accepts(&program));
         }
         let (program, fixture) = checked_native(instruction, &inputs);
@@ -433,18 +450,25 @@ fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
 }
 
 #[test]
-fn native_last_shift_completes_before_missing_halt_without_implicit_termination() {
+fn native_last_shift_missing_halt_is_rejected_at_artifact_admission() {
     for instruction in instructions(4) {
         let artifact = contract(&[instruction], 32, ivm::ivm_mode::ZK);
         let mut code = artifact.artifact().to_vec();
         code.truncate(artifact.code_offset() + 4);
-        let program = Program::new(ivm::prepare_contract(code.into()).unwrap()).unwrap();
-        let (program, recorder, outcome) =
+        let error = ivm::prepare_contract(code.into())
+            .expect_err("the signed entrypoint cannot fall through missing code");
+        assert!(error.to_string().contains("reaches non-instruction pc 4"));
+        assert!(matches!(
+            error.into_vm_error(),
+            ivm::VMError::InvalidMetadata
+        ));
+        let program = Program::new(artifact).unwrap();
+        let (program, recorder, _later_outcome) =
             capture_program(program, &[(2, 17, true), (3, 1, true)], 16);
-        assert!(matches!(outcome, Err(ivm::VMError::MissingHalt)));
         let record = &recorder.records()[0];
         assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);
-        assert_eq!(record.after.pc, program.code_end());
+        assert_eq!(record.after.pc, u64::from(program.first_pc) + 4);
+        assert!(record.after.pc < program.code_end());
         assert!(!record.after.halted);
         let fixture = ScalarFixture::from_record(&program, record);
         assert!(fixture.accepts(&program));

@@ -50,6 +50,9 @@ pub struct ValidationFeeRewardsState {
 }
 
 /// Canonical protected custody key shared by execution and independent evidence.
+///
+/// # Errors
+/// Returns an error if custody coordinates cannot be canonically encoded or their state path cannot be represented.
 pub fn validation_fee_reward_state_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     leaf: &str,
@@ -238,6 +241,9 @@ pub struct ValidationFeeConversionAttempt {
 }
 
 /// Canonical exact reference-price minimum used by consensus and offline proof verification.
+///
+/// # Errors
+/// Returns an error for invalid conversion settings, unsupported precision, a nonpositive amount, or arithmetic overflow.
 pub fn reference_minimum(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     records: &[ValidationFeeReferenceObservation],
@@ -313,6 +319,9 @@ pub fn reference_minimum(
 }
 
 /// Canonical funded largest-remainder allocation used by consensus and proof verification.
+///
+/// # Errors
+/// Returns an error for arithmetic overflow, zero total weight, or no authenticated service.
 pub fn allocate(
     amount: u128,
     weights: &BTreeMap<AccountId, u64>,
@@ -400,6 +409,9 @@ pub struct ValidationFeeRewardBeneficiaryRevision {
     pub authorized_at_height: u64,
 }
 /// Canonical immutable account alias source key.
+///
+/// # Errors
+/// Returns an error if the custody key cannot be derived or the beneficiary state path cannot be represented.
 pub fn validation_fee_beneficiary_alias_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     account: &AccountId,
@@ -413,6 +425,9 @@ pub fn validation_fee_beneficiary_alias_key(
     )
 }
 /// Canonical immutable owner revision source key.
+///
+/// # Errors
+/// Returns an error if the custody key cannot be derived or the revision state path cannot be represented.
 pub fn validation_fee_beneficiary_revision_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     beneficiary: &AccountId,

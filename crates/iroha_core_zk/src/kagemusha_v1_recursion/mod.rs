@@ -230,14 +230,15 @@ pub use generation::KagemushaGeneratedOperationArtifactsV1;
 pub(crate) use generation::production_prover::GeneratedOrdinaryCashReservationOriginalsV1;
 #[cfg(unix)]
 pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaRetainedOrdinaryOutgoingAuxiliariesV1,
-    KagemushaOrdinaryOutgoingAuxiliaryConsumerV1, KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
-    generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
+    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
+    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
 };
 #[cfg(unix)]
 pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
-    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
+    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
+    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
+    KagemushaRetainedOrdinaryOutgoingAuxiliariesV1, generate_ordinary_outgoing_candidate_v1,
+    readmit_retained_ordinary_outgoing_candidate_v1,
 };
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,

@@ -36,7 +36,11 @@ fn changed_digest(digest: Digest) -> Digest {
 
 #[test]
 fn changed_digest_flips_exactly_one_opaque_sha3_bit() {
-    for bytes in [[0_u8; 32], [0xff; 32], core::array::from_fn(|i| i as u8)] {
+    for bytes in [
+        [0_u8; 32],
+        [0xff; 32],
+        core::array::from_fn(|i| u8::try_from(i).expect("32-byte digest index")),
+    ] {
         let original = Digest::from_bytes(bytes);
         let changed = changed_digest(original);
         assert_ne!(changed, original);

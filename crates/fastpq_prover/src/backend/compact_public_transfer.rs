@@ -731,13 +731,13 @@ mod tests {
             })
         ));
         let verifying_started = std::time::Instant::now();
-        let verified =
+        let receipt =
             deep_engine::verify_committed(&verifier, &encoded, limits, 32 * 1024 * 1024).unwrap();
-        let work = verified.work();
+        let work = receipt.work();
         assert_eq!(work.air_evaluations, 1);
         assert_eq!(work.verifier_messages, 10);
         assert_eq!(work.terminal_values, 128);
-        assert!(work.leaf_hashes >= 2 * QUERY_COUNT + 1);
+        assert!(work.leaf_hashes > 2 * QUERY_COUNT);
         assert!(work.fold_checks >= QUERY_COUNT);
         assert_eq!(work.proof_bytes, encoded.len());
         let decoded = deep_proof::decode(&encoded, limits.max_proof_bytes).unwrap();

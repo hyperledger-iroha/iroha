@@ -137,6 +137,9 @@ pub struct ValidationFeePayoutPolicyRegistryV1 {
 }
 impl ValidationFeePayoutPolicyRegistryV1 {
     /// Check authority, revision order and permanent custody identity.
+    ///
+    /// # Errors
+    /// Returns an error for absent enactments, invalid authority, noncontiguous revisions, changed custody, invalid height order, or reused proposals.
     pub fn validate(&self) -> Result<(), String> {
         let first = self
             .entries

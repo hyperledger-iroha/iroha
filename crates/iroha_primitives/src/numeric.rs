@@ -69,6 +69,10 @@ pub struct Numeric {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_primitives::numeric::Quantity")]
 pub struct Quantity(Numeric);
+
+#[path = "numeric/quantity_accumulator.rs"]
+mod quantity_accumulator;
+pub use quantity_accumulator::QuantityAccumulator;
 /// Maximum number of fractional digits accepted for XOR-denominated values.
 ///
 /// XOR's ledger definition permits nanounit precision. Keeping this limit in the nominal type

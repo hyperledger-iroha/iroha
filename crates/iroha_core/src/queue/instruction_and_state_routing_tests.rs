@@ -172,13 +172,21 @@ fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<
     ProgramMetadata::parse(&program).expect("parse minimal IVM program");
     program
 }
-/// Build a minimal world with the shared transaction authority registered.
+/// Build a routing component World with the shared authority and explicit Global metadata.
 pub fn world_with_test_domains() -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
     let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    World::with([domain], [account], [])
+    let world = World::with([domain], [account], []);
+    // This component fixture needs explicit routing metadata; it has no signed
+    // genesis, certified history or native publication authority.
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
+    world
 }
 fn register_test_authority(state: &State, authority: &AccountId) {
     let mut world = state.world.block();
@@ -201,11 +209,15 @@ fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&authority_id);
     let authority = Account::new(authority_id.clone()).build(&authority_id);
-    let state = State::new_with_nexus_for_testing(
-        World::with([domain], [authority], []),
-        nexus,
-        LiveQueryStore::start_test(),
-    );
+    let world = World::with([domain], [authority], []);
+    // This component fixture needs explicit routing metadata; it has no signed
+    // genesis, certified history or native publication authority.
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
+    let state = State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     NexusRoutingFixture {
         state,
         authority_id,

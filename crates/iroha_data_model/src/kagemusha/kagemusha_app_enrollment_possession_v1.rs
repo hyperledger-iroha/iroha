@@ -648,7 +648,11 @@ mod tests {
             assertion.extend_from_slice(&auth);
             assertion.push(0x69);
             assertion.extend_from_slice(b"signature");
-            assertion.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+            assertion.extend_from_slice(&[
+                0x58,
+                u8::try_from(der.as_bytes().len())
+                    .expect("synthetic DER signature fits CBOR byte-string argument"),
+            ]);
             assertion.extend_from_slice(der.as_bytes());
             let changed = KagemushaAppEnrollmentPossessionV1 {
                 challenge: proof.challenge,

@@ -1313,7 +1313,7 @@ mod tests {
                 4 => policy.profile.planned_release_id = [77; 32],
                 5 => policy.profile.planned_hardware_profile_id = [77; 32],
                 _ => policy.profile.planned_suite_id = [77; 32],
-            };
+            }
             policy.profile = policy.profile.seal_identity_profile_id().unwrap();
             assert!(sign_policy(&f, policy).authenticate(&f.roots, 100).is_err());
         }
@@ -1329,7 +1329,7 @@ mod tests {
                 }
                 3 => roots.threshold = 0,
                 _ => roots.authorized_signers.reverse(),
-            };
+            }
             assert!(f.signed.authenticate(&roots, 100).is_err());
         }
         let mut roots = f.roots.clone();
@@ -1374,7 +1374,7 @@ mod tests {
                 7 => c.policy_epoch += 1,
                 8 => c.expires_at_ms = 20001,
                 _ => c.expires_at_ms = 11000,
-            };
+            }
             let signed = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
                 challenge: c,
                 signature: Signature::try_new(

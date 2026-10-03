@@ -198,7 +198,7 @@ fn public_self_check_allowance_dominates_the_complete_bounded_verifier() {
                 .sum::<usize>());
     let terminal = FRI_LENGTHS[5];
     let verifier_work_bound =
-        16384 * (public_units + query_units + terminal * terminal + deep_proof::MAX_FRAME_BYTES);
+        16384 * (public_units + query_units + terminal.pow(2) + deep_proof::MAX_FRAME_BYTES);
     // This is only the direct SMT portion of the retained 4N numerator point
     // allowance; public preparation, hash AIR, FFT and division are additional.
     let retained_point_floor = 4 * TRACE_ROWS * RESIDUE_COUNT * 256;

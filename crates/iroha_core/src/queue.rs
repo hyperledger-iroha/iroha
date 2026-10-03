@@ -6525,7 +6525,7 @@ pub mod tests {
         );
         assert_eq!(
             queue.router.read().try_route(&tx),
-            Err(RoutingResolveError::NoLaneForDataspace {
+            Err(RoutingResolveError::UnknownDataspace {
                 dataspace_id: unknown_dataspace,
             })
         );
@@ -7237,6 +7237,10 @@ pub mod tests {
             .as_accepted()
             .entrypoint_bytes()
             .to_vec();
+        assert_eq!(
+            original, original_input,
+            "scale-out retains the original signed input"
+        );
         let original_owner = Arc::clone(queue.txs.get(&tx_hash).unwrap().value());
         let committed_nexus = state.nexus_snapshot();
         let expected_current = evaluate_policy_plan_with_nexus_and_world_at_block_height(
@@ -7247,10 +7251,7 @@ pub mod tests {
             state_height_for_routing(&state),
         )
         .expect("independent current elastic routing plan");
-        assert_eq!(
-            expected_current.coordinator_route(),
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
-        );
+        assert_eq!(expected_current.coordinator_route(), expected);
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -10524,6 +10525,13 @@ pub mod tests {
             .with_uaid(Some(uaid))
             .build(&account_id);
         let mut world = World::with([domain], [account], []);
+        // This queue component has explicit Global routing metadata; its UAID
+        // fixtures do not authenticate a native genesis or publication source.
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         if bind_manifest {
             let manifest = AssetPermissionManifest {
                 version: ManifestVersion::default(),

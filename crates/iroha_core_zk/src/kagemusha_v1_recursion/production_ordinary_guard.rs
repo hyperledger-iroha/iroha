@@ -1100,9 +1100,15 @@ mod tests {
 pub(super) fn public_cash_relation(
     selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
 ) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
-    selection.recheck_selected_originals_and_current_custody().map_err(owner_error)?;
+    selection
+        .recheck_selected_originals_and_current_custody()
+        .map_err(owner_error)?;
     preparation_digests(selection).map_err(owner_error)?;
     let release = selection.authenticated_release().map_err(owner_error)?;
-    public_relation_for_selected_state(selection.enrollment().app_credential(), &release,
-        selection.selected_successor_state(), selection.normalized_guard_statement())
+    public_relation_for_selected_state(
+        selection.enrollment().app_credential(),
+        &release,
+        selection.selected_successor_state(),
+        selection.normalized_guard_statement(),
+    )
 }

@@ -767,12 +767,19 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let restore_peak = probe_budget.peak_reserved_bytes();
         assert!(retained_bytes > 0);
         assert!(restore_peak >= retained_bytes);
-        // Dropping State retires its actual EBR allocations; the charge must
-        // remain while this real reader pin prevents reclamation.
+        // Shared graph controls are physically dropped with State. Only the
+        // current and undo EBR payload allocations remain charged while this
+        // epoch pin prevents their deferred reclamation.
+        let deferred_bytes = mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts()
+            .into_iter()
+            .chain(native_execution_tip::TipCell::allocation_layouts())
+            .map(|layout| layout.size())
+            .sum::<usize>();
+        assert!(retained_bytes > deferred_bytes);
         let retirement_pin = crossbeam_epoch::pin();
         drop(probe);
         retirement_pin.flush();
-        assert_eq!(probe_budget.reserved_bytes(), retained_bytes);
+        assert_eq!(probe_budget.reserved_bytes(), deferred_bytes);
         drop(retirement_pin);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while probe_budget.reserved_bytes() != 0 {

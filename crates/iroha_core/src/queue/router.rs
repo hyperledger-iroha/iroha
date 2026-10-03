@@ -7861,6 +7861,11 @@ fn canonical_dataspace_route(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    // Classify an absent dataspace before looking for its lane. Lane absence
+    // applies only to a dataspace admitted by the current catalog.
+    if dataspace_catalog.by_id(dataspace_id).is_none() {
+        return Err(RoutingResolveError::UnknownDataspace { dataspace_id });
+    }
     let lane_id = lane_catalog
         .lanes()
         .iter()
@@ -10545,6 +10550,25 @@ mod tests {
             .insert(account_id.clone(), scope_entry);
     }
     include!("router_initial_routing_tests.rs");
+    #[test]
+    fn canonical_dataspace_route_classifies_unknown_scope_before_lane_absence() {
+        let unknown = DataSpaceId::new(8);
+        for lanes in [
+            LaneCatalog::default(),
+            lane_catalog_from_configs(vec![LaneConfig {
+                id: LaneId::SINGLE,
+                dataspace_id: unknown,
+                ..LaneConfig::default()
+            }]),
+        ] {
+            assert_eq!(
+                canonical_dataspace_route(unknown, &lanes, &DataSpaceCatalog::default()),
+                Err(RoutingResolveError::UnknownDataspace {
+                    dataspace_id: unknown
+                })
+            );
+        }
+    }
     #[test]
     fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");

@@ -239,6 +239,9 @@ pub struct FeeEvidenceSnapshotV1 {
 }
 impl FeeEvidenceSnapshotV1 {
     /// Derive a complete canonical commitment, rejecting omitted-order duplicates.
+    ///
+    /// # Errors
+    /// Returns an error for a zero height, excessive count, invalid records, or records not uniquely ordered at that height.
     pub fn from_records(height: u64, records: &[FeeEvidenceRecordV1]) -> Result<Self, String> {
         let count = u32::try_from(records.len()).map_err(|_| "fee record count overflow")?;
         if height == 0
@@ -253,8 +256,7 @@ impl FeeEvidenceSnapshotV1 {
         let root = MerkleTree::<FeeEvidenceRecordV1>::root_from_typed_leaves(
             records.iter().map(HashOf::new),
         )
-        .map(Hash::from)
-        .unwrap_or_else(|| Hash::new(b"iroha.fee_evidence.empty.v1"));
+        .map_or_else(|| Hash::new(b"iroha.fee_evidence.empty.v1"), Hash::from);
         Ok(Self {
             version: 1,
             evaluated_height: height,
@@ -327,6 +329,9 @@ impl FeeEvidenceWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    /// Returns an error if the snapshot cannot be canonically decoded or its fields are incoherent.
     pub fn commitment(&self) -> Result<FeeEvidenceSnapshotV1, String> {
         let commitment: FeeEvidenceSnapshotV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -392,8 +397,11 @@ impl FeeEvidenceBlockProofV1 {
     /// Produce a compact requested-record proof from the complete verified corpus.
     pub fn record_proof(&self, key: &StatePath) -> Option<FeeEvidenceRecordProofV1> {
         let index = self.records.binary_search_by(|r| r.key.cmp(key)).ok()?;
-        let tree =
-            MerkleTree::<FeeEvidenceRecordV1>::from_iter(self.records.iter().map(HashOf::new));
+        let tree = self
+            .records
+            .iter()
+            .map(HashOf::new)
+            .collect::<MerkleTree<FeeEvidenceRecordV1>>();
         Some(FeeEvidenceRecordProofV1 {
             snapshot_witness: self.snapshot_witness.clone(),
             record: self.records[index].clone(),
@@ -525,6 +533,11 @@ impl FeeEvidenceWindowProofV1 {
     /// Authenticate a complete window against an independently supplied checkpoint.
     /// Trust propagates forward from the pinned opening checkpoint through each
     /// contiguous native certificate; the closing block must match its independent pin.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported version, incomplete or invalid finality,
+    /// mismatched roots or policy provenance, altered immutable records, invalid
+    /// reward evidence, or accounting that does not conserve funds.
     pub fn verify(&self, anchor: &FeeEvidenceTrustAnchorV1) -> Result<(), String> {
         use crate::validation_fee::ValidationFeePolicySnapshotCommitmentV1;
         if self.version != 1 {
@@ -686,15 +699,15 @@ impl FeeEvidenceWindowProofV1 {
                 }
             }
             for record in &block.evidence.records {
-                if let FeeEvidencePayloadV1::RetailReceipt(receipt) = &record.payload {
-                    if !block.registry.as_ref().is_some_and(|registry| {
+                if let FeeEvidencePayloadV1::RetailReceipt(receipt) = &record.payload
+                    && !block.registry.as_ref().is_some_and(|registry| {
                         registry.registered_policies.iter().any(|entry| {
                             entry.policy_hash == receipt.policy_hash
                                 && entry.policy.policy_version == receipt.policy_revision
                         })
-                    }) {
-                        return Err("native fee receipt policy provenance is absent".into());
-                    }
+                    })
+                {
+                    return Err("native fee receipt policy provenance is absent".into());
                 }
             }
         }
@@ -832,7 +845,7 @@ where
         records
             .iter()
             .find_map(|r| match &r.payload {
-                FeeEvidencePayloadV1::RewardCustody(c) => Some(c.state.clone()),
+                FeeEvidencePayloadV1::RewardCustody(c) => Some(c.state),
                 _ => None,
             })
             .unwrap_or_default()
@@ -1016,7 +1029,8 @@ mod tests {
             norito::json::from_str::<FeeEvidenceRecordV1>(&json).unwrap(),
             record
         );
-        let snapshot = FeeEvidenceSnapshotV1::from_records(19, &[record.clone()]).unwrap();
+        let snapshot =
+            FeeEvidenceSnapshotV1::from_records(19, std::slice::from_ref(&record)).unwrap();
         assert_eq!(
             norito::decode_canonical::<FeeEvidenceSnapshotV1>(
                 &norito::to_bytes(&snapshot).unwrap()
@@ -1082,9 +1096,9 @@ mod tests {
             reference_feed_config_version: 1,
             reference_provider_accounts: (10..15).map(account).collect(),
             max_sbd_per_attempt_minor: 1000,
-            max_sbd_per_day_minor: 100000,
+            max_sbd_per_day_minor: 100_000,
             min_interval_ms: 60000,
-            max_source_age_ms: 300000,
+            max_source_age_ms: 300_000,
             max_slippage_bps: 100,
             validator_lane_id: LaneId::new(0),
             min_reward_claim_xor_minor: 1,
@@ -1112,7 +1126,7 @@ mod tests {
             reserved_xor: 1,
             ..Default::default()
         };
-        let opening_records = vec![receipt(1, "a"), custody_record(1, opening.clone())];
+        let opening_records = vec![receipt(1, "a"), custody_record(1, opening)];
         let period = 1_790_773_200_000;
         let now = crate::validation_fee::honiara_month_bounds(period)
             .unwrap()
@@ -1140,11 +1154,7 @@ mod tests {
         };
         // An unsuccessful attempt changes only its rate clock. The waived 70 cents
         // and the opening checkpoint's receipt never become new reward credit.
-        let failed = vec![
-            receipt(2, "b"),
-            attempt(2, now),
-            custody_record(2, opening.clone()),
-        ];
+        let failed = vec![receipt(2, "b"), attempt(2, now), custody_record(2, opening)];
         let at = now + 60_000;
         let allocation = FeeEvidenceRecordV1 {
             key: crate::validation_fee_rewards::validation_fee_reward_state_key(
@@ -1176,11 +1186,7 @@ mod tests {
         opening.last_conversion_ms = Some(at);
         opening.conversion_day = (at + 39_600_000) / 86_400_000;
         opening.converted_today_sbd = 50;
-        let converted = vec![
-            attempt(3, at),
-            allocation,
-            custody_record(3, opening.clone()),
-        ];
+        let converted = vec![attempt(3, at), allocation, custody_record(3, opening)];
         opening.reserved_xor = 1;
         opening.next_claim = 1;
         let claim = FeeEvidenceRecordV1 {

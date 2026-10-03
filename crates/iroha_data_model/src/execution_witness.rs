@@ -98,6 +98,14 @@ pub const fn kagemusha_reserve_receipt_witness_key_v1(
     key
 }
 
+/// Fixed per-block native fee accounting snapshot key.
+pub const FEE_EVIDENCE_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
+    ExecutionWitnessKeyTagV1::FeeSnapshot,
+    *b"\0iroha:fee-evidence:root:v1",
+);
+/// Reserved family for native fee record bytes in an execution witness.
+pub const FEE_EVIDENCE_RECORD_TAG_V1: u8 = ExecutionWitnessKeyTagV1::FeeRecord as u8;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,11 +164,3 @@ mod tests {
         }
     }
 }
-
-/// Fixed per-block native fee accounting snapshot key.
-pub const FEE_EVIDENCE_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
-    ExecutionWitnessKeyTagV1::FeeSnapshot,
-    *b"\0iroha:fee-evidence:root:v1",
-);
-/// Reserved family for native fee record bytes in an execution witness.
-pub const FEE_EVIDENCE_RECORD_TAG_V1: u8 = ExecutionWitnessKeyTagV1::FeeRecord as u8;
