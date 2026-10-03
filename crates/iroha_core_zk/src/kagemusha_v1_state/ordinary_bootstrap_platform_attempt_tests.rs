@@ -12,7 +12,7 @@ use iroha_data_model::{
     },
     testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1,
 };
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 fn public_challenge() -> (
     KagemushaAppOperationApprovalChallengeV1,

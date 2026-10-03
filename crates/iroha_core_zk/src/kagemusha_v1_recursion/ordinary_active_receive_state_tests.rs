@@ -15,7 +15,6 @@ use crate::kagemusha_v1_state::{
     CreditIdV1, KagemushaTransitionKindV1, OrdinaryConsumedCreditsForQualificationV1,
     ordinary_incoming_preview_for_qualification_v1,
 };
-use ff::Field as _;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::kagemusha::*;
 

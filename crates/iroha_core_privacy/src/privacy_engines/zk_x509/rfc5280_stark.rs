@@ -4233,14 +4233,9 @@ pub(super) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
             F(u64::try_from(offset).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?);
         row[BASE_STRICT] = F(u64::from(strict));
         row[BASE_EQUAL] = F(u64::from(equal));
-        row[BASE_INVERSE] = if equal {
-            F::ZERO
-        } else {
-            F(u64::from(left))
-                .sub(F(u64::from(right)))
-                .inv()
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?
-        };
+        row[BASE_INVERSE] = F(u64::from(left))
+            .sub(F(u64::from(right)))
+            .inverse_or_zero_canonical_v1();
         row[BASE_STATE_BEFORE] = F(u64::from(prefix_equal));
         row[BASE_STATE_AFTER] = F(u64::from(prefix_equal && equal));
         row[SERIAL_LESS] = F(u64::from(less));
@@ -6090,6 +6085,29 @@ fn populate_der_output_row_v1(
     Ok(())
 }
 
+// The sole caller supplies a fresh active_zero_row_v1 with untouched gap
+// cells. Explicit zero inverse/gap/bit writes therefore preserve its zero
+// difference case. Keep malformed-input writes in the original order.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn populate_ordinal_gap_v1(
+    row: &mut ZkX509Rfc5280StarkBaseRowV1,
+    difference: u64,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    row[BASE_B] = F(difference);
+    row[BASE_EQUAL] = F(u64::from(difference == 0));
+    row[BASE_INVERSE] = F::canonical(difference)
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?
+        .inverse_or_zero_canonical_v1();
+    let gap = difference.saturating_sub(1);
+    row[BASE_C] = F(gap);
+    write_u16_bits_v1(
+        row,
+        GRAMMAR_CHILD_ORDINAL_BITS,
+        u16::try_from(gap).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
+    );
+    Ok(())
+}
+
 /// Compile every canonical base family from the strict-DER owner trace.
 #[allow(clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -6464,22 +6482,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             let difference = next_key
                 .checked_sub(key)
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
-            row[BASE_B] = F(difference);
-            row[BASE_EQUAL] = F(u64::from(difference == 0));
-            if difference != 0 {
-                row[BASE_INVERSE] = F(difference)
-                    .inv()
-                    .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
-                let gap = difference
-                    .checked_sub(1)
-                    .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
-                row[BASE_C] = F(gap);
-                write_u16_bits_v1(
-                    &mut row,
-                    GRAMMAR_CHILD_ORDINAL_BITS,
-                    u16::try_from(gap).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-                );
-            }
+            populate_ordinal_gap_v1(&mut row, difference)?;
         }
         row[BASE_ORDINAL_NEXT_ACTIVE] = F(u64::from(index + 1 < ordinal_entries.len()));
         row[BASE_ORDINAL_EQUAL_CONTINUE] = row[BASE_ORDINAL_NEXT_ACTIVE].mul(row[BASE_EQUAL]);
@@ -11144,6 +11147,159 @@ mod tests {
             "a duplicated unique source address is mechanically detectable"
         );
     }
+    #[test]
+    fn serial_private_difference_inverses_preserve_equal_prefixes_and_rejections() {
+        for byte in 0_u8..=u8::MAX {
+            for (left, right) in [([1, byte, 1], [1, 0, 2]), ([1, 0, 2], [1, byte, 1])] {
+                let comparison = ZkX509Rfc5280SerialComparisonV1 {
+                    kind: ZkX509Rfc5280SerialComparisonKindV1::LeafNonMembership,
+                    left_instance: 0,
+                    right_instance: 1,
+                    left: serial_frame_v1(&left).expect("left frame"),
+                    right: serial_frame_v1(&right).expect("right frame"),
+                };
+                let rows = build_zk_x509_rfc5280_serial_comparison_rows_v1(&comparison)
+                    .expect("distinct serials");
+                assert_eq!(rows.len(), SERIAL_COMPARISON_WIDTH_V1);
+                for (offset, row) in rows.iter().enumerate() {
+                    let difference = F(u64::from(comparison.left[offset]))
+                        .sub(F(u64::from(comparison.right[offset])));
+                    assert_eq!(row[BASE_EQUAL], F(u64::from(difference == F::ZERO)));
+                    assert_eq!(row[BASE_INVERSE], difference.inv().unwrap_or(F::ZERO));
+                }
+            }
+        }
+        let valid = canonical_serial_comparisons_v1(&[7], &[vec![8], vec![9]]).expect("manifest");
+        for attack in 0..5 {
+            let mut changed = valid[2].clone();
+            match attack {
+                0 => changed.right = changed.left,
+                1 => changed.left[1] = 0,
+                2 => changed.right[SERIAL_COMPARISON_WIDTH_V1 - 1] = 1,
+                3 => changed.right[0] = 0,
+                _ => core::mem::swap(&mut changed.left, &mut changed.right),
+            }
+            assert!(matches!(
+                build_zk_x509_rfc5280_serial_comparison_rows_v1(&changed),
+                Err(ZkX509Rfc5280StarkErrorV1::Semantic)
+            ));
+        }
+    }
+
+    #[test]
+    fn ordinal_gap_constructor_preserves_zero_bounds_and_error_write_order() {
+        for difference in [
+            0,
+            1,
+            2,
+            65_535,
+            65_536,
+            65_537,
+            GOLDILOCKS_MODULUS_V1 - 1,
+            GOLDILOCKS_MODULUS_V1,
+            u64::MAX,
+        ] {
+            let mut row = active_zero_row_v1();
+            row[BASE_H] = F(37);
+            let mut expected = row;
+            expected[BASE_B] = F(difference);
+            expected[BASE_EQUAL] = F(u64::from(difference == 0));
+            let expected_result = if difference == 0 {
+                Ok(())
+            } else if let Some(inverse) = F(difference).inv() {
+                expected[BASE_INVERSE] = inverse;
+                let gap = difference - 1;
+                expected[BASE_C] = F(gap);
+                if let Ok(gap) = u16::try_from(gap) {
+                    for bit in 0..16 {
+                        expected[GRAMMAR_CHILD_ORDINAL_BITS + bit] = F(u64::from((gap >> bit) & 1));
+                    }
+                    Ok(())
+                } else {
+                    Err(ZkX509Rfc5280StarkErrorV1::Resource)
+                }
+            } else {
+                Err(ZkX509Rfc5280StarkErrorV1::Grammar)
+            };
+            assert_eq!(
+                populate_ordinal_gap_v1(&mut row, difference),
+                expected_result
+            );
+            assert_eq!(row, expected, "difference {difference}");
+        }
+    }
+
+    #[test]
+    fn canonical_ordinal_rows_preserve_private_groups_and_inverse_constraints() {
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&canonical_trace_v1())
+            .expect("original DER trace");
+        let rows = material.family_rows[ZkX509Rfc5280StarkFamilyV1::Grammar as usize]
+            .iter()
+            .skip(ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1)
+            .collect::<Vec<_>>();
+        let mut examples = [None, None];
+        for (index, pair) in rows.windows(2).enumerate() {
+            let difference = pair[1][BASE_A]
+                .0
+                .checked_sub(pair[0][BASE_A].0)
+                .expect("sorted original keys");
+            assert_eq!(pair[0][BASE_B], F(difference));
+            assert_eq!(pair[0][BASE_EQUAL], F(u64::from(difference == 0)));
+            assert_eq!(
+                pair[0][BASE_INVERSE],
+                F(difference).inv().unwrap_or(F::ZERO)
+            );
+            assert_eq!(pair[0][BASE_C], F(difference.saturating_sub(1)));
+            assert_eq!(
+                pack_bits_v1(&pair[0][GRAMMAR_CHILD_ORDINAL_BITS..GRAMMAR_CHILD_ORDINAL_BITS + 16]),
+                pair[0][BASE_C]
+            );
+            examples[usize::from(difference != 0)].get_or_insert(index);
+        }
+        let last = rows.last().expect("original ordinal rows");
+        for column in [BASE_B, BASE_EQUAL, BASE_INVERSE, BASE_C] {
+            assert_eq!(last[column], F::ZERO);
+        }
+        for index in
+            examples.map(|index| index.expect("both same-parent and different-parent groups"))
+        {
+            let physical = material.schedule.starts[ZkX509Rfc5280StarkFamilyV1::Grammar as usize]
+                + ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1
+                + index;
+            let mut current = material.base_row(physical).expect("original row");
+            let next = material.base_row(physical + 1).expect("next row");
+            let fixed = material.fixed_row(physical).expect("fixed row");
+            let evaluate = |row: &ZkX509Rfc5280StarkBaseRowV1| {
+                evaluate_zk_x509_rfc5280_stark_residues_v1(
+                    row,
+                    &next,
+                    &neutral_aux_v1(),
+                    &neutral_aux_v1(),
+                    &fixed,
+                    der_challenges_v1(),
+                    challenges_v1(),
+                    terminal_claims_v1(),
+                )
+                .expect("original evaluator")
+            };
+            let base_end: usize = RFC5280_RESIDUE_SECTIONS_V1[..12]
+                .iter()
+                .map(|(_, count)| count)
+                .sum();
+            assert!(
+                evaluate(&current)[..base_end]
+                    .iter()
+                    .all(|value| *value == F::ZERO)
+            );
+            current[BASE_INVERSE] = current[BASE_INVERSE].add(F::ONE);
+            assert!(
+                evaluate(&current)[..base_end]
+                    .iter()
+                    .any(|value| *value != F::ZERO)
+            );
+        }
+    }
+
     #[test]
     fn serial_comparison_rows_cover_leaf_and_exact_active_adjacencies() {
         let entries = ZK_X509_MAX_CRL_ENTRIES_V1;

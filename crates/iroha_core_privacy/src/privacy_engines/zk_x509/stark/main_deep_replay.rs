@@ -31,14 +31,12 @@ fn zero_column_v1(length: usize) -> Result<ExtensionColumn, ZkX509StarkErrorV1> 
     Ok(column)
 }
 
-/// Coefficient replay reference retained only for independent native-path tests.
-#[cfg(test)]
+/// Original coefficient opening powers shared by retained RFC and independent tests.
 pub(super) struct MainDeepPointPowersV1 {
     points: [E; 2],
     powers: [ExtensionColumn; 2],
 }
 
-#[cfg(test)]
 impl MainDeepPointPowersV1 {
     pub(super) fn new_v1(points: [E; 2], coefficients: usize) -> Result<Self, ZkX509StarkErrorV1> {
         if coefficients == 0
@@ -79,10 +77,9 @@ impl MainDeepPointPowersV1 {
     }
 }
 
-/// Coefficient-path reference retained only for independent native-path tests.
+/// Original coefficient-path weighted owner for retained RFC columns.
 /// Weighted polynomials at one native group's common current/next points.
 /// Unequal coefficient lengths are padded with zero, never with witness data.
-#[cfg(test)]
 pub(super) struct MainGroupedDeepQuotientV1 {
     points: [E; 2],
     coefficients: [ExtensionColumn; 2],
@@ -90,7 +87,6 @@ pub(super) struct MainGroupedDeepQuotientV1 {
     columns: usize,
 }
 
-#[cfg(test)]
 impl MainGroupedDeepQuotientV1 {
     pub(super) fn new_v1(powers: &MainDeepPointPowersV1) -> Result<Self, ZkX509StarkErrorV1> {
         let length = powers.powers[0].len();
@@ -102,6 +98,7 @@ impl MainGroupedDeepQuotientV1 {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn add_v1(
         &mut self,
         powers: &MainDeepPointPowersV1,
@@ -194,7 +191,10 @@ mod tests;
 
 #[path = "main_native_deep.rs"]
 mod native;
-pub(super) use native::{MainNativeDeepPointsV1, MainNativeDeepQuotientV1, NativeColumnV1};
+pub(super) use native::mixed::{
+    MainDeepReplayBatchV1, MainMixedColumnV1, MainMixedDeepPointsV1, MainMixedDeepQuotientV1,
+    MainMixedInputV1,
+};
 
 /// Clearing owner for bounded named DEEP stack scratch, including partial writes.
 pub(super) struct MainDeepStackValuesV1<const N: usize>([E; N]);

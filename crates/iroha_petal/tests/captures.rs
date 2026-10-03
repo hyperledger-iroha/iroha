@@ -1,14 +1,16 @@
 //! Decodes the golden camera captures in `fixtures/petal/petal_captures_v1.json`.
 //!
 //! Every conforming decoder must read the lanes named in `must_decode`, must
-//! never report wrong data for any lane, and must reject the negatives.
+//! never report wrong data for any lane, must report the recorded inferred
+//! corner, must follow each tracking pair from its first frame into its second,
+//! and must reject the negatives.
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
 use std::io::Read as _;
 use std::path::PathBuf;
 
 use flate2::read::ZlibDecoder;
-use iroha_petal::decode::{DecodeOptions, decode};
+use iroha_petal::decode::{DecodeOptions, decode, track};
 use iroha_petal::image::Luma;
 use iroha_petal::lanes::{Lane, decode_lane};
 use iroha_petal::stream::{AssemblerLimits, StreamAssembler};
@@ -44,12 +46,11 @@ fn base64_decode(text: &str) -> Vec<u8> {
 }
 
 fn luma_of(entry: &Value) -> Luma {
-    let compressed = base64_decode(
-        entry
-            .get("luma_zlib_base64")
-            .and_then(Value::as_str)
-            .expect("luma"),
-    );
+    luma_at(entry, "luma_zlib_base64")
+}
+
+fn luma_at(entry: &Value, key: &str) -> Luma {
+    let compressed = base64_decode(entry.get(key).and_then(Value::as_str).expect("luma"));
     let mut data = Vec::new();
     ZlibDecoder::new(compressed.as_slice())
         .read_to_end(&mut data)
@@ -99,10 +100,46 @@ fn golden_captures_decode_as_recorded() {
                 ),
             }
         }
+        let inferred = capture.get("inferred_corner").and_then(Value::as_u64);
+        assert_eq!(
+            decoded.inferred_corner.map(u64::from),
+            inferred,
+            "{name}: inferred corner"
+        );
         decoded.feed(&mut assembler);
     }
     // captures of different frames of the same stream accumulate in one assembler
     assert!(assembler.progress().atoms_received > 10);
+}
+
+#[test]
+fn golden_tracks_follow_the_pose_into_the_next_frame() {
+    let doc = load();
+    let options = DecodeOptions::default();
+    for pair in doc.get("tracks").and_then(Value::as_array).expect("tracks") {
+        let name = pair.get("name").and_then(Value::as_str).unwrap();
+        let previous = decode(&luma_at(pair, "from_luma_zlib_base64"), &options)
+            .unwrap_or_else(|e| panic!("{name}: first frame: {e}"));
+        let followed = track(&luma_at(pair, "to_luma_zlib_base64"), &previous, &options)
+            .unwrap_or_else(|| panic!("{name}: tracking lost the code"));
+        let must = pair.get("must_track").and_then(Value::as_str).unwrap();
+        for (letter, lane, expected) in [
+            ('P', &followed.p, hex_field(pair, "p_data")),
+            ('K', &followed.k, hex_field(pair, "k_data")),
+            ('D', &followed.d, hex_field(pair, "d_data")),
+        ] {
+            match lane {
+                Some(result) => assert_eq!(result.data, expected, "{name}: lane {letter} data"),
+                None => assert!(!must.contains(letter), "{name}: lane {letter} lost"),
+            }
+        }
+        let inferred = pair.get("inferred_corner").and_then(Value::as_u64);
+        assert_eq!(
+            followed.inferred_corner.map(u64::from),
+            inferred,
+            "{name}: inferred corner"
+        );
+    }
 }
 
 #[test]

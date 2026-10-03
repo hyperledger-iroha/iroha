@@ -144,7 +144,8 @@ public enum PetalCameraFrame {
 ///
 /// Attach it to an `AVCaptureVideoDataOutput` (``attach(to:)``); every
 /// camera frame is converted to luma, decoded and fed to one
-/// ``PetalScanSession``. Each result is reported through `onOutcome` (called
+/// ``PetalScanSession``, which follows the code from frame to frame without a
+/// full finder search while the hand stays steady. Each result is reported through `onOutcome` (called
 /// on the thread that analysed the frame, normally ``queue``) and through
 /// ``outcomes``. Once a payload completes, the analyzer ignores further frames
 /// until ``reset()``, so the completed outcome is always the last one
@@ -211,7 +212,10 @@ public final class PetalCameraAnalyzer: NSObject, AVCaptureVideoDataOutputSample
         return latestProgress
     }
 
-    /// Session counters after the latest analysed frame.
+    /// Session counters after the latest analysed frame, including the frames
+    /// read by tracking the previous pose (``PetalScanStats/tracked``) and those
+    /// read with one corner blossom hidden and inferred
+    /// (``PetalScanStats/inferred``), for diagnostics and UI hints.
     public var stats: PetalScanStats {
         stateLock.lock()
         defer { stateLock.unlock() }

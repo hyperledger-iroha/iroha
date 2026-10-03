@@ -1,6 +1,8 @@
 //! Reusable exact ordinary canonical struct streams from the sole model-owned field grammar.
 //! Codec structure, semantic copies, proof verification and Native custody are separate duties.
-use super::{assemble_bounded_canonical_frame_v1, stream::KagemushaBoundedByteStreamV1};
+#[cfg(test)]
+use super::assemble_bounded_canonical_frame_v1;
+use super::stream::KagemushaBoundedByteStreamV1;
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
@@ -115,6 +117,7 @@ pub(in crate::kagemusha_v1_recursion) fn struct_payload_v1<F: KagemushaPoseidonF
 
 /// Complete schema/header/alignment, actual active payload length and derived CRC64-XZ.
 /// The same bounded buffers and field order are used at every amount/account/proof/DER width.
+#[cfg(test)]
 pub(super) fn struct_frame_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

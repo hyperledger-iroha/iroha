@@ -89,19 +89,57 @@ public readonly struct PetalComponent
     }
 }
 
+/// <summary>One plausible set of corner finders for a frame.</summary>
+public sealed class PetalFinderSet
+{
+    private readonly PetalFinder[] corners;
+
+    internal PetalFinderSet(PetalFinder[] corners, int? inferred)
+    {
+        this.corners = corners;
+        Corners = Array.AsReadOnly(corners);
+        Inferred = inferred;
+    }
+
+    /// <summary>The four corners, clockwise from the one nearest the top-left of the image.</summary>
+    public IReadOnlyList<PetalFinder> Corners { get; }
+
+    /// <summary>
+    /// Index into <see cref="Corners"/> of a corner that was not seen but inferred from the
+    /// other three, or <see langword="null"/> when all four were seen.
+    /// </summary>
+    public int? Inferred { get; }
+
+    /// <summary>The corners without a copy (callers must not modify them).</summary>
+    internal PetalFinder[] CornerArray => corners;
+}
+
 /// <summary>
 /// Finding the four corner finders in a camera luma plane.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Pipeline: adaptive threshold (local mean via an integral image) → 4-connected
 /// component labelling → blossom detection (a large, round, isolated blob) →
 /// selection of the four finders that form a plausible, similarly sized
 /// quadrilateral → intensity-weighted centre refinement. Solid blossoms survive
 /// defocus that would fill in the gaps of a ring-shaped marker.
+/// </para>
+/// <para>
+/// When a finger, a glare or the edge of the frame hides one blossom, three large
+/// blossoms that form a corner still identify the code: the fourth corner is
+/// inferred (and later refined by the decoder).
+/// </para>
 /// </remarks>
 public static class PetalLocator
 {
-    private static readonly double[] Sensitivities = [0.12, 0.22, 0.34];
+    private static readonly double[] SensitivityValues = [0.12, 0.22, 0.34];
+
+    /// <summary>
+    /// Binarisation thresholds, from the most to the least permissive: a higher sensitivity
+    /// separates blurred blossoms from their surroundings.
+    /// </summary>
+    public static IReadOnlyList<double> Sensitivities { get; } = Array.AsReadOnly(SensitivityValues);
 
     /// <summary>Marks pixels that are clearly brighter than their neighbourhood.</summary>
     /// <param name="image">The luma plane.</param>
@@ -191,20 +229,113 @@ public static class PetalLocator
     /// </remarks>
     /// <param name="finders">Candidate finders.</param>
     /// <returns>Four finders clockwise from the top-left, or <see langword="null"/>.</returns>
-    public static PetalFinder[]? SelectQuad(ReadOnlySpan<PetalFinder> finders)
+    public static PetalFinder[]? SelectQuad(ReadOnlySpan<PetalFinder> finders) =>
+        SelectQuadFrom(StrongFinders(finders)) ?? SelectQuadFrom(finders);
+
+    /// <summary>
+    /// Chooses three finders that look like three corners of one code and completes the
+    /// fourth corner as a parallelogram.
+    /// </summary>
+    /// <remarks>
+    /// The three form an <c>L</c>: sizes within a factor 1.9, and one of them (the vertex)
+    /// with two legs whose lengths are within a factor 2, at an angle with
+    /// <c>|cos| ≤ 0.5</c>, and whose mean length is 4.8 to 10.5 mean finder sizes. The
+    /// lowest <c>(size ratio − 1) + (leg ratio − 1) + |cos| + |mean leg / mean size − 7.33| / 7.33</c>
+    /// wins (the first of equal scores); the fourth corner is <c>p + q − vertex</c> with the
+    /// mean size of the three. Like <see cref="SelectQuad"/>, only the ten largest candidates
+    /// are combined.
+    /// </remarks>
+    /// <param name="finders">Candidate finders.</param>
+    /// <returns>
+    /// The four corners clockwise from the top-left and the index of the inferred one among
+    /// them, or <see langword="null"/>.
+    /// </returns>
+    public static (PetalFinder[] Quad, int Inferred)? SelectTriple(ReadOnlySpan<PetalFinder> finders)
     {
-        var largest = 0.0;
-        foreach (var finder in finders)
-            largest = PetalMath.Max(largest, finder.Size);
-        var strong = new List<PetalFinder>();
-        foreach (var finder in finders)
+        var ranked = Ranked(finders);
+        var n = ranked.Length;
+        PetalFinder[]? best = null;
+        var bestInferred = 0;
+        var bestScore = 0.0;
+        Span<PetalFinder> set = stackalloc PetalFinder[3];
+        Span<PetalFinder> quad = stackalloc PetalFinder[4];
+        for (var a = 0; a < n; a++)
         {
-            if (finder.Size >= 0.55 * largest)
-                strong.Add(finder);
+            for (var b = a + 1; b < n; b++)
+            {
+                for (var c = b + 1; c < n; c++)
+                {
+                    set[0] = ranked[a];
+                    set[1] = ranked[b];
+                    set[2] = ranked[c];
+                    var smin = double.MaxValue;
+                    var smax = 0.0;
+                    var sizeSum = PetalMath.SumIdentity;
+                    foreach (var finder in set)
+                    {
+                        smin = PetalMath.Min(smin, finder.Size);
+                        smax = PetalMath.Max(smax, finder.Size);
+                    }
+
+                    if (smax / smin > 1.9)
+                        continue;
+                    foreach (var finder in set)
+                        sizeSum += finder.Size;
+                    var meanSize = sizeSum / 3.0;
+                    for (var corner = 0; corner < 3; corner++)
+                    {
+                        var k = set[corner];
+                        var p = set[(corner + 1) % 3];
+                        var q = set[(corner + 2) % 3];
+                        var (ux, uy) = (p.X - k.X, p.Y - k.Y);
+                        var (vx, vy) = (q.X - k.X, q.Y - k.Y);
+                        var lu = Math.Sqrt(ux * ux + uy * uy);
+                        var lv = Math.Sqrt(vx * vx + vy * vy);
+                        if (lu <= 0.0 || lv <= 0.0)
+                            continue;
+                        var legs = PetalMath.Max(lu, lv) / PetalMath.Min(lu, lv);
+                        var cos = (ux * vx + uy * vy) / (lu * lv);
+                        // canvas geometry: side / finder diameter = 880 / 120
+                        var ratio = 0.5 * (lu + lv) / meanSize;
+                        if (legs > 2.0 || Math.Abs(cos) > 0.5 || !(ratio >= 4.8 && ratio <= 10.5))
+                            continue;
+                        var fourth = new PetalFinder(p.X + q.X - k.X, p.Y + q.Y - k.Y, meanSize);
+                        quad[0] = k;
+                        quad[1] = p;
+                        quad[2] = q;
+                        quad[3] = fourth;
+                        var ordered = OrderClockwise(quad);
+                        if (ordered is null)
+                            continue;
+                        var inferred = -1;
+                        for (var i = 0; i < 4; i++)
+                        {
+                            if (BitConverter.DoubleToInt64Bits(ordered[i].X) == BitConverter.DoubleToInt64Bits(fourth.X)
+                                && BitConverter.DoubleToInt64Bits(ordered[i].Y) == BitConverter.DoubleToInt64Bits(fourth.Y))
+                            {
+                                inferred = i;
+                                break;
+                            }
+                        }
+
+                        if (inferred < 0)
+                            continue;
+                        var score = (smax / smin - 1.0)
+                            + (legs - 1.0)
+                            + Math.Abs(cos)
+                            + Math.Abs((ratio - 7.33) / 7.33);
+                        if (best is null || score < bestScore)
+                        {
+                            best = ordered;
+                            bestInferred = inferred;
+                            bestScore = score;
+                        }
+                    }
+                }
+            }
         }
 
-        return SelectQuadFrom(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(strong))
-            ?? SelectQuadFrom(finders);
+        return best is null ? null : (best, bestInferred);
     }
 
     /// <summary>Sharpens a finder centre with an intensity-weighted centroid.</summary>
@@ -214,23 +345,192 @@ public static class PetalLocator
     public static PetalFinder RefineCenter(PetalLuma image, PetalFinder finder)
     {
         ArgumentNullException.ThrowIfNull(image);
+        return Centroid(image, finder) ?? finder;
+    }
+
+    /// <summary>Re-finds a finder near where it is expected (from the previous frame's pose).</summary>
+    /// <remarks>
+    /// A first centroid over a disc twice the finder's diameter catches a blossom that moved
+    /// up to about one diameter (nothing else bright is that close to a corner finder);
+    /// centroids over the finder's own disc then repeat, at most five times, until the centre
+    /// moves less than a quarter pixel.
+    /// </remarks>
+    /// <param name="image">The luma plane.</param>
+    /// <param name="expected">Where the finder is expected, with its expected diameter.</param>
+    /// <returns>
+    /// The finder, or <see langword="null"/> when nothing bright is there or the result is more
+    /// than 0.75 diameters from the expected centre, which means the code moved too far for
+    /// tracking.
+    /// </returns>
+    public static PetalFinder? Follow(PetalLuma image, PetalFinder expected)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (Centroid(image, expected with { Size = 2.0 * expected.Size }) is not { } wide)
+            return null;
+        var current = wide with { Size = expected.Size };
+        for (var i = 0; i < 5; i++)
+        {
+            if (Centroid(image, current) is not { } next)
+                return null;
+            var step = Math.Sqrt((next.X - current.X) * (next.X - current.X) + (next.Y - current.Y) * (next.Y - current.Y));
+            current = next;
+            if (step < 0.25)
+                break;
+        }
+
+        var moved = Math.Sqrt((current.X - expected.X) * (current.X - expected.X) + (current.Y - expected.Y) * (current.Y - expected.Y));
+        return moved <= 0.75 * expected.Size ? current : null;
+    }
+
+    /// <summary>
+    /// Locates four seen finders of a code: the first candidate of <see cref="Candidates"/>
+    /// without an inferred corner.
+    /// </summary>
+    /// <param name="image">The luma plane.</param>
+    /// <returns>Four refined finders clockwise from the top-left, or <see langword="null"/>.</returns>
+    public static PetalFinder[]? Locate(PetalLuma image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        foreach (var set in CandidateSets(image))
+        {
+            if (set.Inferred is null)
+                return set.CornerArray;
+        }
+
+        return null;
+    }
+
+    /// <summary>All candidate finder sets for one frame, in the order of <see cref="Candidates"/>.</summary>
+    /// <param name="image">The luma plane.</param>
+    /// <returns>The candidate sets.</returns>
+    public static PetalFinderSet[] LocateCandidates(PetalLuma image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        return CandidateSets(image).ToArray();
+    }
+
+    /// <summary>
+    /// Candidate finder sets for one frame, produced lazily in the order a decoder should try
+    /// them, so that a clean frame costs one binarisation.
+    /// </summary>
+    /// <remarks>
+    /// For each threshold of <see cref="Sensitivities"/> in turn: four finders of the largest
+    /// size class that form a quad. Then, from the first threshold that had them, three large
+    /// finders forming a corner — completed by the nearest smaller blob within 0.3 legs of
+    /// where the fourth corner belongs (steep tilt makes the far finder small) — then the first
+    /// quad that smaller blobs form, and last the same three finders with the fourth corner
+    /// inferred (the nearby blob may have been merged ring dots, a quad may have been clutter).
+    /// Seen corners are refined with <see cref="RefineCenter"/>; an inferred corner is not.
+    /// </remarks>
+    /// <param name="image">The luma plane.</param>
+    /// <returns>The candidate sets, computed as they are enumerated.</returns>
+    public static IEnumerable<PetalFinderSet> Candidates(PetalLuma image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        return CandidateSets(image);
+    }
+
+    private static IEnumerable<PetalFinderSet> CandidateSets(PetalLuma image)
+    {
+        if (image.Width == 0 || image.Height == 0)
+            yield break;
+        using var search = new CandidateSearch(image);
+        foreach (var sensitivity in SensitivityValues)
+        {
+            if (search.Stage(sensitivity) is { } quad)
+                yield return new PetalFinderSet(quad, null);
+        }
+
+        foreach (var set in search.Tail())
+            yield return set;
+    }
+
+    /// <summary>
+    /// The finders of the largest size class: lit tiles and merged dots form blob candidates
+    /// too, but the corner finders are the biggest isolated round blobs in view.
+    /// </summary>
+    internal static PetalFinder[] StrongFinders(ReadOnlySpan<PetalFinder> finders)
+    {
+        var largest = 0.0;
+        foreach (var finder in finders)
+            largest = PetalMath.Max(largest, finder.Size);
+        var strong = new List<PetalFinder>(finders.Length);
+        foreach (var finder in finders)
+        {
+            if (finder.Size >= 0.55 * largest)
+                strong.Add(finder);
+        }
+
+        return strong.ToArray();
+    }
+
+    /// <summary>
+    /// A blob of at least 0.3 × the finder size within 0.3 legs of the inferred corner of a
+    /// triple completes it into a seen quad.
+    /// </summary>
+    internal static PetalFinder[]? CompleteTriple(ReadOnlySpan<PetalFinder> finders, PetalFinder[] quad, int missing)
+    {
+        var d = quad[missing];
+        var leg = 0.5 * (Distance(quad[(missing + 1) % 4], d) + Distance(quad[(missing + 3) % 4], d));
+        var found = false;
+        var fourth = default(PetalFinder);
+        var nearest = 0.0;
+        foreach (var finder in finders)
+        {
+            var distance = Distance(finder, d);
+            if (!(finder.Size >= 0.3 * d.Size && distance <= 0.3 * leg))
+                continue;
+            // Rust `min_by` keeps the first of equal minima
+            if (!found || PetalMath.TotalCompare(distance, nearest) < 0)
+            {
+                found = true;
+                fourth = finder;
+                nearest = distance;
+            }
+        }
+
+        if (!found)
+            return null;
+        Span<PetalFinder> full = stackalloc PetalFinder[4];
+        quad.CopyTo(full);
+        full[missing] = fourth;
+        return OrderClockwise(full);
+    }
+
+    /// <summary>
+    /// The intensity-weighted centroid of the bright part of the disc of diameter
+    /// <c>finder.Size</c> around the finder, or <see langword="null"/> when that disc has less
+    /// than 20 levels of contrast (nothing bright is there).
+    /// </summary>
+    /// <remarks>
+    /// A finder with a non-finite centre or size (a broken pose) has no centroid. Only the part
+    /// of the enclosing square inside the image is visited, in raster order, with saturating
+    /// bounds, so a huge or far-away finder never iterates over pixels that do not exist.
+    /// </remarks>
+    internal static PetalFinder? Centroid(PetalLuma image, PetalFinder finder)
+    {
+        if (!(double.IsFinite(finder.X) && double.IsFinite(finder.Y) && double.IsFinite(finder.Size)))
+            return null;
         var half = finder.Size * 0.5;
-        var radius = (int)Math.Ceiling(half);
-        var cx = (int)Math.Floor(finder.X);
-        var cy = (int)Math.Floor(finder.Y);
+        var radius = PetalMath.ToIsize(Math.Ceiling(half));
+        var cx = PetalMath.ToIsize(Math.Floor(finder.X));
+        var cy = PetalMath.ToIsize(Math.Floor(finder.Y));
+        var x0 = Math.Max(PetalMath.SaturatingSubtract(cx, radius), 0L);
+        var x1 = Math.Min(PetalMath.SaturatingAdd(cx, radius), image.Width - 1L);
+        var y0 = Math.Max(PetalMath.SaturatingSubtract(cy, radius), 0L);
+        var y1 = Math.Min(PetalMath.SaturatingAdd(cy, radius), image.Height - 1L);
+        var data = image.Data;
+        var width = image.Width;
         var floor = double.MaxValue;
         var peak = 0.0;
-        for (var dy = -radius; dy <= radius; dy++)
+        for (var y = y0; y <= y1; y++)
         {
-            for (var dx = -radius; dx <= radius; dx++)
+            for (var x = x0; x <= x1; x++)
             {
-                var (x, y) = (cx + dx, cy + dy);
-                if (x < 0 || y < 0 || x >= image.Width || y >= image.Height)
-                    continue;
                 var (px, py) = (x + 0.5, y + 0.5);
                 if (Math.Sqrt((px - finder.X) * (px - finder.X) + (py - finder.Y) * (py - finder.Y)) <= half)
                 {
-                    double value = image.Data[y * image.Width + x];
+                    double value = data[y * width + x];
                     floor = PetalMath.Min(floor, value);
                     peak = PetalMath.Max(peak, value);
                 }
@@ -238,20 +538,17 @@ public static class PetalLocator
         }
 
         if (peak - floor < 20.0)
-            return finder;
+            return null;
         var threshold = floor + 0.5 * (peak - floor);
         var (sw, sx, sy) = (0.0, 0.0, 0.0);
-        for (var dy = -radius; dy <= radius; dy++)
+        for (var y = y0; y <= y1; y++)
         {
-            for (var dx = -radius; dx <= radius; dx++)
+            for (var x = x0; x <= x1; x++)
             {
-                var (x, y) = (cx + dx, cy + dy);
-                if (x < 0 || y < 0 || x >= image.Width || y >= image.Height)
-                    continue;
                 var (px, py) = (x + 0.5, y + 0.5);
                 if (Math.Sqrt((px - finder.X) * (px - finder.X) + (py - finder.Y) * (py - finder.Y)) <= half)
                 {
-                    double value = image.Data[y * image.Width + x];
+                    double value = data[y * width + x];
                     var weight = PetalMath.Max(value - threshold, 0.0);
                     sw += weight;
                     sx += weight * px;
@@ -260,48 +557,42 @@ public static class PetalLocator
             }
         }
 
-        return sw <= 0.0 ? finder : new PetalFinder(sx / sw, sy / sw, finder.Size);
+        return sw > 0.0 ? new PetalFinder(sx / sw, sy / sw, finder.Size) : null;
+    }
+
+    private static double Distance(PetalFinder f, PetalFinder d) =>
+        Math.Sqrt((f.X - d.X) * (f.X - d.X) + (f.Y - d.Y) * (f.Y - d.Y));
+
+    private static PetalFinder[] RefineAll(PetalLuma image, PetalFinder[] quad)
+    {
+        for (var i = 0; i < quad.Length; i++)
+            quad[i] = RefineCenter(image, quad[i]);
+        return quad;
     }
 
     /// <summary>
-    /// Locates the four finders of a code, trying progressively stricter
-    /// thresholds so blurred blobs still separate.
+    /// The ten largest candidates, largest first (ties keep discovery order), so that clutter
+    /// in a busy scene cannot push the real finders out of the set that is combined.
     /// </summary>
-    /// <param name="image">The luma plane.</param>
-    /// <returns>Four refined finders clockwise from the top-left, or <see langword="null"/>.</returns>
-    public static PetalFinder[]? Locate(PetalLuma image)
+    private static PetalFinder[] Ranked(ReadOnlySpan<PetalFinder> candidates)
     {
-        ArgumentNullException.ThrowIfNull(image);
-        var pixels = image.Width * image.Height;
-        if (pixels == 0)
-            return null;
-        // The integral image and percentiles do not depend on the sensitivity;
-        // computing them once leaves every threshold decision unchanged.
-        var statistics = new LocalStatistics(image);
-        var mask = ArrayPool<bool>.Shared.Rent(pixels);
-        try
+        var sizes = new double[candidates.Length];
+        var order = new int[candidates.Length];
+        for (var i = 0; i < candidates.Length; i++)
         {
-            foreach (var sensitivity in Sensitivities)
-            {
-                var span = mask.AsSpan(0, pixels);
-                statistics.Binarize(image, sensitivity, span);
-                var components = Label(span, image.Width, image.Height);
-                var finders = Blossoms(components);
-                var quad = SelectQuad(finders);
-                if (quad is null)
-                    continue;
-                for (var i = 0; i < quad.Length; i++)
-                    quad[i] = RefineCenter(image, quad[i]);
-                return quad;
-            }
+            sizes[i] = candidates[i].Size;
+            order[i] = i;
+        }
 
-            return null;
-        }
-        finally
+        Array.Sort(order, (a, b) =>
         {
-            ArrayPool<bool>.Shared.Return(mask);
-            statistics.Dispose();
-        }
+            var bySize = PetalMath.TotalCompare(sizes[b], sizes[a]);
+            return bySize != 0 ? bySize : a.CompareTo(b);
+        });
+        var ranked = new PetalFinder[Math.Min(candidates.Length, 10)];
+        for (var i = 0; i < ranked.Length; i++)
+            ranked[i] = candidates[order[i]];
+        return ranked;
     }
 
     /// <summary>Orders four finders clockwise (as displayed) from the one nearest the top-left.</summary>
@@ -363,25 +654,8 @@ public static class PetalLocator
     {
         if (candidates.Length < 4)
             return null;
-        // Largest first (ties keep discovery order) so that clutter in a busy scene
-        // cannot push the real finders out of the ten candidates that are combined.
-        var sizes = new double[candidates.Length];
-        var order = new int[candidates.Length];
-        for (var i = 0; i < candidates.Length; i++)
-        {
-            sizes[i] = candidates[i].Size;
-            order[i] = i;
-        }
-
-        Array.Sort(order, (a, b) =>
-        {
-            var bySize = PetalMath.TotalCompare(sizes[b], sizes[a]);
-            return bySize != 0 ? bySize : a.CompareTo(b);
-        });
-        var n = Math.Min(candidates.Length, 10);
-        Span<PetalFinder> finders = stackalloc PetalFinder[n];
-        for (var i = 0; i < n; i++)
-            finders[i] = candidates[order[i]];
+        var finders = Ranked(candidates);
+        var n = finders.Length;
         PetalFinder[]? best = null;
         var bestScore = 0.0;
         Span<PetalFinder> set = stackalloc PetalFinder[4];
@@ -597,6 +871,86 @@ public static class PetalLocator
         public double SumXX;
         public double SumYY;
         public double SumXY;
+    }
+
+    /// <summary>
+    /// The state of <see cref="Candidates"/> between sensitivities: the shared integral image,
+    /// the binarisation buffer and the sets kept for after the last sensitivity.
+    /// </summary>
+    private sealed class CandidateSearch : IDisposable
+    {
+        private readonly PetalLuma image;
+        private readonly int pixels;
+        private LocalStatistics statistics;
+        private bool[]? mask;
+        private PetalFinder[]? completed;
+        private PetalFinder[]? smaller;
+        private PetalFinder[]? inferred;
+        private int missing;
+
+        public CandidateSearch(PetalLuma image)
+        {
+            this.image = image;
+            pixels = image.Width * image.Height;
+            // The integral image and percentiles do not depend on the sensitivity;
+            // computing them once leaves every threshold decision unchanged.
+            statistics = new LocalStatistics(image);
+            mask = ArrayPool<bool>.Shared.Rent(pixels);
+        }
+
+        /// <summary>
+        /// One sensitivity: records the triple (and its completion) and the quad of all
+        /// candidates when none is recorded yet, and returns the refined quad of the large
+        /// candidates, if any.
+        /// </summary>
+        public PetalFinder[]? Stage(double sensitivity)
+        {
+            ObjectDisposedException.ThrowIf(mask is null, this);
+            var span = mask.AsSpan(0, pixels);
+            statistics.Binarize(image, sensitivity, span);
+            var components = Label(span, image.Width, image.Height);
+            var finders = Blossoms(components);
+            var strong = StrongFinders(finders);
+            if (inferred is null && SelectTriple(strong) is var (quad, corner))
+            {
+                completed = CompleteTriple(finders, quad, corner) is { } full ? RefineAll(image, full) : null;
+                var corners = (PetalFinder[])quad.Clone();
+                for (var i = 0; i < corners.Length; i++)
+                {
+                    if (i != corner)
+                        corners[i] = RefineCenter(image, corners[i]);
+                }
+
+                inferred = corners;
+                missing = corner;
+            }
+
+            if (smaller is null && SelectQuadFrom(finders) is { } small)
+                smaller = RefineAll(image, small);
+            return SelectQuadFrom(strong) is { } large ? RefineAll(image, large) : null;
+        }
+
+        /// <summary>After the last sensitivity: the completed triple, the smaller quad, the inferred triple.</summary>
+        public List<PetalFinderSet> Tail()
+        {
+            var tail = new List<PetalFinderSet>(3);
+            if (completed is not null)
+                tail.Add(new PetalFinderSet(completed, null));
+            if (smaller is not null)
+                tail.Add(new PetalFinderSet(smaller, null));
+            if (inferred is not null)
+                tail.Add(new PetalFinderSet(inferred, missing));
+            return tail;
+        }
+
+        public void Dispose()
+        {
+            if (mask is null)
+                return;
+            ArrayPool<bool>.Shared.Return(mask);
+            mask = null;
+            statistics.Dispose();
+        }
     }
 
     /// <summary>Integral image and range statistics shared by every sensitivity.</summary>

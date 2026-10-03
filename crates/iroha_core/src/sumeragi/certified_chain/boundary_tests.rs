@@ -292,16 +292,80 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         )
         .unwrap();
         let entry_hash = transaction.hash_as_entrypoint();
-        let mut block = payload::assemble(
-            &world,
-            Assembly {
-                parent: parent.block(),
-                view: 0,
-                cadence: Duration::from_millis(1),
-            },
-            &[transaction],
+        // This is a certificate transcript, not executed State. Retain the
+        // original proposal fields and signed-root routing through their normal
+        // owners without claiming a committed parent-service source.
+        let view = world.view();
+        let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
+        let route = routing
+            .inputs(view.world())
+            .execution_route(&transaction, height)
+            .unwrap()
+            .expect("signed-root transcript route");
+        let confidential =
+            crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
+        assert_eq!(
+            view.height(),
+            0,
+            "transcript authoring does not execute State"
+        );
+        drop(view);
+        let mut block = crate::block::BlockBuilder::new_with_time_source(
+            vec![transaction.clone()],
+            time_source,
         )
-        .unwrap();
+        .chain(0, Some(parent.block()))
+        .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+            &world.nexus_snapshot(),
+            height,
+        )))
+        .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+        .with_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+                iroha_data_model::block::ExternalExecutionContext::new(
+                    entry_hash,
+                    route.lane_id,
+                    route.dataspace_id,
+                ),
+            ]),
+        ))
+        .with_network_input_time_floor(block_time)
+        .expect("bounded transcript time")
+        .into_unsigned_proposal();
+        assert_eq!(
+            crate::block::ValidBlock::sumeragi_block_time(
+                &block,
+                parent.block().header().creation_time(),
+                Duration::from_millis(1),
+            )
+            .unwrap(),
+            block_time,
+        );
+        if height <= 3 {
+            let assembled = payload::assemble(
+                &world,
+                Assembly {
+                    parent: parent.block(),
+                    view: 0,
+                    cadence: Duration::from_millis(1),
+                },
+                &[transaction],
+            );
+            if height == 2 {
+                assert_eq!(
+                    block.encode_wire().unwrap(),
+                    assembled.unwrap().encode_wire().unwrap(),
+                    "the first transcript proposal preserves every original assembly field"
+                );
+            } else {
+                assert!(
+                    matches!(assembled, Err(payload::PayloadError::ParentService(message))
+                        if message.contains("Canonical history height 1")
+                            && message.contains("ending at `0`")),
+                    "production assembly must refuse the absent committed parent history"
+                );
+            }
+        }
         assert_eq!(
             block.execution_context().unwrap().external,
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -309,7 +373,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
                 crate::sumeragi::lanes::routing::GLOBAL_LANE,
                 metadata.sumeragi_context.root_scope.dataspace_id(),
             )],
-            "normal payload assembly commits the exact signed-root route",
+            "transcript proposal retains the exact original signed-root route",
         );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(

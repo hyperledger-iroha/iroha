@@ -67,7 +67,6 @@ pub use outgoing_driver::{
     KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
     KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
 };
-use sha2::{Digest as _, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},

@@ -107,6 +107,9 @@ finalised.
 liability high-water is
 `slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks`.
 Snapshot restore rejects a stored liability height below this signed formula.
+Consensus effects run before ordinary transactions. Withdrawal at the liability
+release height therefore follows that height's effects; it still requires the
+scheduled timestamp and authenticated committee-obligation release.
 Consensus evidence places no lien on stake: evidence is logged and reported to
 telemetry only, and evidence-driven penalties are future work.
 

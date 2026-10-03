@@ -5,12 +5,7 @@
 //! Guard, ordered SHA, State carrier, reciprocal audits and transport decisions all execute.
 
 use super::super::{
-    DigestV1,
-    composite::{
-        KagemushaRecursiveStateEpCircuitV1, KagemushaRecursiveStateEqCircuitV1,
-        RecursiveStateConstructionV1,
-    },
-    mint_authority::KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
+    DigestV1, composite::RecursiveStateConstructionV1,
     ordinary_cash_terminal_verifier::ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1 as TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
     ordinary_guard_circuit::OrdinaryGuardWitnessV1,
     ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,
@@ -20,8 +15,7 @@ use halo2_base::gates::{
     GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder,
 };
 
-#[path = "ordinary_zero_bootstrap_fixture.rs"]
-mod originals;
+use super::ordinary_zero_bootstrap_fixture as originals;
 
 pub(super) fn mathematical_protocol<C>(parameters: &ParamsIPA<C>, width: usize) -> PlonkProtocol<C>
 where
@@ -137,44 +131,6 @@ pub(super) struct OrdinaryBootstrapStateForTestingV1 {
     pub(super) keys: Arc<StateKeys>,
     pub(super) generated: KagemushaGeneratedRecursiveStateProofV1,
     pub(super) public_original: Vec<u8>,
-}
-
-/// Generate the actual full State family using selected ordinary helper verifier descriptors,
-/// then prove its final zero State with whole SHA, both exact Guards and inner/outer histories.
-/// Supplied inactive helper operands are parser data only. An active operation must separately
-/// supply genuine current proofs and all histories under these exact retained protocols.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn generate_ordinary_bootstrap_state_for_testing_v1(
-    apple: bool,
-    account: &iroha_data_model::account::AccountId,
-    release_id: DigestV1,
-    vk_digest: DigestV1,
-    manifest: DigestV1,
-    hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
-    hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
-    eq_incoming: &PlonkProtocol<EqAffine>,
-    ep_incoming: &PlonkProtocol<EpAffine>,
-    eq_authorization: &PlonkProtocol<EqAffine>,
-    ep_authorization: &PlonkProtocol<EpAffine>,
-    eq_mint: &PlonkProtocol<EqAffine>,
-    ep_mint: &PlonkProtocol<EpAffine>,
-) -> OrdinaryBootstrapStateForTestingV1 {
-    generate_ordinary_bootstrap_state_with_held_keys_for_testing_v1(
-        apple,
-        account,
-        release_id,
-        vk_digest,
-        manifest,
-        hash_eq,
-        hash_ep,
-        eq_incoming,
-        ep_incoming,
-        eq_authorization,
-        ep_authorization,
-        eq_mint,
-        ep_mint,
-        None,
-    )
 }
 
 /// Re-prove the exact zero State under the already frozen physical key family.

@@ -11288,7 +11288,7 @@ mod tests {
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-        use iroha_model_base::{chain::ChainId, domain::DomainId};
+        use iroha_model_base::chain::ChainId;
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),

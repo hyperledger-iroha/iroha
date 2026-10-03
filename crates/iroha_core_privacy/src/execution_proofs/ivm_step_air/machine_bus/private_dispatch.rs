@@ -1,14 +1,18 @@
-//! Private canonical fetch and original CALL/RETURN/STORE/LOAD/scalar/branch producer ownership.
+//! Private canonical fetch and original CALL/RETURN/STORE/LOAD/scalar/branch/jump producer ownership.
 //!
 //! One original packet array owns architectural control, operand reads, both
 //! lifecycle roles and protected return-PC state. The same references feed the
 //! lifecycle bank and the private sorted history; no event digest substitutes
 //! for these columns. All fetch choices and instruction activity are private.
-// TODO: Compose descriptor/typed-word/initialization/copyback/store effects and
+// CALL descriptor lookup, repeated table reads and frame-work gas are joined
+// in their separate 47-port component. Typed argument/pointer work, local
+// allocation and actual success remain mandatory unresolved owners.
+// TODO: Compose typed-word/initialization/copyback/memory effects and
 // their dynamic gas between these fixed slots, then initialize and terminate
 // the entire invocation in one masked STARK. This partial dispatcher has no
 // production adapter, verifier registration or complete-State authority.
 
+mod call_descriptor;
 mod load_success;
 mod scalar;
 mod store_success;
@@ -225,11 +229,14 @@ enum Role {
     Load,
     Scalar,
     Branch,
+    Jump,
 }
 fn role(instruction: u32) -> Option<Role> {
     match wide::opcode(instruction) {
         wide::control::JALS => Some(Role::Child),
         wide::control::JAL if wide::rd(instruction) == 1 => Some(Role::Child),
+        wide::control::JAL if wide::rd(instruction) == 0 => Some(Role::Jump),
+        wide::control::JMP => Some(Role::Jump),
         wide::control::JALR
             if wide::rd(instruction) == 0
                 && wide::rs1(instruction) == 1
@@ -348,6 +355,7 @@ fn append_control_residues<'a>(
     };
     let child = select(&|_, w| role(w) == Some(Role::Child));
     let returning = select(&|_, w| role(w) == Some(Role::Return));
+    let jumping = select(&|_, w| role(w) == Some(Role::Jump));
     let store = select(&|_, w| role(w) == Some(Role::Store));
     let load = select(&|_, w| role(w) == Some(Role::Load));
     let memory = store.add(load);
@@ -393,6 +401,7 @@ fn append_control_residues<'a>(
             .add(memory)
             .add(scalar)
             .add(branching)
+            .add(jumping)
             .sub(active),
     );
     for value in &row[WORDS..CHILD_INVERSE] {
@@ -478,7 +487,7 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: zero for GETGAS, two for CALL/RETURN, three for
+        // Native base cost: zero for GETGAS, two for CALL/RETURN/direct jumps, three for
         // STORE64/LOAD64, one for other scalar arithmetic and conditional branches,
         // plus one for comparisons/rotates/MEAN
         // and two for the four multiply variants, five for ISQRT.
@@ -494,6 +503,7 @@ fn append_control_residues<'a>(
         let cost = if i == 0 {
             child
                 .add(returning)
+                .add(jumping)
                 .mul(F(2))
                 .add(memory.mul(F(3)))
                 .add(scalar_base_gas)
@@ -785,11 +795,13 @@ fn append_control_residues<'a>(
         let direct_target = weighted(&|n, w| {
             let pc = u64::from(program.first_pc) + n as u64 * 4;
             match role(w) {
-                Some(Role::Child) => {
-                    let delta = if wide::opcode(w) == wide::control::JALS {
-                        i64::from(wide::imm24(w))
-                    } else {
+                Some(Role::Child | Role::Jump) => {
+                    // Canonical preparation binds direct targets to instruction
+                    // boundaries. JMP and JAL rd0 have no link/frame effects.
+                    let delta = if wide::opcode(w) == wide::control::JAL {
                         i64::from(wide::imm16(w))
+                    } else {
+                        i64::from(wide::imm24(w))
                     };
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
@@ -865,3 +877,6 @@ pub(super) fn append_residues<'a>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod jump_tests;

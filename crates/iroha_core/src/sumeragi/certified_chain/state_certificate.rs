@@ -255,9 +255,12 @@ mod allocation_tests {
         assert!(matches!(error, ParentServiceError::Deferred(actual) if actual == expected));
         assert_eq!(budget.reserved_bytes(), 1);
         drop(occupied);
-        budget
+        let retry = budget
             .try_reserve_bytes(1)
             .expect("the original pool admits a retry after release");
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(retry);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]

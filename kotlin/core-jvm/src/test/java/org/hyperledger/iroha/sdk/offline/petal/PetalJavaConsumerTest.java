@@ -83,6 +83,29 @@ final class PetalJavaConsumerTest {
   }
 
   @Test
+  void javaFollowsCandidatesAndTracksAPose() {
+    final PetalStreamEncoder encoder = new PetalStreamEncoder(payload(300), 2);
+    final PetalLuma luma = PetalRenderer.render(encoder.cells(3), new PetalRenderOptions(512, 2)).toLuma();
+    final java.util.Iterator<PetalFinderSet> candidates = PetalLocator.candidates(luma);
+    assertTrue(candidates.hasNext());
+    final PetalFinderSet first = candidates.next();
+    assertNull(first.getInferred());
+    assertEquals(PetalLocator.locate(luma), first.getCorners());
+    final PetalDecodedFrame decoded = PetalDecoder.decode(luma).getFrame();
+    assertNotNull(decoded);
+    assertNull(decoded.getInferredCorner());
+    final PetalDecodedFrame followed = PetalDecoder.track(luma, decoded);
+    assertNotNull(followed);
+    assertEquals("PKD", followed.getLanes());
+    assertEquals(500L, PetalScanSession.TRACK_WINDOW_MILLIS);
+    final PetalScanSession session = new PetalScanSession();
+    session.push(luma, 0L);
+    session.push(luma, PetalScanSession.TRACK_WINDOW_MILLIS);
+    assertEquals(1L, session.stats().getTracked());
+    assertEquals(0L, session.stats().getInferred());
+  }
+
+  @Test
   void javaReadsTheCodecAndDrawListSurface() {
     final byte[] data = new byte[PetalLanes.P_DATA];
     final byte[] word = PetalLanes.encodeLane(PetalLane.P, data);

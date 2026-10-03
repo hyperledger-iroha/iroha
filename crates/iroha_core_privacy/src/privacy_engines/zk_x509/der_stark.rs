@@ -699,11 +699,9 @@ fn write_bits_v1(
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: u64) -> F {
-    if value == 0 {
-        F::ZERO
-    } else {
-        F(value).inv().expect("nonzero canonical bounded value")
-    }
+    F::canonical(value)
+        .expect("nonzero canonical bounded value")
+        .inverse_or_zero_canonical_v1()
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_parser_state_v1(
@@ -787,9 +785,9 @@ fn encode_parser_state_v1(
             let byte = F(u64::from(byte.ok_or(ZkX509DerStarkErrorV1::Row)?));
             let ff_delta = byte.sub(F(0xff));
             row[BASE_PAYLOAD + 6] = F(u64::from(byte == F::ZERO));
-            row[BASE_PAYLOAD + 7] = byte.inv().unwrap_or(F::ZERO);
+            row[BASE_PAYLOAD + 7] = byte.inverse_or_zero_canonical_v1();
             row[BASE_PAYLOAD + 8] = F(u64::from(ff_delta == F::ZERO));
-            row[BASE_PAYLOAD + 9] = ff_delta.inv().unwrap_or(F::ZERO);
+            row[BASE_PAYLOAD + 9] = ff_delta.inverse_or_zero_canonical_v1();
         }
         PHASE_BOUNDARY => {
             row[BASE_PAYLOAD] = F(state.boundary_parent.id);
@@ -1696,13 +1694,9 @@ fn write_zero_test_witness_v1(
     inverse_column: usize,
     value: F,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
-    if value == F::ZERO {
-        row[selector_column] = F::ONE;
-        row[inverse_column] = F::ZERO;
-    } else {
-        row[selector_column] = F::ZERO;
-        row[inverse_column] = value.inv().ok_or(ZkX509DerStarkErrorV1::Row)?;
-    }
+    row[selector_column] = F(u64::from(value == F::ZERO));
+    let value = F::canonical(value.0).ok_or(ZkX509DerStarkErrorV1::Row)?;
+    row[inverse_column] = value.inverse_or_zero_canonical_v1();
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2045,18 +2039,14 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
                     lane,
                     challenges,
                 );
-                if denominator == F::ZERO {
-                    aux[AUX_BYTE_TABLE_ZERO + lane] = F::ONE;
-                    byte_table_zero_count[lane] =
-                        byte_table_zero_count[lane].add(current[BASE_BYTE_LOOKUP_MULTIPLICITY]);
-                } else {
-                    let inverse = denominator
-                        .inv()
-                        .expect("nonzero canonical lookup denominator");
-                    aux[AUX_BYTE_TABLE_INVERSE + lane] = inverse;
-                    byte_table_sum[lane] = byte_table_sum[lane]
-                        .add(current[BASE_BYTE_LOOKUP_MULTIPLICITY].mul(inverse));
-                }
+                let zero = F(u64::from(denominator == F::ZERO));
+                let inverse = denominator.inverse_or_zero_canonical_v1();
+                aux[AUX_BYTE_TABLE_ZERO + lane] = zero;
+                aux[AUX_BYTE_TABLE_INVERSE + lane] = inverse;
+                byte_table_zero_count[lane] = byte_table_zero_count[lane]
+                    .add(current[BASE_BYTE_LOOKUP_MULTIPLICITY].mul(zero));
+                byte_table_sum[lane] =
+                    byte_table_sum[lane].add(current[BASE_BYTE_LOOKUP_MULTIPLICITY].mul(inverse));
             }
             if comparator {
                 let left_denominator = byte_denominator_v1(
@@ -2081,16 +2071,12 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
                         AUX_BYTE_RIGHT_QUERY_ZERO + lane,
                     ),
                 ] {
-                    if denominator == F::ZERO {
-                        aux[zero_column] = F::ONE;
-                        byte_query_zero_count[lane] = byte_query_zero_count[lane].add(F::ONE);
-                    } else {
-                        let inverse = denominator
-                            .inv()
-                            .expect("nonzero canonical lookup denominator");
-                        aux[inverse_column] = inverse;
-                        byte_query_sum[lane] = byte_query_sum[lane].add(inverse);
-                    }
+                    let zero = F(u64::from(denominator == F::ZERO));
+                    let inverse = denominator.inverse_or_zero_canonical_v1();
+                    aux[zero_column] = zero;
+                    aux[inverse_column] = inverse;
+                    byte_query_zero_count[lane] = byte_query_zero_count[lane].add(zero);
+                    byte_query_sum[lane] = byte_query_sum[lane].add(inverse);
                 }
             }
         }

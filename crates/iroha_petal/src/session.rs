@@ -1,8 +1,16 @@
 //! The receive-side object an app holds while its camera is open.
+//!
+//! After a frame decodes, the next frames are first read by [`track`]ing the
+//! code from its last pose, which skips the finder search; a full [`decode`]
+//! runs when tracking fails or the last pose is older than
+//! [`TRACK_WINDOW_MS`].
 
-use crate::decode::{DecodeError, DecodeOptions, DecodedFrame, decode};
+use crate::decode::{DecodeError, DecodeOptions, DecodedFrame, decode, track};
 use crate::image::Luma;
 use crate::stream::{AssemblerLimits, Completed, Progress, StreamAssembler};
+
+/// How long a decoded pose stays usable for tracking the next frames.
+pub const TRACK_WINDOW_MS: u64 = 500;
 
 /// Limits of a scan session.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +51,10 @@ pub struct ScanStats {
     pub lane_k: u32,
     /// Lane `D` successes.
     pub lane_d: u32,
+    /// Frames read by tracking the previous pose instead of a full search.
+    pub tracked: u32,
+    /// Frames read with one corner finder hidden and inferred.
+    pub inferred: u32,
 }
 
 /// The result of offering one camera frame.
@@ -67,6 +79,7 @@ pub struct ScanSession {
     started_ms: Option<u64>,
     progress_ms: u64,
     last_rank: usize,
+    last_pose: Option<(DecodedFrame, u64)>,
 }
 
 impl ScanSession {
@@ -80,6 +93,7 @@ impl ScanSession {
             started_ms: None,
             progress_ms: 0,
             last_rank: 0,
+            last_pose: None,
         }
     }
 
@@ -100,6 +114,7 @@ impl ScanSession {
         self.assembler.reset();
         self.started_ms = None;
         self.last_rank = 0;
+        self.last_pose = None;
     }
 
     /// Offers one camera luma plane captured at monotonic time `now_ms`.
@@ -111,9 +126,25 @@ impl ScanSession {
             self.reset();
         }
         self.stats.frames += 1;
-        let result = decode(image, &self.limits.decode);
+        let tracked = self
+            .last_pose
+            .as_ref()
+            .filter(|(_, at)| now_ms.saturating_sub(*at) <= TRACK_WINDOW_MS)
+            .and_then(|(previous, _)| track(image, previous, &self.limits.decode));
+        if tracked.is_some() {
+            self.stats.tracked += 1;
+        }
+        let result = tracked
+            .ok_or(())
+            .or_else(|()| decode(image, &self.limits.decode));
         let (error, lanes) = match &result {
-            Ok(frame) => (None, self.absorb(frame, now_ms)),
+            Ok(frame) => {
+                if frame.inferred_corner.is_some() {
+                    self.stats.inferred += 1;
+                }
+                self.last_pose = Some((frame.clone(), now_ms));
+                (None, self.absorb(frame, now_ms))
+            }
             Err(error) => (Some(*error), String::new()),
         };
         if !matches!(
@@ -167,6 +198,52 @@ mod tests {
     fn payload(len: usize) -> Vec<u8> {
         let mut rng = crate::prng::Xorshift32::new(3);
         (0..len).map(|_| rng.next_byte()).collect()
+    }
+
+    #[test]
+    fn a_steady_camera_is_tracked_after_the_first_frame() {
+        let data = payload(300);
+        let encoder = StreamEncoder::new(&data, 2).unwrap();
+        let config = fit_to_frame(
+            &CaptureConfig {
+                width: 640,
+                height: 480,
+                rotation_deg: 8.0,
+                ..CaptureConfig::modern()
+            },
+            4.0,
+        );
+        let mut session = ScanSession::new(ScanLimits::default());
+        for frame in 0..6u16 {
+            let source = render(
+                &encoder.cells(frame),
+                &RenderOptions {
+                    size: 512,
+                    supersample: 2,
+                    ..RenderOptions::default()
+                },
+            );
+            let outcome = session.push(&capture(&source, &config), u64::from(frame) * 125);
+            assert!(outcome.error.is_none(), "frame {frame}");
+        }
+        let stats = session.stats();
+        assert_eq!(stats.readable, 6);
+        assert_eq!(
+            stats.tracked, 5,
+            "every frame after the first follows the pose"
+        );
+        // a pause longer than the tracking window forces a full search again
+        let source = render(
+            &encoder.cells(6),
+            &RenderOptions {
+                size: 512,
+                supersample: 2,
+                ..RenderOptions::default()
+            },
+        );
+        session.push(&capture(&source, &config), 5 * 125 + TRACK_WINDOW_MS + 1);
+        assert_eq!(session.stats().tracked, 5);
+        assert_eq!(session.stats().readable, 7);
     }
 
     #[test]

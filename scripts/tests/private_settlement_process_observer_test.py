@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 import copy
+import ctypes
 import hashlib
 import os
 from pathlib import Path
@@ -116,6 +117,75 @@ class ParserAndImageTests(unittest.TestCase):
             for constructor in (observer.native_reader,observer.DarwinProcessReader,observer.LinuxProcessReader):
                 with self.assertRaises(observer.ProcessObservationError):
                     constructor()
+
+
+class DarwinCpuTimebaseTests(unittest.TestCase):
+    def test_integer_scaling_keeps_fraction_and_large_tick_precision(self):
+        for numer, denom in ((1,1),(125,3),(1,3),(1_000_000_000,1)):
+            for ticks in (0,1,2,3,7,1036634,2**53+1):
+                expected=ticks*numer//denom
+                if expected < 1 << 64:
+                    self.assertEqual(observer.darwin_cpu_nanoseconds(ticks,numer,denom),expected)
+        self.assertEqual(observer.darwin_cpu_nanoseconds(1036634,125,3),43_193_083)
+        self.assertEqual(observer.darwin_cpu_nanoseconds(2**64,1,2),2**63)
+        self.assertEqual(observer.darwin_cpu_nanoseconds(2**64-1,1,1),2**64-1)
+
+    def test_invalid_native_values_and_scaled_overflow_are_rejected(self):
+        cases=[(-1,1,1),(True,1,1),(1.0,1,1),(1<<65,1,1),
+               (1,0,1),(1,1,0),(1,-1,1),(1,1,-1),(1,True,1),(1,1,True),
+               (1,1<<32,1),(1,1,1<<32),(1,1_000_000_001,1),
+               (1<<64,1,1),((1<<64)-1,125,3)]
+        for args in cases:
+            with self.subTest(args=args),self.assertRaises(observer.ProcessObservationError):
+                observer.darwin_cpu_nanoseconds(*args)
+
+    def test_kernel_call_status_and_timebase_are_mandatory(self):
+        for status,numer,denom in ((0,125,3),(5,125,3),(0,0,3),(0,125,0)):
+            def call(pointer):
+                pointer._obj.numer=numer;pointer._obj.denom=denom
+                return status
+            library=SimpleNamespace(mach_timebase_info=mock.Mock(side_effect=call))
+            with self.subTest(values=(status,numer,denom)), \
+                    mock.patch.object(sys,'platform','darwin'), \
+                    mock.patch.object(observer.ctypes,'CDLL',return_value=library):
+                if status==0 and numer>0 and denom>0:
+                    self.assertEqual(observer.darwin_cpu_timebase(),(125,3))
+                    self.assertEqual(library.mach_timebase_info.argtypes,
+                                     (ctypes.POINTER(observer._MachTimebaseInfo),))
+                    self.assertIs(library.mach_timebase_info.restype,ctypes.c_int)
+                else:
+                    with self.assertRaises(observer.ProcessObservationError):
+                        observer.darwin_cpu_timebase()
+        with mock.patch.object(sys,'platform','linux'),self.assertRaises(observer.ProcessObservationError):
+            observer.darwin_cpu_timebase()
+
+    def test_sample_converts_sum_and_reports_conservative_integer_tick_unit(self):
+        from nexus import resource_process
+        with tempfile.TemporaryDirectory() as raw:
+            path=Path(raw)/'image';path.write_bytes(b'executable fixture')
+            info=SimpleNamespace(pid=123,ppid=100,pgid=123,uid=os.geteuid(),ruid=os.getuid(),
+                                 start_sec=1000,start_usec=7)
+            def usage(_pid,_kind,pointer):
+                pointer._obj.user_time=1;pointer._obj.system_time=2
+                pointer._obj.start_abstime=99;pointer._obj.rss=4096
+                return 0
+            def read_path(_pid,buffer,_size):
+                encoded=os.fsencode(path.resolve());buffer.value=encoded
+                return len(encoded)
+            reader=object.__new__(observer.DarwinProcessReader)
+            reader.native=resource_process
+            reader.reader=SimpleNamespace(_identity=mock.Mock(return_value=info),
+                lib=SimpleNamespace(proc_pid_rusage=usage,proc_pidpath=read_path))
+            reader.cpu_numer=125;reader.cpu_denom=3
+            with observer.ExecutableImage(path,hashlib.sha256(path.read_bytes()).hexdigest()) as image, \
+                    mock.patch.object(resource_process,'_image_uuids',return_value={bytes(16)}):
+                sample=reader.sample(123,image)
+            self.assertEqual(sample['cpu_time_ns'],125)
+            self.assertEqual(sample['cpu_counter_unit_ns'],42)
+            self.assertEqual(sample['rss_bytes'],4096)
+            self.assertEqual(sample['identity']['birth']['start_abstime'],99)
+            self.assertEqual(sample['identity']['pid'],123)
+            self.assertEqual(reader.reader._identity.call_count,2)
 
 
 class InventoryAndScopeTests(unittest.TestCase):

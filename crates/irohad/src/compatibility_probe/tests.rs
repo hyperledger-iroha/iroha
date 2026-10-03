@@ -4,7 +4,7 @@ use super::*;
 use crate::config_tests::minimal_config_table;
 use iroha_config::base::{WithOrigin, toml::TomlSource};
 use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-use iroha_data_model::{block::SignedBlock, prelude::*};
+use iroha_data_model::block::SignedBlock;
 use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
 fn minimal_config() -> Config {

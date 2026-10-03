@@ -217,7 +217,7 @@ final class PetalDecoderTests: XCTestCase {
         let (encoder, image, h, patches) = try cleanPatches(5)
         let expected = encoder.laneData(frame: 5)
         let sigmas = PetalDecodeOptions().templateSigmas
-        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h) })
+        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         for (name, reads) in [
             ("level", PetalDecoder.readTiles(patches, reference, sigmas)),
             ("normalised", PetalDecoder.readTilesNormalised(patches, sigmas)),
@@ -245,7 +245,7 @@ final class PetalDecoderTests: XCTestCase {
                 distorted[index] = gain * patches[index] + offset
             }
         }
-        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h) })
+        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         XCTAssertNil(
             tileLanes(PetalDecoder.readTiles(distorted, reference, sigmas)).p,
             "the level read must not survive this distortion, or the test proves nothing"
@@ -300,7 +300,7 @@ final class PetalDecoderTests: XCTestCase {
         // the finder levels cannot describe a step in the light: the level read loses lane K
         let h = try renderHomography()
         let sigmas = PetalDecodeOptions().templateSigmas
-        let reference = try XCTUnwrap(shadowed.withView { PetalDecoder.referenceLevels($0, h) })
+        let reference = try XCTUnwrap(shadowed.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         let patches = shadowed.withView { PetalDecoder.samplePatches($0, h) }
         let levelLanes = tileLanes(PetalDecoder.readTiles(patches, reference, sigmas))
         XCTAssertNil(levelLanes.k)
@@ -319,7 +319,7 @@ final class PetalDecoderTests: XCTestCase {
         let (encoder, image, h, patches) = try cleanPatches(5)
         let expected = encoder.laneData(frame: 5)
         let sigmas = PetalDecodeOptions().templateSigmas
-        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h) })
+        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         let level = tileLanes(PetalDecoder.readTiles(patches, reference, sigmas))
         let combined = PetalDecoder.readTileLanes(patches, reference, sigmas)
         XCTAssertEqual(level.p?.data, expected.p)
@@ -330,13 +330,13 @@ final class PetalDecoderTests: XCTestCase {
 
     func testLaneDIsReadFromTheRingsUnderAKnownPose() throws {
         let (encoder, image, h, _) = try cleanPatches(5)
-        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h) })
+        let reference = try XCTUnwrap(image.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         let lane = try XCTUnwrap(image.withView { PetalDecoder.readLaneD($0, h, reference) })
         XCTAssertEqual(lane.data, encoder.laneData(frame: 5).d)
         XCTAssertEqual(lane.corrected, 0)
         // a mirrored image under the unmirrored pose reads the rings back to front
         let mirrored = try Support.mirror(image)
-        let mirroredReference = try XCTUnwrap(mirrored.withView { PetalDecoder.referenceLevels($0, h) })
+        let mirroredReference = try XCTUnwrap(mirrored.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
         XCTAssertNil(mirrored.withView { PetalDecoder.readLaneD($0, h, mirroredReference) })
     }
 
@@ -470,15 +470,259 @@ final class PetalDecoderTests: XCTestCase {
         }
     }
 
-    func testAValidCodeWithAMissingFinderIsNotMisread() throws {
-        let (_, image) = try setup(2)
+    // MARK: - Hidden blossoms, the 天 and tracking
+
+    /// A 768-pixel render of `frame` with the blossom of canonical corner
+    /// `corner` painted over with background.
+    private func hiddenBlossom(_ frame: UInt16, corner: Int) throws -> (PetalStreamEncoder, PetalLuma) {
+        let (encoder, image) = try setup(frame)
+        let n = image.width
+        let scale = Double(n) / 1024
+        let center = PetalLayout.finderCenters[corner]
+        let cx = center.x * scale
+        let cy = center.y * scale
+        let radius = 75 * scale
+        var pixels = image.pixels
+        for y in 0..<n {
+            for x in 0..<n {
+                let dx = Double(x) + 0.5 - cx
+                let dy = Double(y) + 0.5 - cy
+                if dx * dx + dy * dy <= radius * radius { pixels[y * n + x] = 0 }
+            }
+        }
+        return (encoder, try PetalLuma(width: n, height: n, pixels: pixels))
+    }
+
+    /// Shifts a luma image by whole pixels, filling with black.
+    private func shifted(_ image: PetalLuma, _ dx: Int, _ dy: Int) throws -> PetalLuma {
+        var pixels = [UInt8](repeating: 0, count: image.pixels.count)
+        for y in 0..<image.height {
+            for x in 0..<image.width {
+                let sx = x - dx
+                let sy = y - dy
+                if sx >= 0, sy >= 0, sx < image.width, sy < image.height {
+                    pixels[y * image.width + x] = image.pixels[sy * image.width + sx]
+                }
+            }
+        }
+        return try PetalLuma(width: image.width, height: image.height, pixels: pixels)
+    }
+
+    /// Places a luma image in the middle of a larger black frame.
+    private func padded(_ image: PetalLuma, _ pad: Int) throws -> PetalLuma {
+        let width = image.width + 2 * pad
+        var pixels = [UInt8](repeating: 0, count: width * (image.height + 2 * pad))
+        for y in 0..<image.height {
+            let start = (y + pad) * width + pad
+            pixels.replaceSubrange(start..<start + image.width, with: image.pixels[y * image.width..<(y + 1) * image.width])
+        }
+        return try PetalLuma(width: width, height: image.height + 2 * pad, pixels: pixels)
+    }
+
+    func testAHiddenBlossomIsInferredAndEveryLaneStillReads() throws {
+        for corner in 0..<4 {
+            let (encoder, image) = try hiddenBlossom(2, corner: corner)
+            let decoded = try PetalDecoder.decode(image)
+            let expected = encoder.laneData(frame: 2)
+            XCTAssertEqual(decoded.inferredCorner, corner, "corner \(corner)")
+            XCTAssertEqual(decoded.rotation, 0, "corner \(corner)")
+            XCTAssertFalse(decoded.mirrored, "corner \(corner)")
+            XCTAssertEqual(decoded.p?.data, expected.p, "corner \(corner) lane P")
+            XCTAssertEqual(decoded.k?.data, expected.k, "corner \(corner) lane K")
+            XCTAssertEqual(decoded.d?.data, expected.d, "corner \(corner) lane D")
+            // the diagnostics read the levels of the inferred corner the same way
+            XCTAssertEqual(PetalDecoder.observedCells(image, frame: decoded), encoder.cells(frame: 2), "corner \(corner)")
+        }
+    }
+
+    func testTheInferredCornerIsReportedInCodeCoordinatesWhenMirrored() throws {
+        // hide the top-right blossom of the code, then mirror the picture: the hidden
+        // blossom appears top-left in the image but is still corner 1 of the code
+        let (encoder, image) = try hiddenBlossom(3, corner: 1)
+        let decoded = try PetalDecoder.decode(try Support.mirror(image))
+        XCTAssertTrue(decoded.mirrored)
+        XCTAssertEqual(decoded.inferredCorner, 1)
+        XCTAssertEqual(decoded.d?.data, encoder.laneData(frame: 3).d)
+    }
+
+    func testALargeHiddenRegionNeverReadsWrongData() throws {
+        // the whole bottom-right quarter is gone: rings and tiles with it
+        let (encoder, image) = try setup(2)
         let n = image.width
         var pixels = image.pixels
-        // erase the bottom-right blossom
         for y in (n * 3 / 4)..<n {
             for x in (n * 3 / 4)..<n { pixels[y * n + x] = 0 }
         }
-        XCTAssertThrowsError(try PetalDecoder.decode(try PetalLuma(width: n, height: n, pixels: pixels)))
+        let expected = encoder.laneData(frame: 2)
+        if let frame = try? PetalDecoder.decode(try PetalLuma(width: n, height: n, pixels: pixels)) {
+            if let p = frame.p { XCTAssertEqual(p.data, expected.p) }
+            if let k = frame.k { XCTAssertEqual(k.data, expected.k) }
+            if let d = frame.d { XCTAssertEqual(d.data, expected.d) }
+        }
+    }
+
+    func testTrackingFollowsASmallMovementAndGivesUpOnAJump() throws {
+        let (encoder, rendered) = try setup(6)
+        let image = try padded(rendered, 100)
+        let first = try PetalDecoder.decode(image)
+        let expected = encoder.laneData(frame: 6)
+        let moved = try shifted(image, 9, -6)
+        let followed = try XCTUnwrap(PetalDecoder.track(moved, previous: first), "tracks a 9 px move")
+        XCTAssertEqual(followed.p?.data, expected.p)
+        XCTAssertEqual(followed.k?.data, expected.k)
+        XCTAssertEqual(followed.d?.data, expected.d)
+        XCTAssertNil(followed.inferredCorner)
+        XCTAssertEqual(followed.rotation, first.rotation)
+        XCTAssertEqual(followed.mirrored, first.mirrored)
+        // more than a finder diameter: tracking refuses, a full decode is needed
+        let jumped = try shifted(image, 95, 0)
+        XCTAssertNil(PetalDecoder.track(jumped, previous: first))
+        XCTAssertNoThrow(try PetalDecoder.decode(jumped))
+        // an image the decoder refuses is never tracked
+        XCTAssertNil(PetalDecoder.track(try PetalLuma(width: 8, height: 8), previous: first))
+    }
+
+    func testTrackingSurvivesABlossomThatDisappears() throws {
+        let (_, rendered) = try setup(4)
+        let first = try PetalDecoder.decode(rendered)
+        // the same code, slightly moved, now with the bottom-left blossom covered
+        let (encoder, covered) = try hiddenBlossom(4, corner: 3)
+        let moved = try shifted(covered, -5, 4)
+        let followed = try XCTUnwrap(PetalDecoder.track(moved, previous: first), "tracks with three blossoms")
+        XCTAssertEqual(followed.inferredCorner, 3)
+        XCTAssertEqual(followed.d?.data, encoder.laneData(frame: 4).d)
+    }
+
+    /// A canvas-sized image with finder (lit) and reference-canvas (dark) levels
+    /// painted where they are sampled.
+    private func levelCard(_ levels: [(UInt8, UInt8)]) throws -> PetalLuma {
+        var pixels = [UInt8](repeating: 0, count: 1024 * 1024)
+        func paint(_ cx: Int, _ cy: Int, _ radius: Int, _ value: UInt8) {
+            for y in (cy - radius)...(cy + radius) {
+                for x in (cx - radius)...(cx + radius) { pixels[y * 1024 + x] = value }
+            }
+        }
+        for (corner, (cx, cy)) in [(72, 72), (952, 72), (952, 952), (72, 952)].enumerated() {
+            let (sx, sy) = (cx < 512 ? 1 : -1, cy < 512 ? 1 : -1)
+            paint(cx, cy, 30, levels[corner].0)
+            paint(cx + sx * 100, cy, 12, levels[corner].1)
+            paint(cx, cy + sy * 100, 12, levels[corner].1)
+        }
+        return try PetalLuma(width: 1024, height: 1024, pixels: pixels)
+    }
+
+    func testAnInferredCornerNeedsContrastToo() throws {
+        let h = try PetalHomography(elements: [1, 0, 0, 0, 1, 0, 0, 0, 1])
+        // even light: the hidden corner (3) gets levels between the others'
+        let even = try levelCard([(230, 30), (220, 25), (210, 20), (0, 0)])
+        let reference = try XCTUnwrap(even.withView { PetalDecoder.referenceLevels($0, h, inferred: 3) })
+        XCTAssertGreaterThanOrEqual(reference.lit[3] - reference.dark[3], 12.0)
+        // the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
+        let uneven = try levelCard([(60, 45), (250, 20), (200, 185), (0, 0)])
+        XCTAssertNil(uneven.withView { PetalDecoder.referenceLevels($0, h, inferred: 3) })
+        // with every corner seen, the same light is fine
+        let seen = try levelCard([(60, 45), (250, 20), (200, 185), (240, 20)])
+        XCTAssertNotNil(seen.withView { PetalDecoder.referenceLevels($0, h, inferred: nil) })
+    }
+
+    func testBrokenPosesAreRefusedWithoutPanicking() throws {
+        let (_, image) = try setup(4)
+        let previous = try PetalDecoder.decode(image)
+        // a good pose that names a corner that does not exist
+        XCTAssertNotNil(PetalDecoder.track(image, previous: previous))
+        for corner in [4, 255, -1] {
+            let named = PetalDecodedFrame(
+                homography: previous.homography,
+                rotation: previous.rotation,
+                mirrored: previous.mirrored,
+                p: previous.p,
+                k: previous.k,
+                d: previous.d,
+                inferredCorner: corner
+            )
+            XCTAssertNil(PetalDecoder.track(image, previous: named), "\(corner)")
+        }
+        let nonFinite = [
+            try PetalHomography(elements: [Double](repeating: .nan, count: 9)),
+            try PetalHomography(elements: [.infinity, 0, 0, 0, 1, 0, 0, 0, 1]),
+        ]
+        for broken in nonFinite {
+            XCTAssertNil(PetalDecoder.decode(image, homography: broken))
+        }
+        // the last one makes every finder far larger than the image
+        let huge = try PetalHomography(elements: [50, 0, 0, 0, 50, 0, 0, 0, 1])
+        for broken in nonFinite + [huge] {
+            for inferred in [nil, 2] as [Int?] {
+                let pose = PetalDecodedFrame(
+                    homography: broken,
+                    rotation: previous.rotation,
+                    mirrored: previous.mirrored,
+                    p: previous.p,
+                    k: previous.k,
+                    d: previous.d,
+                    inferredCorner: inferred
+                )
+                XCTAssertNil(PetalDecoder.track(image, previous: pose), "\(broken.elements) \(String(describing: inferred))")
+            }
+        }
+    }
+
+    func testABlossomThatReappearsIsSeenAgain() throws {
+        let (_, covered) = try hiddenBlossom(4, corner: 3)
+        let first = try PetalDecoder.decode(covered)
+        XCTAssertEqual(first.inferredCorner, 3)
+        // the thumb moves away and the hand moves a little
+        let (encoder, image) = try setup(4)
+        let moved = try shifted(image, 4, -3)
+        let followed = try XCTUnwrap(PetalDecoder.track(moved, previous: first), "tracks")
+        XCTAssertNil(followed.inferredCorner)
+        XCTAssertEqual(followed.d?.data, encoder.laneData(frame: 4).d)
+        // still covered: still inferred
+        let still = try shifted(covered, 4, -3)
+        let stillFollowed = try XCTUnwrap(PetalDecoder.track(still, previous: first), "tracks")
+        XCTAssertEqual(stillFollowed.inferredCorner, 3)
+    }
+
+    func testTheTianMaskTellsTheQuarterTurnsApart() throws {
+        let (_, image) = try setup(5)
+        let quad = try XCTUnwrap(PetalLocator.locate(image), "four finders")
+        var byRotation = [Double](repeating: -Double.greatestFiniteMagnitude, count: 4)
+        try image.withView { view in
+            for hypothesis in PetalDecoder.hypotheses(quad, tryMirrored: true) {
+                let reference = try XCTUnwrap(
+                    PetalDecoder.referenceLevels(view, hypothesis.homography, inferred: nil),
+                    "levels"
+                )
+                let score = PetalDecoder.maskScore(view, hypothesis.homography, reference)
+                if !hypothesis.mirrored { byRotation[hypothesis.rotation] = score }
+            }
+        }
+        // upright wins clearly over the three other quarter turns
+        for rotation in 1..<4 {
+            XCTAssertGreaterThan(byRotation[0], byRotation[rotation] + 0.1, "\(byRotation)")
+        }
+    }
+
+    func testInferredLevelsAreTheParallelogramOfTheOtherThreeWithinTheirRange() throws {
+        let (_, image) = try setup(5)
+        let scale = 768.0 / 1024.0
+        let pose = try PetalHomography(elements: [scale, 0, 0, 0, scale, 0, 0, 0, 1])
+        try image.withView { view in
+            let seen = try XCTUnwrap(PetalDecoder.referenceLevels(view, pose, inferred: nil))
+            for corner in 0..<4 {
+                let guessed = try XCTUnwrap(PetalDecoder.referenceLevels(view, pose, inferred: corner))
+                let (n1, opposite, n2) = ((corner + 1) % 4, (corner + 2) % 4, (corner + 3) % 4)
+                for (levels, all) in [(guessed.lit, seen.lit), (guessed.dark, seen.dark)] {
+                    let others = [all[n1], all[opposite], all[n2]]
+                    let expected = min(max(all[n1] + all[n2] - all[opposite], others.min()!), others.max()!)
+                    XCTAssertEqual(levels[corner], expected, "corner \(corner)")
+                    for index in 0..<4 where index != corner { XCTAssertEqual(levels[index], all[index]) }
+                }
+            }
+        }
+        XCTAssertEqual(PetalDecoder.canonicalCorner(2, rotation: 1, mirrored: false), 1)
+        XCTAssertEqual(PetalDecoder.canonicalCorner(0, rotation: 1, mirrored: true), 1)
+        XCTAssertEqual(PetalDecoder.canonicalCorner(3, rotation: 0, mirrored: true), 1)
     }
 
     func testFramesSurviveBeingShownSmallAndOffCentre() throws {
@@ -511,7 +755,7 @@ final class PetalDecoderTests: XCTestCase {
         let doc = try captures()
         var assembler = PetalStreamAssembler()
         let entries = try Support.objects(doc, "captures")
-        XCTAssertEqual(entries.count, 9)
+        XCTAssertEqual(entries.count, 11)
         for capture in entries {
             let name = try Support.string(capture, "name")
             let image = try Support.luma(of: capture)
@@ -530,6 +774,7 @@ final class PetalDecoderTests: XCTestCase {
                 name, image.width, image.height, decoded.laneLetters, reference, elapsed
             ))
             XCTAssertEqual(decoded.mirrored, capture["mirrored"] as? Bool, "\(name): mirror flag")
+            XCTAssertEqual(decoded.inferredCorner, try Support.optionalInteger(capture, "inferred_corner"), "\(name): inferred corner")
             let must = try Support.string(capture, "must_decode")
             let lanes: [(Character, PetalLaneResult?, String)] = [
                 ("P", decoded.p, "p_data"),
@@ -557,6 +802,42 @@ final class PetalDecoderTests: XCTestCase {
             let name = try Support.string(capture, "name")
             let decoded = try PetalDecoder.decode(try Support.luma(of: capture))
             XCTAssertEqual(decoded.laneLetters, try Support.string(capture, "reference_decoded"), name)
+        }
+    }
+
+    func testGoldenTracksFollowThePoseIntoTheNextFrame() throws {
+        let tracks = try Support.objects(try captures(), "tracks")
+        XCTAssertEqual(tracks.count, 2)
+        for pair in tracks {
+            let name = try Support.string(pair, "name")
+            let previous = try PetalDecoder.decode(try Support.luma(of: pair, key: "from_luma_zlib_base64"))
+            let next = try Support.luma(of: pair, key: "to_luma_zlib_base64")
+            let started = DispatchTime.now().uptimeNanoseconds
+            let tracked = PetalDecoder.track(next, previous: previous)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+            let followed = try XCTUnwrap(tracked, "\(name): tracking lost the code")
+            let reference = try Support.string(pair, "reference_tracked")
+            print(String(
+                format: "petal track %@ %dx%d: lanes %@ (reference %@) in %.1f ms",
+                name, next.width, next.height, followed.laneLetters, reference, elapsed
+            ))
+            XCTAssertEqual(followed.laneLetters, reference, name)
+            let must = try Support.string(pair, "must_track")
+            let lanes: [(Character, PetalLaneResult?, String)] = [
+                ("P", followed.p, "p_data"),
+                ("K", followed.k, "k_data"),
+                ("D", followed.d, "d_data"),
+            ]
+            for (letter, lane, key) in lanes {
+                if let lane {
+                    XCTAssertEqual(lane.data, try Support.bytes(pair, key), "\(name): lane \(letter) data")
+                } else {
+                    XCTAssertFalse(must.contains(letter), "\(name): lane \(letter) lost")
+                }
+            }
+            XCTAssertEqual(followed.inferredCorner, try Support.optionalInteger(pair, "inferred_corner"), "\(name): inferred corner")
+            XCTAssertEqual(followed.rotation, previous.rotation, name)
+            XCTAssertEqual(followed.mirrored, previous.mirrored, name)
         }
     }
 

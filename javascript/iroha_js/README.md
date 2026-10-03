@@ -329,7 +329,8 @@ const stream = await navigator.mediaDevices.getUserMedia({
 });
 const scanner = new PetalCameraScanner({
   stream,
-  onProgress: ({ progress }) => render(progress.rank, progress.sourceAtoms),
+  // `stats.inferred` grows while a corner blossom is hidden (a thumb, a glare)
+  onProgress: ({ progress }, stats) => render(progress.rank, progress.sourceAtoms, stats),
   onComplete: ({ meta, payload }) => accept(meta.kind, payload),
 });
 await scanner.start();
@@ -338,12 +339,20 @@ await scanner.start();
 `PetalCameraScanner` grabs frames with `requestVideoFrameCallback` (falling back
 to `requestAnimationFrame`), downsizes them to at most 1280 pixels on the long
 side, converts them to Rec. 601 luma and feeds a `PetalScanSession`, which
-applies the reference idle (30 s) and absolute (180 s) timeouts. Apps with
-their own camera pipeline can call `session.push(luma, nowMs)` directly with a
-`PetalLuma` built by `PetalLuma.fromStrided` (a camera Y plane),
-`PetalLuma.fromRgba` or `PetalLuma.fromImageData`. Lower-level pieces are
-exported as well: `decodePetalFrame`/`decodePetalFrameAt`, the software
-`renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
+applies the reference idle (30 s) and absolute (180 s) timeouts. Once a frame
+decoded, the session reads the next ones by tracking the code from its pose
+(no finder search) while that pose is at most 500 ms old, and falls back to a
+full decode when tracking fails. A code whose corner blossom is hidden by a
+thumb, a glare or the edge of the frame still reads: the fourth corner is
+inferred from the other three and refined against the rings
+(`frame.inferredCorner` names it; `stats().tracked` and `stats().inferred`
+count both cases). Apps with their own camera pipeline can call
+`session.push(luma, nowMs)` directly with a `PetalLuma` built by
+`PetalLuma.fromStrided` (a camera Y plane), `PetalLuma.fromRgba` or
+`PetalLuma.fromImageData`. Lower-level pieces are exported as well:
+`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, the finder
+search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
+software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
 `petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
 (`encodeLane`, `decodeLane`, `PetalFrameCells`), `PetalReedSolomon`, the
 fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
@@ -375,7 +384,7 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v1.json` and the golden camera captures in
+(`petal_stream_v1.json`, and the golden camera captures and tracking pairs in
 `petal_captures_v1.json`) and ports the reference unit tests; run it on its own
 with `node --test test/petal.test.js`.
 

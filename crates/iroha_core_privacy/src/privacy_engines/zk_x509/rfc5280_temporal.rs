@@ -5,7 +5,9 @@
 
 use super::{F, PolynomialAirFieldV1};
 
-/// Public byte-position template; fields never depend on witness values.
+/// One of two byte-position templates whose individual values are fixed.
+/// Selecting a template with a private `generalized` flag yields private fields;
+/// only the paired columns returned by `fixed_cells_v1` are verifier-owned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DecimalTemplateV1 {
     pub(super) digit: u64,

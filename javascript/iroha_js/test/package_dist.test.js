@@ -558,6 +558,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/numericV1.js",
       "dist/privacyExact12Network.js",
       "dist/proofAttachment.js",
+      "dist/retailFeeAssessment.js",
       "dist/sorafsReplicationProfiles.js",
       "dist/strictLosslessJson.js",
       "dist/transactionCodec.js",

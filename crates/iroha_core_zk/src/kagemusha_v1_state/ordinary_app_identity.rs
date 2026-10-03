@@ -42,12 +42,9 @@ pub use preparation_reservation::{
     KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1,
 };
 pub(crate) use preparation_reservation::{
-    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
-    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
-    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
-    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 
 #[path = "ordinary_app_identity/issuer_preparation.rs"]

@@ -20,7 +20,6 @@ use crate::kagemusha_v1_recursion::{
     ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
 };
 use crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1;
-use iroha_data_model::kagemusha::*;
 use zeroize::Zeroize as _;
 
 macro_rules! proof_leg {
@@ -490,10 +489,6 @@ fn outgoing_public_fold_seed(
     h.update(Sha256::digest(guard));
     h.update(Sha256::digest(parent));
     KagemushaRecoverySeedV1::from_unsealed(h.finalize().into()).map_err(ordinary_error)
-}
-
-fn native_reject(_: impl core::fmt::Display) -> KagemushaStateErrorV1 {
-    KagemushaStateErrorV1::SnapshotIntegrity
 }
 
 fn ordinary_error(e: impl core::fmt::Display) -> KagemushaArtifactGenerationErrorV1 {

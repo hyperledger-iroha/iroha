@@ -62,6 +62,11 @@ fn program(base: u8, destination: u8, imm: i8) -> Program {
     ))
     .unwrap()
 }
+struct NativeSource {
+    descriptors: [u64; 10],
+    gas: u64,
+    cycles: u64,
+}
 impl Fixture {
     fn new(program: &Program, address: u64, mask: u16, active: u16, old_tag: bool) -> Self {
         Self::at(program, 0, address, mask, active, old_tag)
@@ -74,8 +79,30 @@ impl Fixture {
         active: u16,
         old_tag: bool,
     ) -> Self {
+        Self::at_with_source(program, pc_slot, address, mask, active, old_tag, None)
+    }
+    fn at_with_source(
+        program: &Program,
+        pc_slot: usize,
+        address: u64,
+        mask: u16,
+        active: u16,
+        old_tag: bool,
+        source: Option<NativeSource>,
+    ) -> Self {
         let schedule = Schedule::new(7, 64).unwrap();
-        let mut dispatch = dispatch_tests::Fixture::new(program, pc_slot, false, 0);
+        let mut dispatch = if let Some(source) = &source {
+            dispatch_tests::Fixture::with_controls(
+                program,
+                pc_slot,
+                false,
+                0,
+                source.gas,
+                source.cycles,
+            )
+        } else {
+            dispatch_tests::Fixture::new(program, pc_slot, false, 0)
+        };
         dispatch.schedule = schedule.dispatch();
         let instruction = program.words[pc_slot];
         let base = address.wrapping_sub(i64::from(wide::imm8(instruction)) as u64);
@@ -134,6 +161,9 @@ impl Fixture {
             Memory::HEAP_START + 0x900,
             Memory::HEAP_START + 0x910,
         ];
+        let descriptors = source
+            .as_ref()
+            .map_or(descriptors, |source| source.descriptors);
         let mut frame = frame_access::tests::Fixture::new(
             true,
             active,
@@ -195,11 +225,12 @@ impl Fixture {
         }
         let cell = if address < program.code_end() {
             core::array::from_fn(|i| {
-                let offset = ((address & !15) as usize + i).wrapping_sub(program.first_pc as usize);
-                program
-                    .words
-                    .get(offset / 4)
-                    .map_or(0, |w| w.to_le_bytes()[offset % 4])
+                // CODE starts at the original metadata boundary, including the
+                // admitted interface prefix; instruction words alone are not this image.
+                program.artifact().artifact()[program.artifact().header_len()..]
+                    .get((address & !15) as usize + i)
+                    .copied()
+                    .unwrap_or(0)
             })
         } else {
             0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128.to_le_bytes()
@@ -676,108 +707,257 @@ fn all_thirty_nine_original_packets_and_all_eight_stages_share_one_private_histo
     assert_eq!(original.producer(35)[INDEX], original.producer(34)[INDEX]);
 }
 
+const NATIVE_STACK: u64 = Memory::STACK_START + Memory::MIN_STACK_SIZE - 16;
+const NATIVE_CELL: u128 = 0xfedc_ba98_7654_3210_0123_4567_89ab_cdef;
+
 fn native(program: &Program, gas: u64) -> ivm::IVM {
-    let mut bytes = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        max_cycles: 2,
-        ..Default::default()
-    }
-    .encode();
-    for word in &program.words {
-        bytes.extend_from_slice(&word.to_le_bytes());
-    }
     let mut vm = ivm::IVM::new(gas);
-    vm.load_program(&bytes).unwrap();
+    vm.load_prepared(program.artifact()).unwrap();
     vm.set_zk_trace_enabled(true);
+    assert_eq!(vm.pc(), u64::from(program.first_pc));
     vm
 }
-fn assert_native_load_events(vm: &ivm::IVM, fixture: &Fixture) {
+fn root_setup_gas() -> u64 {
+    // The actual empty-argument owner allocates one Unit result word and
+    // the declared 16-byte frame owns its initialization bitmap.
+    8 + 16_u64.div_ceil(8) + 1
+}
+fn root_events(program: &Program) -> Vec<(bool, usize, u64, bool)> {
+    let tables = [(10, 0), (11, 0), (12, Memory::HEAP_START), (13, 1)];
+    let mut expected = tables.map(|(r, v)| (true, r, v, false)).to_vec();
+    expected.extend(tables.map(|(r, v)| (false, r, v, false)));
+    for (r, v) in [(31, NATIVE_STACK + 16), (1, program.code_end())] {
+        expected.extend([(true, r, v, false); 2]);
+    }
+    expected.extend([
+        (false, 10, 0, false),
+        (false, 12, Memory::HEAP_START, false),
+        (false, 11, 0, false),
+        (false, 13, 1, false),
+    ]);
+    expected
+}
+fn assert_native_load_events(
+    vm: &ivm::IVM,
+    program: &Program,
+    fixture: &Fixture,
+    private_half: Option<u64>,
+) {
     let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let capture = vm.try_diagnostic_snapshot(&budget).unwrap();
     let actual = capture
         .register_events()
         .map(|e| (e.written, e.index, e.value, e.tag))
         .collect::<Vec<_>>();
+    // Explain every event; no prefix/suffix filtering can hide an unexpected
+    // root-call access or a changed STORE/LOAD chronology.
+    let mut expected = root_events(program);
+    for (register, half) in [(5, 0), (6, 8)] {
+        expected.push((false, 4, NATIVE_STACK, false));
+        expected.push((
+            false,
+            register,
+            (NATIVE_CELL >> (half * 8)) as u64,
+            private_half == Some(half),
+        ));
+    }
     let originals = fixture.borrowed();
-    let expected = [4, 34, 35]
-        .into_iter()
-        .filter_map(|slot| {
-            let p = originals.producer(slot);
-            (p[ENABLED] == F::ONE).then(|| {
-                (
-                    p[WRITE] == F::ONE,
-                    p[INDEX].0 as usize,
-                    packet::half(p, if p[WRITE] == F::ONE { AFTER } else { BEFORE }, 0),
-                    p[if p[WRITE] == F::ONE {
-                        AFTER_TAG
-                    } else {
-                        BEFORE_TAG
-                    }] == F::ONE,
-                )
-            })
+    expected.extend([4, 34, 35].into_iter().filter_map(|slot| {
+        let p = originals.producer(slot);
+        (p[ENABLED] == F::ONE).then(|| {
+            (
+                p[WRITE] == F::ONE,
+                p[INDEX].0 as usize,
+                packet::half(p, if p[WRITE] == F::ONE { AFTER } else { BEFORE }, 0),
+                p[if p[WRITE] == F::ONE {
+                    AFTER_TAG
+                } else {
+                    BEFORE_TAG
+                }] == F::ONE,
+            )
         })
-        .collect::<Vec<_>>();
+    }));
     assert_eq!(
         actual, expected,
-        "original base read then value/tag writes in native order"
+        "complete root setup, stack initialization, base read and ordered value/tag writes"
+    );
+}
+
+fn native_load_case(
+    region: u64,
+    half: u64,
+    destination: u8,
+    imm: i8,
+    old_tag: bool,
+    private: bool,
+) {
+    let words = [
+        enc::encode_store(wide::memory::STORE64, 4, 5, 0),
+        enc::encode_store(wide::memory::STORE64, 4, 6, 8),
+        enc::encode_load(wide::memory::LOAD64, destination, 2, imm),
+        enc::encode_halt(),
+    ];
+    let program = Program::new(dispatch_tests::contract_with_frame(
+        &words,
+        1_000,
+        ivm::ivm_mode::ZK,
+        16,
+    ))
+    .unwrap();
+    let address = region + half;
+    let private_half = private.then_some(half);
+    let gas = 100;
+    let before_gas = gas - root_setup_gas() - 6;
+    let fixture = Fixture::at_with_source(
+        &program,
+        2,
+        address,
+        if private { 0xff << half } else { 0 },
+        1,
+        old_tag,
+        Some(NativeSource {
+            descriptors: [
+                NATIVE_STACK,
+                NATIVE_STACK + 16,
+                0,
+                0,
+                Memory::HEAP_START,
+                Memory::HEAP_START + 8,
+                0,
+                0,
+                Memory::HEAP_START,
+                Memory::HEAP_START + 8,
+            ],
+            gas: before_gas,
+            cycles: 2,
+        }),
+    );
+    assert!(fixture.accepts(&program));
+    let mut vm = native(&program, gas);
+    let originals = fixture.borrowed();
+    let memory = originals.producer(33);
+    let data = core::array::from_fn::<_, 16, _>(|i| {
+        ((memory[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8
+    });
+    if region == Memory::INPUT_START {
+        vm.memory.preload_input(0, &data).unwrap();
+    } else if region != 0 && region != NATIVE_STACK {
+        vm.memory
+            .store_u128(region, u128::from_le_bytes(data))
+            .unwrap();
+    }
+    vm.set_register(2, address.wrapping_sub(i64::from(imm) as u64));
+    vm.set_register(4, NATIVE_STACK);
+    vm.set_register(5, NATIVE_CELL as u64);
+    vm.set_register(6, (NATIVE_CELL >> 64) as u64);
+    vm.registers.set_tag(5, private_half == Some(0));
+    vm.registers.set_tag(6, private_half == Some(8));
+    if destination == 3 {
+        vm.set_register(3, 0x1234_5678);
+        vm.registers.set_tag(3, old_tag);
+    }
+    vm.memory.clear_tracking();
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let mut recorder =
+        ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(3, &budget).unwrap();
+    // A prepaid diagnostic stop occurs before the next instruction. This is
+    // a completed LOAD prefix, not a successful full invocation or a HALT bypass.
+    assert_eq!(
+        vm.run_with_host_diagnostic_steps(&mut ivm::host::DefaultHost::default(), &mut recorder),
+        Err(ivm::VMError::ExecutionDeferred(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        ))
+    );
+    assert_eq!(recorder.records().len(), 3);
+    for (slot, record) in recorder.records().iter().enumerate() {
+        assert_eq!(record.instruction, Some(words[slot]));
+        assert_eq!(
+            record.outcome,
+            ivm::execution_step_recorder::DiagnosticStepOutcome::Completed
+        );
+        assert_eq!(record.opcode_gas, Some(3));
+        assert_eq!(
+            record.before.pc,
+            u64::from(program.first_pc) + slot as u64 * 4
+        );
+        assert_eq!(record.after.pc, record.before.pc + 4);
+        assert_eq!(record.after.cycles, record.before.cycles + 1);
+        assert_eq!(record.after.gas_remaining, record.before.gas_remaining - 3);
+    }
+    let step = &recorder.records()[2];
+    assert_eq!(
+        (step.before.gas_remaining, step.before.cycles),
+        (before_gas, 2)
+    );
+    for (slot, before, after) in [
+        (36, step.before.pc, step.after.pc),
+        (1, step.before.gas_remaining, step.after.gas_remaining),
+        (37, step.before.cycles, step.after.cycles),
+    ] {
+        assert_eq!(packet::half(originals.producer(slot), BEFORE, 0), before);
+        assert_eq!(packet::half(originals.producer(slot), AFTER, 0), after);
+    }
+    assert_native_load_events(&vm, &program, &fixture, private_half);
+    let value = if destination == 0 {
+        0
+    } else {
+        packet::half(originals.producer(35), AFTER, 0)
+    };
+    let mut values = step.before.registers;
+    let mut tags = step.before.tags;
+    if destination != 0 {
+        values[destination as usize] = value;
+        tags[destination as usize] = private;
+    }
+    assert_eq!(step.after.registers, values);
+    assert_eq!(step.after.tags, tags);
+    assert_eq!(vm.registers.get(destination as usize), value);
+    assert_eq!(
+        vm.registers.tag(destination as usize),
+        private && destination != 0
+    );
+    assert!(
+        vm.memory
+            .try_read_log_snapshot()
+            .unwrap()
+            .iter()
+            .any(|r| (r.addr, r.len) == (address, 8))
+    );
+    assert_eq!(
+        vm.memory
+            .try_write_log_snapshot()
+            .unwrap()
+            .iter()
+            .map(|w| (w.address(), w.bytes().len()))
+            .collect::<Vec<_>>(),
+        [(NATIVE_STACK, 8), (NATIVE_STACK + 8, 8)]
+    );
+    assert_eq!(
+        (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
+        (before_gas - 3, u64::from(program.first_pc) + 12, 3)
+    );
+    assert!(
+        vm.call_result_word_count().is_err(),
+        "diagnostic stop does not complete invocation authority"
     );
 }
 
 #[test]
 fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_immediates() {
+    // HEAP data does not overlap the actual root result table; STACK data
+    // belongs to the declared root frame and is initialized by guest STOREs.
     for region in [
         0,
-        Memory::HEAP_START,
+        Memory::HEAP_START + 0x100,
         Memory::INPUT_START,
         Memory::OUTPUT_START,
-        Memory::STACK_START,
+        NATIVE_STACK,
     ] {
         for half in [0, 8] {
             for destination in [0, 2, 3] {
                 for imm in [-128, -8, 0, 127] {
                     for old_tag in [false, true] {
-                        let program = program(2, destination, imm);
-                        let address = region + half;
-                        let fixture = Fixture::new(&program, address, 0, 0, old_tag);
-                        assert!(fixture.accepts(&program));
-                        let mut vm = native(&program, 100);
-                        let originals = fixture.borrowed();
-                        let memory = originals.producer(33);
-                        let data = core::array::from_fn::<_, 16, _>(|i| {
-                            ((memory[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8
-                        });
-                        if region == Memory::INPUT_START {
-                            vm.memory.preload_input(0, &data).unwrap();
-                        } else if region != 0 {
-                            vm.memory
-                                .store_u128(region, u128::from_le_bytes(data))
-                                .unwrap();
-                        }
-                        vm.set_register(2, address.wrapping_sub(i64::from(imm) as u64));
-                        if destination == 3 {
-                            vm.set_register(3, 0x1234_5678);
-                            vm.registers.set_tag(3, old_tag);
-                        }
-                        vm.memory.clear_tracking();
-                        vm.run().unwrap();
-                        assert_native_load_events(&vm, &fixture);
-                        let expected = if destination == 0 {
-                            0
-                        } else {
-                            packet::half(originals.producer(35), AFTER, 0)
-                        };
-                        assert_eq!(vm.registers.get(destination as usize), expected);
-                        assert!(!vm.registers.tag(destination as usize));
-                        assert!(vm.memory.try_read_log_snapshot().unwrap().iter().any(|r| (
-                            r.addr, r.len
-                        ) == (
-                            address, 8
-                        )));
-                        assert!(vm.memory.try_write_log_snapshot().unwrap().is_empty());
-                        assert_eq!(
-                            (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
-                            (97, 8, 2)
-                        );
+                        native_load_case(region, half, destination, imm, old_tag, false);
                     }
                 }
             }
@@ -789,70 +969,74 @@ fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_i
 fn actual_native_private_stack_load_preserves_value_then_tag_and_rejects_failed_success_paths() {
     for half in [0, 8] {
         for destination in [0, 2, 3] {
-            let words = [
-                enc::encode_store(wide::memory::STORE64, 2, 4, 0),
-                enc::encode_halt(),
-                enc::encode_load(wide::memory::LOAD64, destination, 2, 0),
-                enc::encode_halt(),
-            ];
-            let program =
-                Program::new(dispatch_tests::contract(&words, 1_000, ivm::ivm_mode::ZK)).unwrap();
-            let address = Memory::STACK_START + half;
-            let fixture = Fixture::at(&program, 2, address, 0xff << half, 0, false);
-            assert!(fixture.accepts(&program));
-            let mut vm = native(&program, 1000);
-            vm.memory
-                .store_u128(
-                    address & !15,
-                    0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128,
-                )
-                .unwrap();
-            let originals = fixture.borrowed();
-            let value = packet::half(originals.producer(33), BEFORE, (half / 8) as usize);
-            vm.set_register(2, address);
-            vm.set_register(4, value);
-            vm.registers.set_tag(4, true);
-            if destination == 3 {
-                vm.set_register(3, 0x1234_5678);
-            }
-            vm.run().unwrap();
-            vm.set_program_counter(8).unwrap();
-            let gas = vm.gas_remaining;
-            vm.memory.clear_tracking();
-            vm.run().unwrap();
-            assert_native_load_events(&vm, &fixture);
-            assert_eq!(vm.registers.tag(destination as usize), destination != 0);
-            assert_eq!(
-                vm.registers.get(destination as usize),
-                if destination == 0 { 0 } else { value }
-            );
-            assert_eq!(
-                (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
-                (gas - 3, 16, 2)
-            );
-            assert!(
-                vm.memory
-                    .try_read_log_snapshot()
-                    .unwrap()
-                    .iter()
-                    .any(|r| (r.addr, r.len) == (address, 8))
-            );
+            native_load_case(NATIVE_STACK, half, destination, 0, false, true);
         }
     }
-    let p = program(2, 3, 0);
-    for (address, private_base, gas) in [
-        (Memory::HEAP_START, true, 100),
-        (Memory::HEAP_START + 1, false, 100),
-        (Memory::HEAP_START, false, 2),
-        (16, false, 100),
+    let p = Program::new(dispatch_tests::contract_with_frame(
+        &[
+            enc::encode_load(wide::memory::LOAD64, 3, 2, 0),
+            enc::encode_halt(),
+        ],
+        1_000,
+        ivm::ivm_mode::ZK,
+        16,
+    ))
+    .unwrap();
+    let outside_code = (p.code_end() + 7) & !7;
+    for (address, private_base, opcode_gas, trap) in [
+        (
+            Memory::HEAP_START + 0x100,
+            true,
+            100,
+            ivm::error::VmTrapKind::PrivacyViolation,
+        ),
+        (
+            Memory::HEAP_START + 0x101,
+            false,
+            100,
+            ivm::error::VmTrapKind::MemoryFault,
+        ),
+        (
+            Memory::HEAP_START + 0x100,
+            false,
+            2,
+            ivm::error::VmTrapKind::OutOfGas,
+        ),
+        (
+            outside_code,
+            false,
+            100,
+            ivm::error::VmTrapKind::MemoryFault,
+        ),
     ] {
-        let mut vm = native(&p, gas);
+        let mut vm = native(&p, root_setup_gas() + opcode_gas);
         vm.set_register(2, address);
         vm.registers.set_tag(2, private_base);
         vm.set_register(3, 99);
-        assert!(vm.run().is_err());
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let mut recorder =
+            ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(1, &budget).unwrap();
+        assert!(
+            vm.run_with_host_diagnostic_steps(
+                &mut ivm::host::DefaultHost::default(),
+                &mut recorder
+            )
+            .is_err()
+        );
+        assert_eq!(
+            recorder.records().len(),
+            1,
+            "actual opcode refusal, not a root setup failure"
+        );
+        let step = &recorder.records()[0];
+        assert_eq!(step.instruction, Some(p.words[0]));
+        assert_eq!(
+            step.outcome,
+            ivm::execution_step_recorder::DiagnosticStepOutcome::Trapped(trap)
+        );
+        assert_eq!(step.before.gas_remaining, opcode_gas);
         assert_eq!(vm.registers.get(3), 99);
-        assert_eq!(vm.pc(), 0);
+        assert_eq!(vm.pc(), u64::from(p.first_pc));
         assert_eq!(vm.get_cycle_count(), 0);
     }
     let mut exhausted = program(2, 3, 0);

@@ -54,6 +54,14 @@ import java.nio.ByteBuffer
  * Decode on a background thread. The reference decoder needs about 10 ms for a
  * 1280×720 frame; measure the target device and fall back to 640×480 only when
  * it decodes fewer than 5 frames per second at 720p.
+ *
+ * Push every analysed frame into the same [PetalScanSession]: after a frame
+ * decodes, the session tracks the code from its pose (about a quarter of the
+ * work of a full search) as long as frames keep arriving within
+ * [PetalScanSession.TRACK_WINDOW_MILLIS]. A code with one corner blossom
+ * covered by a thumb or cut off by the frame edge still reads; when a push
+ * raises `stats().inferred`, a hint such as "one corner blossom is hidden"
+ * helps the user uncover it.
  */
 object PetalLumaAdapter {
     /**

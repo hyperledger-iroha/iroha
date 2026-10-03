@@ -60,7 +60,7 @@ import {
 } from "./petal/layout.js";
 import { DEFAULT_DECODE_OPTIONS } from "./petal/decode.js";
 import { DEFAULT_PALETTE, GLYPH_STROKE_WIDTH } from "./petal/render.js";
-import { DEFAULT_SCAN_LIMITS } from "./petal/session.js";
+import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS } from "./petal/session.js";
 import {
   BEACON_INTERVAL,
   DEFAULT_MAX_PAYLOAD_LEN,
@@ -89,13 +89,24 @@ export {
 } from "./petal/stream.js";
 export { PetalLuma } from "./petal/image.js";
 export { PetalHomography } from "./petal/geometry.js";
-export { adaptiveBinarize, blossoms, labelComponents, locate, refineCenter, selectQuad } from "./petal/locate.js";
+export {
+  adaptiveBinarize,
+  blossoms,
+  followFinder,
+  labelComponents,
+  locate,
+  locateCandidates,
+  refineCenter,
+  selectQuad,
+  selectTriple,
+} from "./petal/locate.js";
 export {
   PetalDecodedFrame,
   decodePetalFrame,
   decodePetalFrameAt,
   observedCells,
   tileMatchError,
+  trackPetalFrame,
 } from "./petal/decode.js";
 export { petalDrawList, renderPetalFrame } from "./petal/render.js";
 export { PetalScanSession } from "./petal/session.js";
@@ -172,3 +183,5 @@ export const PETAL_PALETTE = DEFAULT_PALETTE;
 export const PETAL_DEFAULT_DECODE_OPTIONS = DEFAULT_DECODE_OPTIONS;
 /** Default scan-session limits. */
 export const PETAL_DEFAULT_SCAN_LIMITS = DEFAULT_SCAN_LIMITS;
+/** How long (in milliseconds) a scan session tracks a code from its last decoded pose. */
+export const PETAL_TRACK_WINDOW_MS = TRACK_WINDOW_MS;

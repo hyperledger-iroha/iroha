@@ -3,6 +3,151 @@
 use super::*;
 use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use sha2::{Digest as _, Sha256};
+#[test]
+fn parser_private_inverse_cells_preserve_byte_and_zero_boundaries() {
+    let mut state = ParserStateV1::for_document(0, 1).expect("parser state");
+    state.phase = PHASE_PRIMITIVE_CONTENT;
+    for delta in [0, 1, ZK_X509_DER_MAX_DOCUMENT_BYTES_V1 as u64] {
+        state.check_delta = delta;
+        for byte in 0_u8..=u8::MAX {
+            let row = encode_parser_state_v1(&state, Some(byte)).expect("byte state");
+            assert_eq!(row[BASE_CHECK_IS_ZERO], F(u64::from(delta == 0)));
+            assert_eq!(row[BASE_CHECK_INVERSE], F(delta).inv().unwrap_or(F::ZERO));
+            assert_eq!(row[BASE_PAYLOAD + 6], F(u64::from(byte == 0)));
+            assert_eq!(
+                row[BASE_PAYLOAD + 7],
+                F(u64::from(byte)).inv().unwrap_or(F::ZERO)
+            );
+            assert_eq!(row[BASE_PAYLOAD + 8], F(u64::from(byte == u8::MAX)));
+            assert_eq!(
+                row[BASE_PAYLOAD + 9],
+                F(u64::from(byte)).sub(F(255)).inv().unwrap_or(F::ZERO)
+            );
+        }
+    }
+    assert!(matches!(
+        encode_parser_state_v1(&state, None),
+        Err(ZkX509DerStarkErrorV1::Row)
+    ));
+    assert_eq!(
+        inverse_or_zero_v1(GOLDILOCKS_MODULUS_V1 - 1),
+        F(GOLDILOCKS_MODULUS_V1 - 1)
+    );
+    for word in [GOLDILOCKS_MODULUS_V1, GOLDILOCKS_MODULUS_V1 + 1, u64::MAX] {
+        assert!(std::panic::catch_unwind(|| inverse_or_zero_v1(word)).is_err());
+    }
+}
+
+#[test]
+fn zero_test_witness_preserves_canonical_and_malformed_row_effects() {
+    for word in (0_u64..=255).chain([
+        GOLDILOCKS_MODULUS_V1 - 1,
+        GOLDILOCKS_MODULUS_V1,
+        GOLDILOCKS_MODULUS_V1 + 1,
+        u64::MAX,
+    ]) {
+        let mut row = [F(37); ZK_X509_DER_STARK_AUX_WIDTH_V1];
+        let mut expected = row;
+        expected[3] = F(u64::from(word == 0));
+        let result = write_zero_test_witness_v1(&mut row, 3, 7, F(word));
+        if let Some(value) = F::canonical(word) {
+            expected[7] = value.inv().unwrap_or(F::ZERO);
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ZkX509DerStarkErrorV1::Row)));
+        }
+        assert_eq!(row, expected, "word {word}");
+    }
+}
+
+fn assert_lookup_inverse_witnesses(
+    trace: &ZkX509DerStarkTraceV1,
+    challenges: ZkX509DerStarkChallengesV1,
+) {
+    for (index, (base, aux)) in trace.base.rows.iter().zip(&trace.aux_rows).enumerate() {
+        let parser = index < trace.base.private_shape.parser_rows;
+        let phase = pack_bits_v1(&base[BASE_PHASE_BITS..BASE_PHASE_BITS + 3]).0;
+        let consuming = parser
+            && matches!(
+                phase as usize,
+                PHASE_IDENTIFIER_FIRST
+                    | PHASE_IDENTIFIER_HIGH
+                    | PHASE_LENGTH_FIRST
+                    | PHASE_LENGTH_BODY
+                    | PHASE_PRIMITIVE_CONTENT
+            );
+        for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
+            let mut table_delta = F::ZERO;
+            let mut table_zero_delta = F::ZERO;
+            let mut query_delta = F::ZERO;
+            let mut query_zero_delta = F::ZERO;
+            if consuming {
+                let denominator = byte_denominator_v1(
+                    byte_tuple_v1(
+                        base[BASE_DOCUMENT],
+                        base[BASE_OFFSET],
+                        base[BASE_BYTE_VALUE],
+                    ),
+                    lane,
+                    challenges,
+                );
+                let inverse = denominator.inv().unwrap_or(F::ZERO);
+                let zero = F(u64::from(denominator == F::ZERO));
+                assert_eq!(aux[AUX_BYTE_TABLE_INVERSE + lane], inverse);
+                assert_eq!(aux[AUX_BYTE_TABLE_ZERO + lane], zero);
+                table_delta = base[BASE_BYTE_LOOKUP_MULTIPLICITY].mul(inverse);
+                table_zero_delta = base[BASE_BYTE_LOOKUP_MULTIPLICITY].mul(zero);
+            }
+            if !parser {
+                for (tuple, inverse_column, zero_column) in [
+                    (
+                        byte_tuple_v1(base[0], base[4].add(base[9]), base[10]),
+                        AUX_BYTE_LEFT_QUERY_INVERSE + lane,
+                        AUX_BYTE_LEFT_QUERY_ZERO + lane,
+                    ),
+                    (
+                        byte_tuple_v1(base[0], base[6].add(base[9]), base[11]),
+                        AUX_BYTE_RIGHT_QUERY_INVERSE + lane,
+                        AUX_BYTE_RIGHT_QUERY_ZERO + lane,
+                    ),
+                ] {
+                    let denominator = byte_denominator_v1(tuple, lane, challenges);
+                    let inverse = denominator.inv().unwrap_or(F::ZERO);
+                    let zero = F(u64::from(denominator == F::ZERO));
+                    assert_eq!(aux[inverse_column], inverse);
+                    assert_eq!(aux[zero_column], zero);
+                    query_delta = query_delta.add(inverse);
+                    query_zero_delta = query_zero_delta.add(zero);
+                }
+            }
+            for (before, after, delta) in [
+                (
+                    AUX_BYTE_TABLE_SUM_BEFORE,
+                    AUX_BYTE_TABLE_SUM_AFTER,
+                    table_delta,
+                ),
+                (
+                    AUX_BYTE_TABLE_ZERO_COUNT_BEFORE,
+                    AUX_BYTE_TABLE_ZERO_COUNT_AFTER,
+                    table_zero_delta,
+                ),
+                (
+                    AUX_BYTE_QUERY_SUM_BEFORE,
+                    AUX_BYTE_QUERY_SUM_AFTER,
+                    query_delta,
+                ),
+                (
+                    AUX_BYTE_QUERY_ZERO_COUNT_BEFORE,
+                    AUX_BYTE_QUERY_ZERO_COUNT_AFTER,
+                    query_zero_delta,
+                ),
+            ] {
+                assert_eq!(aux[after + lane], aux[before + lane].add(delta));
+            }
+        }
+    }
+}
+
 fn challenges() -> ZkX509DerStarkChallengesV1 {
     ZkX509DerStarkChallengesV1 {
         tuple: core::array::from_fn(|lane| {
@@ -934,6 +1079,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     let collision_trace =
         build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges)
             .expect("zero denominator is a complete lookup case");
+    assert_lookup_inverse_witnesses(&collision_trace, invalid_challenges);
     let collision_terminals =
         zk_x509_der_stark_terminals_v1(&collision_trace).expect("collision terminals");
     assert_ne!(
@@ -1016,6 +1162,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     );
     let trace = build_zk_x509_der_stark_trace_v1(canonical_base.clone(), canonical_challenges)
         .expect("canonical trace");
+    assert_lookup_inverse_witnesses(&trace, canonical_challenges);
     let schedule =
         compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("schedule");
     let final_index = ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1;

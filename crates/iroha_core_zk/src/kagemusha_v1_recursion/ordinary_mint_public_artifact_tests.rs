@@ -5,8 +5,7 @@
 //! These artifacts confer no signed release, device, funding or finalized-State authority.
 
 use super::*;
-use ff::{Field as _, PrimeField as _};
-use halo2_proofs::poly::commitment::Params as _;
+use ff::PrimeField as _;
 use norito::{Decode, Encode, NoritoSchema};
 use std::{
     fs::{self, DirBuilder, OpenOptions},

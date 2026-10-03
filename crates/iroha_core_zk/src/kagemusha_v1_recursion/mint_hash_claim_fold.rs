@@ -16,7 +16,7 @@
 #[path = "mint_hash_claim_global_inventory.rs"]
 mod global_inventory;
 
-use ff::{Field as _, PrimeField as _};
+use ff::Field as _;
 #[cfg(test)]
 use halo2_base::QuantumCell::Witness;
 use halo2_base::{
@@ -48,10 +48,11 @@ use snark_verifier::{
 
 use super::carrier_binding::{
     KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1 as ClaimCarrierBindingV1,
-    KagemushaCarrierCommitmentsV1 as ClaimCarrierCommitmentsV1,
     placeholder_carrier_binding_v1 as placeholder_claim_carrier_binding_v1,
 };
-use super::carrier_rlc::{streaming as rlc_streaming, *};
+#[cfg(test)]
+use super::carrier_rlc::streaming as rlc_streaming;
+use super::carrier_rlc::*;
 const CLAIM_CARRIER_BINDING_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {
         domain: CLAIM_CARRIER_RLC_DOMAIN_V1,

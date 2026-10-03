@@ -13,14 +13,14 @@ The crate is `std`-only and has no runtime dependencies.
 | `layout`, `glyphs` | normative geometry, the 256-tile `天` mask, rings, finders, 16 katakana |
 | `lanes`, `fountain`, `stream` | the three lane codewords, the GF(2) fountain code, `StreamEncoder` / `StreamAssembler` |
 | `render` | software renderer for frames (SDKs also expose a vector draw list) |
-| `locate`, `decode`, `session` | camera luma → finders → pose → lanes; `ScanSession` for apps |
+| `locate`, `decode`, `session` | camera luma → finders (three are enough) → pose → lanes; `ScanSession` tracks the pose between frames |
 | `sim`, `qualify` | deterministic camera simulator and end-to-end stream trials |
 
 ```text
 cargo test -p iroha_petal                                   # unit tests + golden fixtures + golden captures
 cargo run --release -p iroha_petal --example qualify -- 60  # per-frame decode matrix over camera conditions
-cargo run --release -p iroha_petal --example stress -- 40   # lighting stress: exposure, glare, veiling light, banding
-cargo run --release -p iroha_petal --example stream_sim -- 12 7552 8   # end-to-end, KAGEMUSHA-sized payload
+cargo run --release -p iroha_petal --example stress -- 40   # light, motion and hidden-corner stress
+cargo run --release -p iroha_petal --example stream_sim -- 8 10000 8   # end to end, a KAGEMUSHA-sized message
 cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v1.json
 cargo run --release -p iroha_petal --example gen_captures -- fixtures/petal/petal_captures_v1.json
 ```

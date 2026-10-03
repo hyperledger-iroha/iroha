@@ -4878,6 +4878,36 @@ fn has_percent_encoded_separator(path: &str) -> bool {
                 || (window[1] == b'5' && matches!(window[2], b'c' | b'C')))
     })
 }
+fn is_canonical_proof_record_path(path: &str) -> bool {
+    let Some(encoded_id) = path.strip_prefix("/v1/proofs/") else {
+        return false;
+    };
+    if encoded_id.contains('/') {
+        return false;
+    }
+    let Ok(decoded_id) = urlencoding::decode(encoded_id) else {
+        return false;
+    };
+    let Ok(id) = decoded_id.parse::<iroha_data_model::proof::ProofId>() else {
+        return false;
+    };
+    // Slash-delimited backend labels are identifier data in this one route's
+    // single parameter. Admit their canonical spelling, never path traversal,
+    // backslashes, nested escaping, or an arbitrary encoded path separator.
+    if id.backend.split('/').any(|part| {
+        part.is_empty()
+            || matches!(part, "." | "..")
+            || !part.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return false;
+    }
+    let canonical = id.to_string();
+    // URL path_segments and Torii's existing component encoder differ only in
+    // whether data colons are escaped. Both retain the same exact ProofId.
+    canonical.replace('/', "%2F") == encoded_id || urlencoding::encode(&canonical) == encoded_id
+}
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
         segment == "."
@@ -4917,9 +4947,14 @@ async fn enforce_strict_request_target(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let path = req.uri().path();
+    let encoded_path_invalid = if path.starts_with("/v1/proofs/") && path.contains('%') {
+        !is_canonical_proof_record_path(path)
+    } else {
+        has_percent_encoded_separator(path)
+    };
     let violation = if path.contains("//")
         || path.contains('\\')
-        || has_percent_encoded_separator(path)
+        || encoded_path_invalid
         || has_dot_segment(path)
         || has_percent_encoded_kagemusha_operation_id(path)
         || has_percent_encoded_operator_credential_id(path)

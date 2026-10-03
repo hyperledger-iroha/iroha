@@ -216,6 +216,10 @@ struct DecodeReport {
     frames_read: u64,
     frames_located: u64,
     frames_readable: u64,
+    /// Frames read by following the previous pose instead of a full search.
+    frames_tracked: u64,
+    /// Frames read with one corner blossom hidden and inferred.
+    frames_inferred: u64,
     lane_p_frames: u64,
     lane_k_frames: u64,
     lane_d_frames: u64,
@@ -242,6 +246,8 @@ struct InspectReport {
     error: Option<String>,
     rotation_quarter_turns: Option<u8>,
     mirrored: Option<bool>,
+    /// Canonical index of a corner blossom that was hidden and inferred (0 top-left, clockwise).
+    inferred_corner: Option<u8>,
     lane_p: Option<LaneReport>,
     lane_k: Option<LaneReport>,
     lane_d: Option<LaneReport>,
@@ -440,6 +446,8 @@ impl DecodeArgs {
             frames_read: 0,
             frames_located: 0,
             frames_readable: 0,
+            frames_tracked: 0,
+            frames_inferred: 0,
             lane_p_frames: 0,
             lane_k_frames: 0,
             lane_d_frames: 0,
@@ -471,6 +479,8 @@ impl DecodeArgs {
         let stats = session.stats();
         report.frames_located = u64::from(stats.located);
         report.frames_readable = u64::from(stats.readable);
+        report.frames_tracked = u64::from(stats.tracked);
+        report.frames_inferred = u64::from(stats.inferred);
         report.lane_p_frames = u64::from(stats.lane_p);
         report.lane_k_frames = u64::from(stats.lane_k);
         report.lane_d_frames = u64::from(stats.lane_d);
@@ -518,6 +528,7 @@ impl InspectArgs {
             error: None,
             rotation_quarter_turns: None,
             mirrored: None,
+            inferred_corner: None,
             lane_p: None,
             lane_k: None,
             lane_d: None,
@@ -537,6 +548,7 @@ impl InspectArgs {
                 };
                 report.rotation_quarter_turns = Some(frame.rotation);
                 report.mirrored = Some(frame.mirrored);
+                report.inferred_corner = frame.inferred_corner;
                 report.lane_p = lane(&frame.p);
                 report.lane_k = lane(&frame.k);
                 report.lane_d = lane(&frame.d);
@@ -878,6 +890,7 @@ mod tests {
         assert_eq!(report.beacon_kind, Some(2));
         assert_eq!(report.beacon_payload_bytes, Some(100));
         assert_eq!(report.mirrored, Some(false));
+        assert_eq!(report.inferred_corner, None);
     }
 
     #[test]

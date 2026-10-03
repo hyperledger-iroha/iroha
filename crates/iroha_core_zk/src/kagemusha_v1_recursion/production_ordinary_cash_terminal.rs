@@ -34,7 +34,6 @@ use super::production_ordinary_guard::{
 use super::*;
 use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128};
 use crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1;
-pub(crate) use commit_assembler::GeneratedOrdinaryCashCommitOriginalsV1;
 use iroha_data_model::kagemusha::{
     KagemushaOrdinaryAppCredentialV1, KagemushaPlayIntegrityRefreshLeaseV1,
 };

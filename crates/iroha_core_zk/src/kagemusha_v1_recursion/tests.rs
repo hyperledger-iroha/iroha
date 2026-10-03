@@ -435,7 +435,7 @@ fn authenticated_ordinary_fixture_protocols_are_canonical_and_preview_bootstrap(
         for (index, tag) in (0x41_u8..=0x46).enumerate() {
             let mut invalid = actual;
             {
-                let mut fields = [
+                let fields = [
                     &mut invalid.mint_hash_shard_eq_protocol_digest,
                     &mut invalid.mint_hash_shard_ep_protocol_digest,
                     &mut invalid.mint_hash_claim_eq_protocol_digest,

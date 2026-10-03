@@ -46,7 +46,7 @@ pub(super) enum TransportOriginals {
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalSelectionOriginalsV1"
 )]
-struct SelectionOriginals {
+pub(super) struct SelectionOriginals {
     preselection_cash_prefix: KagemushaRecoveryJournalPrefixV1,
     financial_control: CapturedFinancialControlIdentity,
     prepared: KagemushaOrdinaryPreparedOutgoingV1,
@@ -384,7 +384,7 @@ impl TerminalJournal {
 impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Reserve a distinct actual purpose1 nonce only after real preparation Guard and State proofs.
     /// The transport inputs remain private Native originals; managed code supplies no owner/time/key.
-    pub(crate) fn select_terminal(
+    pub(super) fn select_terminal(
         &mut self,
         candidate: KagemushaAuthenticatedOrdinaryCashCandidateV1,
         guard: KagemushaAuthenticatedOrdinaryPreparationGuardV1,

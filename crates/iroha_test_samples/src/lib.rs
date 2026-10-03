@@ -175,7 +175,7 @@ mod calibration_tests {
         let workers = ["parallel-seed-one", "parallel-seed-two"].map(|seed| {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
-                let _fixture = CalibrationSeedFixture::new(seed);
+                let fixture = CalibrationSeedFixture::new(seed);
                 barrier.wait();
                 for ordinal in 0..2 {
                     if ordinal == 1 {
@@ -183,7 +183,7 @@ mod calibration_tests {
                             let _nested = CalibrationSeedFixture::new("unwinding-seed");
                             let (account, key_pair) = try_gen_account_in("wonderland")
                                 .expect("unwinding calibration account");
-                            assert_derived_account(account, key_pair, "unwinding-seed", 0);
+                            assert_derived_account(&account, &key_pair, "unwinding-seed", 0);
                             panic!("nested calibration fixture unwind");
                         });
                         let payload = unwound.expect_err("nested fixture must unwind");
@@ -194,13 +194,13 @@ mod calibration_tests {
                         let _nested = CalibrationSeedFixture::new("nested-seed");
                         let (account, key_pair) =
                             try_gen_account_in("wonderland").expect("nested calibration account");
-                        assert_derived_account(account, key_pair, "nested-seed", 0);
+                        assert_derived_account(&account, &key_pair, "nested-seed", 0);
                     }
                     let (account, key_pair) =
                         try_gen_account_in("wonderland").expect("parallel calibration account");
-                    assert_derived_account(account, key_pair, seed, ordinal);
+                    assert_derived_account(&account, &key_pair, seed, ordinal);
                 }
-                drop(_fixture);
+                drop(fixture);
                 assert!(CALIBRATION_SEED_OVERRIDE.with(|state| state.borrow().is_none()));
             })
         });
@@ -208,12 +208,12 @@ mod calibration_tests {
             worker.join().expect("parallel seed fixture assertions");
         }
     }
-    fn assert_derived_account(account: AccountId, key_pair: KeyPair, seed: &str, ordinal: u64) {
+    fn assert_derived_account(account: &AccountId, key_pair: &KeyPair, seed: &str, ordinal: u64) {
         let hash_bytes: [u8; Hash::LENGTH] =
             Hash::new(format!("{seed}:wonderland:{ordinal}")).into();
         let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
             .expect("fixed calibration seed must derive");
-        assert_eq!(account, AccountId::new(expected_key.public_key().clone()));
+        assert_eq!(account, &AccountId::new(expected_key.public_key().clone()));
         assert_eq!(key_pair.public_key(), expected_key.public_key());
     }
     #[test]

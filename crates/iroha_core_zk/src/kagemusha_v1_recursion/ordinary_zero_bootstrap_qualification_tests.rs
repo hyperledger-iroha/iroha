@@ -21,8 +21,7 @@ use halo2_base::gates::{
 };
 use halo2_proofs::dev::MockProver;
 
-#[path = "ordinary_zero_bootstrap_fixture.rs"]
-mod originals;
+use super::ordinary_zero_bootstrap_fixture as originals;
 
 fn mathematical_protocol<C>(parameters: &ParamsIPA<C>, width: usize) -> PlonkProtocol<C>
 where

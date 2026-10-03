@@ -567,7 +567,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 104);
+  assert.equal(Object.keys(result.metafile.inputs).length, 105);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -611,8 +611,8 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
     ["toriiClient.js", { modules: 129 }],
-    ["transactionCodec.js (browser)", { modules: 63 }],
-    ["nexusApp.js (browser)", { modules: 72 }],
+    ["transactionCodec.js (browser)", { modules: 64 }],
+    ["nexusApp.js (browser)", { modules: 73 }],
     ["canonicalRequest.js (browser)", { modules: 47 }],
   ]);
   const { build } = await import("esbuild");
@@ -649,6 +649,13 @@ test("bundle targets retain canonical module ownership and accurate byte invento
         ).length,
         1,
         `${target.label} must retain exactly one canonical ProofAttachment module`,
+      );
+      assert.equal(
+        Object.keys(result.metafile.inputs).filter((input) =>
+          /(?:^|[/\\])retailFeeAssessment\.js$/u.test(input),
+        ).length,
+        1,
+        `${target.label} must retain exactly one retail fee assessment validator`,
       );
     }
     if (target.label === "toriiClient.js") {

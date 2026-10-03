@@ -23,7 +23,6 @@ use super::ordinary_cash_family_qualification::{
 };
 use super::ordinary_mint_genuine_qualification_tests::sign_message_with_counter;
 use super::*;
-use ff::Field as _;
 use iroha_data_model::kagemusha::*;
 
 /// Full actual outgoing proofs and same original data, without installing a financial owner.
@@ -49,6 +48,26 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
     let before = &send.funded.state;
     let after = &send.state;
     let prepared = &send.prepared;
+    assert_eq!(
+        send.reservation.canonical_commitment().unwrap(),
+        prepared.reservation_digest,
+        "the retained outgoing reservation must be the one authorized by preparation"
+    );
+    let original = super::super::KagemushaOrdinaryLineageStateOriginalV1::decode_original(
+        &send.public_original,
+    )
+    .unwrap();
+    assert_eq!(original.proof(), &send.generated.proof);
+    let (eq_public, ep_public) = original.public_columns().unwrap();
+    let width = super::super::state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT;
+    assert_eq!(
+        eq_public,
+        send.generated.eq_transport_public_instances[..width]
+    );
+    assert_eq!(
+        ep_public,
+        send.generated.ep_transport_public_instances[..width]
+    );
     let c = &send.funded.bootstrap.credential;
     let intent = KagemushaOrdinaryCashTerminalIntentV1 {
         version: 1,

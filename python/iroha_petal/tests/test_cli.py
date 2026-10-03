@@ -55,6 +55,9 @@ class CliTest(unittest.TestCase):
             self.assertEqual(status, 0, err)
             self.assertEqual((root / "out.bin").read_bytes(), data)
             self.assertIn("kind 5", out)
+            # the frames share one pose, so every frame after the first follows it
+            self.assertIn(f"{frames[1].name}: PKD (tracked)", err)
+            self.assertIn("frames: 3 read, 3 located, 3 readable, 2 tracked", err)
 
     def test_decode_reports_incomplete_streams(self) -> None:
         data = payload(2_000, 78)
@@ -112,6 +115,15 @@ class CliTest(unittest.TestCase):
             self.assertIn("lane D: ok", out)
             self.assertIn("rotation 3", out)
             self.assertIn(capture["p_data"], out)
+            self.assertNotIn("inferred corner", out)
+            hidden = next(
+                c for c in captures_fixture()["captures"] if c["name"] == "hidden-corner-540p"
+            )
+            covered = Path(directory) / "covered.png"
+            write_image(covered, luma_of(hidden))
+            status, out, _ = run("inspect", str(covered))
+            self.assertEqual(status, 0)
+            self.assertIn("inferred corner: 3 (bottom-left blossom hidden)", out)
             blank = Path(directory) / "blank.pgm"
             write_image(blank, luma_of(captures_fixture()["negatives"][0]))
             status, out, _ = run("inspect", str(blank))

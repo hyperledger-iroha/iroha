@@ -13,11 +13,17 @@ All notable changes to `IrohaSwift` are documented in this file.
   homographies, joint polarity/katakana tile matching read against the finder
   levels and, for a lane that stays unreadable, again with every patch and
   template normalised by its own contrast so over-exposure, veiling light,
-  glare and shadows cancel; rotation and mirror hypotheses) and
-  `PetalScanSession`. The suites check every section of
-  `fixtures/petal/petal_stream_v1.json`, decode all nine golden captures in
+  glare and shadows cancel; rotation and mirror hypotheses ranked by the ring
+  gates and the `天` silhouette; a blossom hidden by a thumb, a glare or the
+  frame edge is inferred from the other three and reported as
+  `PetalDecodedFrame.inferredCorner`) and `PetalScanSession`, which follows
+  the code from its last pose (`PetalDecoder.track`, within 500 ms) instead
+  of searching every frame and counts `tracked` and `inferred` frames in
+  `PetalScanStats`. The suites check every section of
+  `fixtures/petal/petal_stream_v1.json`, decode all eleven golden captures in
   `fixtures/petal/petal_captures_v1.json` with exactly the reference lanes and
-  reproduce the clean capture pixel for pixel. `IrohaSwiftTransferUI` adds
+  inferred corners, follow both tracking pairs and reproduce the clean capture
+  pixel for pixel. `IrohaSwiftTransferUI` adds
   `PetalCoreGraphicsRenderer`, `PetalFrameView` and the animated
   `PetalStreamView`; `IrohaSwiftMobileTransports` adds the AVFoundation
   `PetalCameraAnalyzer` and `PetalCameraFrame` pixel-buffer conversion.

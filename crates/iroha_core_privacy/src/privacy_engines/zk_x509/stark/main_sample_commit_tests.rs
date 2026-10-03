@@ -421,6 +421,16 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                 MainTraceMaskGroupV1::empty_v1(log, layout.common_lde_log2(), width).unwrap()
             })
             .collect::<Vec<_>>();
+        let mut retained = logs
+            .iter()
+            .zip(widths)
+            .enumerate()
+            .map(|(group, (&log, width))| {
+                super::super::main_retained_rfc::MainRetainedRfcV1::for_original_mask_test_v1(
+                    group, width, log,
+                )
+            })
+            .collect::<Vec<_>>();
         let mut pending = Vec::new().into_iter();
         let actual = plan
             .commit_replayed_v1(
@@ -428,7 +438,8 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                 &indices,
                 |g, c| {
                     if pending.len() == 0 {
-                        pending = groups[g]
+                        let end = widths[g].min(c + 8);
+                        let mut batch = groups[g]
                             .sample_and_replay_batch_with_v1(
                                 c..widths[g].min(c + 8),
                                 MainBoundedTransformPolicyV1::for_test_v1(1 << logs[g], 4),
@@ -437,8 +448,9 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                                 cpu,
                                 || false,
                             )
-                            .unwrap()
-                            .into_iter();
+                            .unwrap();
+                        retained[g].retain_batch_v1(g, c..end, &mut batch).unwrap();
+                        pending = batch.into_iter();
                     }
                     Ok(pending.next().unwrap().into_vec_v1())
                 },
@@ -449,6 +461,100 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
         assert_eq!(actual.commitment.frontier, expected.commitment.frontier);
         assert_eq!(actual.opened_rows, expected.opened_rows);
         assert_eq!(new_rng.next_u64(), old_rng.next_u64());
+        let next_rng = new_rng.clone().next_u64();
+        let replayed = plan
+            .commit_replayed_v1(
+                AGGREGATE_DOMAINS_V1,
+                &indices,
+                |g, c| {
+                    let mut column = retained[g].copy_columns_v1(g, c..c + 1).unwrap();
+                    Ok(column.pop().unwrap().into_vec_v1())
+                },
+                evaluate,
+            )
+            .unwrap();
+        assert_eq!(replayed.commitment.root, expected.commitment.root);
+        assert_eq!(replayed.commitment.frontier, expected.commitment.frontier);
+        assert_eq!(replayed.opened_rows, expected.opened_rows);
+        assert_eq!(
+            new_rng.next_u64(),
+            next_rng,
+            "cached replay never draws entropy"
+        );
+        let evaluate_retained = |columns: &[aggregate::ZeroizingFieldColumnV1],
+                                 native,
+                                 common,
+                                 selected: Option<&[usize]>| {
+            evaluate(columns, native, common).map(|full| {
+                full.into_iter()
+                    .map(|column| match selected {
+                        Some(indices) => aggregate::ZeroizingFieldColumnV1::from_vec_v1(
+                            indices.iter().map(|&row| column[row]).collect(),
+                        ),
+                        None => column,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        let (initial, cut) = plan
+            .commit_retained_replayed_v1(
+                AGGREGATE_DOMAINS_V1,
+                &[],
+                None,
+                |g, c| {
+                    let mut columns = retained[g].copy_columns_v1(g, c..c + 1).unwrap();
+                    Ok(columns.pop().unwrap().into_vec_v1())
+                },
+                evaluate_retained,
+            )
+            .unwrap();
+        assert_eq!(initial.commitment.root, expected.commitment.root);
+        assert!(initial.opened_rows.is_empty());
+        assert!(initial.commitment.frontier.is_empty());
+        let cut = cut.unwrap();
+        cut.check_root_v1(1 << layout.common_lde_log2(), expected.commitment.root)
+            .unwrap();
+        let (selected, absent_cut) = plan
+            .commit_retained_replayed_v1(
+                AGGREGATE_DOMAINS_V1,
+                &indices,
+                Some(&cut),
+                |g, c| {
+                    let mut columns = retained[g].copy_columns_v1(g, c..c + 1).unwrap();
+                    Ok(columns.pop().unwrap().into_vec_v1())
+                },
+                evaluate_retained,
+            )
+            .unwrap();
+        assert!(absent_cut.is_none());
+        assert_eq!(selected.commitment.root, expected.commitment.root);
+        assert_eq!(selected.commitment.frontier, expected.commitment.frontier);
+        assert_eq!(selected.opened_rows, expected.opened_rows);
+        let next_rng = new_rng.clone().next_u64();
+        let mutated = plan.commit_retained_replayed_v1(
+            AGGREGATE_DOMAINS_V1,
+            &indices,
+            Some(&cut),
+            |g, c| {
+                let mut columns = retained[g].copy_columns_v1(g, c..c + 1).unwrap();
+                let mut column = columns.pop().unwrap();
+                if g == 0 && c == 0 {
+                    let last = column.len() - 1;
+                    column[last] = column[last].add(F::ONE);
+                }
+                Ok(column.into_vec_v1())
+            },
+            evaluate_retained,
+        );
+        assert!(
+            mutated.is_err(),
+            "the actual retained-root replay must reject a changed complete mask tail"
+        );
+        assert_eq!(
+            new_rng.next_u64(),
+            next_rng,
+            "retained verification draws no entropy"
+        );
     }
 }
 
@@ -497,4 +603,46 @@ fn fused_log19_width8_required_metal_preserves_cpu_coefficients_and_entropy() {
         assert_eq!(cpu.coefficients(), metal.coefficients());
     }
     assert_eq!(cpu_rng.next_u64(), metal_rng.next_u64());
+}
+
+#[test]
+fn retained_original_source_poisoning_is_refused_before_entropy_or_cache_population() {
+    for poison in [false, true] {
+        let events = RefCell::new(Vec::new());
+        let mut rng = OrderedEntropy {
+            draws: 0,
+            events: &events,
+            fail: None,
+            unwind: false,
+        };
+        let mut group = MainTraceMaskGroupV1::empty_v1(3, 13, 3).unwrap();
+        let mut retained =
+            super::super::main_retained_rfc::MainRetainedRfcV1::for_original_mask_test_v1(0, 3, 3);
+        let output = group.sample_and_replay_batch_with_v1(
+            0..3,
+            MainBoundedTransformPolicyV1::cpu_v1(),
+            &mut rng,
+            |column| {
+                assert_eq!(column, 0);
+                let mut source = native(3, column);
+                if poison {
+                    source[0] = F(u64::MAX);
+                } else {
+                    source.0.pop();
+                }
+                Ok(source)
+            },
+            |_, _, _| panic!("poisoned source cannot transform"),
+            || false,
+        );
+        assert_eq!(output, Err(ZkX509StarkErrorV1::ProfileMismatch));
+        assert_eq!(rng.draws, 0);
+        assert!(group.masks.is_empty());
+        assert!(retained.copy_columns_v1(0, 0..1).is_err());
+        // Retention is reached only after a successful original producer result.
+        if let Ok(mut batch) = output {
+            retained.retain_batch_v1(0, 0..3, &mut batch).unwrap();
+            panic!("poisoned source cannot be retained");
+        }
+    }
 }

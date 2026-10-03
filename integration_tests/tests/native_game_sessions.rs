@@ -11,7 +11,7 @@
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;

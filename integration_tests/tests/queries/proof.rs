@@ -1,28 +1,36 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for proof queries.
 //! The mixed Halo2/STARK network scenario requires the `zk-stark` feature and daemon.
+#[cfg(feature = "zk-stark")]
 use eyre::Result;
+#[cfg(feature = "zk-stark")]
 use integration_tests::sandbox;
+#[cfg(feature = "zk-stark")]
 use iroha::data_model::{
     confidential::ConfidentialStatus,
-    isi::verifying_keys,
     prelude::*,
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::proof::prelude::{
         FindProofRecords, FindProofRecordsByBackend, FindProofRecordsByStatus,
     },
     zk::BackendTag,
 };
+use iroha::data_model::{isi::verifying_keys, proof::ProofAttachment};
+#[cfg(feature = "zk-stark")]
 use iroha_core_zk::hash_vk;
 #[path = "../proof_fixtures.rs"]
 mod proof_fixtures;
 use iroha_data_model::zk::OpenVerifyEnvelope;
+#[cfg(feature = "zk-stark")]
 use iroha_test_network::NetworkBuilder;
+#[cfg(feature = "zk-stark")]
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use proof_fixtures::confidential_attachment;
 #[cfg(feature = "zk-stark")]
 use proof_fixtures::rejected_confidential_attachment;
+#[cfg(feature = "zk-stark")]
 use std::{thread::sleep, time::Duration};
+#[cfg(feature = "zk-stark")]
 fn active_vk_record(
     circuit_id: &str,
     backend: BackendTag,
@@ -136,6 +144,7 @@ fn rejected_stark_fixture_retains_canonical_key_and_proof_framing() {
     assert!(registration.record.key.is_some());
 }
 
+#[cfg(feature = "zk-stark")]
 fn proof_query_network_builder(
     registrations: impl IntoIterator<Item = verifying_keys::RegisterVerifyingKey>,
 ) -> NetworkBuilder {
@@ -271,6 +280,7 @@ fn proof_query_scenarios() -> Result<()> {
     }
     Ok(())
 }
+#[cfg(feature = "zk-stark")]
 fn retry_records_by_status(
     client: &iroha::blocking::Client,
     status: iroha::data_model::proof::ProofStatus,
@@ -282,11 +292,13 @@ fn retry_records_by_status(
             .execute_all()?)
     })
 }
+#[cfg(feature = "zk-stark")]
 fn retry_all_proof_records(
     client: &iroha::blocking::Client,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     retry_proof_records(|| Ok(client.client().query(FindProofRecords).execute_all()?))
 }
+#[cfg(feature = "zk-stark")]
 fn retry_records_by_backend(
     client: &iroha::blocking::Client,
     backend: &str,
@@ -298,6 +310,7 @@ fn retry_records_by_backend(
             .execute_all()?)
     })
 }
+#[cfg(feature = "zk-stark")]
 fn retry_proof_records(
     mut query: impl FnMut() -> Result<Vec<iroha::data_model::proof::ProofRecord>>,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
@@ -321,6 +334,7 @@ fn retry_proof_records(
     }
     unreachable!()
 }
+#[cfg(feature = "zk-stark")]
 fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> Vec<String> {
     records
         .iter()

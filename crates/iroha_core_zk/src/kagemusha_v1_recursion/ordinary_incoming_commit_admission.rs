@@ -555,11 +555,6 @@ impl GeneratedOrdinaryIncomingCommitOriginalsV1 {
     pub(crate) fn private_service_original(&self) -> &[u8] {
         &self.private_service_original
     }
-    pub(crate) fn proof_bundle(&self) -> Result<KagemushaOrdinaryIncomingCommitProofBundleV1> {
-        KagemushaOrdinaryIncomingCommitProofBundleV1::decode_original(
-            &self.private_service_original,
-        )
-    }
 }
 
 /// Assemble/reverify all actual retained incoming proofs and originals. This performs no key

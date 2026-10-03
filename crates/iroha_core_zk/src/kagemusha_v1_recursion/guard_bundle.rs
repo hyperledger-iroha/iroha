@@ -18,6 +18,7 @@
 //! rejected. The Guard transport column has 44 fields: normalized digest, both audits, both exact
 //! credential statement digests, and history. Guard and descendant keys must be regenerated.
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -69,18 +70,20 @@ use snark_verifier::{
 };
 
 use super::deferred_parent::accumulator_limb_count;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::deferred_parent::{DeferredAccumulator, ordinary_ipa_proof_profile_v1};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::deferred_parent::{
-    KagemushaDeferredParentOutputV1, KagemushaNativeDeferredBatchV1, bind_accumulator_limbs,
-    constrain_reciprocal_native_batch_v1, constrain_reciprocal_output_with_u128_binding_v1,
-    deferred_field_chips_v1, deferred_loader_v1, derive_native_deferred_batch_with_u128_binding_v1,
+    KagemushaNativeDeferredBatchV1, bind_accumulator_limbs, constrain_reciprocal_native_batch_v1,
+    constrain_reciprocal_output_with_u128_binding_v1, deferred_field_chips_v1, deferred_loader_v1,
+    derive_native_deferred_batch_with_u128_binding_v1,
     finalize_tagged_deferred_audit_with_u128_binding_v1, kagemusha_protocol_structure_digest_v1,
     load_and_constrain_parent_protocol_v1, load_native_accumulator,
     native_parent_protocol_digest_v1, verify_fold,
     verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use super::{
     carrier_binding::{
         KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1, carrier_binding_values_v1,
@@ -572,11 +575,17 @@ pub(crate) mod platform_credential_public_instance {
     pub(crate) const EQ_PROOF_EP_CARRIER_COMMITMENT_LO: usize = 44;
     pub(crate) const EP_PROOF_EQ_CARRIER_COMMITMENT_LO: usize = 46;
     pub(crate) const EP_PROOF_EP_CARRIER_COMMITMENT_LO: usize = 48;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CARRIER_RLC_EQ_CHALLENGE: usize = 50;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CARRIER_RLC_EP_CHALLENGE: usize = 51;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EQ_CARRIER_AT_EQ_CHALLENGE: usize = 52;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EQ_CARRIER_AT_EP_CHALLENGE: usize = 53;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EP_CARRIER_AT_EQ_CHALLENGE: usize = 54;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const EP_CARRIER_AT_EP_CHALLENGE: usize = 55;
 }
 
@@ -589,6 +598,7 @@ pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1:
     KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 14;
 /// Complete source-major carrier capacity, retaining the original four-lane 2016-source envelope.
 pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1: usize = 4 * 2016 + 98;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {
         domain: u64::from_le_bytes(*b"kgpcrlc1"),
@@ -596,6 +606,7 @@ const PLATFORM_CREDENTIAL_CARRIER_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
         capacity: KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
         semantic_prefix: KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
     };
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 type CredentialCarrierRlcMachineV1<F> = KagemushaCarrierRlcMachineV1<F, 8162, 1, 103>;
 
 #[derive(Clone, Debug)]
@@ -1737,15 +1748,23 @@ fn attach_platform_credential_carriers_v1<F: KagemushaPoseidonFieldV1>(
             zero,
         );
     }
+    let evaluation_positions = [
+        [
+            platform_credential_public_instance::EQ_CARRIER_AT_EQ_CHALLENGE,
+            platform_credential_public_instance::EQ_CARRIER_AT_EP_CHALLENGE,
+        ],
+        [
+            platform_credential_public_instance::EP_CARRIER_AT_EQ_CHALLENGE,
+            platform_credential_public_instance::EP_CARRIER_AT_EP_CHALLENGE,
+        ],
+    ];
     let machines = std::array::from_fn(|index| CredentialCarrierRlcMachineV1 {
         challenge_a: challenges[0],
         challenge_b: challenges[1],
         carriers: [CarrierRlcCarrierV1 {
             values: carriers[index].clone(),
-            expected_a: public
-                [platform_credential_public_instance::EQ_CARRIER_AT_EQ_CHALLENGE + index * 2],
-            expected_b: public
-                [platform_credential_public_instance::EQ_CARRIER_AT_EP_CHALLENGE + index * 2],
+            expected_a: public[evaluation_positions[index][0]],
+            expected_b: public[evaluation_positions[index][1]],
         }],
         use_unknown: false,
     });
@@ -4329,6 +4348,57 @@ mod tests {
                 before.total_lookup_advice_per_phase,
                 after.total_lookup_advice_per_phase
             );
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn platform_credential_carriers_retain_exact_cross_parity_public_cells() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let mut builder = BaseCircuitBuilder::new(false)
+                .use_k(10)
+                .use_lookup_bits(8)
+                .use_instance_columns(1);
+            let public = (1_u64..=56)
+                .map(|value| builder.main(0).load_witness(F::from(value)))
+                .collect::<Vec<_>>();
+            builder.assigned_instances[0] = public.clone();
+            let originals =
+                [101_u64, 202].map(|value| builder.main(0).load_witness(F::from(value)));
+            let machines = attach_platform_credential_carriers_v1(
+                &mut builder,
+                originals.map(|value| vec![value]),
+            )
+            .expect("exact two-parity credential carrier attachment");
+            assert_eq!(builder.assigned_instances.len(), 3);
+            for (index, machine) in machines.iter().enumerate() {
+                // Check the external [56, 8162, 8162] order against original assigned cells,
+                // independently of the implementation's named selector table.
+                let positions = [[50, 51, 52, 53], [50, 51, 54, 55]][index];
+                for (actual, position) in [
+                    machine.challenge_a,
+                    machine.challenge_b,
+                    machine.carriers[0].expected_a,
+                    machine.carriers[0].expected_b,
+                ]
+                .into_iter()
+                .zip(positions)
+                {
+                    assert_eq!(actual.cell, public[position].cell);
+                    assert_eq!(actual.value(), public[position].value());
+                }
+                assert!(!machine.use_unknown);
+                let values = &machine.carriers[0].values;
+                assert_eq!(values.len(), 8162);
+                assert_eq!(values[0].cell, originals[index].cell);
+                assert_eq!(values[0].value(), originals[index].value());
+                assert!(values[1..].iter().all(|value| *value.value() == F::ZERO));
+                for (actual, exposed) in values.iter().zip(&builder.assigned_instances[index + 1]) {
+                    assert_eq!(actual.cell, exposed.cell);
+                    assert_eq!(actual.value(), exposed.value());
+                }
+            }
         }
         check::<Fp>();
         check::<Fq>();

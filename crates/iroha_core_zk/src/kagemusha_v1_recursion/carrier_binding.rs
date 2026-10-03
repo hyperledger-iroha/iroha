@@ -27,10 +27,7 @@ use halo2_proofs::{
         group::{Curve as _, prime::PrimeCurveAffine as _},
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
-    poly::{
-        commitment::{Params as _, ParamsProver as _},
-        ipa::commitment::ParamsIPA,
-    },
+    poly::ipa::commitment::ParamsIPA,
 };
 use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256};
 

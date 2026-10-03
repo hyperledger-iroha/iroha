@@ -607,3 +607,25 @@ fn genuine_native_call_runtime_entries_match_original_operands_and_installed_des
         }
     }
 }
+
+/// Reuse the exact descriptor witness constructor for the composed child bank.
+pub(in super::super) fn child_for_dispatch(
+    selected: Option<(u64, u64, u64, u64)>,
+) -> ([F; WIDTH], [[F; packet::WIDTH]; PORTS]) {
+    let mut shape = Shape::child();
+    shape.generation = 11;
+    if let Some((entry, frame, arguments, results)) = selected {
+        shape.entry = entry;
+        shape.frame = frame;
+        shape.argument_words = arguments;
+        shape.result_words = results;
+        if arguments == 0 {
+            shape.argument = 0;
+        }
+    } else {
+        shape.selected = false;
+    }
+    let fixture = Fixture::new(shape);
+    assert!(fixture.accepts());
+    (fixture.row, fixture.packets)
+}

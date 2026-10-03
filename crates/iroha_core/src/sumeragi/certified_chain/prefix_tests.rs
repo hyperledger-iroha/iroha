@@ -2,18 +2,36 @@
 
 use super::*;
 
+// Keep the real NPoS boundary construction and final native commit outside the
+// later streamed-reader assertion frame, retaining the original chain owner.
+#[inline(never)]
+fn with_native_boundary_chain(assert_original: fn(&CertifiedTestChain)) {
+    let mut chain = Box::new(CertifiedTestChain::npos_boundary_fixture());
+    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    assert_original(&chain);
+}
+
 #[test]
 fn streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor() {
-    let (chain, _) = chain();
+    with_native_chain(
+        assert_streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor,
+    );
+}
+
+#[inline(never)]
+fn assert_streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor(
+    chain: &CertifiedTestChain,
+    _entry: HashOf<TransactionEntrypoint>,
+) {
     let id = ChainId::from("sumeragi-certified-test-chain");
-    let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), frame(&chain, 1)).unwrap();
+    let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), frame(chain, 1)).unwrap();
     assert_eq!(prefix.instance(), chain.instance());
     assert!(
-        prefix.push(frame(&chain, 3)).is_err(),
+        prefix.push(frame(chain, 3)).is_err(),
         "a skipped frame must not advance the cursor"
     );
     for height in 2..=5 {
-        let (current, genesis) = prefix.push(frame(&chain, height)).unwrap().into_parts();
+        let (current, genesis) = prefix.push(frame(chain, height)).unwrap().into_parts();
         assert_eq!(current.verification(), QcVerification::Verified);
         assert_eq!(current.height(), height);
         if height == 2 {
@@ -30,7 +48,7 @@ fn streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor() {
             assert!(genesis.is_none());
         }
         assert!(
-            prefix.push(frame(&chain, height)).is_err(),
+            prefix.push(frame(chain, height)).is_err(),
             "replay cannot advance twice"
         );
     }
@@ -78,14 +96,21 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
 
 #[test]
 fn streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary() {
-    let mut chain = CertifiedTestChain::npos_boundary_fixture();
-    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    with_native_boundary_chain(
+        assert_streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary,
+    );
+}
+
+#[inline(never)]
+fn assert_streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary(
+    chain: &CertifiedTestChain,
+) {
     let id = ChainId::from("sumeragi-certified-test-chain");
-    let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), frame(&chain, 1)).unwrap();
+    let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), frame(chain, 1)).unwrap();
     for height in 2..10 {
-        prefix.push(frame(&chain, height)).unwrap();
+        prefix.push(frame(chain, height)).unwrap();
     }
-    let original = frame(&chain, 10);
+    let original = frame(chain, 10);
     let tampered = with_parts(&original, |_, qc, _| {
         qc.attestation_witness = None;
     });

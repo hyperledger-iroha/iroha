@@ -528,3 +528,54 @@ async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
     }
     assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
+
+#[test]
+fn proof_record_separator_exception_requires_one_canonical_typed_identifier() {
+    let hash = "AB".repeat(32);
+    for backend in [
+        "halo2/ipa",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "halo2/ipa:colon-profile",
+    ] {
+        let id = iroha_data_model::proof::ProofId {
+            backend: backend.into(),
+            proof_hash: [0xAB; 32],
+        };
+        let mut url = url::Url::parse("http://localhost/").expect("fixed base URL");
+        url.path_segments_mut().expect("base URL").clear().extend([
+            "v1",
+            "proofs",
+            &id.to_string(),
+        ]);
+        assert!(has_percent_encoded_separator(url.path()));
+        assert!(is_canonical_proof_record_path(url.path()), "{}", url.path());
+        let component_path = format!("/v1/proofs/{}", urlencoding::encode(&id.to_string()));
+        assert!(
+            is_canonical_proof_record_path(&component_path),
+            "{component_path}"
+        );
+    }
+    for path in [
+        format!("/v1/files/halo2%2Fipa:{hash}"),
+        format!("/v1/proofs/halo2/ipa:{hash}"),
+        format!("/v1/proofs/halo2%2fipa:{hash}"),
+        format!("/v1/proofs/halo2%5Cipa:{hash}"),
+        format!("/v1/proofs/halo2%252Fipa:{hash}"),
+        format!("/v1/proofs/halo2%2F.%2Fipa:{hash}"),
+        format!("/v1/proofs/halo2%2F%2e%2e%2Fipa:{hash}"),
+        format!("/v1/proofs/halo2%2F%2Fipa:{hash}"),
+        format!("/v1/proofs/%2Fhalo2:{hash}"),
+        format!("/v1/proofs/halo2%2F:{hash}"),
+        format!("/v1/proofs/halo2%2Fipa%00:{hash}"),
+        format!("/v1/proofs/halo2%2Fipa%253A{hash}"),
+        format!("/v1/proofs/halo2%2Fipa%3a{hash}"),
+        format!("/v1/proofs/halo2%2Fipa:colon-profile%3A{hash}"),
+        format!("/v1/proofs/halo2%2Fipa%3Acolon-profile:{hash}"),
+        format!("/v1/proofs/halo2%2Fipa:{}", "ab".repeat(32)),
+        format!("/v1/proofs/halo2%2Fipa:{}", "AB".repeat(31)),
+        format!("/v1/proofs/halo2%2Fipa:{}G", "AB".repeat(31)),
+        format!("/v1/proofs/halo2%2Fipa:{hash}/other"),
+    ] {
+        assert!(!is_canonical_proof_record_path(&path), "{path}");
+    }
+}

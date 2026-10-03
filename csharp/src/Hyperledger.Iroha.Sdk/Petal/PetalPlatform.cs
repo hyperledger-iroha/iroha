@@ -128,6 +128,13 @@ public sealed class PetalFramePlayer
 /// decoded (keep-only-latest back-pressure). <see cref="PayloadCompleted"/>
 /// fires once per reassembled, CRC-verified payload, outside the internal lock.
 /// </para>
+/// <para>
+/// The session follows the code from frame to frame instead of searching for it
+/// again (<see cref="PetalScanStats.Tracked"/>), and still reads a frame whose
+/// corner blossom is covered by a thumb or cut off by the frame edge
+/// (<see cref="PetalScanStats.Inferred"/>: a growing count is a cue to show a
+/// "one corner blossom is hidden" hint).
+/// </para>
 /// <para>Instances are thread-safe.</para>
 /// </remarks>
 public sealed class PetalCameraAnalyzer

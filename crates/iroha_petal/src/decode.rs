@@ -1,8 +1,9 @@
 //! From a camera luma plane to lane data.
 //!
-//! The decoder locates the four finders, derives a homography for each
-//! orientation hypothesis, picks the orientation whose ring gates line up (and
-//! whose lane `D` codeword checks out), then reads the tiles and dots. Every
+//! The decoder locates the corner finders (four, or three with the fourth
+//! inferred), derives a homography for each orientation hypothesis, ranks the
+//! orientations by how well the ring gates and the `天` line up (lane `D` must
+//! check out), then reads the tiles and dots. Every
 //! tile is classified *jointly*: the 8×8 sample patch is compared against the
 //! 32 hypotheses (polarity × glyph) and the best match wins, so the katakana
 //! and the light/dark bit help each other. Cells the decoder is unsure about
@@ -21,10 +22,11 @@ use crate::glyphs::{GLYPH_COUNT, TEMPLATE_N, TEMPLATES};
 use crate::image::Luma;
 use crate::lanes::{D_WORD, FrameCells, K_WORD, Lane, P_WORD, decode_lane_counted};
 use crate::layout::{
-    D_BITS, DOT_RADIUS, FINDER_CENTERS, GLYPH_BOX, RING_COUNT, SlotRole, TILE_COUNT, data_slots,
-    ring_offset, slot_center, slot_roles, split_slot, tile_center,
+    D_BITS, DOT_RADIUS, FINDER_CENTERS, GLYPH_BOX, MASK, RING_COUNT, SlotRole, TILE_COUNT,
+    TILE_ORIGIN, TILE_PITCH, TOTAL_SLOTS, data_slots, ring_offset, slot_center, slot_roles,
+    split_slot, tile_center,
 };
-use crate::locate::{Finder, locate};
+use crate::locate::{Finder, FinderSet, candidates, follow};
 use crate::stream::{AtomPacket, Beacon, DLane, StreamAssembler, parse_atom_lane, parse_d_lane};
 
 const PATCH: usize = TEMPLATE_N;
@@ -89,6 +91,10 @@ pub struct DecodedFrame {
     pub k: Option<LaneResult>,
     /// Lane `D` result.
     pub d: Option<LaneResult>,
+    /// The corner finder that was hidden (by a finger, a glare or the edge of the
+    /// frame) and inferred from the other three, as its canonical index: 0 top-left,
+    /// 1 top-right, 2 bottom-right, 3 bottom-left of the upright code.
+    pub inferred_corner: Option<u8>,
 }
 
 impl DecodedFrame {
@@ -149,7 +155,7 @@ pub enum DecodeError {
     /// The image is empty, smaller than 48 pixels on a side, or larger than
     /// [`DecodeOptions::max_pixels`].
     UnsupportedImage,
-    /// The four corner finders were not found.
+    /// No set of corner finders (four, or three forming a corner) was found.
     NoFinders,
     /// Finders were found but no orientation produced a readable lane.
     NoOrientation,
@@ -200,10 +206,17 @@ fn dot_samples(image: &Luma, h: &Homography, x: f64, y: f64, spread: f64) -> f64
     sum / 5.0
 }
 
-fn reference_levels(image: &Luma, h: &Homography) -> Option<Reference> {
+/// Light and dark levels at the four corners: the solid blossom core, and the
+/// black canvas 100 units inward of it. An `inferred` corner (canonical index)
+/// was not seen, so its levels are extrapolated from the other three by the
+/// parallelogram rule and kept within their range.
+fn reference_levels(image: &Luma, h: &Homography, inferred: Option<usize>) -> Option<Reference> {
     let mut lit = [0.0; 4];
     let mut dark = [0.0; 4];
     for (i, &(cx, cy)) in FINDER_CENTERS.iter().enumerate() {
+        if inferred == Some(i) {
+            continue;
+        }
         let (cx, cy) = (f64::from(cx), f64::from(cy));
         // the blossom is solid out to radius 24 around its centre
         let (px, py) = h.apply(cx, cy);
@@ -221,11 +234,146 @@ fn reference_levels(image: &Luma, h: &Homography) -> Option<Reference> {
         let a = dot_samples(image, h, cx + sx * 100.0, cy, 5.0);
         let b = dot_samples(image, h, cx, cy + sy * 100.0, 5.0);
         dark[i] = 0.5 * (a + b);
-        if lit[i] - dark[i] < 12.0 {
+        // also refuses NaN levels, which only a non-finite pose can produce
+        if !(lit[i] - dark[i]).is_finite() || lit[i] - dark[i] < 12.0 {
+            return None;
+        }
+    }
+    if let Some(m) = inferred {
+        let (n1, opposite, n2) = ((m + 1) % 4, (m + 2) % 4, (m + 3) % 4);
+        let extrapolate = |v: &[f64; 4]| {
+            let low = v[n1].min(v[opposite]).min(v[n2]);
+            let high = v[n1].max(v[opposite]).max(v[n2]);
+            (v[n1] + v[n2] - v[opposite]).clamp(low, high)
+        };
+        lit[m] = extrapolate(&lit);
+        dark[m] = extrapolate(&dark);
+        // uneven light can push the estimates past each other; an inferred corner
+        // needs the same contrast as a seen one
+        if lit[m] - dark[m] < 12.0 {
             return None;
         }
     }
     Some(Reference { lit, dark })
+}
+
+/// Centres of the lattice cells outside the `天` mask (no tile is ever drawn there).
+fn empty_cells() -> &'static Vec<(f64, f64)> {
+    static CELLS: OnceLock<Vec<(f64, f64)>> = OnceLock::new();
+    CELLS.get_or_init(|| {
+        let mut cells = Vec::new();
+        for (row, line) in MASK.iter().enumerate() {
+            for (col, mark) in line.bytes().enumerate() {
+                if mark != b'#' {
+                    cells.push((
+                        f64::from(TILE_ORIGIN) + f64::from(TILE_PITCH) * (col as f64 + 0.5),
+                        f64::from(TILE_ORIGIN) + f64::from(TILE_PITCH) * (row as f64 + 0.5),
+                    ));
+                }
+            }
+        }
+        cells
+    })
+}
+
+/// How well the `天` lines up: the mean normalised level over the tiles (each
+/// sampled at five points across the tile, so a glyph stroke at the centre does
+/// not decide it) minus the mean over the empty lattice cells. The mask is
+/// symmetric left to right but not top to bottom, so this tells the four
+/// quarter turns apart even when the ring gates are damaged.
+fn mask_score(image: &Luma, h: &Homography, reference: &Reference) -> f64 {
+    let level = |x: f64, y: f64| {
+        let (lit, dark) = reference.at(x, y);
+        (dot_samples(image, h, x, y, 8.0) - dark) / (lit - dark)
+    };
+    let tiles = (0..TILE_COUNT)
+        .map(|tile| {
+            let (x, y) = tile_center(tile);
+            level(f64::from(x), f64::from(y))
+        })
+        .sum::<f64>()
+        / TILE_COUNT as f64;
+    let cells = empty_cells();
+    let empty = cells.iter().map(|&(x, y)| level(x, y)).sum::<f64>() / cells.len() as f64;
+    tiles - empty
+}
+
+/// Canonical index of the corner at index `index` of a finder quad under one
+/// orientation hypothesis.
+fn canonical_corner(index: usize, rotation: u8, mirrored: bool) -> usize {
+    let r = usize::from(rotation);
+    if mirrored {
+        (r + 4 - index) % 4
+    } else {
+        (index + 4 - r) % 4
+    }
+}
+
+/// The brightness summed over all ring slots under the pose that maps the canonical
+/// corners onto `corners` (in quad order). The slots form the same set of points
+/// under every quarter turn and mirror of the canvas (80, 92 and 104 are multiples
+/// of four), so the value does not depend on the orientation.
+fn ring_brightness(image: &Luma, corners: &[(f64, f64)]) -> Option<f64> {
+    static SLOTS: OnceLock<Vec<(f64, f64)>> = OnceLock::new();
+    let slots = SLOTS.get_or_init(|| {
+        (0..TOTAL_SLOTS)
+            .map(|flat| {
+                let (ring, slot) = split_slot(flat);
+                let (x, y) = slot_center(ring, slot);
+                (f64::from(x), f64::from(y))
+            })
+            .collect()
+    });
+    let canonical: Vec<(f64, f64)> = FINDER_CENTERS
+        .iter()
+        .map(|&(x, y)| (f64::from(x), f64::from(y)))
+        .collect();
+    let h = Homography::from_points(&canonical, corners)?;
+    Some(
+        slots
+            .iter()
+            .map(|&(x, y)| dot_samples(image, &h, x, y, 3.5))
+            .sum(),
+    )
+}
+
+/// Moves an inferred corner to where the three dotted rings line up best: a 13 × 13
+/// search in steps of 2 % of the mean leg around the parallelogram estimate, then a
+/// 9 × 9 search in steps of 0.5 % around the best point. The rings fix the geometry
+/// only; the orientation is decided afterwards by the gates and the `天`.
+fn refine_inferred_corner(image: &Luma, corners: &[Finder; 4], inferred: usize) -> [Finder; 4] {
+    let mut points: Vec<(f64, f64)> = corners.iter().map(|f| (f.x, f.y)).collect();
+    let start = points[inferred];
+    let distance =
+        |o: usize| ((points[o].0 - start.0).powi(2) + (points[o].1 - start.1).powi(2)).sqrt();
+    let leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4));
+    let mut best = (f64::MIN, start);
+    let mut search = |centre: (f64, f64), step: f64, reach: i32, best: &mut (f64, (f64, f64))| {
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let candidate = (
+                    centre.0 + f64::from(dx) * step,
+                    centre.1 + f64::from(dy) * step,
+                );
+                points[inferred] = candidate;
+                if let Some(brightness) = ring_brightness(image, &points)
+                    && brightness > best.0
+                {
+                    *best = (brightness, candidate);
+                }
+            }
+        }
+    };
+    search(start, 0.02 * leg, 6, &mut best);
+    let coarse = best.1;
+    search(coarse, 0.005 * leg, 4, &mut best);
+    let mut refined = *corners;
+    refined[inferred] = Finder {
+        x: best.1.0,
+        y: best.1.1,
+        size: corners[inferred].size,
+    };
+    refined
 }
 
 fn gate_and_guard_slots() -> &'static (Vec<usize>, Vec<usize>) {
@@ -651,6 +799,12 @@ fn is_decodable(image: &Luma, options: &DecodeOptions) -> bool {
 
 /// Decodes one camera frame.
 ///
+/// Tries the finder candidates of [`candidates`] in order and returns the first
+/// that reads. For each, the
+/// orientation hypotheses (four quarter turns, optionally mirrored) are ranked by
+/// the ring gates plus the `天`; lane `D` is tried under the best three whose gate
+/// score is at least 0.2, then the tile lanes under the best four.
+///
 /// # Errors
 /// [`DecodeError::NoFinders`] when no code is visible and
 /// [`DecodeError::NoOrientation`] when no orientation yields a readable lane.
@@ -658,50 +812,76 @@ pub fn decode(image: &Luma, options: &DecodeOptions) -> Result<DecodedFrame, Dec
     if !is_decodable(image, options) {
         return Err(DecodeError::UnsupportedImage);
     }
-    let finders = locate(image).ok_or(DecodeError::NoFinders)?;
-    let mut scored: Vec<(f64, u8, bool, Homography, Reference)> =
-        hypotheses(&finders, options.try_mirrored)
-            .into_iter()
-            .filter_map(|(rotation, mirrored, h)| {
-                let reference = reference_levels(image, &h)?;
-                let score = gate_score(image, &h, &reference);
-                Some((score, rotation, mirrored, h, reference))
-            })
-            .collect();
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut located = false;
+    for set in candidates(image) {
+        located = true;
+        if let Some(frame) = decode_candidate(image, options, &set) {
+            return Ok(frame);
+        }
+    }
+    Err(if located {
+        DecodeError::NoOrientation
+    } else {
+        DecodeError::NoFinders
+    })
+}
+
+/// One hypothesis: gate score, `天` score, orientation, pose and levels.
+type Scored = (f64, f64, u8, bool, Homography, Reference);
+
+fn decode_candidate(
+    image: &Luma,
+    options: &DecodeOptions,
+    set: &FinderSet,
+) -> Option<DecodedFrame> {
+    let corners = set.inferred.map_or(set.corners, |index| {
+        refine_inferred_corner(image, &set.corners, index)
+    });
+    let mut scored: Vec<Scored> = hypotheses(&corners, options.try_mirrored)
+        .into_iter()
+        .filter_map(|(rotation, mirrored, h)| {
+            let inferred = set
+                .inferred
+                .map(|index| canonical_corner(index, rotation, mirrored));
+            let reference = reference_levels(image, &h, inferred)?;
+            let gate = gate_score(image, &h, &reference);
+            let mask = mask_score(image, &h, &reference);
+            Some((gate, mask, rotation, mirrored, h, reference))
+        })
+        .collect();
+    scored.sort_by(|a, b| (b.0 + b.1).total_cmp(&(a.0 + a.1)));
+    let inferred_corner = |rotation: u8, mirrored: bool| {
+        set.inferred
+            .map(|index| canonical_corner(index, rotation, mirrored) as u8)
+    };
     // 1. the ring beacon is the cheapest and strongest orientation check
-    for (score, rotation, mirrored, h, reference) in scored.iter().take(3) {
-        if *score < 0.2 {
-            break;
+    for (gate, _, rotation, mirrored, h, reference) in scored.iter().take(3) {
+        if *gate < 0.2 {
+            continue;
         }
         if let Some(d) = read_lane_d(image, h, reference) {
-            return Ok(finish(
-                image,
-                options,
-                *rotation,
-                *mirrored,
-                *h,
-                reference,
-                Some(d),
-            ));
+            let mut frame = finish(image, options, *rotation, *mirrored, *h, reference, Some(d));
+            frame.inferred_corner = inferred_corner(*rotation, *mirrored);
+            return Some(frame);
         }
     }
     // 2. fall back to the tile lanes under the most promising orientations
-    for (_, rotation, mirrored, h, reference) in scored.iter().take(4) {
+    for (_, _, rotation, mirrored, h, reference) in scored.iter().take(4) {
         let patches = sample_patches(image, h);
         let (p, k) = read_tile_lanes(&patches, reference, &options.template_sigmas);
         if p.is_some() || k.is_some() {
-            return Ok(DecodedFrame {
+            return Some(DecodedFrame {
                 homography: *h,
                 rotation: *rotation,
                 mirrored: *mirrored,
                 p,
                 k,
                 d: read_lane_d(image, h, reference),
+                inferred_corner: inferred_corner(*rotation, *mirrored),
             });
         }
     }
-    Err(DecodeError::NoOrientation)
+    None
 }
 
 fn finish(
@@ -723,7 +903,124 @@ fn finish(
         p,
         k,
         d,
+        inferred_corner: None,
     }
+}
+
+/// Follows a code from the previous frame that decoded, without searching the
+/// whole image for finders (the most expensive part of [`decode`]).
+///
+/// Each corner finder seen in the previous frame is re-found near where the
+/// previous pose puts it (see [`crate::locate::follow`]); the mean movement of those
+/// predicts the rest. A corner inferred in the previous frame counts as seen again
+/// only when its blossom is re-found within a quarter diameter of that prediction
+/// (so a thumb beside it does not count). When exactly one corner is missing it
+/// is placed at the prediction and refined against the rings like an inferred
+/// corner. The orientation is kept from the previous frame. Returns `None` when
+/// two corners are lost or no lane decodes; the caller then runs [`decode`].
+#[must_use]
+pub fn track(
+    image: &Luma,
+    previous: &DecodedFrame,
+    options: &DecodeOptions,
+) -> Option<DecodedFrame> {
+    // a frame built by the caller may name a corner that does not exist
+    if !is_decodable(image, options) || previous.inferred_corner.is_some_and(|c| c > 3) {
+        return None;
+    }
+    let h0 = &previous.homography;
+    let expected: Vec<Finder> = FINDER_CENTERS
+        .iter()
+        .map(|&(cx, cy)| {
+            let (cx, cy) = (f64::from(cx), f64::from(cy));
+            let (x, y) = h0.apply(cx, cy);
+            let span =
+                |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+            let size = span(h0.apply(cx - 60.0, cy), h0.apply(cx + 60.0, cy))
+                .max(span(h0.apply(cx, cy - 60.0), h0.apply(cx, cy + 60.0)));
+            Finder { x, y, size }
+        })
+        .collect();
+    let short = image.width.min(image.height) as f64;
+    if expected
+        .iter()
+        .any(|f| !(f.x.is_finite() && f.y.is_finite() && f.size.is_finite()) || f.size > short)
+    {
+        return None;
+    }
+    let previously_inferred = previous.inferred_corner.map(usize::from);
+    let mut found: Vec<Option<Finder>> = expected
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| {
+            if previously_inferred == Some(i) {
+                None
+            } else {
+                follow(image, e)
+            }
+        })
+        .collect();
+    // the mean movement of the corners that were followed predicts the others
+    let moved: Vec<(f64, f64)> = (0..4)
+        .filter_map(|i| found[i].map(|f| (f.x - expected[i].x, f.y - expected[i].y)))
+        .collect();
+    if moved.len() < 3 {
+        return None;
+    }
+    let shift = (
+        moved.iter().map(|m| m.0).sum::<f64>() / moved.len() as f64,
+        moved.iter().map(|m| m.1).sum::<f64>() / moved.len() as f64,
+    );
+    let predicted = |i: usize| Finder {
+        x: expected[i].x + shift.0,
+        y: expected[i].y + shift.1,
+        size: expected[i].size,
+    };
+    // a corner that was hidden is seen again only when its blossom is found right where
+    // the others say it is (a bright thumb beside it must not count)
+    if let Some(m) = previously_inferred {
+        let at = predicted(m);
+        found[m] = follow(image, at)
+            .filter(|f| ((f.x - at.x).powi(2) + (f.y - at.y).powi(2)).sqrt() <= 0.25 * at.size);
+    }
+    let lost: Vec<usize> = (0..4).filter(|&i| found[i].is_none()).collect();
+    let inferred = match lost.as_slice() {
+        [] => None,
+        [m] => {
+            found[*m] = Some(predicted(*m));
+            Some(*m)
+        }
+        _ => return None,
+    };
+    let mut corners = [expected[0]; 4];
+    for (corner, f) in corners.iter_mut().zip(&found) {
+        *corner = (*f)?;
+    }
+    if let Some(m) = inferred {
+        corners = refine_inferred_corner(image, &corners, m);
+    }
+    let canonical: Vec<(f64, f64)> = FINDER_CENTERS
+        .iter()
+        .map(|&(x, y)| (f64::from(x), f64::from(y)))
+        .collect();
+    let points: Vec<(f64, f64)> = corners.iter().map(|f| (f.x, f.y)).collect();
+    let h = Homography::from_points(&canonical, &points)?;
+    let reference = reference_levels(image, &h, inferred)?;
+    let d = read_lane_d(image, &h, &reference);
+    let patches = sample_patches(image, &h);
+    let (p, k) = read_tile_lanes(&patches, &reference, &options.template_sigmas);
+    if p.is_none() && k.is_none() && d.is_none() {
+        return None;
+    }
+    Some(DecodedFrame {
+        homography: h,
+        rotation: previous.rotation,
+        mirrored: previous.mirrored,
+        p,
+        k,
+        d,
+        inferred_corner: inferred.map(|m| m as u8),
+    })
 }
 
 /// Reads all lanes with a known canvas-to-pixel homography (no finder search).
@@ -732,7 +1029,10 @@ fn finish(
 /// or the finder reference levels are too weak.
 ///
 /// Used by trackers that already know the pose, by refinement passes and by
-/// qualification tooling with a ground-truth pose.
+/// qualification tooling with a ground-truth pose. The reference levels come from
+/// all four corner finders, so a frame whose corner blossom is hidden is refused
+/// here (the hidden corner has no contrast); [`decode`] and [`track`] read such
+/// frames by inferring that corner.
 #[must_use]
 pub fn decode_at(
     image: &Luma,
@@ -742,7 +1042,7 @@ pub fn decode_at(
     if !is_decodable(image, options) {
         return None;
     }
-    let reference = reference_levels(image, &homography)?;
+    let reference = reference_levels(image, &homography, None)?;
     Some(finish(
         image, options, 0, false, homography, &reference, None,
     ))
@@ -761,7 +1061,8 @@ pub fn observed_cells(
     if !is_decodable(image, options) {
         return None;
     }
-    let reference = reference_levels(image, &frame.homography)?;
+    let inferred = frame.inferred_corner.map(usize::from);
+    let reference = reference_levels(image, &frame.homography, inferred)?;
     let patches = sample_patches(image, &frame.homography);
     let reads = read_tiles(&patches, &reference, &options.template_sigmas);
     let ((p, _), (k, _)) = tile_words(&reads);
@@ -782,7 +1083,8 @@ pub fn tile_match_error(
     if !is_decodable(image, options) {
         return None;
     }
-    let reference = reference_levels(image, &frame.homography)?;
+    let inferred = frame.inferred_corner.map(usize::from);
+    let reference = reference_levels(image, &frame.homography, inferred)?;
     let patches = sample_patches(image, &frame.homography);
     let reads = read_tiles(&patches, &reference, &options.template_sigmas);
     Some(reads.iter().map(|r| r.error).sum::<f64>() / reads.len() as f64)
@@ -797,6 +1099,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::locate::locate;
     use crate::render::{RenderOptions, render};
     use crate::stream::StreamEncoder;
 
@@ -924,7 +1227,7 @@ mod tests {
         let (encoder, luma, h, patches) = clean_patches(5);
         let (p_data, k_data, _) = encoder.lane_data(5);
         let sigmas = DecodeOptions::default().template_sigmas;
-        let reference = reference_levels(&luma, &h).expect("reference levels");
+        let reference = reference_levels(&luma, &h, None).expect("reference levels");
         for (name, reads) in [
             ("level", read_tiles(&patches, &reference, &sigmas)),
             ("normalised", read_tiles_normalised(&patches, &sigmas)),
@@ -956,7 +1259,7 @@ mod tests {
                 patch
             })
             .collect();
-        let reference = reference_levels(&luma, &h).expect("reference levels");
+        let reference = reference_levels(&luma, &h, None).expect("reference levels");
         let reads = read_tiles(&distorted, &reference, &sigmas);
         let ((p_word, p_conf), _) = tile_words(&reads);
         assert!(
@@ -1014,7 +1317,7 @@ mod tests {
         // the finder levels cannot describe a step in the light: the level read loses lane K
         let h = render_homography();
         let sigmas = DecodeOptions::default().template_sigmas;
-        let reference = reference_levels(&luma, &h).expect("reference levels");
+        let reference = reference_levels(&luma, &h, None).expect("reference levels");
         let reads = read_tiles(&sample_patches(&luma, &h), &reference, &sigmas);
         let (_, (k_word, k_conf)) = tile_words(&reads);
         assert!(decode_with_erasures(Lane::K, &k_word, &k_conf).is_none());
@@ -1253,16 +1556,257 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_valid_code_with_a_missing_finder_is_not_misread() {
-        let (_, mut rgb) = setup(2);
+    /// A 768-pixel render of frame `frame_no` with the blossom of canonical corner
+    /// `corner` painted over with background.
+    fn hidden_blossom(frame_no: u16, corner: usize) -> (StreamEncoder, crate::image::Rgb) {
+        let (encoder, mut rgb) = setup(frame_no);
         let n = rgb.width;
-        // erase the bottom-right blossom
+        let scale = n as f64 / 1024.0;
+        let (cx, cy) = FINDER_CENTERS[corner];
+        let (cx, cy) = (f64::from(cx) * scale, f64::from(cy) * scale);
+        for y in 0..n {
+            for x in 0..n {
+                let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                if dx * dx + dy * dy <= (75.0 * scale).powi(2) {
+                    rgb.data[(y * n + x) * 3..(y * n + x) * 3 + 3].fill(0);
+                }
+            }
+        }
+        (encoder, rgb)
+    }
+
+    #[test]
+    fn a_hidden_blossom_is_inferred_and_every_lane_still_reads() {
+        for corner in 0..4 {
+            let (encoder, rgb) = hidden_blossom(2, corner);
+            let luma = rgb.to_luma();
+            let decoded = decode(&luma, &DecodeOptions::default()).expect("decodes");
+            let (p, k, d) = encoder.lane_data(2);
+            assert_eq!(
+                decoded.inferred_corner,
+                Some(corner as u8),
+                "corner {corner}"
+            );
+            assert_eq!(
+                (decoded.rotation, decoded.mirrored),
+                (0, false),
+                "corner {corner}"
+            );
+            assert_eq!(decoded.p.map(|l| l.data), Some(p), "corner {corner} lane P");
+            assert_eq!(decoded.k.map(|l| l.data), Some(k), "corner {corner} lane K");
+            assert_eq!(decoded.d.map(|l| l.data), Some(d), "corner {corner} lane D");
+        }
+    }
+
+    #[test]
+    fn the_inferred_corner_is_reported_in_code_coordinates_when_mirrored() {
+        // hide the top-right blossom of the code, then mirror the picture: the hidden
+        // blossom appears top-left in the image but is still corner 1 of the code
+        let (encoder, rgb) = hidden_blossom(3, 1);
+        let n = rgb.width;
+        let mut mirrored = rgb.clone();
+        for y in 0..n {
+            for x in 0..n {
+                let (src, dst) = ((y * n + (n - 1 - x)) * 3, (y * n + x) * 3);
+                mirrored.data[dst..dst + 3].copy_from_slice(&rgb.data[src..src + 3]);
+            }
+        }
+        let decoded = decode(&mirrored.to_luma(), &DecodeOptions::default()).expect("decodes");
+        assert!(decoded.mirrored);
+        assert_eq!(decoded.inferred_corner, Some(1));
+        assert_eq!(decoded.d.map(|l| l.data), Some(encoder.lane_data(3).2));
+    }
+
+    #[test]
+    fn a_large_hidden_region_never_reads_wrong_data() {
+        // the whole bottom-right quarter is gone: rings and tiles with it
+        let (encoder, mut rgb) = setup(2);
+        let n = rgb.width;
         for y in n * 3 / 4..n {
             for x in n * 3 / 4..n {
                 rgb.data[(y * n + x) * 3..(y * n + x) * 3 + 3].fill(0);
             }
         }
-        assert!(decode(&rgb.to_luma(), &DecodeOptions::default()).is_err());
+        let (p, k, d) = encoder.lane_data(2);
+        if let Ok(frame) = decode(&rgb.to_luma(), &DecodeOptions::default()) {
+            for (lane, truth) in [(frame.p, p), (frame.k, k), (frame.d, d)] {
+                if let Some(lane) = lane {
+                    assert_eq!(lane.data, truth);
+                }
+            }
+        }
+    }
+
+    /// Shifts a luma image by whole pixels, filling with black.
+    fn shifted(image: &Luma, dx: isize, dy: isize) -> Luma {
+        let mut out = Luma::new(image.width, image.height);
+        for y in 0..image.height as isize {
+            for x in 0..image.width as isize {
+                let (sx, sy) = (x - dx, y - dy);
+                if sx >= 0 && sy >= 0 && sx < image.width as isize && sy < image.height as isize {
+                    out.data[y as usize * image.width + x as usize] =
+                        image.data[sy as usize * image.width + sx as usize];
+                }
+            }
+        }
+        out
+    }
+
+    /// Places a luma image in the middle of a larger black frame.
+    fn padded(image: &Luma, pad: usize) -> Luma {
+        let width = image.width + 2 * pad;
+        let mut out = Luma::new(width, image.height + 2 * pad);
+        for (y, row) in image.data.chunks(image.width).enumerate() {
+            let start = (y + pad) * width + pad;
+            out.data[start..start + image.width].copy_from_slice(row);
+        }
+        out
+    }
+
+    #[test]
+    fn tracking_follows_a_small_movement_and_gives_up_on_a_jump() {
+        let (encoder, rgb) = setup(6);
+        let luma = padded(&rgb.to_luma(), 100);
+        let options = DecodeOptions::default();
+        let first = decode(&luma, &options).expect("decodes");
+        let (p, k, d) = encoder.lane_data(6);
+        let moved = shifted(&luma, 9, -6);
+        let followed = track(&moved, &first, &options).expect("tracks a 9 px move");
+        assert_eq!(followed.p.map(|l| l.data), Some(p));
+        assert_eq!(followed.k.map(|l| l.data), Some(k));
+        assert_eq!(followed.d.map(|l| l.data), Some(d));
+        assert_eq!(followed.inferred_corner, None);
+        // more than a finder diameter: tracking refuses, a full decode is needed
+        let jumped = shifted(&luma, 95, 0);
+        assert!(track(&jumped, &first, &options).is_none());
+        assert!(decode(&jumped, &options).is_ok());
+    }
+
+    #[test]
+    fn broken_poses_are_refused_without_panicking() {
+        let options = DecodeOptions::default();
+        let (_, rgb) = setup(4);
+        let luma = rgb.to_luma();
+        let mut previous = decode(&luma, &options).expect("decodes");
+        // a good pose that names a corner that does not exist
+        assert!(track(&luma, &previous, &options).is_some());
+        for corner in [4, 255] {
+            previous.inferred_corner = Some(corner);
+            assert!(track(&luma, &previous, &options).is_none());
+        }
+        let non_finite = [
+            Homography([f64::NAN; 9]),
+            Homography([f64::INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+        ];
+        for broken in non_finite {
+            assert!(decode_at(&luma, broken, &options).is_none());
+        }
+        // the last one makes every finder far larger than the image
+        let huge = Homography([50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0]);
+        for broken in non_finite.into_iter().chain([huge]) {
+            for inferred in [None, Some(2)] {
+                previous.homography = broken;
+                previous.inferred_corner = inferred;
+                assert!(track(&luma, &previous, &options).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn tracking_survives_a_blossom_that_disappears() {
+        let options = DecodeOptions::default();
+        let (_, rgb) = setup(4);
+        let first = decode(&rgb.to_luma(), &options).expect("decodes");
+        // the same code, slightly moved, now with the bottom-left blossom covered
+        let (encoder, covered) = hidden_blossom(4, 3);
+        let moved = shifted(&covered.to_luma(), -5, 4);
+        let followed = track(&moved, &first, &options).expect("tracks with three blossoms");
+        assert_eq!(followed.inferred_corner, Some(3));
+        assert_eq!(followed.d.map(|l| l.data), Some(encoder.lane_data(4).2));
+    }
+
+    #[test]
+    fn a_blossom_that_reappears_is_seen_again() {
+        let options = DecodeOptions::default();
+        let (_, covered) = hidden_blossom(4, 3);
+        let first = decode(&covered.to_luma(), &options).expect("decodes");
+        assert_eq!(first.inferred_corner, Some(3));
+        // the thumb moves away and the hand moves a little
+        let (encoder, rgb) = setup(4);
+        let moved = shifted(&rgb.to_luma(), 4, -3);
+        let followed = track(&moved, &first, &options).expect("tracks");
+        assert_eq!(followed.inferred_corner, None);
+        assert_eq!(followed.d.map(|l| l.data), Some(encoder.lane_data(4).2));
+        // still covered: still inferred
+        let still = shifted(&covered.to_luma(), 4, -3);
+        let followed = track(&still, &first, &options).expect("tracks");
+        assert_eq!(followed.inferred_corner, Some(3));
+    }
+
+    /// A canvas-sized image with the given finder (lit) and reference-canvas (dark)
+    /// levels painted where [`reference_levels`] samples them.
+    fn level_card(levels: [(u8, u8); 4]) -> Luma {
+        let mut luma = Luma::new(1024, 1024);
+        let mut paint = |cx: f64, cy: f64, radius: f64, value: u8| {
+            for y in (cy - radius) as usize..=(cy + radius) as usize {
+                for x in (cx - radius) as usize..=(cx + radius) as usize {
+                    luma.data[y * 1024 + x] = value;
+                }
+            }
+        };
+        for (&(cx, cy), &(lit, dark)) in FINDER_CENTERS.iter().zip(&levels) {
+            let (cx, cy) = (f64::from(cx), f64::from(cy));
+            let (sx, sy) = (
+                if cx < 512.0 { 1.0 } else { -1.0 },
+                if cy < 512.0 { 1.0 } else { -1.0 },
+            );
+            paint(cx, cy, 30.0, lit);
+            paint(cx + sx * 100.0, cy, 12.0, dark);
+            paint(cx, cy + sy * 100.0, 12.0, dark);
+        }
+        luma
+    }
+
+    #[test]
+    fn an_inferred_corner_needs_contrast_too() {
+        let h = Homography::IDENTITY;
+        // even light: the hidden corner (3) gets levels between the others'
+        let even = level_card([(230, 30), (220, 25), (210, 20), (0, 0)]);
+        let reference = reference_levels(&even, &h, Some(3)).expect("levels");
+        assert!(
+            reference.lit[3] - reference.dark[3] >= 12.0,
+            "{:?} {:?}",
+            reference.lit,
+            reference.dark
+        );
+        // the hidden corner's neighbours disagree (one dim, one veiled): the
+        // estimates cross, so the corner cannot be read
+        let uneven = level_card([(60, 45), (250, 20), (200, 185), (0, 0)]);
+        assert!(reference_levels(&uneven, &h, Some(3)).is_none());
+        // with every corner seen, the same light is fine
+        let seen = level_card([(60, 45), (250, 20), (200, 185), (240, 20)]);
+        assert!(reference_levels(&seen, &h, None).is_some());
+    }
+
+    #[test]
+    fn the_tian_mask_tells_the_quarter_turns_apart() {
+        let (_, rgb) = setup(5);
+        let luma = rgb.to_luma();
+        let quad = locate(&luma).expect("four finders");
+        let mut by_rotation = [f64::MIN; 4];
+        for (rotation, mirrored, h) in hypotheses(&quad, true) {
+            let reference = reference_levels(&luma, &h, None).expect("levels");
+            let score = mask_score(&luma, &h, &reference);
+            if !mirrored {
+                by_rotation[usize::from(rotation)] = score;
+            }
+        }
+        // upright wins clearly over the three other quarter turns
+        for rotation in 1..4 {
+            assert!(
+                by_rotation[0] > by_rotation[rotation] + 0.1,
+                "{by_rotation:?}"
+            );
+        }
     }
 }
