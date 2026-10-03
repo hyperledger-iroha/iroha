@@ -15,7 +15,10 @@ use crate::kura::Kura;
 use iroha_allocation::AllocationBudget;
 #[cfg(test)]
 use iroha_data_model::block::CommitCertificate;
-use iroha_data_model::{block::SignedBlock, sumeragi_finality::result_of_preimage};
+use iroha_data_model::{
+    block::{SharedSignedBlock, SignedBlock},
+    sumeragi_finality::result_of_preimage,
+};
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody},
     crypto::{AttestationVerifier, Verifier},
@@ -44,14 +47,14 @@ pub struct StagedBlock {
     /// Core block hash of the committed block.
     pub block_hash: Hash32,
     /// The original prepared result-bearing frame, including its exact certificate.
-    pub executed: Arc<SignedBlock>,
+    pub executed: SharedSignedBlock,
 }
 
 /// The single-slot hand-off from the executor worker's `prepare` to the driver's
 /// block-store `append`. Both retain the same certified frame through retries.
 #[derive(Clone, Debug, Default)]
 pub struct Staging {
-    slot: Arc<Mutex<Option<Arc<StagedBlock>>>>,
+    slot: Arc<Mutex<Option<StagedBlock>>>,
 }
 
 impl Staging {
@@ -62,13 +65,13 @@ impl Staging {
     }
 
     /// Stage `block`, replacing whatever was staged.
-    pub fn stage(&self, block: Arc<StagedBlock>) {
+    pub fn stage(&self, block: StagedBlock) {
         *self.slot.lock() = Some(block);
     }
 
     /// The staged block of `block_hash`, if that is what is staged.
     #[must_use]
-    pub fn get(&self, block_hash: &Hash32) -> Option<Arc<StagedBlock>> {
+    pub fn get(&self, block_hash: &Hash32) -> Option<StagedBlock> {
         self.slot
             .lock()
             .as_ref()
@@ -156,7 +159,10 @@ impl KuraBlockStore {
         &self.staging
     }
 
-    fn stored(&self, height: u64) -> io::Result<Option<Arc<SignedBlock>>> {
+    fn stored(
+        &self,
+        height: u64,
+    ) -> Result<Option<iroha_data_model::block::SharedSignedBlock>, Attempt<io::Error>> {
         if height <= self.genesis_height || height > self.height() {
             return Ok(None);
         }
@@ -164,12 +170,12 @@ impl KuraBlockStore {
             .ok()
             .and_then(NonZeroUsize::new)
             .ok_or_else(|| invalid("committed height exceeds host index range"))?;
-        // Kura's historical Option API also returns None for corrupt/poisoned storage.
-        // A known committed slot can therefore never be reported as genuine absence.
+        // A known committed slot cannot become absence or erase its original local refusal.
         self.kura
-            .get_block(index)
+            .get_block(index, &self.execution_budget)
+            .map_err(|error| error.map_rejection(io::Error::other))?
             .map(Some)
-            .ok_or_else(|| invalid("committed Kura slot cannot be read"))
+            .ok_or_else(|| invalid("committed Kura slot cannot be read").into())
     }
 
     /// Restore original signed body custody and the exact original certificate.
@@ -312,7 +318,9 @@ impl BodyReader for KuraBlockStore {
                 "body read uses another historical authority",
             )));
         }
-        let block = self.stored(source.height()).map_err(BodyReadError::Io)?;
+        let block = self
+            .stored(source.height())
+            .map_err(BodyReadError::from_attempt)?;
         Ok(Box::new(keyed_read::KeyedRead::new(
             source,
             block,

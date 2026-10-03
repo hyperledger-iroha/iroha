@@ -11,12 +11,14 @@
 mod ordinary_mint_issuer;
 #[path = "world_state_snapshot/ordinary_wallet.rs"]
 mod ordinary_wallet;
+#[path = "world_state_snapshot/reserve_policy.rs"]
+mod reserve_policy;
 use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{
     state::{
-        AssetDefinitionAliasBindingRecord, State, StateReadOnly, StateView, WorldReadOnly,
-        is_stable_state_view_generation,
+        AssetDefinitionAliasBindingRecord, State, StateReadOnly, StateView, StateViewError,
+        WorldReadOnly, is_stable_state_view_generation,
     },
     sumeragi::certified_chain::CommittedBlock,
 };
@@ -33,6 +35,31 @@ use iroha_data_model::{
 };
 use iroha_model_base::state_path::StatePath;
 use std::alloc::Layout;
+
+/// A complete World snapshot either retains the original local refusal or rejects its claim.
+#[derive(Debug, thiserror::Error)]
+pub enum WorldStateSnapshotError {
+    /// The original State reader could not be acquired or its runtime was invalid.
+    #[error("World snapshot State view: {0}")]
+    View(#[from] StateViewError),
+    /// The original World overlay retains its exact allocation or physical read refusal.
+    #[error("World snapshot acquisition: {0}")]
+    Acquisition(#[source] mv::storage::AdmittedStorageError),
+    /// The certified cut, its typed originals or its bounded encoding was invalid.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+impl From<String> for WorldStateSnapshotError {
+    fn from(reason: String) -> Self {
+        Self::Invalid(reason)
+    }
+}
+impl From<&str> for WorldStateSnapshotError {
+    fn from(reason: &str) -> Self {
+        Self::Invalid(reason.into())
+    }
+}
 
 /// Borrowed exact provider-admission originals from one certified pre-tail World.
 /// The consumer still authenticates the complete snapshot and typed preimages.
@@ -373,7 +400,7 @@ impl State {
         provider: iroha_data_model::sorafs::capacity::ProviderId,
         budget: &AllocationBudget,
         consume: impl FnOnce(ProviderAdmissionSnapshotOriginalsV1<'_>) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
             let (council_head, council_predecessor) =
                 admission_originals(snapshot, world, None, budget)?;
@@ -402,6 +429,72 @@ impl State {
         })
     }
 
+    /// Publish native custody presence or absence independently of provider admission.
+    /// The callback receives only borrowed data from the original certified World cut.
+    /// It must retain all allocation charges and must not perform authorization or side effects.
+    /// # Errors
+    /// Missing owner, private/unbound root, corrupt native history, tail-modified originals,
+    /// unavailable or changed certified cut, or exhausted finite allocation bounds.
+    pub fn with_native_stream_token_custody_snapshot_v1<T>(
+        &self,
+        tip: &CommittedBlock,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        budget: &AllocationBudget,
+        consume: impl FnOnce(
+            &WorldStateSnapshotV1,
+            &AccountId,
+            Option<(&Vec<u8>, &Vec<u8>)>,
+        ) -> Result<T, String>,
+    ) -> Result<T, WorldStateSnapshotError> {
+        self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
+            if provider.as_bytes() == &[0; 32]
+                || crate::sumeragi::lanes::routing::committed_root_scope(world)
+                    != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+            {
+                return Err(
+                    "Custody projection requires a nonzero provider on the global root".into(),
+                );
+            }
+            let owner = world
+                .provider_owners
+                .get(&provider)
+                .ok_or("World snapshot native provider owner is absent")?;
+            require_target(
+                snapshot,
+                "world.provider_owners",
+                WorldStateElementKindV1::Table,
+                Some(hash_value(&provider)?),
+                hash_value(owner)?,
+            )?;
+            let current = stream_token_originals(snapshot, world, provider, budget)?;
+            if current.is_none() {
+                use iroha_data_model::sorafs::stream_token_custody::history::{
+                    head_key, record_key,
+                };
+                // Current typed absence cannot hide a value in the certified pre-tail cut.
+                for key in [head_key(provider), record_key(provider, 1)] {
+                    let target = (
+                        "world.smart_contract_state",
+                        WorldStateElementKindV1::Table,
+                        Some(hash_value(&key)?),
+                    );
+                    if snapshot
+                        .entries
+                        .binary_search_by(|entry| {
+                            (entry.field_id.as_str(), entry.kind, entry.key_hash).cmp(&target)
+                        })
+                        .is_ok()
+                    {
+                        return Err(
+                            "Custody absence differs from the certified original cut".into()
+                        );
+                    }
+                }
+            }
+            consume(snapshot, owner, current)
+        })
+    }
+
     /// Publish the exact original SNS lease bytes at one native certified World cut.
     ///
     /// This is data publication only. The independent recipient selects its finality decision,
@@ -415,7 +508,7 @@ impl State {
         selector: &iroha_data_model::sns::NameSelectorV1,
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         use iroha_data_model::{
             block::consensus::SumeragiRootScope,
             sns::{NameSelectorV1, lease::MAX_SNS_LEASE_RECORD_BYTES_V1, record_storage_key},
@@ -472,7 +565,7 @@ impl State {
             &AxtAssetIncarnationV1,
             &KagemushaGovernedVerifierRegistryV1,
         ) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
             let definition = world
                 .asset_definitions
@@ -522,7 +615,7 @@ impl State {
         keys: &[iroha_model_base::state_path::StatePath; 2],
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>, &Vec<u8>) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         if keys[0] == keys[1] {
             return Err("World snapshot target keys must differ".into());
         }
@@ -579,7 +672,7 @@ impl State {
             &[&iroha_model_base::state_path::StatePath],
             &[(&iroha_model_base::state_path::StatePath, &Vec<u8>)],
         ) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(
             tip,
             Some(authority),
@@ -657,19 +750,17 @@ impl State {
         read_authority: Option<&AccountId>,
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &WorldBlock<'_>) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
+        let publication_release = self.view_publication_release();
         let generation = self.state_view_generation();
         if generation % 2 != 0 {
-            return Err("World snapshot publication is busy".into());
+            return Err(StateViewError::Busy(publication_release).into());
         }
         if tip.commitment().schedule.current.network_id != *self.network_id_ref() {
             return Err("World snapshot native tip belongs to another network".into());
         }
         {
-            let view = self
-                .try_view_once()
-                .map_err(|error| error.to_string())?
-                .ok_or("World snapshot publication is busy or changed")?;
+            let view = self.try_view_once()?;
             require_cut(&view, tip)?;
         }
         let cut = self.native_world_cut.lock().as_ref().cloned()
@@ -692,7 +783,7 @@ impl State {
             let world = self
                 .world
                 .try_block(budget)
-                .map_err(|error| error.to_string())?;
+                .map_err(WorldStateSnapshotError::Acquisition)?;
             let expected = world.state_accumulator.get();
             if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
                 return Err("World snapshot acquired another complete applied World".into());
@@ -704,15 +795,12 @@ impl State {
             let certified = reconstruct(&captured, &cut, budget)?;
             consume(&certified.snapshot, &world)
         };
-        let view = self
-            .try_view_once()
-            .map_err(|error| error.to_string())?
-            .ok_or("World snapshot publication is busy or changed")?;
+        let view = self.try_view_once()?;
         require_cut(&view, tip)?;
         if !is_stable_state_view_generation(generation, self.state_view_generation()) {
             return Err("World snapshot publication generation changed".into());
         }
-        result
+        result.map_err(Into::into)
     }
 }
 

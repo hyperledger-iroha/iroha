@@ -226,8 +226,8 @@ def test_tracked_verification_never_rewrites_output(
     assert destination.read_bytes() == b"stale"
 
 
-@pytest.mark.parametrize("runtime_mode", [0o600, 0o644])
-def test_runtime_manifest_verification_uses_canonical_contract_command(
+@pytest.mark.parametrize("runtime_mode", [0o600])
+def test_runtime_manifest_verification_uses_node_independent_admission_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime_mode: int
 ) -> None:
     root = tmp_path / "repo"
@@ -242,7 +242,7 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
     generated_manifest.write_bytes(b'{"canonical":true}\n')
     artifact_path.chmod(0o600)
     generated_manifest.chmod(0o600)
-    iroha = tmp_path / "bin" / "iroha"
+    admission_tool = tmp_path / "bin" / "ivm_artifact_admit"
     commands: list[list[str]] = []
 
     def fake_run(command: list[object], cwd: Path) -> str:
@@ -255,25 +255,75 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
         return ""
 
     monkeypatch.setattr(goldens, "run", fake_run)
-    goldens.verify_runtime_manifests(iroha, root, release.parent, [row])
+    goldens.verify_runtime_manifests(admission_tool, root, release.parent, [row])
 
     assert artifact_path.stat().st_mode & 0o777 == 0o600
     assert generated_manifest.stat().st_mode & 0o777 == 0o600
     assert (release.parent / "verified" / "example.manifest.json").stat().st_mode & 0o777 == runtime_mode
 
     assert commands == [
-            [
-                str(iroha),
-                "--machine",
-                "contract",
-            "manifest",
-            "build",
+        [
+            str(admission_tool),
             "--code-file",
             str(artifact_path),
             "--out",
             str(release.parent / "verified" / "example.manifest.json"),
         ]
     ]
+
+
+@pytest.mark.parametrize("output", ["missing", "malformed", "oversized", "public", "symlink", "hardlink", "directory", "fifo"])
+def test_success_status_cannot_substitute_for_exact_protected_admission_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str
+) -> None:
+    stage = tmp_path / "stage"
+    release = stage / "release"
+    release.mkdir(parents=True)
+    expected = release / "example.manifest.json"
+    expected.write_bytes(b'{"canonical":true}')
+    expected.chmod(0o600)
+    row = goldens.Golden("standard", Path("example.ko"), Path("example.to"))
+
+    def fake_run(command: list[object], cwd: Path) -> str:
+        assert cwd == tmp_path
+        destination = Path(command[-1])
+        if output == "missing":
+            return "success is not evidence"
+        if output == "symlink":
+            destination.symlink_to(expected)
+        elif output == "hardlink":
+            goldens.os.link(expected, destination)
+        elif output == "directory":
+            destination.mkdir()
+        elif output == "fifo":
+            goldens.os.mkfifo(destination, 0o600)
+        else:
+            destination.write_bytes(
+                b"not-json" if output == "malformed" else
+                expected.read_bytes() * 2 if output == "oversized" else expected.read_bytes()
+            )
+            destination.chmod(0o644 if output == "public" else 0o600)
+        return ""
+
+    monkeypatch.setattr(goldens, "run", fake_run)
+    with pytest.raises(goldens.GoldenError):
+        goldens.verify_runtime_manifests(tmp_path / "ivm_artifact_admit", tmp_path, stage, [row])
+
+
+def test_admission_error_stops_the_generator_before_manifest_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    row = goldens.Golden("standard", Path("example.ko"), Path("example.to"))
+
+    def reject(command: list[object], cwd: Path) -> str:
+        raise goldens.GoldenError("contract admission failed: invalid complete V1 artifact")
+
+    monkeypatch.setattr(goldens, "run", reject)
+    with pytest.raises(goldens.GoldenError, match="contract admission failed"):
+        goldens.verify_runtime_manifests(tmp_path / "ivm_artifact_admit", tmp_path, stage, [row])
+    assert not (stage / "verified" / "example.manifest.json").exists()
 
 
 def test_contract_test_commands_pin_filter_and_exact_acceptance_paths(
@@ -588,7 +638,7 @@ def test_private_compiler_output_publishes_as_a_separate_public_fixture(
         goldens.RenderedFile(Path("demo/example.to"), 0o644, source.read_bytes()),
     )
     destination = tmp_path / "published"
-    goldens.publish_external_create_only(destination, rendered)
+    goldens.publish_create_only(destination, rendered)
     assert goldens.verify_rendered_tree(destination, rendered) == 0
     public = destination / "demo/example.to"
     assert public.read_bytes() == source.read_bytes()

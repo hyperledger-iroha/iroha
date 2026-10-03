@@ -98,6 +98,10 @@ fn complete_world_capture_releases_peers_before_parameters_callback(
     replacement: bool,
     attempt: CaptureAttempt,
 ) {
+    let waiter_pool = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&waiter_pool);
     let world = Arc::new(World::default());
     // Seed genuine retained preimages, even though these two values are equal.
     // The replacement constructor must execute its real Some(preimage) path.
@@ -166,7 +170,7 @@ fn complete_world_capture_releases_peers_before_parameters_callback(
     });
     let waker = Waker::from(Arc::clone(&callback));
     let mut context = Context::from_waker(&waker);
-    let mut released = observation.clone().wait_for_release();
+    let mut released = observation.clone().wait_for_release(&mut registration);
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
 

@@ -29,11 +29,18 @@ impl Fixture {
             (
                 c.entry_pc,
                 u64::from(c.frame_bytes),
-                c.argument_words.len() as u64,
-                c.result_words.len() as u64,
+                c.argument_word_count().unwrap() as u64,
+                c.result_word_count().unwrap() as u64,
             )
         });
-        let (descriptor, ports) = frame_descriptor::tests::child_for_dispatch(shape);
+        let (entry, frame, arguments, results) = shape.unwrap_or((0, 0, 0, 0));
+        let (descriptor, ports) = frame_descriptor::tests::callable_lookup_witness(
+            entry,
+            frame,
+            arguments,
+            results,
+            shape.is_some(),
+        );
         let schedule = Schedule::new(7, 64).unwrap();
         let mut packets = [[F::ZERO; packet::WIDTH]; PORTS];
         for (slot, p) in dispatch.packets.fields.iter().enumerate() {
@@ -171,7 +178,13 @@ fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_ro
     // This deliberately forged Program is available only to this private test;
     // production construction always owns the prepared immutable artifact.
     let mut missing = Program::new(program.artifact().clone()).unwrap();
-    missing.words[slot] = enc::encode_jump(wide::control::JAL, 1, 1);
+    let mut words = missing.words.to_vec();
+    words[slot] = enc::encode_jump(wide::control::JAL, 1, 1);
+    let bytes = words
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect::<Vec<_>>();
+    missing.words = super::super::code_words::CodeWords::new(&bytes).unwrap();
     let dispatch = dispatch_tests::Fixture::new(&missing, slot, false, 0);
     assert!(dispatch.accepts(&missing));
     let bad = Fixture::from_dispatch(&missing, slot, dispatch);
@@ -187,8 +200,27 @@ fn original_fetch_cannot_borrow_another_callable_or_accept_a_non_call_running_ro
             ivm::ivm_mode::ZK,
         ))
         .unwrap();
-        let dispatch = dispatch_tests::Fixture::new(&p, 0, false, 0);
-        assert!(dispatch.accepts(&p));
+        let mut dispatch = dispatch_tests::Fixture::new(&p, 0, false, 0);
+        if super::super::role(word) == Some(Role::Load) {
+            // The canonical dispatcher consumes the LOAD's original atomic
+            // destination even before the memory-success bank supplies its value.
+            let slot = super::super::SCALAR_DESTINATION;
+            dispatch.packets.fields[slot] = dispatch_tests::event(
+                Space::Register,
+                0,
+                u32::try_from(wide::rd(word)).expect("bounded register index"),
+                7,
+                11,
+                true,
+                dispatch.schedule.clocks[slot],
+                false,
+                false,
+            );
+        }
+        assert!(
+            dispatch.accepts(&p),
+            "valid non-CALL instruction {word:08x}"
+        );
         assert!(!Fixture::from_dispatch(&p, 0, dispatch).accepts(&p));
     }
     fn program_for_other_frame() -> (Program, usize) {
@@ -207,9 +239,11 @@ fn a_coherent_detached_descriptor_cannot_replace_any_artifact_callable_field() {
         (8, 128, 1, 1),
         (8, 128, 0, 2),
     ] {
-        // The reused standalone bank verifies each internally coherent forged
-        // witness before this composed relation binds it to the real artifact.
-        let (descriptor, mut packets) = frame_descriptor::tests::child_for_dispatch(Some(shape));
+        // Verify each forged shape in the standalone descriptor bank before
+        // requiring the composed relation to bind it to the original artifact.
+        let (descriptor, mut packets) = frame_descriptor::tests::callable_lookup_witness(
+            shape.0, shape.1, shape.2, shape.3, true,
+        );
         let mut bad = fixture.clone();
         bad.descriptor = descriptor;
         for (i, p) in packets.iter_mut().enumerate() {
@@ -217,6 +251,24 @@ fn a_coherent_detached_descriptor_cannot_replace_any_artifact_callable_field() {
                 p[CLOCK] = F(u64::from(bad.schedule.clock(descriptor_slot(i))));
             }
         }
+        let mut standalone = Vec::new();
+        frame_descriptor::append_residues(
+            &mut standalone,
+            bad.schedule.descriptor(),
+            &descriptor,
+            F::ONE,
+            &super::super::super::callable_lookup::SelectedCallable::unbound_diagnostic(
+                core::array::from_fn(|i| super::super::constant_limb(shape.0, i)),
+                F(shape.1),
+                F(shape.2),
+                F(shape.3),
+            ),
+            frame_descriptor::Ports {
+                active: &bad.packets[dispatch_slot(super::super::CHILD_ACTIVE)],
+                packets: core::array::from_fn(|i| &packets[i]),
+            },
+        );
+        assert!(standalone.iter().all(|residue| *residue == F::ZERO));
         for (slot, original) in packets.iter().enumerate() {
             bad.packets[descriptor_slot(slot)] = *original;
         }
@@ -386,7 +438,7 @@ fn all_forty_seven_original_packets_and_all_eight_stages_share_one_private_histo
     let aux_rows = (start..=start + count)
         .map(|i| aux.iter().map(|column| column[i]).collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    let history_schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
+    let history_schedule = private_history::Schedule::new(bus.trace_log2, 1).unwrap();
     let fixed = (start..start + count)
         .map(|i| history_schedule.fixed(i).unwrap())
         .collect::<Vec<_>>();
@@ -487,8 +539,8 @@ fn actual_prepared_call_preserves_relative_descriptor_identity_and_joins_native_
         assert_eq!(
             (
                 selected.frame_bytes,
-                selected.argument_words.len(),
-                selected.result_words.len()
+                selected.argument_word_count().unwrap(),
+                selected.result_word_count().unwrap()
             ),
             (64, 0, 1)
         );
@@ -538,8 +590,8 @@ fn actual_prepared_call_preserves_relative_descriptor_identity_and_joins_native_
         expected_tags[1] = false;
         assert_eq!(step.after.tags, expected_tags);
         assert_eq!(step.opcode_gas, Some(2));
-        let frame_work =
-            u64::from(selected.frame_bytes).div_ceil(8) + selected.result_words.len() as u64;
+        let frame_work = u64::from(selected.frame_bytes).div_ceil(8)
+            + selected.result_word_count().unwrap() as u64;
         assert_eq!(
             step.before.gas_remaining - step.after.gas_remaining,
             2 + frame_work
@@ -740,7 +792,19 @@ fn authenticated_v1_frame_work_limits_preserve_the_native_bitmap_formula() {
     for frame in [0, 16, 128, ivm::call::MAX_CALL_FRAME_BYTES_V1] {
         for results in [1, 2, ivm::call::MAX_CALL_WORDS_V1] {
             callable.frame_bytes = frame;
-            callable.result_words = vec![ivm::call::CallWordV1::Unit; results];
+            callable.results = ivm::call::CallSchemaV1 {
+                nodes: if results == 1 {
+                    vec![ivm::call::CallTypeNodeV1::Unit]
+                } else {
+                    std::iter::once(ivm::call::CallTypeNodeV1::Tuple(results as u32))
+                        .chain(std::iter::repeat_n(
+                            ivm::call::CallTypeNodeV1::Unit,
+                            results,
+                        ))
+                        .collect()
+                },
+            };
+            assert!(callable.validate());
             let cost = super::frame_work(&callable);
             assert_eq!(cost, u64::from(frame) / 8 + results as u64);
             assert!(cost <= 532_480);

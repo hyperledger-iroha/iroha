@@ -115,6 +115,21 @@ attester trust. The independent approved anchor remains a required deployment in
 Neither observer signatures nor a nonzero state digest substitute for this native
 association.
 
+The SDK's `get_stream_token_custody_state` reads the bounded native
+`/v1/sorafs/providers/{provider_id}/custody/{height}` projection before provider
+admission or advertisement exists. Its independently selected owner, complete
+signer binding, qualified World schema and certified Global decision authenticate
+one exact native record, or absence of both the current head and first revision.
+An HTTP error never means unconfigured custody. The authenticated native instance
+must match the selected network and chain under the existing Global-root derivation;
+a valid private-root certificate cannot satisfy this read. The publisher borrows
+original pre-tail World values and uses one finite source/decode allowance for
+signed genesis plus the current execution-anchored certificate, without walking
+the full genesis prefix. Finality freshness belongs to the caller. This public
+record supports wallet Configure/Enroll preparation and grants no enrollment or
+current-use eligibility. Provider discovery reuses the same custody projection
+checks while retaining its separate admission and signed-advert requirements.
+
 Historical control records remain readable when a provider is removed from the
 current registry. They do not confer current serving authority. Torii separately
 requires the pinned provider to remain registered in the same State view used for

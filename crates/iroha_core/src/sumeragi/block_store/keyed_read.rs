@@ -28,7 +28,7 @@ impl KeyedRead {
     /// Bind the original slot, allocation pool and authenticated historical authority once.
     pub(super) fn new(
         source: AvailabilitySource,
-        block: Option<Arc<SignedBlock>>,
+        block: Option<iroha_data_model::block::SharedSignedBlock>,
         budget: AllocationBudget,
         crypto: SharedCrypto,
         schedule: Arc<dyn AvailabilitySchedule>,

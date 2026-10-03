@@ -3,9 +3,10 @@
 //! Metadata, decoded result/schedule graphs and cryptographic/RS16 scratch retain their own
 //! accounting obligations. This job funds only the exact table, witness and proposal owners.
 
-use std::{io, sync::Arc};
+use std::io;
 
 use iroha_allocation::AllocationBudget;
+#[cfg(test)]
 use iroha_data_model::block::SignedBlock;
 use iroha_sumeragi::{
     availability::{AvailabilityFrame, PayloadBytes},
@@ -31,7 +32,10 @@ pub(in crate::sumeragi) struct PrefixArtifactsRead {
     stage: Stage,
 }
 impl PrefixArtifactsRead {
-    pub(in crate::sumeragi) fn new(source: Arc<SignedBlock>, budget: AllocationBudget) -> Self {
+    pub(in crate::sumeragi) fn new(
+        source: iroha_data_model::block::SharedSignedBlock,
+        budget: AllocationBudget,
+    ) -> Self {
         Self {
             stage: Stage::Certificate(CertificateRead::new(source, budget.clone())),
             budget,
@@ -146,16 +150,18 @@ pub(crate) struct PrefixArtifacts {
     payload: PayloadBytes,
 }
 impl PrefixArtifacts {
-    pub(crate) fn source(&self) -> &Arc<SignedBlock> {
+    pub(crate) fn source(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.decoded.source
     }
 
     pub(super) fn into_parts(
         self,
-        source: &Arc<SignedBlock>,
+        source: &iroha_data_model::block::SharedSignedBlock,
         header: &BlockHeader,
     ) -> Result<(Qc, AvailabilityFrame, PayloadBytes), ChainReadError> {
-        if !Arc::ptr_eq(source, &self.decoded.source) || header != &self.decoded.header {
+        if !iroha_data_model::block::SharedSignedBlock::ptr_eq(source, &self.decoded.source)
+            || header != &self.decoded.header
+        {
             return Err(ChainReadError::HeaderMismatch {
                 height: source.header().height().get(),
             });

@@ -356,7 +356,10 @@ impl Fixture {
     /// A merge-only proposal for the next height carrying `merges` with time floor `floor`.
     fn proposal(&self, merges: &[SumeragiLaneMerge], floor: u64) -> SignedBlock {
         let view = self.chain.state().view();
-        let parent = view.latest_block().expect("parent");
+        let parent = view
+            .latest_block()
+            .expect("parent history read completes")
+            .expect("parent");
         drop(view);
         payload::assemble_with_merges(
             self.chain.state(),

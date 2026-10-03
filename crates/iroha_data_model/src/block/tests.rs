@@ -1489,14 +1489,10 @@ fn commit_certificate_leaves_block_and_wire_hashes_unchanged() {
             .expect("valid original proposal"),
         plain
     );
-    assert!(
-        matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
-        "a block without a certificate is borrowed, not copied"
-    );
-    assert!(matches!(
-        certified.without_commit_certificate(),
-        Cow::Owned(ref block) if block.commit_certificate().is_none()
-    ));
+    let plain_wire = plain.encode_wire().expect("plain canonical wire");
+    let identity = (plain_wire.len() as u64, Hash::new(&plain_wire));
+    assert_eq!(plain.executed_block_wire_identity().unwrap(), identity);
+    assert_eq!(certified.executed_block_wire_identity().unwrap(), identity);
 }
 #[test]
 fn commit_certificate_wire_json_and_versioned_round_trip() {

@@ -729,62 +729,64 @@ pub(super) fn authenticate<'view, 'state>(
     ),
     Error,
 > {
-    let mut check = PreparedCheckExecutionV1::new(
-        view,
-        NativeCustodyCheckPurposeV1::StreamTokenGateway,
-        bound,
-        &prepared.round,
-    )?;
-    let targets = prepare_targets(view, prepared)?;
-    let start = targets
-        .targets
-        .first()
-        .map(|target| target.execution.height)
-        .unwrap_or(check.floor_height())
-        .min(check.floor_height());
-    let through = if start == 1 {
-        check.applied_height().max(2)
-    } else {
-        check.applied_height()
-    };
-    if through != check.applied_height() {
-        return Err(Error::Finality);
-    }
-    let chain = SignerCertifiedWalkV1::new(view)?;
-    let mut cursor = 0;
-    let mut finality_bytes = 0usize;
-    let mut next_height = Some(start);
-    for block in chain.walk(start, through) {
-        prepared.round.ensure_live()?;
-        let receipt = block?;
-        let block = receipt.in_view(view)?;
-        if next_height != Some(block.height())
-            || (block.height() > 1 && block.verification() != QcVerification::Verified)
-        {
+    crate::query::signer_check::with_native_check_read_limits(|| {
+        let mut check = PreparedCheckExecutionV1::new(
+            view,
+            NativeCustodyCheckPurposeV1::StreamTokenGateway,
+            bound,
+            &prepared.round,
+        )?;
+        let targets = prepare_targets(view, prepared)?;
+        let start = targets
+            .targets
+            .first()
+            .map(|target| target.execution.height)
+            .unwrap_or(check.floor_height())
+            .min(check.floor_height());
+        let through = if start == 1 {
+            check.applied_height().max(2)
+        } else {
+            check.applied_height()
+        };
+        if through != check.applied_height() {
             return Err(Error::Finality);
         }
-        finality_bytes = finality_bytes
-            .checked_add(block.certificate_len())
-            .filter(|total| *total <= MAX_FINALITY_BYTES)
-            .ok_or(Error::Finality)?;
-        while let Some(target) = targets.targets.get(cursor)
-            && target.execution.height == block.height()
-        {
-            authenticate_target(view, prepared, target, &targets.policies, block)?;
-            cursor += 1;
+        let chain = SignerCertifiedWalkV1::new(view)?;
+        let mut cursor = 0;
+        let mut finality_bytes = 0usize;
+        let mut next_height = Some(start);
+        for block in chain.walk(start, through) {
+            prepared.round.ensure_live()?;
+            let receipt = block?;
+            let block = receipt.in_view(view)?;
+            if next_height != Some(block.height())
+                || (block.height() > 1 && block.verification() != QcVerification::Verified)
+            {
+                return Err(Error::Finality);
+            }
+            finality_bytes = finality_bytes
+                .checked_add(block.certificate_len())
+                .filter(|total| *total <= MAX_FINALITY_BYTES)
+                .ok_or(Error::Finality)?;
+            while let Some(target) = targets.targets.get(cursor)
+                && target.execution.height == block.height()
+            {
+                authenticate_target(view, prepared, target, &targets.policies, block)?;
+                cursor += 1;
+            }
+            if block.height() >= check.floor_height() {
+                check.consume(&receipt)?;
+            }
+            next_height = if block.height() == through {
+                None
+            } else {
+                block.height().checked_add(1)
+            };
         }
-        if block.height() >= check.floor_height() {
-            check.consume(&receipt)?;
+        if next_height.is_some() || cursor != targets.targets.len() {
+            return Err(Error::Finality);
         }
-        next_height = if block.height() == through {
-            None
-        } else {
-            block.height().checked_add(1)
-        };
-    }
-    if next_height.is_some() || cursor != targets.targets.len() {
-        return Err(Error::Finality);
-    }
-    prepared.round.ensure_live()?;
-    check.finish_retaining_bound().map_err(Into::into)
+        prepared.round.ensure_live()?;
+        check.finish_retaining_bound().map_err(Into::into)
+    })
 }

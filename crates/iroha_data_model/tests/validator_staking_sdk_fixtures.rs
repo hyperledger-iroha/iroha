@@ -24,8 +24,9 @@ use iroha_data_model::{
         staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
     },
     nexus::{
-        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
-        PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+        PublicLaneFeeRewardClaimV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1, PublicLaneRewardClaimPlanV1,
+        PublicLaneRewardClaimSourceV1, PublicLaneRewardClaimStateV1, PublicLaneRewardRecordRefV1,
         ValidatorCommitteeCredentialsV1, ValidatorCommitteePreparationV1,
         ValidatorCommitteeTransitionV1,
     },
@@ -257,6 +258,36 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
             },
         ),
     };
+    let reward_plan = PublicLaneRewardClaimPlanV1 {
+        network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+        valid_until_height: 210,
+        expected_state: Some(PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(200),
+        }),
+        records: vec![PublicLaneRewardRecordRefV1 {
+            epoch: 201,
+            record_hash: Hash::new(b"sdk-exact-reward-record"),
+        }],
+        sources: vec![PublicLaneRewardClaimSourceV1 {
+            source_asset: plan.destination_asset.clone(),
+            destination_asset: plan.source_asset.clone(),
+            expected_accrued: Some(Quantity::from(5_u64)),
+            payout: Quantity::from(15_u64),
+        }],
+        fee_claim: None,
+    };
+    let mut fee_reward_plan = reward_plan.clone();
+    fee_reward_plan.fee_claim = Some(PublicLaneFeeRewardClaimV1 {
+        lifecycle_seal: [0x77; 32],
+        beneficiary_id: staker.clone(),
+        beneficiary_revision: 4,
+        source_asset: plan.destination_asset.clone(),
+        destination_asset: plan.source_asset.clone(),
+        amount: Quantity::from(7_u64),
+        expected_claim_sequence: 5,
+    });
+    assert!(reward_plan.has_canonical_shape(&staker));
+    assert!(fee_reward_plan.has_canonical_shape(&staker));
     let new_peer_key = key(0x73, Algorithm::Ed25519);
     let new_peer = PeerId::new(new_peer_key.public_key().clone());
     let consent = PublicLanePeerBindingAuthorization::new(
@@ -280,6 +311,8 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         ("dkg_transcript", transcript.encode()),
         ("committee_transition", transition.encode()),
         ("monetary_plan", plan.encode()),
+        ("reward_claim_plan", reward_plan.encode()),
+        ("fee_reward_claim_plan", fee_reward_plan.encode()),
         ("rebind_peer", rebind.encode()),
     ]
 }

@@ -324,6 +324,56 @@ pub struct PublicLaneRewardClaimSourceV1 {
     pub payout: Quantity,
 }
 
+/// Exact funded validation-fee reward payment authorized by the current beneficiary.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneFeeRewardClaimV1")]
+#[norito(deny_unknown_fields)]
+pub struct PublicLaneFeeRewardClaimV1 {
+    /// Commitment to the complete currently enacted conversion lifecycle.
+    pub lifecycle_seal: [u8; 32],
+    /// Original earning account retained through authenticated account recovery.
+    pub beneficiary_id: AccountId,
+    /// Exact current beneficiary ownership revision.
+    pub beneficiary_revision: u64,
+    /// Global network-XOR custody asset held by the reward pool.
+    pub source_asset: AssetId,
+    /// Exact global network-XOR asset of the signing recipient.
+    pub destination_asset: AssetId,
+    /// Complete positive reserved credit observed before signing.
+    pub amount: Quantity,
+    /// Exact next receipt sequence observed before signing.
+    pub expected_claim_sequence: u64,
+}
+
+impl PublicLaneFeeRewardClaimV1 {
+    /// Check a positive payment between exact global assets of the same definition.
+    #[must_use]
+    pub fn has_canonical_shape(&self, recipient: &AccountId) -> bool {
+        self.lifecycle_seal != [0; 32]
+            && !self.amount.is_zero()
+            && self.source_asset
+                == AssetId::new(
+                    self.source_asset.definition().clone(),
+                    self.source_asset.account().clone(),
+                )
+            && self.destination_asset
+                == AssetId::new(self.source_asset.definition().clone(), recipient.clone())
+    }
+}
+
 /// Bounded signed reward processing and payment plan.
 #[derive(
     Debug,
@@ -353,12 +403,19 @@ pub struct PublicLaneRewardClaimPlanV1 {
     pub records: Vec<PublicLaneRewardRecordRefV1>,
     /// At most 64 touched or previously accrued sources, in exact asset order.
     pub sources: Vec<PublicLaneRewardClaimSourceV1>,
+    /// Exactly one independently enacted fee reward payment, or no fee reward effects.
+    #[norito(required)]
+    pub fee_claim: Option<PublicLaneFeeRewardClaimV1>,
 }
 impl PublicLaneRewardClaimPlanV1 {
     /// Check bounded canonical ordering and exact payment invariants.
     #[must_use]
     pub fn has_canonical_shape(&self, recipient: &AccountId) -> bool {
         self.valid_until_height > 0
+            && self
+                .fee_claim
+                .as_ref()
+                .is_none_or(|claim| claim.has_canonical_shape(recipient))
             && self.records.len() <= MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS
             && self.sources.len() <= MAX_PUBLIC_LANE_REWARD_CLAIM_SOURCES
             && self

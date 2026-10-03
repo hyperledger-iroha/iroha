@@ -1784,7 +1784,15 @@ fn make_sealed_reveal_block(
 }
 fn store_block(app: &SharedAppState, block: SignedBlock) -> HashOf<BlockHeader> {
     let hash = block.hash();
-    app.kura.store_block(Arc::new(block)).expect("store block");
+    app.kura
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                block,
+                &app.state.ivm_execution_budget(),
+            )
+            .expect("fund original fixture block"),
+        )
+        .expect("store block");
     hash
 }
 fn record_committed_block_hash_for_test(
@@ -1836,7 +1844,11 @@ pub(crate) fn record_latest_committed_header_for_test(
         "latest test header height must advance durable Kura height"
     );
     let mut prev_hash = NonZeroUsize::new(durable_height.try_into().expect("height fits usize"))
-        .and_then(|height| app.kura.get_block(height))
+        .and_then(|height| {
+            app.kura
+                .get_block(height, &app.state.ivm_execution_budget())
+                .expect("admit existing fixture block")
+        })
         .map(|block| block.hash());
     let mut block_hashes = app.state.block_hashes.block();
     let mut latest_header = None;

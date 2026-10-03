@@ -3,6 +3,7 @@
 use super::*;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use std::{
+    borrow::Borrow,
     fs,
     io::Write as _,
     os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _},
@@ -358,38 +359,7 @@ impl Directory {
         private: bool,
         create_new: bool,
     ) -> io::Result<RetainedFile> {
-        self.revalidate()?;
-        let file = if create_new {
-            File::from(rustix::fs::openat(
-                &self.current().file,
-                name,
-                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::from_raw_mode(0o600),
-            )?)
-        } else {
-            self.open_read(name)?
-        };
-        let before = validate_file(&file, private || create_new)?;
-        let retained = RetainedFile {
-            directory: self.clone(),
-            name: name.to_owned(),
-            file,
-            before,
-            private: private || create_new,
-            writable: create_new,
-            read_only: false,
-            publication: if create_new {
-                PublicationAuthority::ExclusiveCreation
-            } else {
-                PublicationAuthority::None
-            },
-        };
-        retained.revalidate()?;
-        if create_new {
-            retained.file.sync_all()?;
-            self.sync()?;
-        }
-        Ok(retained)
+        RetainedFile::open(self.clone(), name.to_owned(), private, create_new)
     }
 
     pub(super) fn read(
@@ -680,9 +650,9 @@ enum PublicationAuthority {
 }
 
 #[derive(Debug)]
-pub struct RetainedFile {
-    directory: Directory,
-    name: std::ffi::OsString,
+pub struct RetainedFile<D = Directory, N = std::ffi::OsString> {
+    directory: D,
+    name: N,
     file: File,
     before: fs::Metadata,
     private: bool,
@@ -703,13 +673,33 @@ pub struct FileSnapshot {
     changed: (i64, i64),
 }
 
+impl FileSnapshot {
+    fn from_metadata(value: &fs::Metadata) -> Self {
+        let mut object = [0; 16];
+        object[..8].copy_from_slice(&value.ino().to_le_bytes());
+        Self {
+            identity: FileIdentity {
+                volume: value.dev(),
+                object,
+            },
+            mode: value.mode(),
+            owner: value.uid(),
+            group: value.gid(),
+            links: value.nlink(),
+            length: value.len(),
+            modified: (value.mtime(), value.mtime_nsec()),
+            changed: (value.ctime(), value.ctime_nsec()),
+        }
+    }
+}
+
 /// Capture a revalidated private journal with exact owner-only mode.
 pub fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
     let value = validate_file(file, true)?;
     if value.mode() & 0o7777 != 0o600 {
         return Err(denied("private journal requires mode 0600"));
     }
-    snapshot_file(file, true)
+    Ok(FileSnapshot::from_metadata(&value))
 }
 /// Validate retained public-file custody and its accepted read modes.
 pub fn validate_public_original(file: &File) -> io::Result<()> {
@@ -725,48 +715,62 @@ impl Directory {
         let file = &self.current().file;
         validate_directory(file, false)?;
         let value = file.metadata()?;
-        Ok(FileSnapshot {
-            identity: identity(file)?,
-            mode: value.mode(),
-            owner: value.uid(),
-            group: value.gid(),
-            links: value.nlink(),
-            length: value.len(),
-            modified: (value.mtime(), value.mtime_nsec()),
-            changed: (value.ctime(), value.ctime_nsec()),
-        })
+        let snapshot = FileSnapshot::from_metadata(&value);
+        self.revalidate()?;
+        if !unchanged(&value, &file.metadata()?) {
+            return Err(changed());
+        }
+        Ok(snapshot)
     }
 }
 
 /// Capture current metadata after validating the retained file authority.
 pub fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
     let value = validate_file(file, private)?;
-    Ok(FileSnapshot {
-        identity: identity(file)?,
-        mode: value.mode(),
-        owner: value.uid(),
-        group: value.gid(),
-        links: value.nlink(),
-        length: value.len(),
-        modified: (value.mtime(), value.mtime_nsec()),
-        changed: (value.ctime(), value.ctime_nsec()),
-    })
+    Ok(FileSnapshot::from_metadata(&value))
 }
 
-impl RetainedFile {
+impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
+    fn open(directory: D, name: N, private: bool, create_new: bool) -> io::Result<Self> {
+        let parent = directory.borrow();
+        parent.revalidate()?;
+        let file = if create_new {
+            File::from(rustix::fs::openat(
+                &parent.current().file,
+                name.as_ref(),
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            )?)
+        } else {
+            parent.open_read(name.as_ref())?
+        };
+        let before = validate_file(&file, private || create_new)?;
+        let retained = Self {
+            directory,
+            name,
+            file,
+            before,
+            private: private || create_new,
+            writable: create_new,
+            read_only: false,
+            publication: if create_new {
+                PublicationAuthority::ExclusiveCreation
+            } else {
+                PublicationAuthority::None
+            },
+        };
+        retained.revalidate()?;
+        if create_new {
+            retained.file.sync_all()?;
+            retained.directory.borrow().sync()?;
+        }
+        Ok(retained)
+    }
+
     pub(super) fn snapshot(&self) -> io::Result<FileSnapshot> {
         self.revalidate()?;
         let value = validate_file(&self.file, self.private)?;
-        let snapshot = FileSnapshot {
-            identity: self.identity()?,
-            mode: value.mode(),
-            owner: value.uid(),
-            group: value.gid(),
-            links: value.nlink(),
-            length: value.len(),
-            modified: (value.mtime(), value.mtime_nsec()),
-            changed: (value.ctime(), value.ctime_nsec()),
-        };
+        let snapshot = FileSnapshot::from_metadata(&value);
         self.revalidate()?;
         Ok(snapshot)
     }
@@ -775,7 +779,7 @@ impl RetainedFile {
         self.revalidate()?;
         self.before = validate_file(&self.file, self.private)?;
         self.writable = false;
-        self.directory.sync()?;
+        self.directory.borrow().sync()?;
         Ok(self)
     }
     pub(super) fn file(&self) -> &File {
@@ -797,7 +801,7 @@ impl RetainedFile {
         Ok(expected)
     }
     pub(super) fn revalidate(&self) -> io::Result<()> {
-        self.directory.revalidate()?;
+        self.directory.borrow().revalidate()?;
         let after = validate_file(&self.file, self.private)?;
         if self.read_only {
             private_files::validate_read_only(&self.file)?;
@@ -807,12 +811,12 @@ impl RetainedFile {
         {
             return Err(changed());
         }
-        let named = self.directory.open_read(&self.name)?;
+        let named = self.directory.borrow().open_read(self.name.as_ref())?;
         let named_metadata = validate_file(&named, self.private)?;
         if !unchanged(&after, &named_metadata) {
             return Err(changed());
         }
-        self.directory.revalidate()
+        self.directory.borrow().revalidate()
     }
 }
 
@@ -841,4 +845,59 @@ pub fn read_external(
     private: bool,
 ) -> io::Result<Zeroizing<Vec<u8>>> {
     Directory::open_with_policy(parent, false, false, 0, true)?.read(name, maximum, private)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn journal_snapshot_requires_exact_writable_private_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("journal");
+        fs::write(&path, b"original").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = File::open(&path).unwrap();
+        let original = journal_snapshot(&file).unwrap();
+        assert_eq!(original, snapshot_file(&file, true).unwrap());
+        assert_eq!(original.identity, identity(&file).unwrap());
+        assert_eq!(original.length, 8);
+        assert_eq!(original.mode & 0o7777, 0o600);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(snapshot_file(&file, true).is_ok());
+        assert!(journal_snapshot(&file).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(journal_snapshot(&file).is_err());
+    }
+
+    #[test]
+    fn public_original_requires_exact_public_read_modes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("public");
+        fs::write(&path, b"original").unwrap();
+        let file = File::open(&path).unwrap();
+        for mode in [0o644, 0o444] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            validate_public_original(&file).unwrap();
+        }
+        for mode in [0o600, 0o400, 0o640, 0o664] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(validate_public_original(&file).is_err());
+        }
+    }
+
+    #[test]
+    fn directory_snapshot_revalidates_original_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("original");
+        fs::create_dir(&path).unwrap();
+        let directory = Directory::open_reader(&path).unwrap();
+        let original = directory.snapshot_directory().unwrap();
+        assert_eq!(original, directory.snapshot_directory().unwrap());
+        fs::rename(&path, root.path().join("retired")).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(directory.snapshot_directory().is_err());
+    }
 }

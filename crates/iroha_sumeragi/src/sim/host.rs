@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use super::driver::{Barrier, Lanes};
 use crate::{
     Core,
-    api::{Action, ConfigError, Event, ExecOutcome, Init, LocalParams},
+    api::{Action, Event, ExecOutcome, Init, LocalParams},
     availability::AvailableBody,
     crypto::{Attestation, Crypto, Signer},
     message::{Qc, TrafficClass, WireMessage},
@@ -288,8 +288,8 @@ pub trait Host {
     /// world executes like those of [`Host::handle`].
     ///
     /// # Errors
-    /// The core refused its configuration.
-    fn start(&mut self, start: Start) -> Result<Vec<Action>, ConfigError>;
+    /// The original configuration or resource error is retained for diagnosis.
+    fn start(&mut self, start: Start) -> Result<Vec<Action>, Box<dyn std::error::Error>>;
     /// Crash: lose the core, every queued input and every held effect.
     fn crash(&mut self);
     /// Whether the node is running (started and not crashed).
@@ -360,7 +360,7 @@ pub struct FakeHost {
 }
 
 impl Host for FakeHost {
-    fn start(&mut self, start: Start) -> Result<Vec<Action>, ConfigError> {
+    fn start(&mut self, start: Start) -> Result<Vec<Action>, Box<dyn std::error::Error>> {
         let (core, actions) = Core::new(
             start.local,
             start.init,
@@ -573,7 +573,7 @@ mod tests {
     }
 
     impl Host for Probe {
-        fn start(&mut self, start: Start) -> Result<Vec<Action>, ConfigError> {
+        fn start(&mut self, start: Start) -> Result<Vec<Action>, Box<dyn std::error::Error>> {
             self.inner.start(start)
         }
         fn crash(&mut self) {
@@ -917,7 +917,11 @@ mod tests {
             fifo_ingress: false,
         };
         let mut host = FakeHost::default();
-        assert!(host.start(start).is_err());
+        let error = host.start(start).unwrap_err();
+        assert!(
+            error.downcast_ref::<crate::api::ConfigError>().is_some(),
+            "the original configuration error remains typed"
+        );
         assert!(!host.running());
         assert!(
             fake_host(0, 0).core().is_none(),

@@ -242,11 +242,6 @@ capture_world_table_once!(
     "world.soradns_release_signers"
 );
 capture_world_table_once!(
-    pub(super) capture_repo_agreements_once,
-    repo_agreements,
-    "world.repo_agreements"
-);
-capture_world_table_once!(
     pub(super) capture_settlement_receipts_once,
     settlement_receipts,
     "world.settlement_receipts"

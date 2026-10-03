@@ -50,7 +50,7 @@ pub(super) fn residues(bank: &[F], sources: Sources<'_>, selectors: [F; 4]) -> V
 /// Public callers retain one; only a disjoint private workspace owner uses zero.
 /// Packing, radix-four and Boolean checks remain unconditional.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     sources: Sources<'_>,
     selectors: [F; 4],

@@ -1,6 +1,8 @@
 // pub(crate) for inner modules it is not redundant, the contents of `signature` module get re-exported at root
 #![allow(clippy::redundant_pub_crate)]
 pub(crate) mod admission;
+mod allocation;
+pub use allocation::{ChargedSignature, SignatureAllocationError};
 #[cfg(feature = "bls")]
 pub(crate) mod bls;
 pub(crate) mod ed25519;

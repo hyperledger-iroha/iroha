@@ -1,5 +1,6 @@
 //! Read-only authentication of the original global lane state through native certified history.
 use super::{State, WorldReadOnly};
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader, sumeragi_finality::SumeragiLaneStateCommitment,
@@ -55,7 +56,7 @@ impl State {
     /// Rejects malformed history, unanchored or substituted state, missing archive data and I/O.
     pub fn verified_sumeragi_lane_state(
         &self,
-    ) -> Result<Option<VerifiedSumeragiLaneState<'_>>, String> {
+    ) -> Result<Option<VerifiedSumeragiLaneState<'_>>, Attempt<String>> {
         let generation = self.state_view_generation();
         if generation % 2 != 0 {
             return Ok(None);
@@ -79,14 +80,14 @@ impl State {
         {
             return Ok(None);
         }
-        let result: Result<Arc<SumeragiLaneState>, String> = (|| {
+        let result: Result<Arc<SumeragiLaneState>, Attempt<String>> = (|| {
             let archive =
                 crate::query::native_context_archive::NativeContextArchive::open_existing(
                     &self.kura,
                     self.ivm_execution_budget(),
                     self.kura.native_context_archive_max_bytes(),
                 )
-                .map_err(|error| error.to_string())?;
+                .map_err(archive_attempt)?;
             let state_bound = u64::try_from(self.kura.native_context_archive_max_bytes().get())
                 .map_err(|_| "lane archive bound overflow")?;
             let block_bound = iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64;
@@ -112,19 +113,20 @@ impl State {
                     .ok_or("native carrier index overflow")?;
                 let block = self
                     .kura
-                    .get_block(index)
+                    .get_block(index, &self.ivm_execution_budget())
+                    .map_err(|error| error.map_rejection(|error| error.to_string()))?
                     .ok_or_else(|| format!("native carrier {next} is unavailable"))?;
                 if next == height && block.hash() != carrier {
                     return Err("native history differs from State tip".into());
                 }
                 let bytes = archive.read_exact(next, block.hash()).map_err(|error| {
-                    format!("required historical native lane state source {next}: {error}")
+                    archive_attempt(error).map_rejection(|error| {
+                        format!("required historical native lane state source {next}: {error}")
+                    })
                 })?;
-                verifier.push_shared_height(block, bytes.as_slice())?;
+                verifier.push_height(block, bytes.as_slice())?;
             }
-            archive
-                .recheck_namespace()
-                .map_err(|error| error.to_string())?;
+            archive.recheck_namespace().map_err(archive_attempt)?;
             let lanes = verifier.into_current_lanes()?;
             if SumeragiLaneStateCommitment::from_state_encoding(network, height, &lanes)
                 .map_err(|error| error.to_string())?
@@ -144,5 +146,24 @@ impl State {
             carrier,
             lanes: result?,
         }))
+    }
+}
+
+// Preserve an actual original archive refusal before rendering permanent source diagnostics.
+fn archive_attempt(
+    error: crate::query::native_context_archive::NativeContextArchiveError,
+) -> Attempt<String> {
+    use crate::query::native_context_archive::NativeContextArchiveError as Error;
+    match error {
+        Error::Allocation(iroha_allocation::ChargedBufferError::Admission(original)) => {
+            Attempt::Deferred(original.into())
+        }
+        Error::Allocation(iroha_allocation::ChargedBufferError::Allocator { .. }) => {
+            Attempt::Deferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+        }
+        Error::Codec(error) => {
+            crate::execution_attempt::norito_decode_attempt_error(error, |error| error.to_string())
+        }
+        error => Attempt::Rejected(error.to_string()),
     }
 }

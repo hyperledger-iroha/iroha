@@ -754,17 +754,9 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
     let view = state.state.view();
     let finalized_cursor = reserve_finalized_cursor_from_view(&view)
         .ok_or(ReserveGenerationErrorV1::FinalizedViewUnavailable)?;
-    let finalized_block = view
-        .latest_block()
-        .ok_or(ReserveGenerationErrorV1::FinalizedViewUnavailable)?;
-    let finalized_block_hash = finalized_block.hash();
-    if finalized_block.header().height().get() != finalized_cursor.height
-        || finalized_block_hash.as_ref() != &finalized_cursor.block_hash
-    {
-        return Err(ReserveGenerationErrorV1::FinalizedViewUnavailable);
-    }
-    let finalized_at_unix = u64::try_from(finalized_block.header().creation_time().as_millis())
-        .map_err(|_| ReserveGenerationErrorV1::InvalidFinalizedTimestamp)?
+    let finalized_at_unix = view
+        .authenticated_query_ledger_time_ms()
+        .ok_or(ReserveGenerationErrorV1::FinalizedViewUnavailable)?
         / 1_000;
     if finalized_at_unix == 0 {
         return Err(ReserveGenerationErrorV1::InvalidFinalizedTimestamp);

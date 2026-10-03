@@ -643,6 +643,91 @@ fn restored_policy_reload_accepts_exact_head_and_rejects_unavailable_release() {
 }
 
 #[test]
+fn runtime_reload_world_reader_notifications_follow_commit_fence_release() {
+    use crate::smartcontracts::isi::kagemusha::{
+        KagemushaV1RuntimeVerifier, RejectAllKagemushaV1RuntimeVerifier,
+    };
+    use std::{
+        future::Future as _,
+        sync::atomic::{AtomicBool, AtomicUsize},
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        state: Arc<State>,
+        calls: AtomicUsize,
+        blocked: AtomicBool,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.blocked.store(
+                self.state.state_commit_lock.try_lock().is_none(),
+                Ordering::SeqCst,
+            );
+        }
+    }
+    for operation in 0..3 {
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let mut registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+        let candidate: Arc<dyn KagemushaV1RuntimeVerifier> =
+            Arc::new(RejectAllKagemushaV1RuntimeVerifier);
+        let previous = state.kagemusha_v1_runtime_verifier();
+        let mut head = state.kagemusha_v1_runtime_reload_head();
+        let probe = Arc::new(Probe {
+            state: Arc::clone(&state),
+            calls: AtomicUsize::new(0),
+            blocked: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut context = Context::from_waker(&waker);
+        let mut wait = std::pin::pin!(
+            state
+                .world
+                .domains
+                .observe_reader_release()
+                .wait_for_release(&mut registration)
+        );
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+        match operation {
+            0 => {
+                let captured = state.kagemusha_v1_runtime_reload_head();
+                assert_eq!(captured.view_generation, head.view_generation);
+                assert_eq!(captured.registry, head.registry);
+            }
+            1 => {
+                state
+                    .install_kagemusha_v1_runtime_verifier_checked(head, Arc::clone(&candidate))
+                    .unwrap();
+                assert!(Arc::ptr_eq(
+                    &state.kagemusha_v1_runtime_verifier(),
+                    &candidate
+                ));
+            }
+            _ => {
+                head.view_generation = head.view_generation.checked_add(2).unwrap();
+                assert!(
+                    state
+                        .install_kagemusha_v1_runtime_verifier_checked(head, candidate)
+                        .is_err()
+                );
+                assert!(Arc::ptr_eq(
+                    &state.kagemusha_v1_runtime_verifier(),
+                    &previous
+                ));
+            }
+        }
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        assert!(!probe.blocked.load(Ordering::SeqCst));
+        assert!(wait.as_mut().poll(&mut context).is_ready());
+    }
+}
+
+#[test]
 fn direct_standby_retirement_without_certified_original_owner_never_publishes() {
     let install: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 =
         norito::decode_canonical(include_bytes!(concat!(

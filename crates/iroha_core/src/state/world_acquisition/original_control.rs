@@ -3,7 +3,7 @@
 //! This covers these exact allocations only. EBR generations, release controls,
 //! nested values and mutation growth remain separate admission obligations.
 
-use super::{OperationAcquisition, OrdinaryAcquisition, WorldFieldAcquisition};
+use super::{CellAcquisition, OperationAcquisition, OrdinaryAcquisition, WorldFieldAcquisition};
 use crate::state::{
     Storage, TriggerSet, WorldBlockFields, kagemusha_operation_indexes::OperationIndexMode,
 };
@@ -190,7 +190,7 @@ pub(in crate::state) fn original_cell<'a, V: Value>(
 
 impl<V: Value> OriginalControlSource for Cell<V> {
     type Acquisition<'a>
-        = OrdinaryAcquisition<mv::cell::BlockAcquisitionSlot<'a, V>>
+        = CellAcquisition<'a, V>
     where
         Self: 'a;
     fn successor_layout(&self) -> Option<Layout> {
@@ -202,15 +202,13 @@ impl<V: Value> OriginalControlSource for Cell<V> {
         budget: &AllocationBudget,
         parent: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {
-        original_cell(self, budget, parent).map(OrdinaryAcquisition)
+        original_cell(self, budget, parent).map(CellAcquisition)
     }
 }
 
 impl<V: Value> OriginalControlSource for Cell<V, iroha_allocation::AllocationCharge> {
     type Acquisition<'a>
-        = OrdinaryAcquisition<
-        mv::cell::BlockAcquisitionSlot<'a, V, iroha_allocation::AllocationCharge>,
-    >
+        = CellAcquisition<'a, V, iroha_allocation::AllocationCharge>
     where
         Self: 'a;
     fn successor_layout(&self) -> Option<Layout> {
@@ -280,7 +278,7 @@ impl<V: Value> OriginalControlSource for Cell<V, iroha_allocation::AllocationCha
             }
         })?;
         self.try_block_acquisition_with_backing(backing, successor, budget)
-            .map(OrdinaryAcquisition)
+            .map(CellAcquisition)
             .map_err(|_| AdmittedStorageError::PolicyIdentity)
     }
 }

@@ -94,6 +94,7 @@ fn state() -> State {
         AccountAlias::domainless("captured".parse().unwrap(), DataSpaceId::UNIVERSAL),
         account,
     );
+    state.world.rebuild_account_alias_index().unwrap();
     state
 }
 
@@ -251,6 +252,7 @@ impl Wake for Wakes {
 fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
     let state = state();
     let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let before = budget.reserved_bytes();
     let occupied = budget
         .try_reserve_bytes(budget.limit_bytes() - before)
@@ -271,7 +273,7 @@ fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(Arc::clone(&wakes));
     let mut context = Context::from_waker(&waker);
-    let mut future = release.wait_for_release();
+    let mut future = release.wait_for_release(&mut registration);
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(backing_bytes());
     drop(unrelated.try_reserve_bytes(backing_bytes()).unwrap());
@@ -286,6 +288,12 @@ fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
     assert_eq!(FIRST_RESERVED.get(), before + backing_bytes());
     drop(capture);
     assert_eq!(budget.reserved_bytes(), before);
+    drop(future);
+    drop(registration);
+    assert_eq!(
+        budget.reserved_bytes(),
+        before - iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 fn rejected_second(

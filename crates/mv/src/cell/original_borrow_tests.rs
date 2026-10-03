@@ -3,8 +3,17 @@ use super::*;
 use std::{
     future::Future,
     pin::pin,
-    task::{Context, Poll, Waker},
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
 };
+
+struct WriterWake(std::thread::Thread);
+
+impl Wake for WriterWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+}
 
 #[test]
 fn committed_borrow_preserves_noncopy_payload_pointer_and_explicit_undo() {
@@ -46,6 +55,10 @@ fn committed_borrow_preserves_nested_absence_without_cloning() {
 
 #[test]
 fn committed_borrow_partial_busy_releases_undo_and_retains_exact_current_waiter() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::release_test_support::registration(&release_budget);
     let cell = Cell::new(String::from("original"));
     let acquired = cell.blocks.try_acquire_writer().unwrap();
     let held = cell.blocks_released.poisoning_guard(acquired);
@@ -56,7 +69,7 @@ fn committed_borrow_partial_busy_releases_undo_and_retains_exact_current_waiter(
         cell.revert.try_acquire_writer().is_some(),
         "partial original undo must be released"
     );
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = pin!(release.wait_for_release(&mut registration));
     let mut cx = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
     drop(
@@ -88,8 +101,29 @@ fn committed_borrow_concurrent_publication_only_returns_actual_predecessor_pair(
     let cell = Cell::new(String::from("0"));
     std::thread::scope(|scope| {
         let writer = scope.spawn(|| {
+            let release_budget = iroha_allocation::AllocationBudget::new(
+                iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+            );
+            let mut registration = crate::release_test_support::registration(&release_budget);
+            let waker = Waker::from(Arc::new(WriterWake(std::thread::current())));
             for n in 1..=128 {
-                let mut block = cell.block();
+                let mut block = loop {
+                    let mut slot = cell.block_acquisition();
+                    match slot.try_initialize(BlockMode::Ordinary) {
+                        Ok(()) => break crate::BlockAcquisition::into_block(slot),
+                        Err(crate::storage::AdmittedStorageError::Busy { release, .. }) => {
+                            // Release partial acquisition before waiting on the actual
+                            // contended owner. The next attempt owns a fresh one-shot slot.
+                            drop(slot);
+                            let mut wait = pin!(release.wait_for_release(&mut registration));
+                            let mut cx = Context::from_waker(&waker);
+                            while wait.as_mut().poll(&mut cx) == Poll::Pending {
+                                std::thread::park();
+                            }
+                        }
+                        Err(other) => panic!("unexpected original writer refusal: {other:?}"),
+                    }
+                };
                 *block.get_mut() = n.to_string();
                 block.commit();
             }

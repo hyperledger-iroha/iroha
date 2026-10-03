@@ -580,7 +580,10 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
     let (world, _, _, _) = seeded_musubi_publication_snapshot();
     let bytes = world.musubi_public_directory.view().len()
         * core::mem::size_of::<&MusubiOrderedPackageEntryV1>();
-    let budget = iroha_allocation::AllocationBudget::new(bytes);
+    let budget = iroha_allocation::AllocationBudget::new(
+        bytes + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let held = budget.try_reserve_bytes(bytes).unwrap();
     let crate::execution_attempt::ExecutionAttemptError::Deferred(refusal) =
         validate_musubi_live_projection_cut(&world.view(), &budget).unwrap_err()
@@ -592,7 +595,7 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
     else {
         panic!("original release owner")
     };
-    let mut future = release.clone().wait_for_release();
+    let mut future = release.clone().wait_for_release(&mut registration);
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(wakes.clone());
     let mut context = Context::from_waker(&waker);
@@ -612,6 +615,8 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
         validate_musubi_live_projection_cut(&world.view(), &budget),
         Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
     ));
+    drop(future);
+    drop(registration);
     budget.set_limit_bytes(bytes);
     validate_musubi_live_projection_cut(&world.view(), &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), 0);

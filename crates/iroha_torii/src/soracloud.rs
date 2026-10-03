@@ -5866,9 +5866,7 @@ pub(crate) fn control_plane_snapshot(
     let current_height = u64::try_from(state_view.height()).map_err(|_| {
         SoracloudError::internal("committed block height exceeds the V1 u64 domain")
     })?;
-    let latest_block_ms = state_view.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+    let latest_block_ms = state_view.query_ledger_time_ms();
     let wall_clock_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()

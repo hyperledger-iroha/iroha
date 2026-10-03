@@ -1,50 +1,53 @@
 //! Atomic reconstruction and publication of the State DA query projections.
 
 use super::*;
-use crate::publication_rwlock::DeferredPublicationRwLock;
-
-/// Original index notifications outlive every hydration and State write guard.
-struct DaHydrationReleases<'state> {
-    commitments: DeferredPublicationRwLock<'state, DaCommitmentStore>,
-    confidential_compute: DeferredPublicationRwLock<'state, ConfidentialComputeStore>,
-    receipt_cursors: DeferredPublicationRwLock<'state, DaReceiptCursorIndex>,
-    shard_cursors: DeferredPublicationRwLock<'state, DaShardCursorIndex>,
-    pin_intents: DeferredPublicationRwLock<'state, DaPinStore>,
-    hydrated: DeferredPublicationRwLock<'state, Option<Result<(), DaIndexHydrationError>>>,
-}
-
-impl<'state> DaHydrationReleases<'state> {
-    fn new(state: &'state State) -> Self {
-        Self {
-            commitments: state.da_commitments.defer_notifications(),
-            confidential_compute: state.da_confidential_compute.defer_notifications(),
-            receipt_cursors: state.da_receipt_cursors.defer_notifications(),
-            shard_cursors: state.da_shard_cursors.defer_notifications(),
-            pin_intents: state.da_pin_intents.defer_notifications(),
-            hydrated: state.da_indexes_hydrated.defer_notifications(),
-        }
-    }
-}
 
 /// Original replacement-rewind notifications retained by the executing owner.
 /// Physical hydration guards remain short; their notices outlive every MV writer.
 pub(super) struct DaRewindReleases<'state> {
-    indexes: DaHydrationReleases<'state>,
+    indexes: LaneLifecycleReleases<'state>,
     write_fence: crate::publication_lock::DeferredPublicationFence<'state, ()>,
+    refunds: iroha_allocation::AllocationRefundBatch,
 }
 
 impl<'state> DaRewindReleases<'state> {
     pub(super) fn new(state: &'state State) -> Self {
         Self {
-            indexes: DaHydrationReleases::new(state),
+            indexes: LaneLifecycleReleases::new(state),
             write_fence: state.state_write_lock.defer_notifications(),
+            refunds: state.ivm_execution_budget().deferred_refund_batch(),
         }
     }
 }
 
+/// Retain the original cold-read refunds through the caller's physical writers.
+fn with_da_rebuild_refunds<R>(
+    refunds: &mut iroha_allocation::AllocationRefundBatch,
+    operation: impl FnOnce() -> R,
+) -> R {
+    #[cfg(all(test, sumeragi_core_mutation = "HC75"))]
+    {
+        let _ = refunds;
+        operation()
+    }
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC75")))]
+    refunds.with_scope(|_| operation())
+}
+
 /// Errors surfaced while rebuilding DA indexes from the committed block log.
-#[derive(Copy, Clone, Debug, ThisError, PartialEq, Eq)]
-pub(crate) enum DaIndexHydrationError {
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+pub enum DaIndexHydrationError {
+    /// Original local capacity refusal; retry without publishing or caching an invalid verdict.
+    #[error("DA history acquisition deferred: {0}")]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
+    /// A completed canonical storage read failed independently of local allocation capacity.
+    #[error("DA block storage at height {height} is invalid: {reason}")]
+    Storage {
+        /// Exact original slot whose read failed.
+        height: NonZeroU64,
+        /// Completed storage diagnostic, never a formatted local capacity refusal.
+        reason: String,
+    },
     /// A committed WSV hash has no corresponding non-hash-only Kura body.
     #[error("committed DA block body at height {height} is missing from Kura")]
     MissingBlock {
@@ -113,7 +116,7 @@ impl State {
     fn publish_hydrated_da_indexes(
         &self,
         hydrated: HydratedDaIndexes,
-        releases: &mut DaHydrationReleases<'_>,
+        releases: &mut LaneLifecycleReleases<'_>,
     ) {
         let HydratedDaIndexes {
             commitments,
@@ -136,12 +139,17 @@ impl State {
         *published_pin_intents = pin_intents;
     }
 
-    fn persist_hydrated_da_shard_cursor_journal(&self, releases: &mut DaHydrationReleases<'_>) {
+    fn persist_hydrated_da_shard_cursor_journal(&self, releases: &mut LaneLifecycleReleases<'_>) {
         let path = self.da_shard_cursor_journal_path();
         if path.as_os_str().is_empty() {
             return;
         }
-        let lane_config = self.nexus_ownership_projection().lane_config.clone();
+        let lane_config = self
+            .canonical_runtime
+            .view()
+            .nexus_projection(&releases.nexus.read())
+            .expect("persisted canonical runtime must be valid")
+            .lane_config;
         let snapshot =
             DaShardCursorJournal::from_index(&lane_config, &releases.shard_cursors.read(), &path);
         if let Err(err) = snapshot.persist() {
@@ -169,28 +177,42 @@ impl State {
         {
             let guard = self.da_indexes_hydrated.read();
             if let Some(result) = guard.as_ref() {
-                return *result;
+                return result.clone();
             }
         }
-        let mut releases = DaHydrationReleases::new(self);
+        // This owner is declared before all reader notices and physical guards,
+        // so cold Kura allocation refunds cannot reenter beneath either fence.
+        let mut refunds = self.ivm_execution_budget().deferred_refund_batch();
+        let mut releases = LaneLifecycleReleases::new(self);
         let mut write_fence = self.state_write_lock.defer_notifications();
         let _hydration_guard = self.da_index_hydration_fence.lock();
         if let Some(result) = releases.hydrated.read().as_ref() {
-            return *result;
+            return result.clone();
         }
         let _state_write_guard = write_fence.lock();
-        let result = self.build_da_indexes_from_kura(None).map(|mut hydrated| {
-            hydrated.pin_intents = self.da_pin_cache_from_world();
-            self.publish_hydrated_da_indexes(hydrated, &mut releases);
-            if persist_journal {
-                self.persist_hydrated_da_shard_cursor_journal(&mut releases);
+        with_da_rebuild_refunds(&mut refunds, || {
+            let result =
+                self.build_da_indexes_from_kura(None, &mut releases)
+                    .map(|mut hydrated| {
+                        hydrated.pin_intents = self.da_pin_cache_from_world(&mut releases.world);
+                        self.publish_hydrated_da_indexes(hydrated, &mut releases);
+                        if persist_journal {
+                            self.persist_hydrated_da_shard_cursor_journal(&mut releases);
+                        }
+                    });
+            if let Err(err) = &result {
+                warn!(?err, "failed to hydrate DA indexes from Kura");
             }
-        });
-        if let Err(err) = &result {
-            warn!(?err, "failed to hydrate DA indexes from Kura");
-        }
-        *releases.hydrated.write() = Some(result);
-        result
+            // An unfinished local attempt must be retried after its original pool releases.
+            // Only completed results can become the persistent hydration verdict.
+            *releases.hydrated.write() =
+                if matches!(&result, Err(DaIndexHydrationError::Deferred(_))) {
+                    None
+                } else {
+                    Some(result.clone())
+                };
+            result
+        })
     }
 
     /// Force a rebuild of DA indexes from the Kura block log, truncating at `target_height` when provided.
@@ -212,31 +234,52 @@ impl State {
         let DaRewindReleases {
             indexes: releases,
             write_fence,
+            refunds,
         } = releases;
         let _hydration_guard = self.da_index_hydration_fence.lock();
         // Make concurrent accessors join this fenced rebuild instead of observing the
         // previous cached success while the committed projection is being rewound.
         *releases.hydrated.write() = None;
         let _state_write_guard = write_fence.lock();
-        let result = self
-            .build_da_indexes_from_kura(Some(target_height))
-            .map(|hydrated| {
-                self.publish_hydrated_da_indexes(hydrated, releases);
-                self.persist_hydrated_da_shard_cursor_journal(releases);
-            });
-        if let Err(err) = &result {
-            warn!(?err, target_height, "failed to rewind DA indexes from Kura");
-        }
-        *releases.hydrated.write() = Some(result);
-        result
+        with_da_rebuild_refunds(refunds, || {
+            let result = self
+                .build_da_indexes_from_kura(Some(target_height), releases)
+                .map(|hydrated| {
+                    self.publish_hydrated_da_indexes(hydrated, releases);
+                    self.persist_hydrated_da_shard_cursor_journal(releases);
+                });
+            if let Err(err) = &result {
+                warn!(?err, target_height, "failed to rewind DA indexes from Kura");
+            }
+            // An unfinished local attempt must be retried after its original pool releases.
+            // Only completed results can become the persistent hydration verdict.
+            *releases.hydrated.write() =
+                if matches!(&result, Err(DaIndexHydrationError::Deferred(_))) {
+                    None
+                } else {
+                    Some(result.clone())
+                };
+            result
+        })
     }
 
     #[allow(clippy::too_many_lines)]
     fn build_da_indexes_from_kura(
         &self,
         target_height: Option<u64>,
+        releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<HydratedDaIndexes, DaIndexHydrationError> {
-        let nexus = self.nexus_snapshot();
+        // The caller holds the original State writer, so this complete catalog
+        // projection is stable. Its reader notice belongs to the enclosing
+        // rebuild and must not call a waiter beneath that writer.
+        let catalog = runtime_catalog_from_parameters(self.world.parameters.view().get())
+            .expect("persisted canonical runtime catalog must be valid");
+        let nexus = self
+            .canonical_runtime
+            .view()
+            .nexus_projection_with_catalog(&releases.nexus.read(), catalog.as_ref())
+            .expect("persisted canonical runtime and catalog must be valid");
+        let execution_budget = self.ivm_execution_budget();
         let lane_config = &nexus.lane_config;
         let incarnation_resets = self
             .lane_incarnation_activation_heights_snapshot()
@@ -262,8 +305,12 @@ impl State {
         };
         // Clone the hash list up front so we do not hold the block-hash lock while
         // loading blocks from Kura (avoids lock-order inversions with Kura writers).
-        let mut committed_hash_prefix: Vec<HashOf<BlockHeader>> =
-            self.block_hashes.view().iter().copied().collect();
+        let mut committed_hash_prefix: Vec<HashOf<BlockHeader>> = self
+            .block_hashes
+            .view_retaining(&mut releases.hashes)
+            .iter()
+            .copied()
+            .collect();
         let replay_len = target_height
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
             .map_or(committed_hash_prefix.len(), |limit| {
@@ -293,7 +340,21 @@ impl State {
             let height_u64 = u64::try_from(height).expect("committed block height must fit u64");
             let height_u64 = NonZeroU64::new(height_u64).expect("block height is non-zero");
             let height_usize = NonZeroUsize::new(height).expect("block height is non-zero");
-            let Some(block) = self.kura.get_block(height_usize) else {
+            let Some(block) = self
+                .kura
+                .get_block(height_usize, &execution_budget)
+                .map_err(|error| match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        DaIndexHydrationError::Deferred(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        DaIndexHydrationError::Storage {
+                            height: height_u64,
+                            reason: error.to_string(),
+                        }
+                    }
+                })?
+            else {
                 return Err(DaIndexHydrationError::MissingBlock { height: height_u64 });
             };
             let block_hash = block.hash();

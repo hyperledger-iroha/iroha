@@ -331,3 +331,152 @@ async fn checked_metrics_sync_and_status_refuse_substituted_counter_height() {
     ));
     assert!(sut.telemetry.metrics_fresh_checked().await.is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn cold_status_history_refusal_retains_original_pool_and_unpublished_counters() {
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_data_model::block::SharedSignedBlock;
+    use std::{
+        future::Future as _,
+        pin::pin,
+        task::{Context, Waker},
+    };
+
+    let sut = SystemUnderTest::new_native();
+    sut.commit_block(sut.create_block());
+    let original_wire = sut
+        .kura
+        .canonical_block_wire_bytes_for_testing(NonZeroUsize::MIN)
+        .unwrap();
+    sut.kura
+        .forget_cached_block_for_testing(NonZeroUsize::MIN)
+        .unwrap();
+    let budget = sut.state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let layout = SharedSignedBlock::allocation_layout();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let expected = budget.try_reserve(layout).unwrap_err();
+    let response = sut.telemetry.status_snapshot(&BuildStatus::default()).await;
+    let Err(StatusSnapshotError::Deferred(reason)) = response else {
+        panic!("cold status must return its original local refusal");
+    };
+    assert_eq!(reason.allocation_refusal(), Some(&expected));
+    let AllocationRefusal::Capacity { release, .. } = expected else {
+        panic!("occupied original history pool");
+    };
+    let mut released = pin!(release.wait_for_release(&mut registration));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(released.as_mut().poll(&mut context).is_pending());
+    assert_eq!(sut.telemetry.metrics.block_height.get(), 0);
+    assert_eq!(sut.telemetry.metrics.block_height_non_empty.get(), 0);
+    assert_eq!(
+        sut.telemetry
+            .metrics
+            .txs
+            .with_label_values(&["total"])
+            .get(),
+        0
+    );
+    assert_eq!(sut.telemetry.metrics.last_block_committed_at_ms.get(), 0);
+    assert_eq!(
+        sut.kura
+            .canonical_block_wire_bytes_for_testing(NonZeroUsize::MIN)
+            .unwrap(),
+        original_wire
+    );
+    let unrelated = AllocationBudget::new(layout.size());
+    drop(unrelated.try_reserve(layout).unwrap());
+    assert!(released.as_mut().poll(&mut context).is_pending());
+    drop(occupied);
+    assert!(released.as_mut().poll(&mut context).is_ready());
+    let (status, height) = sut
+        .telemetry
+        .status_snapshot(&BuildStatus::default())
+        .await
+        .expect("same actor and canonical source retry after original refund")
+        .into_parts();
+    assert_eq!(height, 2);
+    assert_eq!(status.blocks, 2);
+    let total = sut
+        .telemetry
+        .metrics
+        .txs
+        .with_label_values(&["total"])
+        .get();
+    assert!(total > 0);
+    sut.telemetry
+        .status_snapshot(&BuildStatus::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        sut.telemetry
+            .metrics
+            .txs
+            .with_label_values(&["total"])
+            .get(),
+        total
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cold_genesis_uptime_refusal_remains_deferred_after_classified_prefix() {
+    use iroha_data_model::block::SharedSignedBlock;
+
+    let sut = SystemUnderTest::new_native();
+    let (_, height) = sut
+        .telemetry
+        .status_snapshot(&BuildStatus::default())
+        .await
+        .unwrap()
+        .into_parts();
+    assert_eq!(height, 1);
+    let total = sut
+        .telemetry
+        .metrics
+        .txs
+        .with_label_values(&["total"])
+        .get();
+    let uptime = sut.telemetry.metrics.uptime_since_genesis_ms.get();
+    sut.kura
+        .forget_cached_block_for_testing(NonZeroUsize::MIN)
+        .unwrap();
+    let budget = sut.state.ivm_execution_budget();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let expected = budget
+        .try_reserve(SharedSignedBlock::allocation_layout())
+        .unwrap_err();
+    let response = sut.telemetry.status_snapshot(&BuildStatus::default()).await;
+    assert!(
+        matches!(response, Err(StatusSnapshotError::Deferred(reason)) if reason.allocation_refusal() == Some(&expected))
+    );
+    assert_eq!(sut.telemetry.metrics.block_height.get(), 1);
+    assert_eq!(
+        sut.telemetry
+            .metrics
+            .txs
+            .with_label_values(&["total"])
+            .get(),
+        total
+    );
+    assert_eq!(sut.telemetry.metrics.uptime_since_genesis_ms.get(), uptime);
+    drop(occupied);
+    let (_, recovered_height) = sut
+        .telemetry
+        .status_snapshot(&BuildStatus::default())
+        .await
+        .unwrap()
+        .into_parts();
+    assert_eq!(recovered_height, 1);
+    assert_eq!(
+        sut.telemetry
+            .metrics
+            .txs
+            .with_label_values(&["total"])
+            .get(),
+        total
+    );
+}

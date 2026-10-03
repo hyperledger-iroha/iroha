@@ -142,7 +142,11 @@ mod tests {
         );
         let executed_genesis = chain
             .kura()
-            .get_block(std::num::NonZeroUsize::MIN)
+            .get_block(
+                std::num::NonZeroUsize::MIN,
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original genesis history read completes")
             .expect("retained executed genesis");
         assert!(executed_genesis.commit_certificate().is_some());
         let genesis_hash = executed_genesis.hash();

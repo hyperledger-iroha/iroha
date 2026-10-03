@@ -369,7 +369,7 @@ fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
                 read_reserve_state(transaction.world())?.expect("installed reserve state");
             crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
                 &persisted,
-                "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1",
+                "iroha_data_model::sorafs::reserve::history::ReserveStateV1",
             );
             let frame = encode_state(&persisted, "reserve state")?;
             assert_eq!(decode_reserve_state(&frame)?, persisted);

@@ -70,8 +70,12 @@ IVM_CUDA_TRUSTED_KEY_SHA256=<reviewed-fingerprint> IVM_CUDA_PTX_MODE=check cargo
 `scripts/build_ivm_cuda_bundle.py` is the offline candidate producer. It reads
 the ten pinned `.cu` files into one source snapshot, compiles every family in
 two clean output directories with identical exact flags, rejects divergent PTX,
-and writes a fresh candidate directory only after signing the fixed-order
-manifest. It does not run during Cargo builds or node startup. The signer key
+and publishes a fresh candidate directory only after signing the fixed-order
+manifest and checking the retained records. The original private staging and
+parent directory descriptors remain held throughout generation. Publication
+uses Linux/macOS atomic no-replace rename; an existing destination, including an
+empty directory, is never replaced. Unsupported hosts fail closed. It does not
+run during Cargo builds or node startup. The signer key
 must be supplied explicitly as a PEM file outside the repository and is never
 copied into the candidate. The tool requires Python 3.10+, a pinned `nvcc`, and
 OpenSSL with Ed25519 support. It never downloads a toolkit or a kernel.
@@ -85,13 +89,31 @@ python3 scripts/build_ivm_cuda_bundle.py \
   --output-dir /private/staging/ivm-cuda-candidate
 ```
 
+An absent checkout-local path such as `target/ivm-cuda-candidate` is also
+supported; source-directory destinations and symlink ancestors are rejected.
+Failed runs retain their private `.ivm-cuda-incomplete-*` staging directory for
+inspection and do not publish the requested candidate path.
+
 The script prints the candidate path, raw-public-key fingerprint, and common
 two-run generation digest. On Linux it mirrors `build.rs`'s default `g++-12`
 selection; `--host-compiler` and repeated `--extra-flag` inputs are available
 when the pinned qualification image uses a different exact compiler command
 (`--extra-flag=--fmad=false` for a flag beginning with `-`).
 The output contains the ten source snapshots, ten PTX files,
-`provenance.v1`, `provenance.v1.sig`, and `provenance.v1.pub`. The Ed25519
+`provenance.v1`, `provenance.v1.sig`, `provenance.v1.pub`, and `evidence/`.
+The evidence retains both clean output trees, exact compiler commands and
+stdout/stderr, source/output hashes, executable hashes, and the exact version
+output. Every child retains the original launcher/tool file descriptors and
+no-follow ancestor descriptors, including directory change timestamps; swapping
+and restoring a compiler ancestor causes publication to fail even when the
+original executable bytes are unchanged. Each tool has a twenty-minute deadline
+and a combined 4 MiB log bound;
+each source snapshot is limited to 16 MiB and each PTX to 8 MiB. The evidence
+record is bounded to 128 KiB. Empty stdout/stderr retain normal descriptor custody
+and exact zero-byte hashes. The private key is never copied; signer command
+records redact its runtime path. Executable/source/output records are local
+observations; the supplied CUDA image digest remains explicitly an unverified
+claim until the independent runner check. The Ed25519
 signature covers the exact LF-terminated manifest bytes, while the manifest
 binds the independently supplied image digest, exact `nvcc --version` bytes,
 flags, target, two PTX-generation digests, and every source/PTX digest. The
@@ -140,6 +162,21 @@ do not count. A receipt must accompany matching output, not replace it.
 The nightly workflow first runs this test against a generated diagnostic
 candidate. Its separate release gate requires `check` mode to reproduce every
 checked-in PTX byte and then reruns hardware qualification in `bundled` mode.
+That release gate requires three reviewed repository variables:
+`IVM_CUDA_QUALIFICATION_IMAGE` (a repository reference ending in `@sha256:...`),
+`IVM_CUDA_IMAGE_SHA256` (the independently reviewed image manifest digest), and
+`IVM_CUDA_TRUSTED_KEY_SHA256` (the reviewed raw public-key digest). Missing values
+fail before pulling or building. The runner needs Docker with GPU access and a
+pinned image containing the matching CUDA, host compiler, and Rust build tools.
+It pulls the immutable reference, retains Docker's actual image inspection, and
+uses `scripts/check_ivm_cuda_release_image.py` to bind that observation to both
+reviewed digests and the source manifest's image claim. Builds and hardware tests
+then execute using the inspected image configuration ID. An ambient host key or
+the manifest's own image claim cannot supply the reviewed inputs. This input
+receipt explicitly does not verify the bundle signature or qualify hardware;
+the mandatory Rust build and actual kernel tests still perform those checks.
+No reviewed CI values, production bundle, or physical run is supplied by these
+source changes.
 Missing checked-in artifacts fail that gate. The emitted SHA-256 inventory and
 hardware logs are evidence inputs, not a substitute for the signed provenance
 manifest above. The `cuda-hardware-tests` feature exposes device-selection hooks

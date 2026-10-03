@@ -51,9 +51,8 @@ use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
 include!("attribute_helpers.rs");
 
 fn is_option_type(ty: &syn::Type) -> bool {
+    // Macro ty fragments introduce invisible groups; parentheses are equally transparent.
     match ty {
-        // Forwarded macro_rules! type fragments carry an invisible Group.
-        // Parentheses also preserve the same field type and presence contract.
         syn::Type::Group(group) => is_option_type(&group.elem),
         syn::Type::Paren(paren) => is_option_type(&paren.elem),
         _ => type_ident(ty).is_some_and(|ident| ident == "Option"),

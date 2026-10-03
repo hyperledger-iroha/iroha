@@ -12,7 +12,7 @@ pub struct AuthenticatedExecutionBlock {
 impl AuthenticatedExecutionBlock {
     /// Original authenticated block graph, including the exact node-local certificate.
     #[must_use]
-    pub fn block(&self) -> &Arc<SignedBlock> {
+    pub fn block(&self) -> &iroha_data_model::block::SharedSignedBlock {
         self.committed.block()
     }
 
@@ -197,6 +197,7 @@ pub fn read_authenticated_execution(
     hashes: &dyn crate::state::BlockHashRead,
     height: u64,
     limits: NativeExecutionReadLimits,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<NativeExecutionRead, NativeExecutionReadError> {
     if height == 0 {
         return Err(ChainReadError::NotCommitted { height }.into());
@@ -280,6 +281,8 @@ pub fn read_authenticated_execution(
             .read(length)
             .map_err(storage)?
             .ok_or(ChainReadError::NotInView { height: current })?;
+        let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
+            .map_err(|error| NativeExecutionReadError::Deferred(error.into()))?;
         let block =
             iroha_data_model::block::decode_framed_signed_block(&wire).map_err(|error| {
                 match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
@@ -312,7 +315,7 @@ pub fn read_authenticated_execution(
             .into());
         }
         total = next;
-        let block = Arc::new(block);
+        let block = shell.initialize(block);
         if current == GENESIS_HEIGHT {
             prefix = Some(CertifiedPrefix::new(chain_id, network, block)?);
             if height == GENESIS_HEIGHT {
@@ -339,8 +342,8 @@ pub fn read_authenticated_execution(
             } else {
                 (certified.into_authenticated_execution()?, wire)
             };
-            // TODO: physically admit decoder/authority graphs and retained wire from the query
-            // owner's original pool. Logical source ceilings are not that reservation.
+            // TODO: physically admit nested decoder/authority graphs and retained wire from
+            // the query owner's original pool. Only the shared block control is funded here.
             return Ok(NativeExecutionRead {
                 authority,
                 wire,
@@ -412,26 +415,26 @@ mod tests {
         let source = CertifiedChain::new(&view).unwrap();
         // Consuming each verification receipt must retain its original graph. Separate
         // physical reads above need not share one allocation or a process-local cache.
-        let original_genesis = Arc::clone(chain.committed(GENESIS_HEIGHT).block());
-        let original_successor = Arc::clone(chain.committed(GENESIS_HEIGHT + 1).block());
+        let original_genesis = Clone::clone(chain.committed(GENESIS_HEIGHT).block());
+        let original_successor = Clone::clone(chain.committed(GENESIS_HEIGHT + 1).block());
         let mut prefix = CertifiedPrefix::new(
             view.chain_id(),
             *view.network_id(),
-            Arc::clone(&original_genesis),
+            Clone::clone(&original_genesis),
         )
         .unwrap();
         let (certified, genesis) = prefix
-            .push(Arc::clone(&original_successor))
+            .push(Clone::clone(&original_successor))
             .unwrap()
             .into_parts();
         let genesis = genesis.expect("actual H2 authenticates genesis execution");
         let authenticated_genesis = genesis.into_authenticated_execution();
-        assert!(Arc::ptr_eq(
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
             authenticated_genesis.block(),
             &original_genesis
         ));
         let authenticated_successor = certified.into_authenticated_execution().unwrap();
-        assert!(Arc::ptr_eq(
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
             authenticated_successor.block(),
             &original_successor
         ));
@@ -476,6 +479,7 @@ mod tests {
                     admitted_target_wire_bytes: frames[(height - 1) as usize].len() as u64,
                     ..limits
                 },
+                &chain.state().ivm_execution_budget(),
             )
             .unwrap();
             assert_eq!(read.wire, frames[(height - 1) as usize]);
@@ -507,7 +511,8 @@ mod tests {
             ),
         ] {
             assert!(
-                matches!(read_authenticated_execution(chain.kura(), view.chain_id(), *view.network_id(), view.block_hashes(), 1, limits),
+                matches!(read_authenticated_execution(chain.kura(), view.chain_id(), *view.network_id(), view.block_hashes(), 1, limits,
+&chain.state().ivm_execution_budget(),),
                 Err(NativeExecutionReadError::Capacity { resource: found, .. }) if found == resource)
             );
         }
@@ -532,7 +537,8 @@ mod tests {
                     *view.network_id(),
                     view.block_hashes(),
                     1,
-                    limits
+                    limits,
+                    &chain.state().ivm_execution_budget(),
                 ),
                 Err(NativeExecutionReadError::Chain(
                     ChainReadError::NotCommitted { height: 2 }
@@ -543,7 +549,11 @@ mod tests {
         let view = chain.state().view();
         let target_wire = chain
             .kura()
-            .get_block(NonZeroUsize::new(2).unwrap())
+            .get_block(
+                NonZeroUsize::new(2).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original block read attempt")
             .unwrap()
             .encode_wire()
             .unwrap();
@@ -560,7 +570,8 @@ mod tests {
                 *view.network_id(),
                 &hashes,
                 2,
-                limits
+                limits,
+                &chain.state().ivm_execution_budget(),
             ),
             Err(NativeExecutionReadError::Storage { height: 2, .. })
         ));
@@ -571,7 +582,8 @@ mod tests {
                 *view.network_id(),
                 view.block_hashes(),
                 2,
-                limits
+                limits,
+                &chain.state().ivm_execution_budget(),
             ),
             Err(NativeExecutionReadError::Chain(
                 ChainReadError::WrongInstance { height: 2 }
@@ -599,7 +611,8 @@ mod tests {
                     *view.network_id(),
                     view.block_hashes(),
                     2,
-                    limits
+                    limits,
+                    &chain.state().ivm_execution_budget(),
                 ),
                 Err(NativeExecutionReadError::Storage { height: 2, .. })
             ));

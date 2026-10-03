@@ -9,8 +9,8 @@ pub(super) fn create_proof_reference<
     Scheme: CommitmentScheme,
     P: Prover<'params, Scheme>,
     E: EncodedChallenge<Scheme::Curve>,
-    R: RngCore + 'a,
-    T: TranscriptWrite<Scheme::Curve, E>,
+    R: RngCore + SyncDeps + 'a,
+    T: TranscriptWrite<Scheme::Curve, E> + SyncDeps,
     ConcreteCircuit: Circuit<Scheme::Scalar>,
 >(
     params: &'params Scheme::ParamsProver,
@@ -123,7 +123,7 @@ where
         column_indices: [Vec<usize>; 3],
         challenge_indices: [Vec<usize>; 3],
         unusable_rows_start: usize,
-        _marker: PhantomData<(P, E)>,
+        _marker: WitnessTypeMarker<P, E>,
     }
 
     impl<'params, 'a, 'b, F, Scheme, P, C, E, R, T> Assignment<F>

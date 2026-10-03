@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -15,6 +17,14 @@ from scripts import build_ivm_cuda_bundle as bundle
 
 OPENSSL = shutil.which("openssl")
 pytestmark = pytest.mark.skipif(OPENSSL is None, reason="OpenSSL Ed25519 is unavailable")
+
+
+@pytest.fixture(autouse=True)
+def synthetic_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Keep ephemeral test keys under target, outside the synthetic production root."""
+    repository = tmp_path / "test-repository"
+    repository.mkdir()
+    monkeypatch.setattr(bundle, "ROOT", repository)
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -102,6 +112,7 @@ def test_two_run_candidate_matches_independent_manifest_and_signature(tmp_path: 
         "provenance.v1",
         "provenance.v1.sig",
         "provenance.v1.pub",
+        "evidence",
     }
     raw_public = (candidate / "provenance.v1.pub").read_bytes()
     assert len(raw_public) == 32
@@ -136,6 +147,22 @@ def test_two_run_candidate_matches_independent_manifest_and_signature(tmp_path: 
             )
         )
     assert lines == expected
+    evidence = json.loads((candidate / "evidence/record.json").read_bytes())
+    assert evidence["image_attestation_verified"] is False
+    assert evidence["hardware_qualified"] is False
+    assert evidence["manifest_sha256"] == hashlib.sha256(raw_manifest).hexdigest()
+    assert len(evidence["runs"]) == 2
+    for run in evidence["runs"]:
+        assert run["generation_sha256"] == generation
+        assert len(run["compilations"]) == 10
+        for invocation in run["compilations"]:
+            assert invocation["exit_code"] == 0
+            for field in ("output", "stdout", "stderr", "invocation_record"):
+                item = invocation[field]
+                data = (candidate / item["path"]).read_bytes()
+                assert len(data) == item["size"]
+                assert hashlib.sha256(data).hexdigest() == item["sha256"]
+    assert str(tmp_path / "signer.pem") not in (candidate / "evidence/record.json").read_text()
 
 
 def test_divergent_second_run_never_publishes_candidate(tmp_path: Path) -> None:
@@ -375,3 +402,130 @@ def test_signing_key_symlink_into_repository_is_rejected(
             image_digest=hashlib.sha256(b"image").hexdigest(),
             target_profile="arch=compute_86,code=sm_86",
         )
+
+
+@pytest.mark.parametrize("populated", [False, True])
+def test_existing_destination_cannot_be_replaced_at_publication(tmp_path, monkeypatch, populated):
+    original = bundle.custody.publish_directory_noreplace
+
+    def race(stage, destination, **kwargs):
+        destination.mkdir()
+        if populated:
+            (destination / "sentinel").write_bytes(b"other owner")
+        original(stage, destination, **kwargs)
+
+    monkeypatch.setattr(bundle.custody, "publish_directory_noreplace", race)
+    with pytest.raises(bundle.custody.ReleaseArtifactError, match="publication failed"):
+        _build(tmp_path)
+    if populated:
+        assert (tmp_path / "candidate/sentinel").read_bytes() == b"other owner"
+    else:
+        assert not list((tmp_path / "candidate").iterdir())
+    assert not (tmp_path / "candidate/provenance.v1").exists()
+
+
+def test_output_parent_symlink_is_rejected_before_compiler(tmp_path):
+    source_dir, nvcc, key = _fixture(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    with pytest.raises(bundle.custody.ReleaseArtifactError, match="directory"):
+        bundle.build_candidate(source_dir=source_dir, output_dir=alias / "candidate",
+                               nvcc=nvcc, openssl=Path(OPENSSL), signing_key=key,
+                               image_digest=hashlib.sha256(b"image").hexdigest(),
+                               target_profile="arch=compute_86,code=sm_86")
+    assert not list(real.iterdir())
+
+
+def test_replaced_parent_retains_original_stage_and_never_publishes(tmp_path, monkeypatch):
+    source_dir, nvcc, key = _fixture(tmp_path)
+    parent = tmp_path / "output"
+    parent.mkdir()
+    moved = tmp_path / "original-output"
+    original = bundle.sign_manifest
+
+    def replace_parent(*args, **kwargs):
+        result = original(*args, **kwargs)
+        parent.rename(moved)
+        parent.mkdir()
+        return result
+
+    monkeypatch.setattr(bundle, "sign_manifest", replace_parent)
+    with pytest.raises(bundle.custody.ReleaseArtifactError):
+        bundle.build_candidate(source_dir=source_dir, output_dir=parent / "candidate",
+                               nvcc=nvcc, openssl=Path(OPENSSL), signing_key=key,
+                               image_digest=hashlib.sha256(b"image").hexdigest(),
+                               target_profile="arch=compute_86,code=sm_86")
+    assert not list(parent.iterdir())
+    assert list(moved.glob(".ivm-cuda-incomplete-*"))
+
+
+def test_tool_output_bound_rejects_without_publication(tmp_path, monkeypatch):
+    monkeypatch.setattr(bundle, "MAX_LOG_BYTES", 1)
+    with pytest.raises(bundle.BundleError, match="log byte limit"):
+        _build(tmp_path)
+    assert not (tmp_path / "candidate").exists()
+
+
+def test_tool_replacement_during_generation_is_not_signed_evidence(tmp_path, monkeypatch):
+    original = bundle.compile_run
+    changed = False
+
+    def replace(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            changed = True
+            nvcc = args[0]
+            nvcc.write_bytes(nvcc.read_bytes() + b"\n# replaced executable\n")
+        return result
+
+    monkeypatch.setattr(bundle, "compile_run", replace)
+    with pytest.raises(bundle.custody.ReleaseArtifactError, match="no longer matches its stable capture"):
+        _build(tmp_path)
+    assert not (tmp_path / "candidate").exists()
+
+
+def test_alternate_compiler_really_executes_but_parent_restore_cannot_publish(tmp_path, monkeypatch):
+    source_dir, nvcc, key = _fixture(tmp_path)
+    parent = tmp_path / "compiler"
+    parent.mkdir()
+    nvcc.rename(parent / "nvcc")
+    nvcc = parent / "nvcc"
+    before = bundle.custody.stable_hash_path(nvcc)
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    marker = tmp_path / "executed"
+    marker.write_bytes(b"")
+    (alternate / "nvcc").write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\n"
+        f"Path({str(marker)!r}).write_bytes(b'alternate compiler executed')\n"
+        "print('Pinned nvcc test output')\n"
+    )
+    (alternate / "nvcc").chmod(0o755)
+    saved = tmp_path / "original-compiler"
+    popen = bundle.subprocess.Popen
+
+    def substitute(command, **kwargs):
+        assert str(nvcc) in command
+        parent.rename(saved)
+        alternate.rename(parent)
+        try:
+            child = popen(command, **kwargs)
+            assert child.wait(timeout=5) == 0
+            assert marker.read_bytes() == b"alternate compiler executed"
+            return child
+        finally:
+            parent.rename(alternate)
+            saved.rename(parent)
+
+    monkeypatch.setattr(bundle.subprocess, "Popen", substitute)
+    with pytest.raises(bundle.custody.ReleaseArtifactError, match="ancestor changed"):
+        bundle.build_candidate(source_dir=source_dir, output_dir=tmp_path / "candidate",
+                               nvcc=nvcc, openssl=Path(OPENSSL), signing_key=key,
+                               image_digest=hashlib.sha256(b"image").hexdigest(),
+                               target_profile="arch=compute_86,code=sm_86")
+    assert marker.read_bytes() == b"alternate compiler executed"
+    assert bundle.custody.stable_hash_path(nvcc) == before
+    assert not (tmp_path / "candidate").exists()

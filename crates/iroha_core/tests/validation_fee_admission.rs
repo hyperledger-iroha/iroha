@@ -142,8 +142,8 @@ fn payout_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-admission-test".to_owned(),
@@ -220,8 +220,8 @@ fn pool_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePool".to_owned(),
         compiler_fingerprint: "validation-fee-pool-admission-test".to_owned(),

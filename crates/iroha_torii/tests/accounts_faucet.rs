@@ -608,6 +608,7 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
                 .and_then(std::num::NonZeroUsize::new)
                 .expect("non-zero height"),
         )
+        .expect("funded canonical history read")
         .expect("anchor block");
     let anchor_hash = anchor_block.hash();
     let challenge_salt = faucet_beacon_seed_for_anchor(state, anchor_height);

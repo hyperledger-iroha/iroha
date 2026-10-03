@@ -14,7 +14,7 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
     let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
-    kura.store_block(Arc::new(signed_first.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_first.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -24,7 +24,7 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
     let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
-    kura.store_block(Arc::new(signed_second.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_second.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -35,7 +35,7 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
         .ensure_da_indexes_hydrated()
         .expect("hydration should succeed");
     {
-        let cursors = state.da_shard_cursor_index();
+        let cursors = state.da_shard_cursor_index().expect("completed DA history read");
         let_row! { cursor = cursors .get(lane_config.shard_id(LaneId::new(0)), LaneId::new(0)) .expect("cursor present at tip") };
         assert_eq!(cursor.sequence, 2);
         assert_eq!(cursor.last_block_height, 2);
@@ -44,13 +44,13 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
         .rewind_da_indexes_to_height(1)
         .expect("rewind should succeed");
     {
-        let cursors = state.da_shard_cursor_index();
+        let cursors = state.da_shard_cursor_index().expect("completed DA history read");
         let_row! { cursor = cursors .get(lane_config.shard_id(LaneId::new(0)), LaneId::new(0)) .expect("cursor retained after rewind") };
         assert_eq!(cursor.sequence, 1);
         assert_eq!(cursor.last_block_height, 1);
     }
     assert!(
-        state.da_commitments().bundle_at(2).is_none(),
+        state.da_commitments().expect("completed DA history read").bundle_at(2).is_none(),
         "reverted height should be dropped from commitment index"
     );
 }
@@ -73,7 +73,7 @@ fn block_and_revert_rewinds_da_indexes() {
     let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle.clone())) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
-    kura.store_block(Arc::new(signed_first.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_first.clone()))
         .expect("store first block");
     {
         let mut hashes = state.block_hashes.block();
@@ -85,7 +85,7 @@ fn block_and_revert_rewinds_da_indexes() {
     let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle.clone())) .with_da_pin_intents(Some(pin_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
-    kura.store_block(Arc::new(signed_second.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_second.clone()))
         .expect("store second block");
     {
         let mut hashes = state.block_hashes.block();
@@ -112,7 +112,9 @@ fn block_and_revert_rewinds_da_indexes() {
         .ensure_da_indexes_hydrated()
         .expect("initial hydration should succeed");
     {
-        let cursors = state.da_shard_cursor_index();
+        let cursors = state
+            .da_shard_cursor_index()
+            .expect("completed DA history read");
         let cursor = cursors
             .get(0, LaneId::new(0))
             .expect("cursor present at height 2");
@@ -120,7 +122,7 @@ fn block_and_revert_rewinds_da_indexes() {
         assert_eq!(cursor.last_block_height, 2);
     }
     {
-        let pins = state.da_pin_intents();
+        let pins = state.da_pin_intents().expect("completed DA history read");
         assert!(
             pins.get_by_alias("rewind-alias").is_some(),
             "pin intent should be present before rewind"
@@ -129,14 +131,16 @@ fn block_and_revert_rewinds_da_indexes() {
     let rollback = state.block_and_revert(signed_second.header());
     drop(rollback);
     {
-        let cursors = state.da_shard_cursor_index();
+        let cursors = state
+            .da_shard_cursor_index()
+            .expect("completed DA history read");
         let cursor = cursors
             .get(0, LaneId::new(0))
             .expect("cursor present after rewind");
         assert_eq!(cursor.sequence, 1);
         assert_eq!(cursor.last_block_height, 1);
     }
-    let pins = state.da_pin_intents();
+    let pins = state.da_pin_intents().expect("completed DA history read");
     assert!(
         pins.get_by_alias("rewind-alias").is_none(),
         "pin intent from reverted block should be dropped"

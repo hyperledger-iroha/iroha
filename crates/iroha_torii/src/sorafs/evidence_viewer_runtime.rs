@@ -89,12 +89,15 @@ impl EvidenceViewerFinalizedAuthorizationReaderV1
         if !explicitly_authorized {
             return Err(EvidenceViewerAuthorizationErrorV1::Denied);
         }
-        let block = view
-            .latest_block()
+        let finalized_height = u64::try_from(view.height())
+            .map_err(|_| EvidenceViewerAuthorizationErrorV1::Unavailable)?;
+        let finalized_block_hash = *view
+            .latest_block_hash()
+            .ok_or(EvidenceViewerAuthorizationErrorV1::Unavailable)?
+            .as_ref();
+        let finalized_at_unix_ms = view
+            .authenticated_query_ledger_time_ms()
             .ok_or(EvidenceViewerAuthorizationErrorV1::Unavailable)?;
-        let finalized_height = block.header().height().get();
-        let finalized_block_hash = *block.hash().as_ref();
-        let finalized_at_unix_ms = block.header().creation_time_ms;
         if finalized_height == 0 || finalized_block_hash == [0; 32] || finalized_at_unix_ms == 0 {
             return Err(EvidenceViewerAuthorizationErrorV1::Unavailable);
         }

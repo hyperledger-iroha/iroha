@@ -78,6 +78,9 @@ fn prepared_reputation_insertion_owns_actual_writer_until_drop_without_side_effe
         pin::Pin,
         task::{Context, Waker},
     };
+    let waiter_layout = iroha_allocation::release::ReleaseRegistration::allocation_layout();
+    let waiter_budget = iroha_allocation::AllocationBudget::new(waiter_layout.size());
+    let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
     let directory = tempdir().unwrap();
     let archive = open_archive(&directory, bounds());
     let projection = sample_projection(7, [0x71; 32]);
@@ -86,7 +89,7 @@ fn prepared_reputation_insertion_owns_actual_writer_until_drop_without_side_effe
         Err(ArchiveIndexLockError::Busy(wait)) => wait,
         _ => panic!("prepared insertion must retain the actual writer"),
     };
-    let mut released = wait.wait_for_release();
+    let mut released = wait.wait_for_release(&mut registration);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     assert!(prepared.index.by_height.is_empty());
@@ -105,6 +108,10 @@ fn prepared_reputation_insertion_owns_actual_writer_until_drop_without_side_effe
         archive.get_exact(&projection.key).unwrap(),
         Some(projection)
     );
+    drop(released);
+    assert_eq!(waiter_budget.reserved_bytes(), waiter_layout.size());
+    drop(registration);
+    assert_eq!(waiter_budget.reserved_bytes(), 0);
 }
 
 #[test]

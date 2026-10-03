@@ -108,6 +108,41 @@ impl<T> std::ops::DerefMut for PublicationGuard<'_, T> {
 }
 
 impl<T> PublicationMutex<T> {
+    /// Construct this original fence's notification from the caller's finite pool.
+    /// Native mutex internals and future waiter registrations remain separate owners.
+    pub(crate) fn try_new(
+        value: T,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, mv::storage::AdmittedStorageError> {
+        let layout = iroha_allocation::release::ReleaseNotification::allocation_layout::<
+            iroha_allocation::AllocationCharge,
+        >();
+        let mut reservation = budget
+            .try_reserve(layout)
+            .map_err(mv::storage::AdmittedStorageError::Allocation)?;
+        let charge = reservation
+            .try_split(layout)
+            .expect("exact original fence control layout");
+        let released = iroha_allocation::release::ReleaseNotification::try_new_charged(charge)
+            .map_err(|(charge, error)| {
+                drop(charge);
+                mv::storage::AdmittedStorageError::Allocator {
+                    layout: error.layout(),
+                }
+            })?;
+        Ok(Self {
+            inner: parking_lot::Mutex::new(value),
+            released,
+            mutation_epoch: None,
+        })
+    }
+
+    /// Observe this actual fence before sampling state published beneath it.
+    /// A release is only a retry hint and grants no read or publication authority.
+    pub(crate) fn observe_release(&self) -> iroha_allocation::release::ReleaseWait {
+        self.released.observe()
+    }
+
     /// An empty, allocation-free release batch bound to this actual mutex.
     pub(crate) fn deferred_releases(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.released.deferred_batch()
@@ -291,7 +326,6 @@ impl<T> PublicationMutex<T> {
 mod tests {
     use super::*;
     use std::{
-        future::Future,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -301,6 +335,10 @@ mod tests {
 
     #[test]
     fn typed_guard_notifies_after_unlock_and_preserves_value() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         struct AcquireOnWake {
             original: Arc<PublicationMutex<Vec<u8>>>,
             observed: AtomicBool,
@@ -328,19 +366,26 @@ mod tests {
         });
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
-        let mut pending = Box::pin(wait.wait_for_release());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
+        let pending = wait;
+        assert!(registration.poll_wait(&pending, &mut context).is_pending());
         let foreign = PublicationMutex::new(vec![8_u8]);
         drop(foreign.lock());
         assert!(!probe.observed.load(Ordering::SeqCst));
-        assert!(pending.as_mut().poll(&mut context).is_pending());
+        assert!(registration.poll_wait(&pending, &mut context).is_pending());
         drop(held);
         assert!(probe.observed.load(Ordering::SeqCst));
-        assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+        assert_eq!(
+            registration.poll_wait(&pending, &mut context),
+            Poll::Ready(())
+        );
     }
 
     #[test]
     fn typed_fair_unlock_and_release_before_poll_are_observable() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         let original = PublicationMutex::new(String::from("original"));
         let mut held = original.lock();
         held.push_str(" retained");
@@ -349,11 +394,9 @@ mod tests {
             Ok(_) => panic!("original backend is still held"),
         };
         held.unlock_fair();
-        let mut pending = Box::pin(wait.wait_for_release());
+        let pending = wait;
         assert_eq!(
-            pending
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop())),
+            registration.poll_wait(&pending, &mut Context::from_waker(Waker::noop())),
             Poll::Ready(())
         );
         assert_eq!(&*original.lock(), "original retained");
@@ -361,6 +404,10 @@ mod tests {
 
     #[test]
     fn typed_unwind_releases_original_value_without_poisoning() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         let original = PublicationMutex::new(vec![1_u8]);
         let mut wait = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -370,14 +417,9 @@ mod tests {
             panic!("exercise the real backend guard's unwind release");
         }));
         assert!(result.is_err());
-        let mut pending = Box::pin(
-            wait.expect("held original returns its wait")
-                .wait_for_release(),
-        );
+        let pending = wait.expect("held original returns its wait");
         assert_eq!(
-            pending
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop())),
+            registration.poll_wait(&pending, &mut Context::from_waker(Waker::noop())),
             Poll::Ready(())
         );
         let value = original
@@ -389,6 +431,10 @@ mod tests {
 
     #[test]
     fn deferred_notification_reenters_all_original_fences_after_outer_unlock() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         struct AcquireBoth {
             locks: [Arc<PublicationMutex>; 2],
             observed: AtomicBool,
@@ -414,22 +460,15 @@ mod tests {
             ];
             let held = locks[0].lock();
             let outer = locks[1].lock();
-            let mut pending = Box::pin(
-                locks[0]
-                    .try_lock_or_wait()
-                    .err()
-                    .unwrap()
-                    .wait_for_release(),
-            );
+            let pending = locks[0].try_lock_or_wait().err().unwrap();
             let probe = Arc::new(AcquireBoth {
                 locks: locks.clone(),
                 observed: AtomicBool::new(false),
             });
             let waker = Waker::from(Arc::clone(&probe));
             assert!(
-                pending
-                    .as_mut()
-                    .poll(&mut Context::from_waker(&waker))
+                registration
+                    .poll_wait(&pending, &mut Context::from_waker(&waker))
                     .is_pending()
             );
             let released = held.release_deferred();
@@ -451,9 +490,8 @@ mod tests {
             }
             assert!(probe.observed.load(Ordering::SeqCst));
             assert!(
-                pending
-                    .as_mut()
-                    .poll(&mut Context::from_waker(&waker))
+                registration
+                    .poll_wait(&pending, &mut Context::from_waker(&waker))
                     .is_ready()
             );
         }
@@ -468,7 +506,6 @@ mod scoped_tests;
 mod mutation_epoch_tests {
     use super::*;
     use std::{
-        future::Future,
         sync::atomic::Ordering,
         task::{Context, Poll, Waker},
     };
@@ -614,22 +651,35 @@ mod mutation_epoch_tests {
 
     #[test]
     fn read_guard_unlock_and_deferred_notification_preserve_original_source() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         let (mutex, permit) = PublicationMutex::with_read_permit();
         let held = mutex.lock_read_only(&permit).unwrap();
         let wait = mutex
             .try_lock_or_wait()
             .err()
             .expect("physical fence is held");
-        let mut pending = Box::pin(wait.wait_for_release());
+        let pending = wait;
         let mut context = Context::from_waker(Waker::noop());
-        assert_eq!(pending.as_mut().poll(&mut context), Poll::Pending);
+        assert_eq!(
+            registration.poll_wait(&pending, &mut context),
+            Poll::Pending
+        );
         let released = held.release_deferred();
         // Probe the private backend only in this notification-order test, so
         // the probe itself cannot signal the notification under observation.
         assert!(mutex.inner.try_lock().is_some());
-        assert_eq!(pending.as_mut().poll(&mut context), Poll::Pending);
+        assert_eq!(
+            registration.poll_wait(&pending, &mut context),
+            Poll::Pending
+        );
         drop(released);
-        assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+        assert_eq!(
+            registration.poll_wait(&pending, &mut context),
+            Poll::Ready(())
+        );
         assert_eq!(read_epoch(&mutex, &permit), Some(0));
         assert_eq!(mutex.lock().mutation_epoch(), Some(1));
     }
@@ -650,5 +700,27 @@ mod mutation_epoch_tests {
         assert!(held.try_release_into(&mut original_batch).is_ok());
         assert_eq!(read_epoch(&mutex, &permit), Some(1));
         drop(original_batch);
+    }
+}
+
+#[cfg(test)]
+mod admitted_control_tests {
+    use super::*;
+    #[test]
+    fn original_fence_control_is_fallible_and_retained_by_its_release_observation() {
+        use iroha_allocation::{AllocationBudget, AllocationCharge, release::ReleaseNotification};
+        let layout = ReleaseNotification::allocation_layout::<AllocationCharge>();
+        let empty = AllocationBudget::new(0);
+        let expected = empty.try_reserve(layout).unwrap_err();
+        assert!(matches!(PublicationMutex::try_new((), &empty),
+            Err(mv::storage::AdmittedStorageError::Allocation(ref actual)) if actual == &expected));
+        let budget = AllocationBudget::new(layout.size());
+        let lock = PublicationMutex::try_new((), &budget).unwrap();
+        let wait = lock.observe_release();
+        assert_eq!(budget.reserved_bytes(), layout.size());
+        drop(lock);
+        assert_eq!(budget.reserved_bytes(), layout.size());
+        drop(wait);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }

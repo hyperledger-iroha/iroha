@@ -1,5 +1,8 @@
 //! Closed map edits with real MV credits and observed allocation custody.
 
+#[path = "../src/release_test_support.rs"]
+mod release_test_support;
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     borrow::Borrow,
@@ -731,6 +734,9 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
     let owner = insert(&map, &budget, &counters, 2);
     commit(&map, &budget, owner);
     let unpublished = insert(&map, &budget, &counters, 3);
+    // The seed operations above have completed their exact payload credit checks.
+    // Admit this observation before acquiring its writer or creating pressure.
+    let mut registration = crate::release_test_support::registration(&budget);
     let wake = Arc::new(Reenter {
         map: Arc::clone(&map),
         budget: budget.clone(),
@@ -753,9 +759,8 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
         else {
             panic!("original budget must be full");
         };
-        let mut pending = Box::pin(release.wait_for_release());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
-        wait = Some(pending);
+        assert!(registration.poll_wait(&release, &mut context).is_pending());
+        wait = Some(release);
         without_allocations(|| {
             drop(old);
             assert!(RECORDS[old_id].freed.load(SeqCst));
@@ -770,10 +775,8 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
     assert_eq!(wake.wakes.load(SeqCst), 1);
     assert!(wake.writer_released.load(SeqCst));
     assert!(
-        wait.as_mut()
-            .unwrap()
-            .as_mut()
-            .poll(&mut context)
+        registration
+            .poll_wait(wait.as_ref().unwrap(), &mut context)
             .is_ready()
     );
     assert_eq!(map.read().len(), 2);
@@ -781,6 +784,8 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
     budget.with_deferred_refund_notifications(|_| drop((wait, waker, wake)));
     without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
+    registration.cancel();
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

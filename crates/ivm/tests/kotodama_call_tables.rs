@@ -106,32 +106,44 @@ fn wide_sum_payloads_cross_the_signed_immediate_boundary() {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let source = format!(
-        r#"seiyaku WideSums {{
+    // Keep separate artifacts beneath the unchanged 1 MiB image limit. The
+    // constructors return sum handles, avoiding repeated wide table marshals.
+    let option_source = format!(
+        r#"seiyaku WideOption {{
             struct Wide {{ {fields} }}
-            fn build(bool last) -> Wide {{ Wide {{ {values} }} }}
-            fn option(Wide value, List<int, 1> trace, int digit) -> Option<Wide> {{
+            fn option(bool last, List<int, 1> trace, int digit) -> Option<Wide> {{
                 var log = trace;
                 log.set(index: 0, value: log.get(0).unwrap_or(0) * 10 + digit);
-                Option::some(value)
+                Option::some(Wide {{ {values} }})
             }}
-            fn result(Wide value, bool success) -> Result<Wide, Wide> {{
-                if success {{ Result::ok(value) }} else {{ Result::err(value) }}
+            fn equal(bool last, List<int, 1> trace) -> bool {{
+                option(last: true, trace: trace, digit: 1) ==
+                    option(last: last, trace: trace, digit: 2)
             }}
             view fn main() -> bool {{
-                let expected = build(last: true);
-                let changed = build(last: false);
                 let List<int, 1> trace = [0];
-                let equal = option(value: expected, trace: trace, digit: 1) ==
-                    option(value: expected, trace: trace, digit: 2);
-                let Option<Wide> present = Option::some(expected);
-                let Option<Wide> different = Option::some(changed);
+                let same = equal(last: true, trace: trace);
+                let different = !equal(last: false, trace: trace);
+                let ordered_once = trace.get(0).unwrap_or(0) == 1212;
+                let present = option(last: true, trace: trace, digit: 0);
                 let selected = match present {{
                     Option::some(value) => value.f0 && !value.f4093 && value.f4094 && value.f4095,
                     Option::none => false,
                 }};
-                let success = result(value: expected, success: true);
-                let failure = result(value: changed, success: false);
+                same && different && ordered_once && selected
+            }}
+        }}"#,
+    );
+    let result_source = format!(
+        r#"seiyaku WideResult {{
+            struct Wide {{ {fields} }}
+            fn result(bool last, bool success) -> Result<Wide, Wide> {{
+                let value = Wide {{ {values} }};
+                if success {{ Result::ok(value) }} else {{ Result::err(value) }}
+            }}
+            view fn main() -> bool {{
+                let success = result(last: true, success: true);
+                let failure = result(last: false, success: false);
                 let success_selected = match success {{
                     Result::ok(value) => value.f4095,
                     Result::err(value) => false,
@@ -140,11 +152,12 @@ fn wide_sum_payloads_cross_the_signed_immediate_boundary() {
                     Result::ok(value) => false,
                     Result::err(value) => !value.f4095,
                 }};
-                equal && present != different && selected && success_selected &&
-                    failure_selected && trace.get(0).unwrap_or(0) == 12
+                success_selected && failure_selected
             }}
         }}"#,
     );
-    let vm = run_table_function(&source);
-    assert_eq!(vm.public_call_result_word(0), Ok(1));
+    for source in [option_source, result_source] {
+        let vm = run_table_function(&source);
+        assert_eq!(vm.public_call_result_word(0), Ok(1));
+    }
 }

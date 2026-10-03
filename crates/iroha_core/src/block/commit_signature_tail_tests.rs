@@ -39,7 +39,12 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
         ValidatorIndex::try_from(2).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),
@@ -88,7 +93,12 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
         ValidatorIndex::try_from(3).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),

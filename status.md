@@ -14,7 +14,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Unsigned macOS ARM64 installed-release diagnostics pass config-free local startup, all three deployment inputs and restart recovery, plus four-parent/four-private attachment, paid namespace provisioning, verified anchoring and bounded payload-isolation checks. | Cold registry dependencies, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency targets remain under qualification. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. | The current shared branch needs combined runtime requalification, including paid provisioning, anchoring and payload isolation. Cold registry dependencies, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
@@ -233,19 +233,30 @@ endpoints. The CA check binds a synthetic paired MAIN record. The optimized
 constructor, full ordinary suite, upstream strict lint and merged-source qualification
 remain open. Maximum-proof external time/RSS evidence and enforced address-space
 limits remain separate cryptographic release gates. The non-test real-proof frontend
-remains under qualification. Later Privacy source additions require a fresh
-source/dep-info closure and test registry before current-candidate validation.
+remains under qualification. Later Privacy source additions have a separate
+development libtest build and registry discovery (2,541 tests, 65 ignored,
+433 dep-info inputs). After the shared Norito derive correction, the current
+debug-profile libtest compiles with all 8,374 captured source, literal and control
+inputs unchanged at the closed merged revision. Its actual registry preserves
+all 61 original ignores; the 2,476 ordinary cases are running serially after a
+current resource review. The derive library, strict JSON and UI regressions pass;
+full runtime validation remains open and retains its artifact's source epoch
+across the separate test-fixture repair.
 SDK Native custody and genuine production proving are mandatory even with SDK
 defaults disabled; assembly tools remain explicit
 `dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
 CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
-The last stable source-budget pass admits the two actual filesystem-lock edges
-and their measured edge-count costs. Subsequent workspace and manifest changes
-require a new check; current native frontend and proof qualification remain open.
-The signed-clock type path is corrected. The latest focused development
-fee-evidence build stops in Core ZK's HTTP-proof module on an undeclared `url`
-dependency, now declared in the current manifest. Its tests have not executed;
-a fresh compile and runtime result require the concurrent merge to close.
+Source budgets include the exact filesystem-lock, Petal, URL, wallet-manifest
+and IVM test-owner costs without growth headroom or relaxed ownership denials;
+current native frontend and proof qualification remain open.
+The signed-clock type path, Core ZK URL dependency and shared request-codec
+derive are corrected. The normal Core ZK library frontend passes with its default
+features and an unchanged source/Git interval. The repair chat installed the
+ordinary-mint submission-limit import and checkpoint genesis-error conversion
+that blocked the fee-target build; a fresh build and fee runtime remain pending.
+The current metadata sequence stops at its first build on three wallet custody
+types missing required canonical Norito schema names. Its source/Git interval
+is unchanged; the second build and strict freshness comparison have not run.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit

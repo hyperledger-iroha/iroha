@@ -24,11 +24,20 @@ static KECCAK: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Result<HostOutput<T>, CudaFailure> {
+fn complete<T>(
+    kernel: Kernel,
+    artifact: PtxArtifact,
+    expected_count: usize,
+    result: Result<HostOutput<T>, CudaFailure>,
+) -> Result<HostOutput<T>, CudaFailure> {
     match result {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == expected_count => {
+            super::imp::record_completed_cuda_dispatch(kernel, artifact);
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -43,24 +52,26 @@ fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Result<HostOutput<
 }
 
 fn sha256_staging(state: &[u32; 8], block: &[u8; 64]) -> Result<HostOutput<u32>, CudaFailure> {
-    complete(crate::cuda_dispatch::with_selected(
+    complete(
         Kernel::Sha256,
         SHA256,
-        |device| {
+        state.len(),
+        crate::cuda_dispatch::with_selected(Kernel::Sha256, SHA256, |device| {
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
             unsafe { launch::sha256_output(device, SHA256, state, block) }
-        },
-    ))
+        }),
+    )
 }
 fn keccak_staging(state: &[u64; 25]) -> Result<HostOutput<u64>, CudaFailure> {
-    complete(crate::cuda_dispatch::with_selected(
+    complete(
         Kernel::Keccak,
         KECCAK,
-        |device| {
+        state.len(),
+        crate::cuda_dispatch::with_selected(Kernel::Keccak, KECCAK, |device| {
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
             unsafe { launch::keccak_output(device, KECCAK, state) }
-        },
-    ))
+        }),
+    )
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {

@@ -131,9 +131,14 @@ fn invalid_envelopes_are_rejected_before_missing_finality_and_valid_payload_requ
         let block = fixture
             .state
             .block_by_height(std::num::NonZeroUsize::new(height).unwrap())
+            .unwrap()
             .unwrap();
-        let block = Arc::new(block.as_ref().clone().with_commit_certificate(None));
-        kura.store_block(Arc::clone(&block)).unwrap();
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(
+            block.as_ref().clone().with_commit_certificate(None),
+            &state.ivm_execution_budget(),
+        )
+        .unwrap();
+        kura.store_block(block.clone()).unwrap();
         Arc::get_mut(&mut state)
             .unwrap()
             .push_block_hash_for_testing(block.hash());

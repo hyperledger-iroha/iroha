@@ -8,6 +8,7 @@
 // then qualify queue admission and provider coordination before stock publication can start.
 use super::{
     MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
     MusubiPublicationPrivateServiceContextV1, pin_registration::validate_signed_pin_intent,
 };
@@ -15,6 +16,7 @@ use iroha_config::parameters::actual::{
     MusubiPublicationPaidPinPolicy, SorafsPinPolicyConstraints,
 };
 use iroha_core::{
+    execution_attempt::ExecutionDeferred,
     executor::quote_nexus_fee_admission_draft,
     queue::Queue,
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
@@ -46,8 +48,12 @@ use sorafs_manifest::{
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 /// Redacted signer or current-state failure before any Queue admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPinSigningErrorV1 {
+    /// Original local allocation admission is unfinished; retain its exact retry owner.
+    Deferred(ExecutionDeferred),
+    /// The source registration is ahead of this daemon's coherent finalized view.
+    LocallyAhead,
     /// Runtime key does not control the configured public pin account.
     AuthorityMismatch,
     /// Finalized source archive is unavailable, invalid, or no longer current.
@@ -70,6 +76,8 @@ pub enum MusubiPublicationPinSigningErrorV1 {
 impl core::fmt::Display for MusubiPublicationPinSigningErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "Musubi pin signing is waiting for local history capacity",
+            Self::LocallyAhead => "Musubi pin source is ahead of local finality",
             Self::AuthorityMismatch => "Musubi pin signer authority does not match configuration",
             Self::Finality => "finalized Musubi archive is not current",
             Self::Clock => "durable Musubi pin clock is unavailable",
@@ -83,6 +91,21 @@ impl core::fmt::Display for MusubiPublicationPinSigningErrorV1 {
     }
 }
 impl std::error::Error for MusubiPublicationPinSigningErrorV1 {}
+impl From<MusubiPublicationFinalizedArchiveRegistrationReadErrorV1>
+    for MusubiPublicationPinSigningErrorV1
+{
+    fn from(error: MusubiPublicationFinalizedArchiveRegistrationReadErrorV1) -> Self {
+        match error {
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(original) => {
+                Self::Deferred(original)
+            }
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
+                Self::LocallyAhead
+            }
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => Self::Finality,
+        }
+    }
+}
 
 /// Runtime-only credential restricted to one canonical paid pin transaction shape.
 pub struct MusubiPublicationPinTransactionSignerV1 {
@@ -137,8 +160,10 @@ impl MusubiPublicationPinTransactionSignerV1 {
     /// or fee policy requires a new invocation and a new outbox intent.
     ///
     /// # Errors
-    /// Returns a redacted error before any side effect if finality, current policy, funding,
-    /// routing, clock, fee quote, manifest, or signing validation fails.
+    /// Returns a redacted error before Queue admission if finality, current policy, funding,
+    /// routing, clock, fee quote, manifest, or signing validation fails. Finalized-reader capacity
+    /// refusals retain their original retry owner, and locally future evidence stays distinct
+    /// from invalid finality. The clock may already have advanced when a later check refuses.
     pub fn sign_finalized_archive(
         &self,
         source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
@@ -148,7 +173,7 @@ impl MusubiPublicationPinTransactionSignerV1 {
         let archive = self
             .finalized_reader
             .read_current_archive(source)
-            .map_err(|_| Error::Finality)?;
+            .map_err(Error::from)?;
         let now_ms = clock.current_time_ms().map_err(|_| Error::Clock)?;
         let governance = self.state.governance_snapshot();
         let manifest = build_exact_pin_manifest(
@@ -178,7 +203,7 @@ impl MusubiPublicationPinTransactionSignerV1 {
         let current = self
             .finalized_reader
             .read_current_archive_in_view(source, &view)
-            .map_err(|_| Error::Finality)?;
+            .map_err(Error::from)?;
         if current.commitment != archive.commitment {
             return Err(Error::Finality);
         }
@@ -236,12 +261,27 @@ impl MusubiPublicationPinTransactionSignerV1 {
             crypto.as_ref(),
         )
         .map_err(|_| Error::TransactionAdmission)?;
-        if self.finalized_reader.read_current_archive(source).is_err() {
-            return Err(Error::Finality);
-        }
+        // TODO: Retain the already signed wire across a refused final read in the durable
+        // outbox/control handoff before activating production coordination. A typed refusal
+        // preserves its retry owner but does not grant permission to sign a replacement.
+        self.recheck_finalized_archive(source)?;
         Ok((digest, transaction))
     }
+
+    fn recheck_finalized_archive(
+        &self,
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    ) -> Result<(), MusubiPublicationPinSigningErrorV1> {
+        self.finalized_reader
+            .read_current_archive(source)
+            .map(|_| ())
+            .map_err(MusubiPublicationPinSigningErrorV1::from)
+    }
 }
+
+#[cfg(test)]
+#[path = "pin_signer/reader_tests.rs"]
+mod reader_tests;
 
 fn sign_quoted_pin(
     network_id: NetworkId,

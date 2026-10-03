@@ -48,10 +48,10 @@ use crate::{
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
     hybrid::{self, HybridKemCiphertext, HybridPublicKey, HybridSecretKey, HybridSuite},
 };
-use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar};
+use arrayvec::ArrayVec;
+use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use group::{Curve as _, Group as _, ff::Field as _, prime::PrimeCurveAffine as _};
 use hkdf::Hkdf;
-use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
 use rand_core::{OsRng, TryCryptoRng};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -60,6 +60,7 @@ use zeroize::Zeroizing;
 /// Version of the fixed threshold-BLS transcript profile.
 pub const THRESHOLD_BLS_PROTOCOL_VERSION_V1: u16 = 1;
 const SESSION_CANONICAL_BYTES_V1: usize = SESSION_DOMAIN_V1.len() + 2 + 1 + 32 * 3 + 2 * 2;
+const MESSAGE_PREFIX_BYTES_V1: usize = MESSAGE_DOMAIN_V1.len() + SESSION_CANONICAL_BYTES_V1 + 4;
 /// Minimum exact `3f + 1` committee size accepted by the v1 profile.
 pub const THRESHOLD_BLS_MIN_COMMITTEE_SIZE_V1: u16 = 4;
 /// Maximum exact `3f + 1` committee size accepted by the v1 profile.
@@ -322,25 +323,31 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsSession<P> {
     /// Returns [`ThresholdBlsError::MessageTooLarge`] when `payload` exceeds
     /// the fixed v1 bound.
     pub fn signing_message(&self, payload: &[u8]) -> Result<Vec<u8>, ThresholdBlsError> {
+        let message = self.borrowed_signing_message(payload)?;
+        let mut bytes = Vec::with_capacity(message.prefix.len() + payload.len());
+        bytes.extend_from_slice(&message.prefix);
+        bytes.extend_from_slice(payload);
+        Ok(bytes)
+    }
+
+    fn borrowed_signing_message<'a>(
+        &self,
+        payload: &'a [u8],
+    ) -> Result<BorrowedSigningMessage<'a, P>, ThresholdBlsError> {
         let payload_len = u32::try_from(payload.len())
             .ok()
             .filter(|_| payload.len() <= THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1)
             .ok_or(ThresholdBlsError::MessageTooLarge)?;
-        let mut message = Vec::with_capacity(
-            MESSAGE_DOMAIN_V1.len()
-                + SESSION_DOMAIN_V1.len()
-                + 2
-                + 1
-                + 32 * 3
-                + 2 * 2
-                + 4
-                + payload.len(),
-        );
-        message.extend_from_slice(MESSAGE_DOMAIN_V1);
-        self.write_canonical(&mut message);
-        message.extend_from_slice(&payload_len.to_be_bytes());
-        message.extend_from_slice(payload);
-        Ok(message)
+        let mut prefix = [0; MESSAGE_PREFIX_BYTES_V1];
+        let session_end = MESSAGE_DOMAIN_V1.len() + SESSION_CANONICAL_BYTES_V1;
+        prefix[..MESSAGE_DOMAIN_V1.len()].copy_from_slice(MESSAGE_DOMAIN_V1);
+        prefix[MESSAGE_DOMAIN_V1.len()..session_end].copy_from_slice(&self.canonical_bytes());
+        prefix[session_end..].copy_from_slice(&payload_len.to_be_bytes());
+        Ok(BorrowedSigningMessage {
+            prefix,
+            payload,
+            marker: PhantomData,
+        })
     }
 
     fn canonical_bytes(&self) -> [u8; SESSION_CANONICAL_BYTES_V1] {
@@ -360,10 +367,6 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsSession<P> {
             offset += field.len();
         }
         out
-    }
-
-    fn write_canonical(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.canonical_bytes());
     }
 }
 
@@ -436,7 +439,7 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsPublicKey<P> {
         {
             return Err(ThresholdBlsError::SessionMismatch);
         }
-        let message = session.signing_message(payload)?;
+        let message = session.borrowed_signing_message(payload)?;
         verify_signature::<P>(&self.bytes, &message, &signature.bytes)
     }
 
@@ -1268,12 +1271,19 @@ impl<P: ThresholdBlsPurpose> DasRenPartialSignature<P> {
 }
 
 /// Fully verified qualified-dealer transcript for adaptive threshold BLS.
+///
+/// Qualified indices and composite verification shares are held inline at the
+/// canonical 31-seat bound. Only verified initialized entries are exposed by
+/// the slice accessors; cloning this retained transcript allocates no backing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdaptiveThresholdBlsPublicTranscript<P: ThresholdBlsPurpose> {
     parameters: AdaptiveThresholdBlsParameters<P>,
-    qualified_indices: Vec<u16>,
+    qualified_indices: ArrayVec<u16, { THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 as usize }>,
     group_public_key: ThresholdBlsPublicKey<P>,
-    public_shares: Vec<AdaptiveThresholdBlsPublicShare<P>>,
+    public_shares: ArrayVec<
+        AdaptiveThresholdBlsPublicShare<P>,
+        { THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 as usize },
+    >,
     dkg_event_hash: [u8; 32],
     transcript_hash: [u8; 32],
 }
@@ -1334,7 +1344,8 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
             &group_point.to_affine().to_compressed(),
         )?;
 
-        let mut public_shares = Vec::with_capacity(usize::from(session.committee_size()));
+        let mut public_shares =
+            ArrayVec::<_, { THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 as usize }>::new();
         for index in 1_u16..=session.committee_size() {
             let mut composite = G2Projective::identity();
             for dealer in validated_dealers {
@@ -1343,13 +1354,15 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
             if bool::from(composite.is_identity()) {
                 return Err(ThresholdBlsError::InvalidCoefficientCommitment);
             }
-            public_shares.push(AdaptiveThresholdBlsPublicShare {
-                parameters_digest,
-                index,
-                participant_hash: adaptive_participant_hash(session, index),
-                bytes: composite.to_affine().to_compressed(),
-                marker: PhantomData,
-            });
+            public_shares
+                .try_push(AdaptiveThresholdBlsPublicShare {
+                    parameters_digest,
+                    index,
+                    participant_hash: adaptive_participant_hash(session, index),
+                    bytes: composite.to_affine().to_compressed(),
+                    marker: PhantomData,
+                })
+                .map_err(|_| ThresholdBlsError::NonCanonicalQualifiedSet)?;
         }
         let transcript_hash = compute_adaptive_transcript_hash(
             parameters,
@@ -1359,9 +1372,13 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
             &public_shares,
             &dkg_event_hash,
         );
+        let mut retained_qualified = ArrayVec::new();
+        retained_qualified
+            .try_extend_from_slice(qualified_indices)
+            .map_err(|_| ThresholdBlsError::NonCanonicalQualifiedSet)?;
         Ok(Self {
             parameters: *parameters,
-            qualified_indices: qualified_indices.to_vec(),
+            qualified_indices: retained_qualified,
             group_public_key,
             public_shares,
             dkg_event_hash,
@@ -1384,7 +1401,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
     /// Return the exact canonical qualified-dealer indices.
     #[must_use]
     pub fn qualified_indices(&self) -> &[u16] {
-        &self.qualified_indices
+        self.qualified_indices.as_slice()
     }
 
     /// Return the standard-generator group public key.
@@ -1396,7 +1413,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
     /// Return all canonically indexed composite verification shares.
     #[must_use]
     pub fn public_shares(&self) -> &[AdaptiveThresholdBlsPublicShare<P>] {
-        &self.public_shares
+        self.public_shares.as_slice()
     }
 
     /// Return the consensus event hash binding complaints and qualification.
@@ -1466,9 +1483,9 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
         if share.parameters_digest != self.parameters.digest() {
             return Err(ThresholdBlsError::SessionMismatch);
         }
-        let message = self.session().signing_message(payload)?;
-        let message_h0 = hash_message_to_g1::<P>(&message);
-        let message_h1 = hash_message_to_h1::<P>(&message);
+        let message = self.session().borrowed_signing_message(payload)?;
+        let message_h0 = message.h0();
+        let message_h1 = message.h1();
         let sigma = decode_g1(&partial.sigma)?;
         let proof_x = decode_g2(&partial.proof_x)
             .map_err(|_| ThresholdBlsError::InvalidPartialSignatureProof)?;
@@ -1498,6 +1515,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
     ///
     /// The returned standard BLS signature carries no reconstruction bitmap;
     /// all valid threshold subsets interpolate to the same group signature.
+    /// Interpolation borrows those checked partials without allocating an index buffer.
     ///
     /// # Errors
     ///
@@ -1524,15 +1542,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
             self.verify_partial_signature(payload, partial)?;
             previous = partial.index;
         }
-        let indices = partials
-            .iter()
-            .map(|partial| partial.index)
-            .collect::<Vec<_>>();
-        let mut combined = G1Projective::identity();
-        for partial in partials {
-            let coefficient = lagrange_at_zero(partial.index, &indices)?;
-            combined += G1Projective::from(decode_g1(&partial.sigma)?) * coefficient;
-        }
+        let combined = interpolate_partial_signatures(partials)?;
         if bool::from(combined.is_identity()) {
             return Err(ThresholdBlsError::InvalidSignature);
         }
@@ -1726,9 +1736,9 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsSecretShare<P> {
         let s = decode_scalar(&self.scalar_bytes[0])?;
         let r = decode_scalar(&self.scalar_bytes[1])?;
         let u = decode_scalar(&self.scalar_bytes[2])?;
-        let message = transcript.session().signing_message(payload)?;
-        let message_h0 = hash_message_to_g1::<P>(&message);
-        let message_h1 = hash_message_to_h1::<P>(&message);
+        let message = transcript.session().borrowed_signing_message(payload)?;
+        let message_h0 = message.h0();
+        let message_h1 = message.h1();
         let sigma = (G1Projective::from(message_h0) * s + G1Projective::from(message_h1) * r)
             .to_affine()
             .to_compressed();
@@ -1960,15 +1970,33 @@ fn partial_proof_challenge<P: ThresholdBlsPurpose>(
     scalar_from_transcript(&hasher)
 }
 
-fn lagrange_at_zero(index: u16, indices: &[u16]) -> Result<Scalar, ThresholdBlsError> {
+/// Interpolate the same complete partial slice whose order, session and proofs
+/// the caller has already verified. Borrow each index directly instead of
+/// materializing a second owner; all canonical subset sizes remain accepted.
+fn interpolate_partial_signatures<P: ThresholdBlsPurpose>(
+    partials: &[DasRenPartialSignature<P>],
+) -> Result<G1Projective, ThresholdBlsError> {
+    let mut combined = G1Projective::identity();
+    for partial in partials {
+        let coefficient =
+            lagrange_at_zero(partial.index, partials.iter().map(|entry| entry.index))?;
+        combined += G1Projective::from(decode_g1(&partial.sigma)?) * coefficient;
+    }
+    Ok(combined)
+}
+
+fn lagrange_at_zero(
+    index: u16,
+    indices: impl Iterator<Item = u16>,
+) -> Result<Scalar, ThresholdBlsError> {
     let x_i = Scalar::from(u64::from(index));
     let mut numerator = Scalar::from(1_u64);
     let mut denominator = Scalar::from(1_u64);
     for other in indices {
-        if *other == index {
+        if other == index {
             continue;
         }
-        let x_j = Scalar::from(u64::from(*other));
+        let x_j = Scalar::from(u64::from(other));
         numerator *= -x_j;
         denominator *= x_i - x_j;
     }
@@ -1985,8 +2013,8 @@ fn derive_beacon_seed(
     payload: &[u8],
     signature: &ThresholdBlsSignature<BeaconPurpose>,
 ) -> Result<[u8; 32], ThresholdBlsError> {
-    let message = session.signing_message(payload)?;
-    let message_hash: [u8; 32] = Sha256::digest(&message).into();
+    let message = session.borrowed_signing_message(payload)?;
+    let message_hash = message.digest();
     let mut salt_hasher = Sha256::new();
     salt_hasher.update(BEACON_SEED_SALT_V1);
     salt_hasher.update(transcript_hash);
@@ -2003,30 +2031,52 @@ pub(crate) fn hash_message_to_g1<P: ThresholdBlsPurpose>(message: &[u8]) -> G1Af
     G1Projective::hash_to_curve(message, P::SIGNATURE_DST, &[]).to_affine()
 }
 
-fn hash_message_to_h1<P: ThresholdBlsPurpose>(message: &[u8]) -> G1Affine {
-    let mut purpose_bound_message = Vec::with_capacity(message.len() + 1);
-    purpose_bound_message.push(P::ROLE_TAG);
-    purpose_bound_message.extend_from_slice(message);
-    G1Projective::hash_to_curve(&purpose_bound_message, PARTIAL_H1_DST_V1, &[]).to_affine()
+/// The canonical framed message with only its fixed prefix owned on the stack.
+///
+/// blstrs/blst hashes augmentation immediately before the message bytes. Passing
+/// our prefix there is byte-identical to hashing the serialized concatenation;
+/// no public signing format or hash-to-curve domain is changed.
+struct BorrowedSigningMessage<'a, P: ThresholdBlsPurpose> {
+    prefix: [u8; MESSAGE_PREFIX_BYTES_V1],
+    payload: &'a [u8],
+    marker: PhantomData<P>,
+}
+
+impl<P: ThresholdBlsPurpose> BorrowedSigningMessage<'_, P> {
+    fn h0(&self) -> G1Affine {
+        G1Projective::hash_to_curve(self.payload, P::SIGNATURE_DST, &self.prefix).to_affine()
+    }
+
+    fn h1(&self) -> G1Affine {
+        let mut prefix = [0; 1 + MESSAGE_PREFIX_BYTES_V1];
+        prefix[0] = P::ROLE_TAG;
+        prefix[1..].copy_from_slice(&self.prefix);
+        G1Projective::hash_to_curve(self.payload, PARTIAL_H1_DST_V1, &prefix).to_affine()
+    }
+
+    fn digest(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(self.prefix);
+        hash.update(self.payload);
+        hash.finalize().into()
+    }
 }
 
 fn verify_signature<P: ThresholdBlsPurpose>(
     public_key: &[u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES],
-    message: &[u8],
+    message: &BorrowedSigningMessage<'_, P>,
     signature: &[u8; THRESHOLD_BLS_SIGNATURE_BYTES],
 ) -> Result<(), ThresholdBlsError> {
     let public_key = decode_g2(public_key)?;
     let signature = decode_g1(signature)?;
-    let message_point = hash_message_to_g1::<P>(message);
-    let terms: [(&G1Affine, &G2Prepared); 2] = [
-        (&signature, &G2Prepared::from(G2Affine::generator())),
-        (
-            &(-G1Projective::from(message_point)).to_affine(),
-            &G2Prepared::from(public_key),
-        ),
-    ];
-    let pairing = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-    if bool::from(pairing.is_identity()) {
+    let message_point = message.h0();
+    // Pairing equality is the same checked relation as e(sig, g) * e(-H, pk) = 1.
+    // Each one-point blst loop and final comparison uses fixed stack scratch;
+    // no prepared-line Vec or heap-backed Pairing accumulator is constructed.
+    let signature_pairing =
+        blst::blst_fp12::miller_loop(G2Affine::generator().as_ref(), signature.as_ref());
+    let message_pairing = blst::blst_fp12::miller_loop(public_key.as_ref(), message_point.as_ref());
+    if blst::blst_fp12::finalverify(&signature_pairing, &message_pairing) {
         Ok(())
     } else {
         Err(ThresholdBlsError::SignatureMismatch)
@@ -2061,6 +2111,11 @@ fn is_zero(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod interpolation;
+    mod message_borrow;
+    mod pairing_scratch;
+    mod transcript_inline;
+
     use blstrs::{G2Affine, Scalar};
     use group::{Curve as _, prime::PrimeCurveAffine as _};
     use rand_chacha::ChaCha20Rng;
@@ -2115,9 +2170,6 @@ mod tests {
             let session = session::<P>();
             let canonical = original_session(&session);
             assert_eq!(session.canonical_bytes().as_slice(), canonical);
-            let mut written = Vec::new();
-            session.write_canonical(&mut written);
-            assert_eq!(written, canonical);
             let mut signed = MESSAGE_DOMAIN_V1.to_vec();
             signed.extend_from_slice(&canonical);
             signed.extend_from_slice(&3_u32.to_be_bytes());

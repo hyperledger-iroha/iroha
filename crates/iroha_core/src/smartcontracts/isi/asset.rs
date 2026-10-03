@@ -134,7 +134,8 @@ pub mod isi {
                 self,
                 &resolved_id,
                 &candidate,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
                 self,
                 &resolved_id,
@@ -262,7 +263,8 @@ pub mod isi {
                 self,
                 source_id,
                 source_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if enforce_credit_controls {
                 self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
             }
@@ -346,7 +348,8 @@ pub mod isi {
                 self,
                 source_id,
                 balance_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if source_id == destination_id {
                 self.precheck_quantity_balance_assignment(source_id, &delta.to_balance_after)?;
                 self.quantity_mutation_observation.changed();
@@ -4199,7 +4202,12 @@ pub mod isi {
             &movement.plan.destination_id,
             &amount,
             &movement.plan.prechecked_delta.to_balance_after,
-        )?;
+        )
+        .map_err(|error| {
+            state_transaction
+                .world
+                .attempt_error_to_instruction_error(error)
+        })?;
         movement.apply(state_transaction)?;
         custody.apply(&mut state_transaction.world);
         Ok(())
@@ -5633,11 +5641,8 @@ pub mod isi {
             )?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &destination_id)?;
-            crate::validation_fee_rewards::ensure_reward_custody_debit(
-                state_transaction,
-                &source_id,
-                &amount,
-            )?;
+            // The common transfer precheck below protects all additive reserves
+            // against the final net balance, including an exact self-transfer.
             let retail_usage_update = prepare_retail_daily_usage_update(
                 state_transaction,
                 &source_id,
@@ -6017,7 +6022,12 @@ pub mod isi {
                         state_transaction.world(),
                         source_id,
                         after,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        state_transaction
+                            .world
+                            .attempt_error_to_instruction_error(error)
+                    })?;
                 }
             }
             let mut aggregate_outbound =
@@ -6258,7 +6268,12 @@ pub mod isi {
                 state_transaction.world(),
                 &source,
                 &after,
-            )?;
+            )
+            .map_err(|error| {
+                state_transaction
+                    .world
+                    .attempt_error_to_instruction_error(error)
+            })?;
         }
         let mut plans = Vec::with_capacity(movements.as_slice().len());
         for movement in movements.as_slice() {

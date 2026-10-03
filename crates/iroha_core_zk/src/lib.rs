@@ -93,6 +93,7 @@ use std::{
 pub mod confidential;
 /// Shared confidential note, tree, and verifier-key primitives.
 pub mod confidential_v2;
+mod ivm_proof_identity;
 mod verification;
 pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, verify_for_relation};
 /// Frame-identity path mapping for the relocated nominal schema names.
@@ -1155,6 +1156,9 @@ pub fn validate_stark_fri_verifying_key_v1(
     ))
 }
 fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
+    if ivm_proof_identity::circuit_id_uses_reserved_ivm_namespace(circuit_id) {
+        return true;
+    }
     let trimmed = circuit_id.trim();
     if stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(trimmed) {
         return true;
@@ -1174,7 +1178,6 @@ fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> 
 fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &str) -> bool {
     let lower = fragment.to_ascii_lowercase();
     lower == "halo2"
-        || lower.starts_with("ivm-")
         || lower
             .strip_prefix("halo2")
             .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
@@ -5235,7 +5238,10 @@ mod stark_prover_tests {
                     || err.contains("IVM execution")
                     || err.contains("Soracloud") =>
             {
-                let fixture_air_circuit_id = format!("{env_circuit_id}:generic-binding-fixture");
+                // Build a real generic fixture before deliberately corrupting
+                // its identity. Appending a leaf cannot leave a reserved IVM
+                // namespace, even in a rejection-test fixture.
+                let fixture_air_circuit_id = format!("{backend}:generic-binding-fixture");
                 let envelope_bytes = crate::stark::prove_stark_fri_air_envelope_bytes(
                     params,
                     transcript_label.to_owned(),

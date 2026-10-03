@@ -2508,8 +2508,16 @@ mod test_mode_tests {
             .iter()
             .find(|callable| callable.entry_pc == identity.pc_start)
             .unwrap();
-        assert_eq!(callable.argument_words.len(), 1);
-        assert_eq!(callable.result_words.len(), 1);
+        assert_eq!(
+            callable
+                .argument_word_count()
+                .expect("valid argument schema"),
+            1
+        );
+        assert_eq!(
+            callable.result_word_count().expect("valid result schema"),
+            1
+        );
         let words = artifact[metadata.code_offset + identity.pc_start as usize
             ..metadata.code_offset + identity.pc_end as usize]
             .chunks_exact(4)
@@ -2708,9 +2716,10 @@ mod test_mode_tests {
         let lowered = crate::ir::lower(&typed).expect("lower split-spill fixture");
         let mut optimized = crate::ssa::Program::from_ir(lowered).expect("construct SSA fixture");
         optimized
-            .optimize_and_retain(&std::collections::BTreeSet::from([
-                implementation_name.clone()
-            ]))
+            .optimize_and_retain(
+                &std::collections::BTreeSet::from([implementation_name.clone()]),
+                &super::private_literal_candidates(&typed),
+            )
             .expect("optimize SSA fixture");
         let lowered = optimized.into_ir().expect("destroy SSA fixture");
         let function = lowered
@@ -3320,7 +3329,7 @@ impl Compiler {
             source_name,
         } = ssa;
         ssa_program
-            .optimize_and_retain(&executable_roots)
+            .optimize_and_retain(&executable_roots, &private_literal_candidates(&typed))
             .map_err(|message| {
                 native_diagnostic_bundle(
                     "K3004",
@@ -4092,13 +4101,13 @@ impl Compiler {
                     let signature = signatures
                         .get(callee)
                         .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
-                    if args.len() != signature.arguments.len() {
+                    if args.len() != signature.argument_word_count() {
                         return Err(format!(
                             "call to `{callee}` has an inconsistent argument table"
                         ));
                     }
                     max_argument_words = max_argument_words.max(args.len());
-                    max_result_words = max_result_words.max(signature.results.len());
+                    max_result_words = max_result_words.max(signature.result_word_count());
                 }
                 match instruction {
                     Instr::InvokeEntrypointAs { .. } => max_result_words = max_result_words.max(1),
@@ -4126,8 +4135,8 @@ impl Compiler {
             callables.push(ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: func_base as u64,
                 frame_bytes: local_frame as u32,
-                argument_words: signature.arguments.clone(),
-                result_words: signature.results.clone(),
+                arguments: signature.arguments.clone(),
+                results: signature.results.clone(),
             });
             let debug_seed_index = function_debug_seeds.len();
             function_debug_seeds.push(FunctionDebugSeed {
@@ -6147,7 +6156,7 @@ impl Compiler {
                                 &mut code,
                                 &fixups,
                                 13,
-                                signature.results.len() as i64,
+                                signature.result_word_count() as i64,
                             );
                             let at = reserve_word(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
@@ -6159,7 +6168,7 @@ impl Compiler {
                                 _ => unreachable!("call instruction selected above"),
                             };
                             if !destinations.is_empty()
-                                && destinations.len() != signature.results.len()
+                                && destinations.len() != signature.result_word_count()
                             {
                                 return Err(format!(
                                     "call to `{callee}` has an inconsistent result table"
@@ -8039,7 +8048,7 @@ impl Compiler {
                             _ => unreachable!("return terminator selected above"),
                         };
                         let result_count = values.len().max(1);
-                        if result_count != signature.results.len() {
+                        if result_count != signature.result_word_count() {
                             return Err(format!(
                                 "function `{}` has an inconsistent result table",
                                 func.name
@@ -9409,6 +9418,42 @@ fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<St
             (function.modifiers.kind != FunctionKind::Private
                 || (include_tests && function.modifiers.is_test))
                 .then(|| function.name.clone())
+        })
+        .collect()
+}
+/// Declarations whose literal leaf bodies may replace an ordinary private call.
+///
+/// Keep this whitelist in typed HIR: SSA does not retain permission/test metadata
+/// or distinguish public numeric values from secret witnesses. The full linked
+/// semantic, policy and codegen validation still precedes SSA optimization.
+fn private_literal_candidates(typed: &TypedProgram) -> BTreeMap<String, ir::DataRefKind> {
+    typed
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            let crate::ast::FunctionModifiers {
+                kind,
+                permission,
+                is_test,
+                test_fixture,
+            } = &function.modifiers;
+            if *kind != FunctionKind::Private
+                || permission.is_some()
+                || *is_test
+                || test_fixture.is_some()
+                || !function.params.is_empty()
+                || !function.param_types.is_empty()
+            {
+                return None;
+            }
+            let kind = match function.ret_ty.as_ref()? {
+                semantic::Type::Int => ir::DataRefKind::Int,
+                semantic::Type::Decimal => ir::DataRefKind::Decimal,
+                semantic::Type::Quantity => ir::DataRefKind::Quantity,
+                _ => return None,
+            };
+            Some((function.name.clone(), kind))
         })
         .collect()
 }

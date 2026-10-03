@@ -31,8 +31,9 @@ exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
 Twelve rewritten private-terminal controls map to original field-mutation and
 forgery coverage. Recorded normal
 native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
-inventory now admits 106 declared targets and 23 defaults, including the installed-context
-developer tool. Recorded IVM-only,
+inventory now admits 107 declared targets and 24 defaults. The independent canonical `ivm_artifact_admit` owner fills the existing
+24-default ceiling; the installed-context developer tool remains non-default.
+Recorded IVM-only,
 feature-hygiene, dependency-boundary and retired-codec pattern guards pass.
 The normal production-feature Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
@@ -60,16 +61,24 @@ inputs unchanged through their runtime endpoints. The CA check binds a synthetic
 paired MAIN record. The optimized constructor, full ordinary suite, upstream strict
 lint and merged-source qualification remain open. Maximum-proof external time/RSS evidence and enforced
 address-space limits remain separate cryptographic release gates.
-Later Privacy source additions require fresh source, dep-info and registry
-discovery; the retained input and test counts do not admit those additions.
+After the shared Norito derive correction, the current debug-profile Privacy
+libtest compiles at the closed merged revision with all 8,374 captured source,
+literal and control inputs unchanged, including all 433 actual dep-info inputs.
+Its actual registry contains 2,541 tests, including 65 ignored cases; all 61
+original ignores remain. The renamed shift test preserves the original running
+checks and adds admission and forgery coverage. The 2,476 ordinary cases are
+running serially after a current resource review. The derive library, strict JSON
+and UI regressions pass, preserving the original diagnostics. Full runtime and
+final merged-source qualification remain open; the running Privacy artifact
+retains its original source epoch across the separate test-fixture repair.
 Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
 compile with matching package/features; the freshness check fails with concurrent
 source changes and library rebuilds. The last recorded workspace check reaches
 Core test compile errors owned by the separate repair chat. That chat also owns
-the remaining protocol integration repairs after completing the preceding signed
-merge; a new concurrent merge remains open. Broader Core/SDK and Privacy sources
+the remaining protocol integration repairs. Both merges are complete.
+Broader Core/SDK and Privacy sources
 continue to change; final validation still requires a
 stable current source interval.
 SDK Native custody and genuine production proving are mandatory even with SDK
@@ -79,11 +88,10 @@ from 418 to 403 packages and does not establish a current frontend result or
 compile speedup. Exact CoreZK/Halo2 owner contracts cover default/TLS SDK selections
 and the fixed Musubi, SCCP wallet and storage-client consumers, retaining their
 runtime, P2P, compiler and test-feature denials. Feature hygiene, the ownership-guard
-suite and all 21 configured dependency boundaries have recorded passes. The last
-stable source-budget pass admits only the two actual filesystem-lock dependency
-edges and their eight measured edge-count costs, without speculative growth
-headroom. Subsequent workspace and manifest changes require a new source-budget
-check; current native frontend qualification
+suite and all 21 configured dependency boundaries have recorded passes. Source
+budgets account for the exact filesystem-lock, Petal, URL, wallet-manifest and
+IVM test-owner costs, preserving ownership denials without growth headroom;
+current native frontend qualification
 remains open. Workspace validation, metadata freshness qualification
 and observational warm timings remain pending. The
 [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
@@ -99,7 +107,13 @@ import directly to `iroha_core_zk`, and Core's temporary public test adapter is
 removed. Core uses a crate-local owner alias for every feature selection. The
 development-only fee-evidence test now imports the actual Kotodama compiler owner;
 fresh focused compilation and runtime validation remain in progress.
-The signed-clock type path is corrected. The latest focused build stops before
-the fee target in Core ZK's HTTP-proof module on an undeclared `url` dependency;
-the current manifest now declares it. A fresh compile and runtime result are
-still required after the concurrent merge closes.
+The signed-clock type path, Core ZK URL dependency and shared request-codec
+derive are corrected. The current normal Core ZK library frontend passes with
+its four default features and an unchanged source/Git interval. The latest
+fee-target build stopped before emitting its harness on two shipping Core errors:
+a missing ordinary-mint submission-limit import and checkpoint genesis-error
+conversion. The repair chat installed both fixes; a fresh fee-target build and
+runtime validation remain pending. The current metadata sequence stops at its
+first build on three wallet custody types missing required canonical Norito
+schema names. Its source/Git interval is unchanged; the second build and strict
+freshness comparison have not run.

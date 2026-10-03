@@ -637,6 +637,176 @@ public struct AdvanceMusubiPinOutboxV1: MusubiInstructionV1 {
     }
 }
 
+/// Original committed execution below a pin-outbox Check; encoding does not authenticate it.
+public struct MusubiPinOutboxCheckFloorV1: Equatable, Sendable {
+    public let height: UInt64
+    public let blockHash: [UInt8]
+    /// Exact marked hash bytes of the native `HeightContextId`.
+    public let contextID: [UInt8]
+
+    public init(height: UInt64, blockHash: [UInt8], contextID: [UInt8]) throws {
+        guard height > 0,
+              blockHash.count == 32, blockHash.contains(where: { $0 != 0 }),
+              contextID.count == 32, contextID[31] & 1 == 1,
+              contextID.dropLast().contains(where: { $0 != 0 }) || contextID[31] != 1 else {
+            throw MusubiV1Error.invalidValue("Musubi pin-outbox Check floor is invalid.")
+        }
+        self.height = height
+        self.blockHash = blockHash
+        self.contextID = contextID
+    }
+
+    fileprivate var noritoPayload: Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeUInt64(height))
+        writer.writeField(Data(blockHash))
+        // HeightContextId is a tuple newtype around the raw HashOf bytes.
+        writer.writeField(MusubiInstructionNoritoV1.newtype(Data(contextID)))
+        return writer.data
+    }
+}
+
+/// Complete current pin-outbox row supplied independently when constructing a Check.
+public struct MusubiPinOutboxHighWaterV1: Equatable, Sendable {
+    public let version: UInt8
+    public let networkID: NetworkId
+    public let pinAuthority: String
+    public let sessionID: [UInt8]
+    public let revision: UInt64
+    public let inventoryDigest: [UInt8]
+    public let recordedAtHeight: UInt64
+    public let transactionHash: [UInt8]
+    fileprivate let pinAuthorityPayload: Data
+
+    public init(
+        version: UInt8 = 1,
+        networkID: NetworkId,
+        pinAuthority: String,
+        sessionID: [UInt8],
+        revision: UInt64,
+        inventoryDigest: [UInt8],
+        recordedAtHeight: UInt64,
+        transactionHash: [UInt8]
+    ) throws {
+        guard version == 1, revision > 0, recordedAtHeight > 0,
+              sessionID.count == 32, sessionID.contains(where: { $0 != 0 }),
+              inventoryDigest.count == 32, inventoryDigest.contains(where: { $0 != 0 }),
+              transactionHash.count == 32, transactionHash.contains(where: { $0 != 0 }) else {
+            throw MusubiV1Error.invalidValue("Musubi pin-outbox high-water is invalid.")
+        }
+        let authorityPayload = try CanonicalNorito.encodeCompactAccountId(pinAuthority)
+        guard NoritoHeader.encodedLength + authorityPayload.count <= 8 * 1_024 else {
+            throw MusubiV1Error.invalidValue("Musubi pin authority exceeds its canonical bound.")
+        }
+        self.version = version
+        self.networkID = networkID
+        self.pinAuthority = pinAuthority
+        self.sessionID = sessionID
+        self.revision = revision
+        self.inventoryDigest = inventoryDigest
+        self.recordedAtHeight = recordedAtHeight
+        self.transactionHash = transactionHash
+        self.pinAuthorityPayload = authorityPayload
+    }
+
+    fileprivate var noritoPayload: Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeUInt8(version))
+        writer.writeField(networkID.bytes)
+        writer.writeField(pinAuthorityPayload)
+        writer.writeField(Data(sessionID))
+        writer.writeField(CompactNorito.encodeUInt64(revision))
+        writer.writeField(Data(inventoryDigest))
+        writer.writeField(CompactNorito.encodeUInt64(recordedAtHeight))
+        writer.writeField(Data(transactionHash))
+        return writer.data
+    }
+}
+
+/// Authority-wide absence or exact complete row equality; neither value grants proof authority.
+public enum MusubiPinOutboxCheckExpectationV1: Equatable, Sendable {
+    case absent
+    case present(MusubiPinOutboxHighWaterV1)
+
+    fileprivate var noritoPayload: Data {
+        var writer = CompactNoritoWriter()
+        switch self {
+        case .absent:
+            writer.writeUInt32LE(0)
+        case .present(let row):
+            writer.writeUInt32LE(1)
+            writer.writeField(row.noritoPayload)
+        }
+        return writer.data
+    }
+}
+
+/// Check an authority's complete high-water under an original native floor and fresh challenge.
+/// Native execution requires this to be the sole direct signed External instruction.
+public struct CheckMusubiPinOutboxV1: MusubiInstructionV1 {
+    public static let stableWireID = "iroha.musubi.v1.pin_outbox.check"
+    public static let schemaName = "iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1"
+    public static let maximumFrameBytes = 4 * 1_024
+
+    public let networkID: NetworkId
+    public let pinAuthority: String
+    public let sessionID: [UInt8]
+    public let inventoryDigest: [UInt8]
+    public let challenge: [UInt8]
+    public let floor: MusubiPinOutboxCheckFloorV1
+    public let expected: MusubiPinOutboxCheckExpectationV1
+    private let pinAuthorityPayload: Data
+
+    public init(
+        networkID: NetworkId,
+        pinAuthority: String,
+        sessionID: [UInt8],
+        inventoryDigest: [UInt8],
+        challenge: [UInt8],
+        floor: MusubiPinOutboxCheckFloorV1,
+        expected: MusubiPinOutboxCheckExpectationV1
+    ) throws {
+        guard sessionID.count == 32, sessionID.contains(where: { $0 != 0 }),
+              inventoryDigest.count == 32, inventoryDigest.contains(where: { $0 != 0 }),
+              challenge.count == 32, challenge.contains(where: { $0 != 0 }) else {
+            throw MusubiV1Error.invalidValue("Musubi pin-outbox Check binding is invalid.")
+        }
+        let authorityPayload = try CanonicalNorito.encodeCompactAccountId(pinAuthority)
+        if case .present(let row) = expected {
+            guard row.networkID == networkID, row.pinAuthorityPayload == authorityPayload,
+                  row.sessionID == sessionID, row.inventoryDigest == inventoryDigest else {
+                throw MusubiV1Error.invalidValue("Musubi pin-outbox Check expected row binding differs.")
+            }
+        }
+        self.networkID = networkID
+        self.pinAuthority = pinAuthority
+        self.sessionID = sessionID
+        self.inventoryDigest = inventoryDigest
+        self.challenge = challenge
+        self.floor = floor
+        self.expected = expected
+        self.pinAuthorityPayload = authorityPayload
+        guard try transactionInstructionFrame().framedPayload.count <= Self.maximumFrameBytes else {
+            throw MusubiV1Error.invalidValue("Musubi pin-outbox Check frame exceeds its bound.")
+        }
+    }
+
+    public var wireID: String { Self.stableWireID }
+    public var concreteSchemaName: String { Self.schemaName }
+
+    public func barePayload() throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(networkID.bytes)
+        writer.writeField(pinAuthorityPayload)
+        writer.writeField(Data(sessionID))
+        writer.writeField(Data(inventoryDigest))
+        writer.writeField(Data(challenge))
+        writer.writeField(floor.noritoPayload)
+        writer.writeField(expected.noritoPayload)
+        return writer.data
+    }
+}
+
 /// Register one immutable provider attestation for later location-set commitments.
 public struct RegisterMusubiProviderBundleAttestationV1: MusubiInstructionV1 {
     public static let stableWireID =

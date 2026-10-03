@@ -15,6 +15,78 @@ impl core::fmt::Display for OriginalFailure {
 impl std::error::Error for OriginalFailure {}
 
 #[test]
+fn merge_state_view_failures_preserve_original_source_without_rejection() {
+    use crate::state::{MergeLedgerCommitError, StateViewError};
+    use iroha_allocation::{AllocationBudget, AllocationCharge, release::ReleaseNotification};
+    use std::{
+        future::Future as _,
+        task::{Context, Waker},
+    };
+
+    let layout = ReleaseNotification::allocation_layout::<AllocationCharge>();
+    let pool = AllocationBudget::new(
+        layout.size()
+            + 2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registrations = [
+        crate::unit_test_support::release_registration(&pool),
+        crate::unit_test_support::release_registration(&pool),
+    ];
+    let mut reservation = pool.try_reserve(layout).unwrap();
+    let source =
+        ReleaseNotification::try_new_charged(reservation.try_split(layout).unwrap()).unwrap();
+    let mutex = std::sync::Mutex::new(());
+    let held = source.guard(mutex.lock().unwrap());
+    let original = source.observe();
+    let mut waits = Vec::new();
+    for (registration, error) in registrations.iter_mut().zip([
+        BlockValidationError::from(MergeError::StateView(StateViewError::Busy(
+            original.clone(),
+        ))),
+        BlockValidationError::from_certified_merge_stage_error(MergeLedgerCommitError::StateView(
+            StateViewError::Busy(original.clone()),
+        )),
+    ]) {
+        assert_eq!(event::map_block_err_to_reason(&error), None);
+        let BlockValidationError::StateView(StateViewError::Busy(retained)) = &error else {
+            panic!("State view source survives the original merge boundary")
+        };
+        assert_eq!(retained, &original);
+        assert!(std::ptr::eq(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<StateViewError>()
+                .unwrap(),
+            match &error {
+                BlockValidationError::StateView(retained) => retained,
+                _ => unreachable!(),
+            }
+        ));
+        let mut wait = retained.clone().wait_for_release(registration);
+        assert!(
+            std::pin::Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        waits.push(wait);
+    }
+    drop(held);
+    for mut wait in waits {
+        assert!(
+            std::pin::Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+    }
+    for original in [StateViewError::Changed, StateViewError::Poisoned] {
+        let error = BlockValidationError::from(MergeError::StateView(original));
+        assert_eq!(event::map_block_err_to_reason(&error), None);
+        assert!(matches!(error, BlockValidationError::StateView(_)));
+    }
+}
+
+#[test]
 fn lane_io_failure_retains_kind_and_original_source_without_rejection() {
     for kind in [
         io::ErrorKind::WouldBlock,

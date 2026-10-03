@@ -127,6 +127,9 @@ into the output directory.
 - Native control IPC authenticates the owner; numeric PID files do not establish
   process ownership.
 - Logs are bounded; `--json` returns public connection metadata with progress on stderr.
+- Failed startup preserves its nonzero result and reports any retained status. JSON recovery
+  actions contain exact argument arrays bound to the opened state store; reset reports the
+  matching next startup action. Human output lists the action, name and state path separately.
 
 `kagami contract deploy`
 - Compiles `.ko`, verifies `.to`, or resolves a Musubi package through shared services.

@@ -2032,8 +2032,8 @@ const fn invalid_publication_config() -> ProductionPublicationConfigurationError
 ///
 /// This is shared by publication, authenticated registry reads, and prepared archive fetching so
 /// all consumers preserve the same single-link and before/after identity checks. The reader is
-/// qualified on Unix; other targets return [`io::ErrorKind::Unsupported`] before path metadata or
-/// file contents are consulted.
+/// implemented with no-follow final-component descriptors on Unix and retained `iroha_fs` handles
+/// on Windows. Other targets return [`io::ErrorKind::Unsupported`] before inspecting the path.
 pub(crate) fn read_bounded_platform_config_v1(path: &Path) -> std::io::Result<Vec<u8>> {
     read_bounded_nonempty_regular(path, MAX_CLIENT_CONFIG_BYTES)
 }

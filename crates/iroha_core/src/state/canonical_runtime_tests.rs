@@ -343,15 +343,21 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
         // Cursor persistence also runs inside lane-geometry publication. Its
         // ownership-only input must not wait on the generation held here.
         state.persist_da_shard_cursor_journal();
-        assert!(state.try_view_once().unwrap().is_none());
+        assert!(matches!(
+            state.try_view_once(),
+            Err(StateViewError::Busy(_))
+        ));
         let error = match crate::snapshot::CapturedStateSnapshot::capture(&state) {
             Ok(_) => panic!("odd publication generation cannot yield a snapshot"),
             Err(error) => error,
         };
-        assert!(matches!(error, crate::snapshot::SnapshotCaptureError::Busy));
+        assert!(matches!(
+            error,
+            crate::snapshot::SnapshotCaptureError::Read(StateViewError::Busy(_))
+        ));
         assert!(matches!(
             MergeLedgerCommitError::from(error),
-            MergeLedgerCommitError::ExecutionObservationChanged
+            MergeLedgerCommitError::StateView(StateViewError::Busy(_))
         ));
         drop(publication);
         drop(publication_notice);
@@ -394,11 +400,11 @@ fn snapshot_capture_discards_bytes_after_completed_publication() {
         };
         assert!(matches!(
             error,
-            crate::snapshot::SnapshotCaptureError::Changed
+            crate::snapshot::SnapshotCaptureError::Changed(_)
         ));
         assert!(matches!(
             TransactionsBlockError::from(error),
-            TransactionsBlockError::SnapshotObservationChanged
+            TransactionsBlockError::PublicationBusy(_)
         ));
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),

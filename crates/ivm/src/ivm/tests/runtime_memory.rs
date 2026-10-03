@@ -8,6 +8,24 @@ use crate::{
     metadata::{EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1},
 };
 
+/// A run replaces its logger before guest effects. Keep this separate from
+/// the exact read/write-owner budgets exercised by the callers below.
+fn allow_exact_invocation_shell(vm: &mut IVM, budget: &AllocationBudget) {
+    let occupied = budget.reserved_bytes();
+    let shell = zk::SharedRegLog::allocation_layout().size();
+    let before = vm.execution_summary();
+    budget.set_limit_bytes(occupied + shell - 1);
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes, ..
+        })) if requested_bytes == shell
+    ));
+    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(budget.reserved_bytes(), occupied);
+    budget.set_limit_bytes(occupied + shell);
+}
+
 #[test]
 fn load_program_reuses_cached_prepared_ops() {
     set_banner_enabled(false);
@@ -336,11 +354,15 @@ fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas(
         assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
         assert_eq!(vm.pc, ordinary.pc);
         assert_eq!(budget.reserved_bytes(), reserved + row_bytes);
+        assert!(matches!(vm.run(), Err(VMError::AllocationDeferred(_))));
+        assert_eq!(budget.reserved_bytes(), reserved + row_bytes);
+        allow_exact_invocation_shell(&mut vm, &budget);
         vm.run().unwrap();
         ordinary.run().unwrap();
         assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
         assert_eq!(vm.memory.current_root(), ordinary.memory.current_root());
         assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
+        budget.set_limit_bytes(0);
         vm.reset_from_runtime_template(&template).unwrap();
         ordinary
             .reset_from_runtime_template(&ordinary_template)
@@ -387,6 +409,7 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     vm.store_u64(Memory::STACK_START, 0x1234).unwrap();
     local.store_u64(Memory::STACK_START, 0x1234).unwrap();
     assert_eq!(budget.reserved_bytes(), base + append_bytes);
+    allow_exact_invocation_shell(&mut vm, &budget);
     vm.run().unwrap();
     local.run().unwrap();
     assert_eq!(vm.remaining_gas(), local.remaining_gas());
@@ -662,7 +685,8 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     vm.delta_trace.record(4, gpr, [false; 256]);
     let reg_root = vm.registers.merkle_root();
     let mem_root = vm.memory.root();
-    vm.step_log.record(4, reg_root, mem_root);
+    vm.step_log.prepare_cycles(1).expect("prepaid cycle row");
+    vm.step_log.record_reserved(4, reg_root, mem_root);
     vm.pc_trace.push(4);
     vm.contract_return_stack.try_push(8).unwrap();
 
@@ -672,7 +696,7 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     assert_eq!(copied.constraints.list, vm.constraints.list);
     assert_eq!(copied.trace_log.entries, vm.trace_log.entries);
     assert_eq!(copied.delta_trace.entries, vm.delta_trace.entries);
-    assert_eq!(copied.step_log.steps, vm.step_log.steps);
+    assert_eq!(copied.step_log.as_slice(), vm.step_log.as_slice());
     assert_eq!(copied.pc_trace, vm.pc_trace);
     assert_eq!(
         &copied.contract_return_stack[..],
@@ -851,7 +875,17 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     ));
     assert_eq!(tree_insufficient.reserved_bytes(), 0);
 
-    let total_bytes = image_bytes + leaf_bytes + node_bytes + bitmap_bytes + register_bytes;
+    let shell_bytes = zk::SharedRegLog::allocation_layout().size();
+    let total_bytes =
+        image_bytes + leaf_bytes + node_bytes + bitmap_bytes + register_bytes + shell_bytes;
+    let shell_insufficient = AllocationBudget::new(total_bytes - 1);
+    assert!(matches!(
+        IVM::try_new_with_memory_budget(gas_limit, &shell_insufficient),
+        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes, ..
+        })) if requested_bytes == shell_bytes
+    ));
+    assert_eq!(shell_insufficient.reserved_bytes(), 0);
     let budget = AllocationBudget::new(total_bytes);
     let mut vm = IVM::try_new_with_memory_budget(gas_limit, &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), total_bytes);
@@ -868,9 +902,12 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert_eq!(budget.reserved_bytes(), total_bytes);
     let mut ordinary = IVM::try_new(gas_limit).unwrap();
     ordinary.load_code(&code).unwrap();
-    // Unprepared fetch logging owns separate rows; construction geometry stays exact.
+    // The replacement shell overlaps the old one, then retires it before
+    // unprepared fetch allocates separate read rows. Admit the exact peak of
+    // these sequential stages without changing the construction charge.
     let read_bytes = 4 * std::mem::size_of::<crate::AccessRange>();
-    budget.set_limit_bytes(total_bytes + read_bytes);
+    allow_exact_invocation_shell(&mut vm, &budget);
+    budget.set_limit_bytes(total_bytes + shell_bytes.max(read_bytes));
     vm.run().unwrap();
     ordinary.run().unwrap();
     assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
@@ -1024,6 +1061,7 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
         local.memory.load_u64(Memory::INPUT_START)
     );
     assert_eq!(budget.reserved_bytes(), occupied + read_bytes / 2);
+    allow_exact_invocation_shell(&mut vm, &budget);
     vm.run().unwrap();
     local.run().unwrap();
     assert_eq!(vm.remaining_gas(), local.remaining_gas());

@@ -733,8 +733,22 @@ pub fn register_code_bytes(
     code: Vec<u8>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<Hash, RegistryError> {
-    let verified = ivm::verify_contract_artifact(&code)
-        .map_err(|err| RegistryError::InvalidCode(err.to_string()))?;
+    let verified = ivm::verify_contract_artifact_with_memory_budget(
+        &code,
+        &state_transaction.execution_budget(),
+    )
+    .map_err(|error| {
+        if let Some(local) = error.local_vm_error()
+            && let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&local)
+        {
+            return RegistryError::Instruction(
+                state_transaction.world.attempt_error_to_instruction_error(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ),
+            );
+        }
+        RegistryError::InvalidCode(error.to_string())
+    })?;
     let code_hash = verified.code_hash;
     RegisterSmartContractBytes {
         artifact_id: ContractArtifactId::new(dataspace_id, code_hash),
@@ -1188,8 +1202,8 @@ mod tests {
             callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),

@@ -208,25 +208,34 @@ impl PartialEq for BlockPublicationIdentity {
 impl Eq for BlockPublicationIdentity {}
 
 impl Publication {
-    // Initialize opaque native mutex storage during original owner construction.
-    // The first source observation must not perform lazy platform allocation.
-    // This construction cost is separate from the three explicit charged layouts;
-    // TODO: admit native mutex backing before claiming complete construction custody.
-    fn initialized_version(version: Identity<Version>) -> Mutex<Identity<Version>> {
-        let mutex = Mutex::new(version);
-        drop(
-            mutex
-                .lock()
-                .expect("new publication identity mutex is not poisoned"),
-        );
-        mutex
+    pub(crate) fn new() -> Self {
+        Self::with_initial_controls(
+            Shared::new(Owner, None),
+            Shared::new(Version, None),
+            ReleaseNotification::default(),
+        )
     }
 
-    pub(crate) fn new() -> Self {
+    fn with_initial_controls(
+        owner: Identity<Owner>,
+        version: Identity<Version>,
+        released: ReleaseNotification,
+    ) -> Self {
+        let version = Mutex::new(version);
+        // Some platforms allocate mutex internals on first acquisition. Perform
+        // that construction here so a cold nonblocking observation or refusal
+        // cannot allocate. This is initialization, not a publication release.
+        // TODO: fund native mutex internals along with the remaining lock owners;
+        // the three explicit initial layouts do not include platform internals.
+        drop(
+            version
+                .lock()
+                .expect("new publication mutex cannot be poisoned"),
+        );
         Self {
-            owner: Shared::new(Owner, None),
-            version: Self::initialized_version(Shared::new(Version, None)),
-            released: ReleaseNotification::default(),
+            owner,
+            version,
+            released,
         }
     }
 
@@ -274,11 +283,7 @@ impl Publication {
                 drop(charge);
                 error
             })?;
-        Ok(Self {
-            owner,
-            version: Self::initialized_version(version),
-            released,
-        })
+        Ok(Self::with_initial_controls(owner, version, released))
     }
 
     pub(crate) fn from_admission(mut reservation: AllocationReservation) -> Self {
@@ -291,11 +296,11 @@ impl Publication {
             .try_split(Identity::<Owner>::layout())
             .expect("original storage identity admission");
         let next = NextPublication::from_admission(reservation);
-        Self {
-            owner: Shared::new(Owner, Some(owner_charge)),
-            version: Self::initialized_version(next.0),
-            released: ReleaseNotification::new_charged(notification_charge),
-        }
+        Self::with_initial_controls(
+            Shared::new(Owner, Some(owner_charge)),
+            next.0,
+            ReleaseNotification::new_charged(notification_charge),
+        )
     }
 
     fn lock_version(&self) -> ReleaseGuard<'_, std::sync::MutexGuard<'_, Identity<Version>>> {

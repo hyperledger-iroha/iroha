@@ -14,6 +14,7 @@ mod remote_failure;
 mod remote_status;
 mod runtime;
 mod store;
+pub(crate) mod stream_token_custody;
 mod transport;
 mod workspace;
 
@@ -34,6 +35,10 @@ pub use remote_status::{
 };
 pub use runtime::run_worker;
 pub use store::{LocalnetPorts, ManagedStore};
+pub use stream_token_custody::{
+    ManagedCustodyEnrollmentInterval, ManagedCustodyFinality, ManagedCustodyProgress,
+    ManagedStreamTokenCustody,
+};
 pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
 
 /// Result of one managed developer-network operation.
@@ -55,7 +60,7 @@ pub enum Error {
     #[error("managed network `{0}` is already owned; inspect its status before retrying")]
     Busy(String),
     /// Startup could not prove readiness within the requested budget.
-    #[error("localnet startup did not complete within {0:?}; inspect `kagami localnet logs`")]
+    #[error("localnet startup did not complete within {0:?}")]
     Timeout(Duration),
     /// Parent attachment or its independent registry work exhausted the caller's finite budget.
     #[error(

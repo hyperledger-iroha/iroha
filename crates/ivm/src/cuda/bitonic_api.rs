@@ -24,7 +24,7 @@ fn stage(hi: &[u64], lo: &[u64]) -> Result<launch::Sorted, CudaFailure> {
         unsafe { launch::output(device, ARTIFACT, hi, lo) }
     }) {
         Ok(result) if result.hi.len() == hi.len() && result.lo.len() == lo.len() => {
-            super::imp::record_completed_cuda_dispatch();
+            super::imp::record_completed_cuda_dispatch(Kernel::Bitonic, ARTIFACT);
             Ok(result)
         }
         Ok(_) => {

@@ -428,7 +428,7 @@ fn reward_reserve_checks_aggregate_batch_debits() {
 }
 
 #[test]
-fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback() {
+fn reward_failed_second_source_rolls_back_all_claim_state() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
@@ -504,6 +504,14 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
     }
     assert!(state_block.drain_transfer_transcripts().is_empty());
     let stx = state_block.transaction_for_callback_testing();
+    assert!(
+        stx.world
+            .public_lane_reward_accruals
+            .iter()
+            .next()
+            .is_none(),
+        "a rejected claim must not retain accrued reward writes"
+    );
     for asset in assets {
         assert_eq!(
             stx.world.assets.get(&asset).unwrap().as_ref(),

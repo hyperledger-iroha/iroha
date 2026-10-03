@@ -24,7 +24,9 @@ use iroha_crypto::Hash;
 pub mod account_read;
 /// Authenticated current signer control, including states awaiting enrollment.
 pub mod stream_token_control;
-use account_read::StreamTokenDiscoveryProofV1;
+use crate::sorafs::stream_token_custody::proof::{
+    StreamTokenCustodyRecordProofRefV1, StreamTokenCustodyRecordProofV1, borrowed,
+};
 use sorafs_manifest::{
     AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
     provider_admission::{
@@ -93,70 +95,13 @@ pub struct ProviderDiscoveryProofV1 {
     pub advert: Vec<u8>,
     /// Current public native token custody; absence never authorizes account downloads.
     #[norito(required)]
-    pub stream_token: Option<StreamTokenDiscoveryProofV1>,
-}
-
-// Preserve the syntactic Vec segment used by the packed sequence derive while
-// forwarding each exact original. No second response schema or decoder exists.
-mod borrowed {
-    pub(super) struct Value<'a, T>(pub(super) &'a T);
-    pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
-    macro_rules! forward {
-        ($name:ident, $target:ty) => {
-            impl<T> norito::core::SerializePayload for $name<'_, T>
-            where
-                $target: norito::core::SerializePayload,
-            {
-                fn serialize(
-                    &self,
-                    out: &mut norito::core::Encoder<'_>,
-                ) -> Result<(), norito::Error> {
-                    norito::core::SerializePayload::serialize(self.0, out)
-                }
-                fn encoded_len_hint(&self) -> Option<usize> {
-                    norito::core::SerializePayload::encoded_len_hint(self.0)
-                }
-                fn encoded_len_exact(&self) -> Option<usize> {
-                    norito::core::SerializePayload::encoded_len_exact(self.0)
-                }
-            }
-            impl<T> norito::json::JsonSerialize for $name<'_, T>
-            where
-                $target: norito::json::JsonSerialize,
-            {
-                fn json_serialize(&self, out: &mut String) {
-                    self.0.json_serialize(out);
-                }
-                fn json_serialize_to(
-                    &self,
-                    out: &mut dyn norito::json::JsonWriteSink,
-                ) -> Result<(), norito::json::BoundedJsonError> {
-                    self.0.json_serialize_to(out)
-                }
-            }
-        };
-    }
-    forward!(Value, T);
-    forward!(Vec, std::vec::Vec<T>);
+    pub stream_token: Option<StreamTokenCustodyRecordProofV1>,
 }
 
 #[derive(norito::derive::NoritoSerialize, norito::derive::JsonSerialize)]
 struct HeadRef<'a> {
     head: borrowed::Vec<'a, u8>,
     predecessor: Option<borrowed::Vec<'a, u8>>,
-}
-#[derive(norito::derive::NoritoSerialize, norito::derive::JsonSerialize)]
-struct TokenRef<'a> {
-    head: borrowed::Vec<'a, u8>,
-    record: borrowed::Vec<'a, u8>,
-}
-impl norito::NoritoSchema for TokenRef<'_> {
-    fn nominal_name() -> String {
-        <StreamTokenDiscoveryProofV1 as norito::NoritoSchema>::nominal_name()
-    }
-    fn frame_name() -> String {
-        <StreamTokenDiscoveryProofV1 as norito::NoritoSchema>::frame_name()
-    }
 }
 impl norito::NoritoSchema for HeadRef<'_> {
     fn nominal_name() -> String {
@@ -175,7 +120,7 @@ pub struct ProviderDiscoveryProofRefV1<'a> {
     provider: HeadRef<'a>,
     owner: borrowed::Value<'a, AccountId>,
     advert: borrowed::Vec<'a, u8>,
-    stream_token: Option<TokenRef<'a>>,
+    stream_token: Option<StreamTokenCustodyRecordProofRefV1<'a>>,
 }
 impl norito::NoritoSchema for ProviderDiscoveryProofRefV1<'_> {
     fn nominal_name() -> String {
@@ -209,7 +154,7 @@ impl<'a> ProviderDiscoveryProofRefV1<'a> {
             },
             owner: borrowed::Value(owner),
             advert: borrowed::Vec(advert),
-            stream_token: stream_token.map(|(head, record)| TokenRef {
+            stream_token: stream_token.map(|(head, record)| StreamTokenCustodyRecordProofRefV1 {
                 head: borrowed::Vec(head),
                 record: borrowed::Vec(record),
             }),

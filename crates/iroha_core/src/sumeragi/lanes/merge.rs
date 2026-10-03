@@ -116,6 +116,9 @@ impl LaneBlockSource for NoLanes {
 /// Why a global block's lane merge cannot be expanded.
 #[derive(Debug, thiserror::Error)]
 pub enum MergeError {
+    /// Original State reader refusal, preserving its actual physical release source.
+    #[error(transparent)]
+    StateView(#[from] crate::state::StateViewError),
     /// Original routing State could not be read locally; the certified input remains retryable.
     #[error("lane routing deferred: {0}")]
     RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
@@ -247,22 +250,15 @@ pub fn expand<'state>(
     source: &dyn LaneBlockSource,
     wait: Duration,
 ) -> Result<Expansion<'state>, MergeError> {
+    let publication = state.view_publication_release();
     let generation = state.state_view_generation();
-    if !is_stable_state_view_generation(generation, generation) {
-        return Err(MergeError::Pending(
-            "State publication is in progress".into(),
-        ));
-    }
-    let view = state
-        .try_view_once()
-        .map_err(|error| MergeError::Pending(error.to_string()))?
-        .ok_or_else(|| MergeError::Pending("State publication changed before expansion".into()))?;
+    let view = state.try_view_once()?;
     let expanded = expand_from_view(state, generation, &view, proposal, source, wait);
     drop(view);
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
-        return Err(MergeError::Pending(
-            "State publication changed during expansion".into(),
-        ));
+        return Err(MergeError::StateView(crate::state::StateViewError::Busy(
+            publication,
+        )));
     }
     expanded
 }

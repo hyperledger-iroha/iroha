@@ -98,10 +98,14 @@ impl<'a> Base64Writer<'a> {
             _ => unreachable!("base64 carry is always shorter than one block"),
         };
         self.carry_len = 0;
-        result.map_err(|_| self.sink_error.unwrap_or(BoundedJsonError::LengthMismatch))
+        result.map_err(|_| {
+            self.sink_error
+                .clone()
+                .unwrap_or(BoundedJsonError::LengthMismatch)
+        })
     }
     fn sink_error(&self) -> Option<BoundedJsonError> {
-        self.sink_error
+        self.sink_error.clone()
     }
 }
 impl Write for Base64Writer<'_> {

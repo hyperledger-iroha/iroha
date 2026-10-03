@@ -4,7 +4,7 @@
 //! [`field_impl`] chooses between them based on [`vector::simd_choice`],
 //! enabling SSE2/AVX2/AVX-512 or NEON acceleration transparently.
 use crate::vector::{SimdChoice, simd_choice};
-use std::{any::Any, sync::OnceLock};
+use std::any::Any;
 pub trait FieldArithmetic: Any + Sync {
     fn add(
         &self,
@@ -32,7 +32,6 @@ pub struct Avx2Field;
 pub struct Avx512Field;
 #[derive(Clone, Copy, Debug)]
 pub struct NeonField;
-static FIELD_IMPL: OnceLock<&'static dyn FieldArithmetic> = OnceLock::new();
 #[cfg(any(test, feature = "bench", feature = "ivm_zk_tests"))]
 use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(any(test, feature = "ivm_zk_tests"))]
@@ -52,8 +51,9 @@ pub fn field_impl_test_lock() -> MutexGuard<'static, ()> {
 static TEST_CHOICE: AtomicU8 = AtomicU8::new(0);
 /// Return the field arithmetic backend selected for this platform.
 ///
-/// The implementation is chosen on first use based on the SIMD capabilities detected by
-/// [`vector::simd_choice`]. The selected instance is cached for all subsequent calls.
+/// Hardware detection is cached by [`vector::simd_choice`], while each lookup
+/// applies the current file policy and supported caller override. A configuration
+/// reload cannot leave field arithmetic on a previously selected SIMD backend.
 pub fn field_impl() -> &'static dyn FieldArithmetic {
     #[cfg(any(test, feature = "bench", feature = "ivm_zk_tests"))]
     {
@@ -67,7 +67,7 @@ pub fn field_impl() -> &'static dyn FieldArithmetic {
             _ => {}
         }
     }
-    *FIELD_IMPL.get_or_init(|| backend_from_choice(simd_choice()))
+    backend_from_choice(simd_choice())
 }
 fn backend_from_choice(choice: SimdChoice) -> &'static dyn FieldArithmetic {
     match choice {

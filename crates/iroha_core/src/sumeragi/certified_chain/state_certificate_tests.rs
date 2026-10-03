@@ -4,6 +4,263 @@ use super::*;
 use iroha_data_model::query::error::QueryExecutionFail;
 
 #[test]
+fn ascending_native_continuation_charges_one_reverse_and_one_forward_source_pass() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    for start in [2_usize, 4] {
+        let expected_heights: Vec<_> = std::iter::once(1_u64)
+            .chain((start as u64 - 1..=chain.height()).rev())
+            .chain(start as u64..=chain.height())
+            .collect();
+        let expected_bytes: u64 = expected_heights
+            .iter()
+            .map(|height| frame(&chain, *height).encode_wire().unwrap().len() as u64)
+            .sum();
+        let mut frames_left = expected_heights.len() as u64;
+        let mut bytes_left = expected_bytes;
+        let mut admit = |count, length| {
+            frames_left = frames_left
+                .checked_sub(count)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            bytes_left = bytes_left
+                .checked_sub(length)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            Ok(())
+        };
+        chain.kura().reset_canonical_query_reads_for_test();
+        let reader = CertifiedChain::new_with_source_admission(&view, &mut admit).unwrap();
+        let (result, relations) = relation_counts::measure(|| {
+            reader
+                .walk_from_execution(
+                    NonZeroUsize::new(start).unwrap(),
+                    NonZeroUsize::new(chain.height() as usize).unwrap(),
+                    &mut admit,
+                )
+                .collect::<Result<Vec<_>, _>>()
+        });
+        let blocks = result.unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.height())
+                .collect::<Vec<_>>(),
+            (start as u64..=chain.height()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            relations.qcs,
+            (start as u64..=chain.height()).collect::<Vec<_>>()
+        );
+        assert_eq!((frames_left, bytes_left), (0, 0));
+        assert_eq!(
+            chain.kura().canonical_query_reads_for_test(),
+            (expected_heights.len(), expected_bytes)
+        );
+    }
+}
+
+#[test]
+fn ascending_native_continuation_refuses_changed_source_and_stops_after_failure() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
+    let mut walk = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| Ok(()),
+    );
+    assert_eq!(walk.next().unwrap().unwrap().height(), 4);
+    chain
+        .kura()
+        .corrupt_native_frame_for_test(NonZeroUsize::new(5).unwrap());
+    assert!(walk.next().unwrap().is_err());
+    assert!(walk.next().is_none());
+    chain
+        .kura()
+        .corrupt_native_frame_for_test(NonZeroUsize::new(5).unwrap());
+    chain.kura().reset_canonical_query_reads_for_test();
+    let mut refused = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| Err(QueryExecutionFail::GasBudgetExceeded),
+    );
+    assert!(matches!(
+        refused.next(),
+        Some(Err(QueryExecutionFail::GasBudgetExceeded))
+    ));
+    assert!(refused.next().is_none());
+    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    assert!(matches!(
+        norito::core::with_decode_limits_scope(limits, || reader
+            .walk_from_execution(
+                NonZeroUsize::new(4).unwrap(),
+                NonZeroUsize::new(5).unwrap(),
+                |_, _| Ok(())
+            )
+            .next()),
+        Some(Err(QueryExecutionFail::GasBudgetExceeded))
+    ));
+}
+
+#[test]
+fn ascending_native_continuation_refuses_same_proposal_changed_result_before_first_yield() {
+    let (chain, _) = chain();
+    let original = frame(&chain, 4);
+    let changed = with_parts(&original, |_, qc, preimage| {
+        let mut result = ExecutionResultCommitment::decode(preimage).unwrap();
+        result.execution.world_state_root =
+            Hash::new(b"different quorum-certified execution result");
+        *preimage = result.preimage().unwrap();
+        *qc = chain.commit_qc(
+            4,
+            qc.block_hash,
+            result_of_preimage(preimage),
+            qc.attest,
+            Signers::Quorum,
+        );
+    });
+    assert_eq!(changed.hash(), original.hash());
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let candidate = reader
+        .verify_executed_successor(&chain.committed(3), read_frame(changed.clone(), 4).unwrap())
+        .expect("genuine quorum over the same proposal and a different result");
+    assert_eq!(candidate.block_hash(), chain.committed(4).block_hash());
+    assert_ne!(candidate.result(), chain.committed(4).result());
+    let original_wire = original.encode_wire().unwrap();
+    let changed_wire = changed.encode_wire().unwrap();
+    assert_eq!(original_wire.len(), changed_wire.len());
+    let path = Kura::canonical_storage_path(&chain.kura().store_root()).join("blocks.data");
+    let original_file = std::fs::read(&path).unwrap();
+    let offsets = original_file
+        .windows(original_wire.len())
+        .enumerate()
+        .filter_map(|(at, bytes)| (bytes == original_wire.as_slice()).then_some(at))
+        .collect::<Vec<_>>();
+    assert_eq!(offsets.len(), 1);
+    let mut changed_file = original_file.clone();
+    changed_file[offsets[0]..offsets[0] + changed_wire.len()].copy_from_slice(&changed_wire);
+    let mut reads = 0;
+    let mut walk = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| {
+            reads += 1;
+            if reads == 4 {
+                // Original reverse ancestry has already captured 5, 4 and parent 3.
+                // Replace only R and its genuine QC before the first ascending receipt.
+                std::fs::write(&path, &changed_file).unwrap();
+            }
+            Ok(())
+        },
+    );
+    let result = walk.next();
+    assert!(walk.next().is_none());
+    drop(walk);
+    std::fs::write(&path, original_file).unwrap();
+    assert_eq!(reads, 4);
+    assert!(
+        matches!(result, Some(Err(QueryExecutionFail::Conversion(ref reason)))
+        if reason == "certificate differs from its original execution result")
+    );
+}
+
+#[test]
+fn ascending_native_genesis_waits_for_genuine_successor_quorum() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
+    let blocks = reader
+        .walk_from_execution(NonZeroUsize::MIN, NonZeroUsize::new(2).unwrap(), |_, _| {
+            Ok(())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(blocks[0].verification(), QcVerification::Genesis);
+    assert_eq!(blocks[1].verification(), QcVerification::Verified);
+    assert!(blocks[1].extends(&blocks[0]));
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    let mut denied =
+        reader.walk_from_execution(NonZeroUsize::MIN, NonZeroUsize::new(2).unwrap(), |_, _| {
+            Ok(())
+        });
+    assert!(
+        denied.next().unwrap().is_err(),
+        "genesis result cannot escape before H2 verification"
+    );
+    assert!(denied.next().is_none());
+}
+
+#[test]
+fn ascending_native_continuation_rejects_structural_history_without_original_state_tip() {
+    let (chain, _) = chain();
+    let frames = (1..=chain.height())
+        .map(|height| frame(&chain, height))
+        .collect::<Vec<_>>();
+    let state = state_with_history(&frames);
+    let view = state.view();
+    let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
+    let mut walk = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| Ok(()),
+    );
+    assert!(walk.next().unwrap().is_err());
+    assert!(walk.next().is_none());
+}
+
+#[test]
+fn pinned_frame_reader_charges_raw_buffer_once_and_retains_cumulative_scope() {
+    let (chain, _) = chain();
+    let index = NonZeroUsize::new(4).unwrap();
+    let expected = frame(&chain, 4).hash();
+    let budget = chain.state().ivm_execution_budget();
+    let original = || {
+        let source = chain
+            .kura()
+            .native_frame_read(4, expected)
+            .unwrap()
+            .unwrap();
+        let length = source.wire_len();
+        let bytes = source.read(length).map_err(|_| ())?.ok_or(())?;
+        iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| ())
+    };
+    let accepts = |limit| {
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 128),
+            || original().is_ok(),
+        )
+    };
+    let mut low = 0;
+    let mut high = 64 * 1024 * 1024;
+    assert!(accepts(high));
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if accepts(middle) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    assert!(low > 0);
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, low, 128);
+    norito::core::with_decode_limits_scope(limits, || {
+        assert!(read_durable_pinned_block(chain.kura(), index, expected, &budget).is_ok());
+        assert!(
+            read_durable_pinned_block(chain.kura(), index, expected, &budget).is_err(),
+            "second read cannot renew the original allocation budget"
+        );
+    });
+    assert!(
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, low - 1, 128),
+            || read_durable_pinned_block(chain.kura(), index, expected, &budget),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn state_certificate_reads_only_target_and_parent_under_exact_source_limits() {
     let (chain, _) = chain();
     let view = chain.state().view();
@@ -130,14 +387,16 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
             .availability()
             .to_vec(),
     ] {
-        let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
-            CommitCertificate::from_untrusted_parts(
-                certificate.consensus_header().to_vec(),
-                certificate.commit_qc().to_vec(),
-                certificate.result_preimage().to_vec(),
-                availability,
-            ),
-        )));
+        let changed = crate::block::reserve_block_for_tests().initialize(
+            original.as_ref().clone().with_commit_certificate(Some(
+                CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    certificate.commit_qc().to_vec(),
+                    certificate.result_preimage().to_vec(),
+                    availability,
+                ),
+            )),
+        );
         assert!(
             read_frame(changed, 4)
                 .map_err(VerificationReadError::from)
@@ -411,7 +670,7 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
 
     let (chain, _) = chain();
     let source = frame(&chain, 3);
-    let current = read_frame(Arc::clone(&source), 3).unwrap();
+    let current = read_frame(Clone::clone(&source), 3).unwrap();
     let parent = chain.committed(2);
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
         panic!("original executed parent authorizes height 3");
@@ -422,7 +681,7 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
         .unwrap();
     let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3, &mut validation).unwrap();
     let budget = AllocationBudget::new(1 << 26);
-    let artifacts = artifacts::PrefixArtifactsRead::new(Arc::clone(&source), budget.clone())
+    let artifacts = artifacts::PrefixArtifactsRead::new(Clone::clone(&source), budget.clone())
         .complete(&budget)
         .unwrap_or_else(|(_, error)| panic!("original artifact owners: {error}"));
     let (_, table, payload) = artifacts
@@ -463,7 +722,10 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
     assert_eq!(budget.reserved_bytes(), retained);
     check(scratch, &payload).expect("same source and original owners retry at the exact allowance");
     assert_eq!(budget.reserved_bytes(), retained);
-    assert!(Arc::ptr_eq(&current.block, &source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &current.block,
+        &source
+    ));
 
     let mut corrupt = payload.as_slice().to_vec();
     corrupt[0] ^= 1;
@@ -517,7 +779,10 @@ fn state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_s
     let certified =
         check(usize::MAX).expect("exact original source retries without a new authority");
     assert_eq!(certified.id(), current.id());
-    assert!(Arc::ptr_eq(certified.block(), current.block()));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        certified.block(),
+        current.block()
+    ));
 }
 
 #[test]
@@ -545,7 +810,10 @@ fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_r
     let certified =
         check(1 << 26).expect("same authenticated body and parent retry after local refusal");
     assert_eq!(certified.id(), current.id());
-    assert!(Arc::ptr_eq(certified.block(), current.block()));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        certified.block(),
+        current.block()
+    ));
     assert_eq!(parent.id(), chain.committed(2).id());
 }
 

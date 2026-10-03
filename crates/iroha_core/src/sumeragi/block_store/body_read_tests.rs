@@ -9,7 +9,11 @@ use iroha_data_model::{
 };
 use iroha_sumeragi::{availability::AvailabilityFrame, types::Hash32};
 
-fn fixture() -> (Arc<SignedBlock>, AvailabilitySource, SharedCrypto) {
+fn fixture() -> (
+    iroha_data_model::block::SharedSignedBlock,
+    AvailabilitySource,
+    SharedCrypto,
+) {
     let fixture = NativeFinalityFixture::new();
     let parent = fixture
         .verifier()
@@ -18,7 +22,8 @@ fn fixture() -> (Arc<SignedBlock>, AvailabilitySource, SharedCrypto) {
     let ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
         panic!("authenticated next fixture authority");
     };
-    let source = Arc::new(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
+    let source = crate::block::reserve_block_for_tests()
+        .initialize(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
     let header: iroha_sumeragi::message::BlockHeader =
         norito::decode_canonical(source.commit_certificate().unwrap().consensus_header()).unwrap();
     let crypto: SharedCrypto = Arc::new(BlsCrypto::new());
@@ -54,14 +59,20 @@ fn stored_body_retains_original_certificate_and_projected_payload_across_refusal
     let Stage::Certificate(job) = &read.stage else {
         panic!("same certificate owner")
     };
-    assert!(Arc::ptr_eq(job.source(), &block));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        job.source(),
+        &block
+    ));
 
     budget.set_limit_bytes(decoded_size);
     assert!(matches!(read.poll(&budget), Ok(BodyReadPoll::Pending(_))));
     let Stage::Projecting(job) = &read.stage else {
         panic!("one funded projection")
     };
-    assert!(Arc::ptr_eq(&job.source().source, &block));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &job.source().source,
+        &block
+    ));
     let table_pointer = job.source().availability.as_slice().as_ptr();
     let payload_len = block.resultless_proposal_wire_len().unwrap();
     budget.set_limit_bytes(decoded_size + payload_len);
@@ -73,7 +84,10 @@ fn stored_body_retains_original_certificate_and_projected_payload_across_refusal
     let Stage::Projecting(job) = &read.stage else {
         panic!("same encoded projection")
     };
-    assert!(Arc::ptr_eq(&job.source().source, &block));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &job.source().source,
+        &block
+    ));
     assert_eq!(job.source().availability.as_slice().as_ptr(), table_pointer);
 
     budget.set_limit_bytes(1 << 25);
@@ -113,7 +127,8 @@ fn absence_foreign_pool_and_corrupt_storage_are_separate_outcomes() {
         absent.poll(&budget),
         Err(BodyReadError::Completed)
     ));
-    let corrupt = Arc::new(block.as_ref().clone().with_commit_certificate(None));
+    let corrupt = crate::block::reserve_block_for_tests()
+        .initialize(block.as_ref().clone().with_commit_certificate(None));
     let mut read = StoredBodyRead::new(source, Some(corrupt), budget.clone(), crypto);
     for _ in 0..2 {
         assert!(
@@ -142,7 +157,10 @@ fn requested_hash_cannot_be_replaced_by_the_stored_certificate() {
         let Stage::Decoded(decoded) = &read.stage else {
             panic!("keep exact rejected artifact")
         };
-        assert!(Arc::ptr_eq(&decoded.source, &block));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &decoded.source,
+            &block
+        ));
         assert_eq!(read.source(), &source);
     }
 }
@@ -162,7 +180,7 @@ fn canonical_but_invalid_author_signature_never_becomes_available_custody() {
         old.result_preimage().to_vec(),
         norito::encode_canonical(&table).unwrap(),
     );
-    let changed = Arc::new(
+    let changed = crate::block::reserve_block_for_tests().initialize(
         block
             .as_ref()
             .clone()
@@ -213,7 +231,10 @@ fn stored_result_decode_refusal_retains_original_decoded_owners_and_retries() {
         let Stage::Decoded(decoded) = &read.stage else {
             panic!("retain the same original decoded source");
         };
-        assert!(Arc::ptr_eq(&decoded.source, &block));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &decoded.source,
+            &block
+        ));
         assert_eq!(decoded.availability.as_slice().as_ptr(), table);
         assert_eq!(decoded.commit_qc.signers.as_bytes().as_ptr(), bitmap);
         assert_eq!(read.source(), &source);
@@ -269,7 +290,7 @@ fn stored_certificate_allocator_refusal_keeps_original_read_and_retries() {
     let budget = AllocationBudget::new(1 << 25);
     let mut read = StoredBodyRead::new(
         source.clone(),
-        Some(Arc::clone(&block)),
+        Some(Clone::clone(&block)),
         budget.clone(),
         crypto.clone(),
     );
@@ -297,7 +318,10 @@ fn stored_certificate_allocator_refusal_keeps_original_read_and_retries() {
     let Stage::Certificate(job) = &read.stage else {
         panic!("same original certificate read");
     };
-    assert!(Arc::ptr_eq(job.source(), &block));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        job.source(),
+        &block
+    ));
     assert_eq!(read.source(), &source);
     assert_eq!(budget.reserved_bytes(), 0);
     let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {

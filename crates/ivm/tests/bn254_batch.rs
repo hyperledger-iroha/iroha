@@ -1,5 +1,9 @@
 //! Caller-owned BN254 parity, malformed-input and explicit hardware controls.
 
+/// Shared exact-owner CUDA completion controls.
+#[path = "support/cuda_completions.rs"]
+pub mod cuda_completions;
+
 use halo2curves::{bn256::Fr, ff::Field};
 use ivm::bn254_vec::{self, FieldElem};
 
@@ -20,16 +24,16 @@ fn operands() -> ([[u64; 4]; 257], [[u64; 4]; 257]) {
     (lhs, rhs)
 }
 
-fn check_parity(batch: Batch, relation: Relation, native: bool) {
+fn check_parity(batch: Batch, relation: Relation, native: Option<ivm::CudaKernel>) {
     let (left, right) = operands();
     let before = (left, right);
     let mut output = [[u64::MAX; 4]; 257];
     for count in [0, 1, 127, 128, 129, 257] {
-        let dispatches = ivm::cuda_completed_dispatches();
+        let dispatches = native.map(|_| cuda_completions::capture());
         assert!(batch(&left[..count], &right[..count], &mut output[..count]));
-        if native && count != 0 {
+        if let Some(kernel) = native.filter(|_| count != 0) {
             assert!(
-                ivm::cuda_completed_dispatches() > dispatches,
+                cuda_completions::increased(dispatches.as_ref().unwrap(), kernel),
                 "native parity requires actual completed dispatches"
             );
         }
@@ -46,9 +50,9 @@ fn check_parity(batch: Batch, relation: Relation, native: bool) {
 
 #[test]
 fn ordinary_batches_match_field_relation_across_launch_boundaries() {
-    check_parity(bn254_vec::add_batch_into, |a, b| a + b, false);
-    check_parity(bn254_vec::sub_batch_into, |a, b| a - b, false);
-    check_parity(bn254_vec::mul_batch_into, |a, b| a * b, false);
+    check_parity(bn254_vec::add_batch_into, |a, b| a + b, None);
+    check_parity(bn254_vec::sub_batch_into, |a, b| a - b, None);
+    check_parity(bn254_vec::mul_batch_into, |a, b| a * b, None);
 }
 
 #[test]
@@ -88,7 +92,19 @@ fn native_batches_execute_each_kernel_and_match_full_width_field_relation() {
         ivm::cuda_available(),
         "CUDA qualification cannot pass on CPU fallback"
     );
-    check_parity(ivm::bn254_add_batch_cuda_into, |a, b| a + b, true);
-    check_parity(ivm::bn254_sub_batch_cuda_into, |a, b| a - b, true);
-    check_parity(ivm::bn254_mul_batch_cuda_into, |a, b| a * b, true);
+    check_parity(
+        ivm::bn254_add_batch_cuda_into,
+        |a, b| a + b,
+        Some(ivm::CudaKernel::BnAdd),
+    );
+    check_parity(
+        ivm::bn254_sub_batch_cuda_into,
+        |a, b| a - b,
+        Some(ivm::CudaKernel::BnSub),
+    );
+    check_parity(
+        ivm::bn254_mul_batch_cuda_into,
+        |a, b| a * b,
+        Some(ivm::CudaKernel::BnMul),
+    );
 }

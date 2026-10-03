@@ -8222,6 +8222,8 @@ fn certified_native_history_from_proofs(
         (1..=MAX_NATIVE_HISTORY_HEIGHT).contains(&height),
         "native history exceeds the bounded diagnostic corridor"
     );
+    // All independently fetched carriers retain controls in this one bounded inspection pool.
+    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
     let mut verifier = None;
     let mut certified = Vec::new();
     for at in 1..=height {
@@ -8236,6 +8238,8 @@ fn certified_native_history_from_proofs(
         );
         proof.decode_checked()?;
         let block = iroha::data_model::block::decode_versioned_signed_block(&proof.block_wire)?;
+        let block = iroha::data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
         if at == 1 {
             ensure!(
                 block.canonical_resultless_proposal()?.encode_wire()?
@@ -8245,15 +8249,13 @@ fn certified_native_history_from_proofs(
                 "peer substituted the independently signed genesis"
             );
             verifier = Some(iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
-                chain_id,
-                network_id,
-                Arc::new(block),
+                chain_id, network_id, block,
             )?);
         } else {
             let step = verifier
                 .as_mut()
                 .expect("original genesis authenticated first")
-                .push(Arc::new(block))?;
+                .push(block)?;
             certified.push(step.into_parts().0);
         }
     }

@@ -72,6 +72,36 @@ where
     W: Write + ?Sized,
     F: FnOnce(&mut W, usize) -> Result<(), Error>,
 {
+    write_typed_payload_frame_with_prefix::<T, T, _, _>(value, writer, base_flags, prefix)
+}
+
+/// The nominal type supplies only its original frame identity and alignment;
+/// the payload still runs through the same checked two-pass frame writer.
+pub(super) fn write_typed_payload_frame<T, P, W>(
+    value: &P,
+    writer: &mut W,
+    base_flags: u8,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    P: NoritoSerialize,
+    W: Write + ?Sized,
+{
+    write_typed_payload_frame_with_prefix::<T, P, _, _>(value, writer, base_flags, |_, _| Ok(()))
+}
+
+fn write_typed_payload_frame_with_prefix<T, P, W, F>(
+    value: &P,
+    writer: &mut W,
+    base_flags: u8,
+    prefix: F,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    P: NoritoSerialize,
+    W: Write + ?Sized,
+    F: FnOnce(&mut W, usize) -> Result<(), Error>,
+{
     validate_header_flags(base_flags)?;
     let first_guard = EncodeContextGuard::enter();
     let mut discard = std::io::sink();

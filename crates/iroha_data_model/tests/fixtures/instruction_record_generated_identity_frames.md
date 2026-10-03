@@ -1,12 +1,15 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 331
-type rows preserve 373 populated values and 1,492 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 332
+type rows preserve 375 populated values and 1,500 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`4de5be96e0a1e11b767d2b806201da24cc9fe777a41c04320628fa9867ba3813`.
+`9ed377f607fd37851a2e3fa8fbe5443237f8286e8959b4b549e2862f57dc2944`.
+`ClaimPublicLaneRewards` uses the required explicit fee-claim field and canonical
+XOR custody. Its native producer checks all four frame roundtrips; the nominal
+and directional identity hashes are unchanged.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -29,6 +32,12 @@ The first-release `AdvanceMusubiPinOutboxV1` declaration adds one canonical
 populated row with exact root, vector, option and map frames. Its compiler
 identity is `1893a09ca99cc2829a0da3822d80bf6b`; the historical capture hashes
 above remain records of their original runs.
+
+The first-release `CheckMusubiPinOutboxV1` row retains both authority-wide Absent
+and exact-full-row Present values. Its two-case native seed and the complete
+typed capture each decode, compare and exactly re-encode root, vector, option
+and map frames. These codec fixtures do not establish ledger admission or
+current-readback authority.
 
 The permanent tests decode every captured root, compare its value after a
 roundtrip, and require exact re-encoding of all four frame forms. They compare
@@ -123,7 +132,7 @@ on-chain penalty exists to cancel. The merged first-release inventory retains 33
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
-The current capture contains 331 rows, 373 populated cases and 1,492 frame forms.
+The current capture contains 332 rows, 375 populated cases and 1,500 frame forms.
 Earlier dated counts and checksums above describe only their original candidates.
 
 The current scoped-artifact candidate recaptures the six artifact lifecycle records

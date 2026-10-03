@@ -146,6 +146,10 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
 
 #[test]
 fn frozen_field_delays_actual_capture_notice_until_original_cleanup_is_retired() {
+    let observer_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&observer_budget);
     let cell = Cell::new(7_u64);
     let probe = cell.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
     let mut field = BlockField::new(cell.block());
@@ -158,7 +162,7 @@ fn frozen_field_delays_actual_capture_notice_until_original_cleanup_is_retired()
     };
     let noticed = Arc::new(Notice(AtomicUsize::new(0)));
     let waker = Waker::from(Arc::clone(&noticed));
-    let mut future = wait.wait_for_release();
+    let mut future = wait.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))
@@ -372,6 +376,10 @@ fn world_read_trait_borrows_frozen_original_cell_fields_without_execution_deref(
 #[test]
 fn inline_frozen_pair_recovers_actual_busy_without_replacing_originals() {
     for replacement in [false, true] {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         let cell = Cell::new(String::from("old"));
         let map = Storage::<u64, String>::from_iter([(1, "old".into())]);
         let mut pair = Pair {
@@ -425,7 +433,7 @@ fn inline_frozen_pair_recovers_actual_busy_without_replacing_originals() {
         };
         let noticed = Arc::new(Notice(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&noticed));
-        let mut future = wait.wait_for_release();
+        let mut future = wait.wait_for_release(&mut registration);
         assert!(
             Pin::new(&mut future)
                 .poll(&mut Context::from_waker(&waker))

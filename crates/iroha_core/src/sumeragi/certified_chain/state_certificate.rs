@@ -4,6 +4,164 @@ use super::*;
 use iroha_data_model::query::error::QueryExecutionFail;
 
 impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
+    /// Read an ascending interval from this view's original execution authority.
+    ///
+    /// The starting parent is acquired once through the reverse native ancestry. Each
+    /// following source frame is then read once and verified by the same native successor
+    /// relation as [`Self::certified_from_execution`]. Only the parent and current receipt
+    /// plus bounded fixed original coordinates are retained. Every yielded result matches
+    /// its own original coordinate; genesis also waits for H2 to authenticate its result.
+    /// The constructor and this entire lazy walk must share one source admission callback
+    /// and one inherited allocation scope; returning this iterator does not retain a scope.
+    ///
+    /// # Errors
+    /// Refuses non-State sources, reversed/out-of-view intervals, missing original execution
+    /// authority, unavailable or changed ancestry, invalid certificates and resource refusal.
+    /// The iterator stops after its first error and never emits a partially verified block.
+    pub(crate) fn walk_from_execution<'r>(
+        &'r self,
+        from: NonZeroUsize,
+        to: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail> + 'r,
+    ) -> impl Iterator<Item = Result<CertifiedBlock, QueryExecutionFail>> + 'r {
+        let mut next = Some(from.get());
+        let mut parent: Option<CommittedBlock> = None;
+        let mut successor: Option<CertifiedBlock> = None;
+        type Coordinate = (HashOf<IrohaHeader>, Hash32, Hash32, HeightContextId);
+        let mut originals: Vec<Coordinate> = Vec::new();
+        let mut initialized = false;
+        std::iter::from_fn(move || {
+            let height = next?;
+            let result = (|| {
+                let invalid = |message: &str| QueryExecutionFail::Conversion(message.into());
+                let ChainSource::State(view) = &self.source else {
+                    return Err(invalid(
+                        "certificate walk requires original State authority",
+                    ));
+                };
+                if from > to || to.get() > view.height() {
+                    return Err(invalid("certificate interval is outside original State"));
+                }
+                let source_error = crate::smartcontracts::isi::query::query_transport_error;
+                if !initialized {
+                    let count = to.get() - from.get() + 1;
+                    if count > iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_COUNT
+                    {
+                        return Err(QueryExecutionFail::GasBudgetExceeded);
+                    }
+                    let bytes = count
+                        .checked_mul(core::mem::size_of::<Coordinate>())
+                        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                    norito::core::reserve_decode_allocation(bytes)
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+                    originals
+                        .try_reserve_exact(count)
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+                    let parent_height = from.get().saturating_sub(1).max(1);
+                    view.canonical_history()
+                        .visit_executed_backwards(
+                            NonZeroUsize::new(parent_height).expect("nonzero parent"),
+                            to,
+                            &mut before_read,
+                            |receipt| {
+                                if receipt.height() >= from.get() as u64 {
+                                    originals.push((
+                                        receipt.block_hash(),
+                                        receipt.core_hash(),
+                                        receipt.result(),
+                                        receipt.id(),
+                                    ));
+                                }
+                                if receipt.height() == parent_height as u64 {
+                                    parent = Some(receipt);
+                                }
+                                Ok(())
+                            },
+                        )
+                        .map_err(source_error)?;
+                    if originals.len() != count {
+                        return Err(invalid("original certificate interval is incomplete"));
+                    }
+                    if from.get() == 1 {
+                        // A local signed genesis body cannot authenticate its result on its own.
+                        let block = view
+                            .canonical_history()
+                            .block_with_admission(
+                                NonZeroUsize::new(2).expect("successor is nonzero"),
+                                &mut before_read,
+                            )
+                            .map_err(source_error)?;
+                        let current = read_frame(block, 2)
+                            .map_err(|error| query_failure(VerificationReadError::from(error)))?;
+                        successor = Some(
+                            self.verify_executed_successor(parent.as_ref().unwrap(), current)
+                                .map_err(query_failure)?,
+                        );
+                    }
+                    initialized = true;
+                }
+                if height == 1 {
+                    let committed = parent.take().unwrap();
+                    let certificate_len = norito::canonical_frame_len(
+                        committed.block().commit_certificate().ok_or_else(|| {
+                            invalid("original genesis result certificate is absent")
+                        })?,
+                    )
+                    .map_err(|error| query_failure(verification_codec_error(1, error)))?;
+                    return Ok(CertifiedBlock {
+                        committed,
+                        commit_qc: None,
+                        verification: QcVerification::Genesis,
+                        certificate_len,
+                    });
+                }
+                let certified = if let Some(successor) = successor.take() {
+                    successor
+                } else {
+                    let block = view
+                        .canonical_history()
+                        .block_with_admission(
+                            NonZeroUsize::new(height).expect("nonzero successor"),
+                            &mut before_read,
+                        )
+                        .map_err(source_error)?;
+                    let current = read_frame(block, height as u64)
+                        .map_err(|error| query_failure(VerificationReadError::from(error)))?;
+                    self.verify_executed_successor(parent.as_ref().unwrap(), current)
+                        .map_err(query_failure)?
+                };
+                if originals.get(to.get() - height)
+                    != Some(&(
+                        certified.block_hash(),
+                        certified.core_hash(),
+                        certified.result(),
+                        certified.id(),
+                    ))
+                {
+                    return Err(invalid(
+                        "certificate differs from its original execution result",
+                    ));
+                }
+                if height < to.get() {
+                    // Retain through the existing bounded original codec, not an infallible
+                    // deep clone of its variable-size header/schedule. No source I/O or QC
+                    // verification is repeated, and the same cumulative scope funds it.
+                    parent = Some(
+                        read_frame(certified.block().clone(), height as u64)
+                            .map_err(|error| query_failure(VerificationReadError::from(error)))?,
+                    );
+                }
+                Ok(certified)
+            })();
+            next = if result.is_ok() && height < to.get() {
+                height.checked_add(1)
+            } else {
+                None
+            };
+            Some(result)
+        })
+    }
+
     /// Authenticate signed genesis after admitting its exact canonical source frame.
     ///
     /// Use the same admission callback and allocation scope for later certificate reads

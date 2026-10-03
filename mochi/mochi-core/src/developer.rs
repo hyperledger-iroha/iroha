@@ -170,6 +170,18 @@ impl DeveloperWorkspace {
         Ok(ManagedStore::open(&self.root)?.select(name)?)
     }
 
+    /// Create a new named global localnet without resuming any existing context.
+    ///
+    /// The canonical store owns the name check under its operation lock. A stale desktop
+    /// context list cannot adopt a global or private generation created by another frontend.
+    ///
+    /// # Errors
+    /// Existing or concurrently owned name, generation, custody or startup failure.
+    pub fn create_localnet(&self, name: &str) -> Result<ManagedStatus> {
+        Ok(ManagedStore::open(&self.root)?
+            .create_localnet(&self.runtime.localnet_request(name, Duration::from_secs(30)))?)
+    }
+
     /// Start a new localnet or restart the exact retained global or private generation.
     ///
     /// # Errors
@@ -479,6 +491,24 @@ impl ManagedNetwork {
 mod tests {
     use super::*;
 
+    fn assert_create_refuses_retained_context(desktop: &DeveloperWorkspace, name: &str) {
+        let store = ManagedStore::open(desktop.state_root()).unwrap();
+        let original = store.prepared(name).unwrap();
+        let selection = desktop.selected_name().unwrap();
+        let config = std::fs::read(&original.context.client_config).unwrap();
+        let error = desktop.create_localnet(name).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<iroha_deploy::managed::Error>(),
+            Some(iroha_deploy::managed::Error::Invalid(message)) if message.contains("already exists")
+        ));
+        assert_eq!(store.prepared(name).unwrap(), original);
+        assert_eq!(desktop.selected_name().unwrap(), selection);
+        assert_eq!(
+            std::fs::read(&original.context.client_config).unwrap(),
+            config
+        );
+    }
+
     #[test]
     fn desktop_restart_keeps_the_cli_prepared_private_root_and_owner() {
         use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
@@ -525,6 +555,7 @@ mod tests {
         let prepared = store.prepared("private").unwrap();
         let owner = prepared.context.load_client_config().unwrap();
         assert!(owner.api_token.is_some());
+        assert_create_refuses_retained_context(&desktop, "private");
         let failure = desktop.start("private").unwrap_err();
         assert!(
             matches!(
@@ -621,6 +652,7 @@ mod tests {
         assert!(desktop.reset("missing").is_err());
         assert!(desktop.logs("missing", None, 1024).is_err());
         assert!(desktop.start("../invalid").is_err());
+        assert!(desktop.create_localnet("../invalid").is_err());
         assert!(
             desktop
                 .resume(Path::new("journal"), None, &mut |_| Ok(()), &mut |_| {})
@@ -663,6 +695,7 @@ mod tests {
         .unwrap();
         assert!(desktop.start("fixture").is_err());
         let context = desktop.select("fixture").unwrap();
+        assert_create_refuses_retained_context(&desktop, "fixture");
         let network = desktop.network(None).unwrap();
         assert_eq!(network.prepared().peers.len(), 4);
         // Even a deliberately absent registry context cannot affect a local source build.

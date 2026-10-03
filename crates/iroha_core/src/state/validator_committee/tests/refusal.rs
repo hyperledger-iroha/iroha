@@ -49,9 +49,10 @@ fn original_candidate() -> (CertifiedTestChain, KeyPair, ValidatorCandidateKeysV
             Account::new(other.clone()).build(&other),
             Account::new(escrow.clone()).build(&escrow),
         ],
-        [AssetDefinition::numeric(
+        [AssetDefinition::new(
             definition,
             "Staked XOR",
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )

@@ -574,7 +574,8 @@ fn all_forty_original_packets_and_all_eight_stages_share_one_private_history() {
     let aux_rows = (start..=start + count)
         .map(|i| aux.iter().map(|column| column[i]).collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    let history_schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
+    // This fixture owns exactly one complete PublicPacketBus segment.
+    let history_schedule = private_history::Schedule::new(bus.trace_log2, 1).unwrap();
     let fixed = (start..start + count)
         .map(|i| history_schedule.fixed(i).unwrap())
         .collect::<Vec<_>>();

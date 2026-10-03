@@ -380,6 +380,16 @@ impl VerifiedWorldStateSnapshotV1 {
         Ok(())
     }
 
+    /// Prove an exact canonical universal account key exists, without projecting its value.
+    /// # Errors
+    /// Missing key, incompatible field kind, or failed canonical key encoding.
+    pub fn verify_account_key_present(
+        &self,
+        key: &crate::account::AccountId,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_present("world.accounts", key)
+    }
+
     /// Prove an exact canonical definition key exists, without projecting its value.
     /// # Errors
     /// Missing key, incompatible field kind, or failed canonical key encoding.

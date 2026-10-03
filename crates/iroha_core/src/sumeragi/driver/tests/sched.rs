@@ -60,7 +60,7 @@ struct Rig {
 impl Rig {
     fn new() -> Self {
         Self {
-            sched: ExecSched::new(0, Backoff::default()),
+            sched: ExecSched::new(0, Backoff::default(), super::test_registrations()),
             exec: FakeExecutor::new(G, RG, config()),
             blocks: FakeBlocks::default(),
             events: Vec::new(),
@@ -668,7 +668,7 @@ fn drive(
 /// once the append succeeds; the other work runs afterwards.
 #[test]
 fn apply_runs_alone_while_backing_off() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let mut exec = Overlay::new();
     let blocks = FakeBlocks::default();
     let (b1, bh1, r1) = child(1, (G, RG), 1);
@@ -711,7 +711,7 @@ fn apply_runs_alone_while_backing_off() {
 /// — and without a second append (the block is durable already).
 #[test]
 fn failed_commit_prepares_again_without_a_second_append() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let mut exec = Overlay::new();
     exec.fail_commits = 1;
     let blocks = FakeBlocks::default();
@@ -745,7 +745,7 @@ fn failed_commit_prepares_again_without_a_second_append() {
 /// capture. Keep increasing the delay through the cap, then reset it for the next block.
 #[test]
 fn repeated_commit_failures_preserve_backoff_and_reset_after_success() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let mut exec = Overlay::new();
     exec.fail_commits = 9;
     let blocks = FakeBlocks::default();
@@ -808,7 +808,7 @@ fn repeated_commit_failures_preserve_backoff_and_reset_after_success() {
 /// successful prepare must not discard either the commit or prepare failure history.
 #[test]
 fn commit_backoff_survives_a_failed_reprepare() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let mut exec = Overlay::new();
     exec.fail_commits = 2;
     let blocks = FakeBlocks::default();
@@ -1076,8 +1076,9 @@ fn partial(height: u64) -> iroha_sumeragi::message::ApplicationControl {
 
 #[test]
 fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let context = control_context(1, 3);
+    sched.retain_control_context(Some((partial_context(1), 3)));
     sched.build_control(17, context);
     sched.build(17, 1, 3, 1024, 100);
     assert_eq!(
@@ -1114,14 +1115,15 @@ fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work
 #[test]
 fn control_build_view_change_cancels_queued_and_running_retry() {
     for success in [false, true] {
-        let mut sched = ExecSched::new(0, Backoff::default());
+        let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
         let context = control_context(1, 1);
+        sched.retain_control_context(Some((partial_context(1), 1)));
         sched.build_control(3, context);
         assert!(matches!(
             sched.next(0),
             Some(ExecOp::BuildControlWitness { req: 3, .. })
         ));
-        sched.retain_control_round(Some((1, 2)));
+        sched.retain_control_context(Some((partial_context(1), 2)));
         let done = if success {
             Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
         } else {
@@ -1132,20 +1134,20 @@ fn control_build_view_change_cancels_queued_and_running_retry() {
         assert!(sched.next(10_000).is_none());
         assert_eq!(sched.wakeup(), u64::MAX);
         sched.build_control(4, control_context(1, 2));
-        sched.retain_control_round(None);
+        sched.retain_control_context(None);
         assert!(sched.next(10_000).is_none());
     }
 }
 
 #[test]
 fn all_validator_control_waits_for_applied_parent_and_shares_do_not_starve_work() {
-    let mut sched = ExecSched::new(0, Backoff::default());
-    sched.retain_control_round(Some((2, 0)));
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
+    sched.retain_control_context(Some((partial_context(2), 0)));
     sched.drive_control(partial_context(2));
     sched.receive_control(PublicKey::new(vec![2; 32]).unwrap(), partial(2));
     assert!(sched.next(0).is_none());
-    let mut sched = ExecSched::new(1, Backoff::default());
-    sched.retain_control_round(Some((2, 0)));
+    let mut sched = ExecSched::new(1, Backoff::default(), super::test_registrations());
+    sched.retain_control_context(Some((partial_context(2), 0)));
     sched.drive_control(partial_context(2));
     sched.build(9, 2, 0, 64, 100);
     for index in 1..=4 {
@@ -1161,21 +1163,33 @@ fn all_validator_control_waits_for_applied_parent_and_shares_do_not_starve_work(
     sched.done(0, ExecDone::ApplicationControlDriven(Ok(Some(partial(2)))));
     assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 9, .. })));
     sched.done(0, ExecDone::Built(Ok((None, false))));
-    assert!(matches!(
-        sched.next(0),
-        Some(ExecOp::ReceiveApplicationControl { .. })
-    ));
-    sched.done(0, ExecDone::ApplicationControlReceived(Ok(())));
-    sched.retain_control_round(Some((2, 1))); // partials survive a view change
+    let Some(ExecOp::ReceiveApplicationControl {
+        occurrence,
+        from,
+        message,
+    }) = sched.next(0)
+    else {
+        panic!("original queued partial");
+    };
+    sched.done(
+        0,
+        ExecDone::ApplicationControlReceived {
+            occurrence,
+            from,
+            message,
+            result: Ok(()),
+        },
+    );
+    sched.retain_control_context(Some((partial_context(2), 1))); // partials survive a view change
     assert_eq!(sched.queued_ops(), 3);
-    sched.retain_control_round(Some((3, 0))); // old-source partials do not survive a height
+    sched.retain_control_context(Some((partial_context(3), 0))); // old-source partials do not survive a height
     assert_eq!(sched.queued_ops(), 0);
 }
 
 #[test]
 fn application_control_ingress_has_a_hard_protocol_cap() {
-    let mut sched = ExecSched::new(0, Backoff::default());
-    sched.retain_control_round(Some((1, 0)));
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
+    sched.retain_control_context(Some((partial_context(1), 0)));
     for index in 0..iroha_sumeragi::types::MAX_COMMITTEE_SIZE + 1 {
         let mut bytes = vec![0xAB; 32];
         bytes[..8].copy_from_slice(&(index as u64).to_le_bytes());
@@ -1185,7 +1199,7 @@ fn application_control_ingress_has_a_hard_protocol_cap() {
         sched.queued_ops(),
         iroha_sumeragi::types::MAX_COMMITTEE_SIZE
     );
-    sched.retain_control_round(None);
+    sched.retain_control_context(None);
     assert_eq!(sched.queued_ops(), 0);
     assert!(sched.next(0).is_none());
 }
@@ -1200,24 +1214,57 @@ fn control_worker_unwind_requires_recovery_and_cannot_invent_empty() {
         },
         ExecOp::DriveApplicationControl(partial_context(1)),
         ExecOp::ReceiveApplicationControl {
+            occurrence: super::super::exec::ControlOccurrence(0),
             from: PublicKey::new(vec![1; 32]).unwrap(),
             message: partial(1),
         },
     ] {
+        let original = match &op {
+            ExecOp::ReceiveApplicationControl {
+                occurrence,
+                from,
+                message,
+            } => Some((
+                *occurrence,
+                from.as_bytes().as_ptr(),
+                message.context,
+                message.bytes,
+            )),
+            _ => None,
+        };
         let done = run_exec(&mut Panicking, &blocks, op);
+        if let Some((expected, sender, context, bytes)) = original {
+            let ExecDone::ApplicationControlReceived {
+                occurrence,
+                from,
+                message,
+                ..
+            } = &done
+            else {
+                panic!("unwind must return the original input owner");
+            };
+            assert_eq!(*occurrence, expected);
+            assert_eq!(from.as_bytes().as_ptr(), sender);
+            assert_eq!(message.context, context);
+            assert_eq!(message.bytes, bytes);
+        }
         assert!(matches!(
             done,
             ExecDone::ControlWitnessBuilt(Err(PublicationError::RecoveryRequired(_)))
                 | ExecDone::ApplicationControlDriven(Err(PublicationError::RecoveryRequired(_)))
-                | ExecDone::ApplicationControlReceived(Err(PublicationError::RecoveryRequired(_)))
+                | ExecDone::ApplicationControlReceived {
+                    result: Err(PublicationError::RecoveryRequired(_)),
+                    ..
+                }
         ));
     }
 }
 
 #[test]
 fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
-    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut sched = ExecSched::new(0, Backoff::default(), super::test_registrations());
     let context = control_context(1, 0);
+    sched.retain_control_context(Some((partial_context(1), 0)));
     sched.build_control(71, context);
     for step in 0..3 {
         // The queues are replenished after every completion, including the previously served
@@ -1228,8 +1275,23 @@ fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
             (0, ExecOp::DriveApplicationControl(_)) => {
                 sched.done(0, ExecDone::ApplicationControlDriven(Ok(None)));
             }
-            (1, ExecOp::ReceiveApplicationControl { .. }) => {
-                sched.done(0, ExecDone::ApplicationControlReceived(Ok(())));
+            (
+                1,
+                ExecOp::ReceiveApplicationControl {
+                    occurrence,
+                    from,
+                    message,
+                },
+            ) => {
+                sched.done(
+                    0,
+                    ExecDone::ApplicationControlReceived {
+                        occurrence,
+                        from,
+                        message,
+                        result: Ok(()),
+                    },
+                );
             }
             (
                 2,

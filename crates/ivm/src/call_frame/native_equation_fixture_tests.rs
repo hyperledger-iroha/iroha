@@ -8,12 +8,12 @@ use norito::{json, json::Value};
 
 const CELLS: usize = 4097;
 
-fn callable(frame_bytes: u32, result_words: usize) -> EmbeddedCallableV1 {
-    EmbeddedCallableV1 {
+fn callable(frame_bytes: u32, result_words: usize) -> CallFrameShape {
+    CallFrameShape {
         entry_pc: 4,
         frame_bytes,
-        argument_words: Vec::new(),
-        result_words: vec![ivm_abi::call::CallWordV1::Bool; result_words],
+        argument_words: 0,
+        result_words,
     }
 }
 
@@ -74,7 +74,7 @@ fn owner_capture(result_words: usize, shift: u64, root_return: bool) -> Value {
                 argument_base: 0,
                 argument_words: 0,
                 result_base: root_result,
-                result_words: root_callable.result_words.len() as u64,
+                result_words: root_callable.result_words as u64,
             },
             top,
         )
@@ -83,7 +83,7 @@ fn owner_capture(result_words: usize, shift: u64, root_return: bool) -> Value {
     let root_entry = json!({
         "root": true, "sp": top, "frame_bytes": (root_callable.frame_bytes as u64),
         "entry_pc": (root_callable.entry_pc), "argument": 0_u64, "argument_words": 0_u64,
-        "result": root_result, "result_words": (root_callable.result_words.len() as u64),
+        "result": root_result, "result_words": (root_callable.result_words as u64),
         "stack_top": top, "heap_end": (Memory::HEAP_START + memory.heap_allocated_len()),
         "parent_start": 0_u64, "parent_end": 0_u64, "descriptor": (root_descriptor.to_vec()),
     });

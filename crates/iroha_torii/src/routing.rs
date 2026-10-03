@@ -115,7 +115,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 use iroha_data_model::{
     self,
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, SharedSignedBlock, SignedBlock,
         consensus::{EvidencePenaltyStatus, EvidenceRecord},
     },
     consensus::ConsensusKeyRecord,
@@ -7143,6 +7143,7 @@ fn zk_witness_snapshot_identity(
         .ok_or_else(|| zk_query_conversion_error("committed snapshot has no latest block hash"))?;
     let latest_block = state_view
         .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
         .ok_or_else(|| zk_query_conversion_error("committed snapshot block body is unavailable"))?;
     if latest_block.header().height().get() != height || latest_block.hash() != expected_hash {
         return Err(zk_query_conversion_error(
@@ -16137,6 +16138,16 @@ fn contract_vm_attempt_error<E>(
     }
 }
 
+// VRF policy reads share the unfinished-attempt boundary with local VM execution.
+fn hydrate_contract_vrf_seeds<E, QS: Default + iroha_core::smartcontracts::ivm::host::QueryStateAccess>(
+    host: &mut iroha_core::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    state: &impl StateReadOnly,
+    rejected: impl FnOnce(String) -> E,
+) -> std::result::Result<(), iroha_core::execution_attempt::ExecutionAttemptError<E>> {
+    host.set_vrf_epoch_seeds_from_state(state)
+        .map_err(|error| error.map_rejection(rejected))
+}
+
 fn resolve_exact_contract_runtime_alias(
     world: &impl WorldReadOnly,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -16409,7 +16420,10 @@ fn execute_contract_view(
             vm_diagnostic: None,
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_state(&query_view);
+    hydrate_contract_vrf_seeds(&mut host, &query_view, |message| ContractViewExecutionError {
+        message: format!("invalid VRF policy snapshot: {message}"),
+        vm_diagnostic: None,
+    })?;
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -16617,7 +16631,13 @@ fn execute_contract_call_simulation(
             queued_instructions: Vec::new(),
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_state(&query_view);
+    hydrate_contract_vrf_seeds(&mut host, &query_view, |message| ContractCallSimulationError {
+        message: format!("invalid VRF policy snapshot: {message}"),
+        vm_diagnostic: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -17090,9 +17110,7 @@ fn resolve_exact_active_account_alias(
     let nexus = state.nexus_snapshot();
     let alias = parse_multisig_account_alias(alias_literal, &nexus.dataspace_catalog)?;
     let view = state.view();
-    let now_ms = view.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+    let now_ms = view.query_ledger_time_ms();
     resolve_active_account_alias(
         view.world(),
         &nexus.dataspace_catalog,
@@ -17147,9 +17165,7 @@ fn resolve_multisig_account_selector(
                     format!("missing account-alias resolve permission for `{alias}`"),
                 ));
             }
-            let now_ms = state_view.latest_block().map_or(0, |block| {
-                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-            });
+            let now_ms = state_view.query_ledger_time_ms();
             resolve_active_account_alias(
                 state_view.world(),
                 &nexus.dataspace_catalog,
@@ -18761,6 +18777,44 @@ mod multisig_contract_call_tests {
         );
         assert!(matches!(contract_transport_attempt(refused_call), Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)))));
+    }
+
+    #[test]
+    fn original_contract_vrf_policy_refusal_is_unfinished_and_same_source_retries() {
+        use iroha_core::{
+            execution_attempt::ExecutionAttemptError,
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        };
+
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).unwrap();
+        let view = chain.state().query_view();
+        let custom = view.world().parameters().custom()
+            .get(&SumeragiNposParameters::parameter_id()).unwrap();
+        let original = custom.payload().get().to_owned();
+        let mut host = iroha_core::smartcontracts::ivm::host::CoreHost::new(sample_account_id());
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || hydrate_contract_vrf_seeds(&mut host, &view, |_| -> () {
+                panic!("unfinished policy read cannot become a completed contract result")
+            }),
+        );
+        assert!(matches!(&refused, Err(ExecutionAttemptError::Deferred(reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity));
+        let error = contract_transport_attempt(refused).unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(custom.payload().get(), &original);
+        let retried = hydrate_contract_vrf_seeds(&mut host, &view, |error| error);
+        assert!(matches!(contract_transport_attempt(retried), Ok(Ok(()))));
     }
 
     #[test]
@@ -31274,9 +31328,9 @@ impl HistoryReadBudget {
         let work_left = app_query_limits().max_fetch_size;
         Self { work_left, bytes_left: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work_left) }
     }
-    fn read(&mut self, state: &CoreState, height: NonZeroUsize) -> Result<Arc<SignedBlock>> {
+    fn read(&mut self, state: &CoreState, height: NonZeroUsize) -> Result<SharedSignedBlock> {
         let carrier = state.read_finalized_execution_carrier(height, self.work_left, self.bytes_left)
-            .map_err(history_query_error)?;
+            .map_err(crate::canonical_history::query_attempt_error)?;
         self.work_left = self.work_left.checked_sub(carrier.work_items()).ok_or_else(history_capacity_error)?;
         self.bytes_left = self.bytes_left.checked_sub(carrier.wire_bytes()).ok_or_else(history_capacity_error)?;
         Ok(carrier.into_block())
@@ -35013,7 +35067,7 @@ struct HistoryVisibilityReads {
 }
 struct HistoryVisibilityReadState {
     budget: HistoryReadBudget,
-    blocks: BTreeMap<usize, Arc<SignedBlock>>,
+    blocks: BTreeMap<usize, SharedSignedBlock>,
     error: Option<Error>,
 }
 impl HistoryVisibilityReads {
@@ -39277,11 +39331,8 @@ mod explorer_lookup_tests {
     use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
@@ -39334,7 +39385,8 @@ mod explorer_lookup_tests {
     fn build_state_with_executables(
         executables: Vec<dm::Executable>,
     ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
-        build_state_with_executables_and_route_plans(executables, None, None)
+        let (chain, hashes) = build_chain_with_executables_and_route_plans(executables, None, None);
+        (Arc::clone(chain.state()), hashes)
     }
     fn build_state_with_routed_transactions(
         instruction_batches: Vec<Vec<dm::InstructionBox>>,
@@ -39356,17 +39408,18 @@ mod explorer_lookup_tests {
                 )]
             })
             .collect();
-        build_state_with_executables_and_route_plans(
+        let (chain, hashes) = build_chain_with_executables_and_route_plans(
             executables,
             Some(route_plans),
             creation_times_ms,
-        )
+        );
+        (Arc::clone(chain.state()), hashes)
     }
-    fn build_state_with_executables_and_route_plans(
+    fn build_chain_with_executables_and_route_plans(
         executables: Vec<dm::Executable>,
         route_plans: Option<Vec<Vec<(LaneId, DataSpaceId)>>>,
         creation_times_ms: Option<Vec<u64>>,
-    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
+    ) -> (iroha_core::sumeragi::test_chain::CertifiedTestChain, Vec<HashOf<TransactionEntrypoint>>) {
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute};
         let keys = (0..executables.len()).map(|index| {
@@ -39423,7 +39476,7 @@ mod explorer_lookup_tests {
             AcceptedTransaction::new_unchecked(Cow::Owned(signed))
         }).collect();
         crate::test_utils::commit_native_accepted_inputs(&mut chain, txs);
-        (chain.state().clone(), hashes)
+        (chain, hashes)
     }
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
@@ -39439,6 +39492,7 @@ mod explorer_lookup_tests {
         ExplorerPendingBlock {
             block: state
                 .block_by_height(height)
+                .expect("funded canonical history read")
                 .expect("test committed block remains available"),
             height: height_u64,
             entrypoint_index: 0,
@@ -39746,6 +39800,7 @@ mod explorer_lookup_tests {
         let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
         let mut block = state
             .block_by_height(height)
+            .expect("funded canonical history read")
             .expect("committed block remains available")
             .as_ref()
             .clone();
@@ -39895,48 +39950,31 @@ mod explorer_lookup_tests {
     fn build_state_with_unindexed_kura_transaction(
         instructions: Vec<dm::InstructionBox>,
     ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
+        let (chain, mut hashes) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(instructions)], None, None,
+        );
+        let indexed = chain.state();
+        let target_hash = hashes.remove(0);
+        let stored = indexed
+            .block_by_height(NonZeroUsize::new(indexed.committed_height()).unwrap())
+            .expect("original native history read")
+            .expect("actual executed successor remains in Kura");
+        assert!(
+            crate::canonical_history::signed_calls(stored.as_ref())
+                .expect("original certified execution outputs")
+                .any(|(hash, _, _)| hash == target_hash),
+            "the lookup target really exists in the authenticated Kura body"
+        );
+        // A fresh, unapplied State has no transaction index even though its Kura
+        // contains the real signed genesis and certified successor.
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
-            kura.clone(),
-            query,
+            Arc::clone(chain.kura()),
+            LiveQueryStore::start_test(),
+            indexed.chain_id_ref().clone(),
+            *indexed.network_id_ref(),
         ));
-        let (authority, authority_key) = checked_explorer_lookup_account(
-            0x22,
-            "derive Kura-only explorer authority fixture key",
-        );
-        let mut builder = dm::TransactionBuilder::new_genesis(
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
-        let signed = builder
-            .with_instructions(instructions)
-            .sign(authority_key.private_key());
-        let target_hash = signed.hash_as_entrypoint();
-        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-        let leader = checked_explorer_lookup_keypair(
-            0x23,
-            Algorithm::BlsNormal,
-            "derive Kura-only explorer block leader fixture key",
-        );
-        let _topology = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![tx])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let source: iroha_data_model::block::SignedBlock = unverified.clone().into();
-        let (mut state_block, recording) = ValidBlock::start_component_execution(&source, &state)
-            .expect("original explorer component execution");
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut state_block, recording)
-            .unpack(|_| {});
-        drop(state_block);
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        let signed_block: iroha_data_model::block::SignedBlock = committed.into();
-        kura.store_block(Arc::new(signed_block))
-            .expect("store Kura-only block");
+        assert_eq!(state.committed_height(), 0);
         (state, target_hash)
     }
     routing_test! { sync explorer_transaction_history_cursor_and_has_more_ignore_hidden_entrypoints
@@ -40085,6 +40123,7 @@ mod explorer_lookup_tests {
         let height = NonZeroUsize::new(with_hidden.committed_height()).expect("committed height");
         let block = with_hidden
             .block_by_height(height)
+            .expect("funded canonical history read")
             .expect("committed routed block");
         let hidden_probe = resolve_explorer_history_entrypoint(
             block.as_ref(),
@@ -41402,7 +41441,7 @@ pub fn handle_v1_events_sse_for_tests(
     events: EventsSender,
     crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
-    handle_v1_events_sse_with_filter(events, params, Some, || true)
+    handle_v1_events_sse_with_filter(events, params, |event| Ok(Some(event)), || true)
 }
 
 fn handle_v1_events_sse_with_filter<F, A>(
@@ -41412,7 +41451,7 @@ fn handle_v1_events_sse_with_filter<F, A>(
     authorization_is_current: A,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error>
 where
-    F: Fn(EventBox) -> Option<EventBox> + Clone + Send + 'static,
+    F: Fn(EventBox) -> std::result::Result<Option<EventBox>, iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>> + Clone + Send + 'static,
     A: Fn() -> bool + Clone + Send + 'static,
 {
     let SseFilterSpec {
@@ -41481,8 +41520,22 @@ where
                                         state.terminal = true;
                                         return Some((Ok(stream_authorization_revoked_event()), state));
                                     }
-                                    let Some(event_box) = filter_event(event_box) else {
-                                        continue;
+                                    let event_box = match filter_event(event_box) {
+                                        Ok(Some(event)) => event,
+                                        Ok(None) => continue,
+                                        Err(error) => {
+                                            state.pending.clear();
+                                            state.terminal = true;
+                                            let (code, message) = match error {
+                                                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => (
+                                                    "stream_history_capacity", "Event history is temporarily beyond local capacity; reconnect to retry.",
+                                                ),
+                                                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => (
+                                                    "stream_history_error", "The server could not read canonical event history.",
+                                                ),
+                                            };
+                                            return Some((Ok(stream_error_event(code, message, None)), state));
+                                        }
                                     };
                                     let mut consider_event = |event_box| {
                                         if let Some(flt) = filters.as_ref() {
@@ -41697,7 +41750,7 @@ fn explorer_height_is_new(last_block_height: Option<u64>, height: u64) -> bool {
     last_block_height.is_none_or(|last_height| height > last_height)
 }
 struct ExplorerPendingBlock {
-    block: Arc<SignedBlock>,
+    block: SharedSignedBlock,
     height: u64,
     entrypoint_index: usize,
     current_entrypoint: Option<(usize, HashOf<TransactionEntrypoint>)>,
@@ -41726,7 +41779,7 @@ fn explorer_pending_block(source: &iroha_core::state::State, height: u64) -> Res
     let carrier = source.read_finalized_execution_carrier(
         nonzero_height, maximum,
         iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(maximum),
-    ).map_err(history_query_error)?;
+    ).map_err(crate::canonical_history::query_attempt_error)?;
     Ok(ExplorerPendingBlock {
         block: carrier.into_block(),
         height,
@@ -44263,6 +44316,26 @@ mod sse_stream_tests {
             .expect("terminal stream should not hang");
         assert!(terminal.is_none());
     }
+    routing_test! { async original_event_history_capacity_is_terminal_and_never_silent_sse_filtering
+        let pool = iroha_core::state::AllocationBudget::new(8);
+        let _held = pool.try_reserve_bytes(8).unwrap();
+        let refusal = pool.try_reserve_bytes(1).unwrap_err();
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse_with_filter(
+            events.clone(),
+            EventsSseParams { filter: None },
+            move |_| Err(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(refusal.clone().into())),
+            || true,
+        ).unwrap();
+        let mut body = sse.into_response().into_body();
+        events.send(queued_transaction_event(0x73)).unwrap();
+        let frame = next_sse_chunk(&mut body).await;
+        assert!(frame.contains("event: stream_error"));
+        assert!(frame.contains("stream_history_capacity"));
+        assert!(!frame.contains("transaction"));
+        let terminal = timeout(Duration::from_secs(1), body.frame()).await.unwrap();
+        assert!(terminal.is_none());
+    }
     routing_test! { async sse_authorization_revocation_is_generic_and_terminal
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let authorized = Arc::new(AtomicBool::new(true));
@@ -44270,7 +44343,7 @@ mod sse_stream_tests {
         let sse = handle_v1_events_sse_with_filter(
             events,
             EventsSseParams { filter: None },
-            Some,
+            |event| Ok(Some(event)),
             move || authorization_gate.load(Ordering::SeqCst),
         )
         .expect("create revocable SSE stream");
@@ -44557,16 +44630,14 @@ mod validation_fee_torii_ingress_tests {
     use super::*;
     use iroha_config::parameters::actual::ParliamentTimedOvn;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
         governance::parliament::{
             ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
         },
-        kura::Kura,
-        query::store::LiveQueryStore,
         queue::Queue,
         smartcontracts::Execute,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -44643,36 +44714,31 @@ mod validation_fee_torii_ingress_tests {
         )
     }
     fn xor_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("fees", "paynet").expect("domain id"),
-            "xor".parse().expect("asset name"),
-        )
+        iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id
     }
-    fn payout_contract_address(user: &AccountId) -> ContractAddress {
-        ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            user,
-            42,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive validation-fee payout contract address")
+    fn payout_contract_address(state: &State, user: &AccountId) -> ContractAddress {
+        ContractAddress::derive(state.network_id_ref(), user, 0, DataSpaceId::UNIVERSAL)
+            .expect("derive original network payout address")
     }
-    fn pool_contract_address() -> ContractAddress {
-        let (deployer, _) = account(4, "derive validation-fee pool deployer");
-        ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &deployer,
-            43,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive validation-fee pool contract address")
+    fn pool_contract_address(state: &State, user: &AccountId) -> ContractAddress {
+        ContractAddress::derive(state.network_id_ref(), user, 1, DataSpaceId::UNIVERSAL)
+            .expect("derive original network pool address")
     }
-    fn payout_pool_vault_account() -> AccountId {
-        pool_contract_address().subject_id()
+    fn unit_return_code() -> Vec<u8> {
+        use ivm::{
+            encoding::wide,
+            instruction::wide::{arithmetic, control, memory},
+        };
+        [
+            wide::encode_store(memory::STORE64, 12, 0, 0),
+            wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
+            wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+            wide::encode_rr(control::JALR, 0, 1, 0),
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect()
     }
     fn reward_and_reference_accounts() -> Vec<AccountId> {
         [7, 10, 11, 12, 13, 14]
@@ -44695,7 +44761,7 @@ mod validation_fee_torii_ingress_tests {
             version_minor: 1,
             mode: 0,
             vector_length: 0,
-            max_cycles: 1,
+            max_cycles: 4,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -44727,7 +44793,12 @@ mod validation_fee_torii_ingress_tests {
             }],
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            callables: Vec::new(),
+            callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
+            }],
             seiyaku_name: "ValidationFeePayout".to_owned(),
             compiler_fingerprint: "validation-fee-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -44755,7 +44826,7 @@ mod validation_fee_torii_ingress_tests {
         };
         let mut artifact = metadata.encode();
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        artifact.extend_from_slice(&unit_return_code());
         let verified =
             ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
         (artifact, verified.manifest)
@@ -44769,7 +44840,7 @@ mod validation_fee_torii_ingress_tests {
             version_minor: 1,
             mode: 0,
             vector_length: 0,
-            max_cycles: 1,
+            max_cycles: 4,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -44789,7 +44860,12 @@ mod validation_fee_torii_ingress_tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            callables: Vec::new(),
+            callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
+            }],
             seiyaku_name: "ValidationFeePool".to_owned(),
             compiler_fingerprint: "validation-fee-pool-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -44817,16 +44893,17 @@ mod validation_fee_torii_ingress_tests {
         };
         let mut artifact = metadata.encode();
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        artifact.extend_from_slice(&unit_return_code());
         let verified =
             ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
         (artifact, verified.manifest)
     }
     fn payout_binding(
+        state: &State,
         user: &AccountId,
         fee_asset: &AssetDefinitionId,
     ) -> ValidationFeeTreasuryPayoutBindingV1 {
-        let contract_address = payout_contract_address(user);
+        let contract_address = payout_contract_address(state, user);
         let (contract_artifact, _) = payout_contract_artifact();
         ValidationFeeTreasuryPayoutBindingV1 {
             treasury_account_id: contract_address.subject_id(),
@@ -44837,8 +44914,8 @@ mod validation_fee_torii_ingress_tests {
                 .expect("payout entrypoint"),
             ds_asset_id: fee_asset.clone(),
             xor_asset_id: xor_asset_definition_id(),
-            pool_vault_account_id: payout_pool_vault_account(),
-            pool_contract_address: pool_contract_address(),
+            pool_vault_account_id: pool_contract_address(state, user).subject_id(),
+            pool_contract_address: pool_contract_address(state, user),
             pool_code_hash: ivm::contract_code_hash(&pool_contract_artifact().0).into(),
             reward_pool_account_id: account(7, "reward pool").0,
             reference_feed_id: "xor_per_sbd".parse().unwrap(),
@@ -44855,12 +44932,7 @@ mod validation_fee_torii_ingress_tests {
             min_reward_claim_xor_minor: 1,
         }
     }
-    fn test_world(
-        user: &AccountId,
-        recipient: &AccountId,
-        treasury: &AccountId,
-        fee_asset: &AssetDefinitionId,
-    ) -> World {
+    fn test_world(user: &AccountId, recipient: &AccountId, fee_asset: &AssetDefinitionId) -> World {
         let domain_id = DomainId::try_new("fees", "paynet").expect("domain id");
         let domain = Domain::new(domain_id).build(user);
         let asset_definition = AssetDefinition::new(
@@ -44874,7 +44946,7 @@ mod validation_fee_torii_ingress_tests {
         let xor_asset_definition = AssetDefinition::new(
             xor_asset_definition_id(),
             "xor".to_owned(),
-            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -44886,8 +44958,6 @@ mod validation_fee_torii_ingress_tests {
         let mut accounts = vec![
             Account::new(user.clone()).build(user),
             Account::new(recipient.clone()).build(user),
-            Account::new(treasury.clone()).build(user),
-            Account::new(payout_pool_vault_account()).build(user),
             Account::new(account(4, "derive validation-fee multisig account").0).build(user),
         ];
         accounts.extend(
@@ -44895,13 +44965,121 @@ mod validation_fee_torii_ingress_tests {
                 .into_iter()
                 .map(|account_id| Account::new(account_id).build(user)),
         );
-        World::with_assets(
-            [domain],
+        let world = World::with_assets(
+            [
+                domain,
+                Domain::new(DomainId::try_new("contracts", "universal").unwrap()).build(user),
+            ],
             accounts,
             [asset_definition, xor_asset_definition],
             [user_asset],
             [],
-        )
+        );
+        // This permissioned fixture carries the canonical application staking policy;
+        // its signed genesis still declares the actual permissioned consensus mode.
+        let mut initial = world.block();
+        initial
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .into_custom_parameter(),
+            ));
+        initial.commit();
+        world
+    }
+    fn native_fee_fixture() -> (
+        CertifiedTestChain,
+        KeyPair,
+        AccountId,
+        KeyPair,
+        AccountId,
+        AssetDefinitionId,
+    ) {
+        use iroha_data_model::{
+            isi::smart_contract_code::{
+                CommitContractDeployment, RegisterSmartContractBytes, RegisterSmartContractCode,
+            },
+            smart_contract::{ContractAlias, ContractArtifactId},
+        };
+        use iroha_executor_data_model::permission::account::{
+            AccountAliasPermissionScope, CanManageAccountAlias,
+        };
+        let (user, key) = account(1, "derive validation-fee Torii user key");
+        let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
+        let fee_asset = fee_asset_definition_id();
+        let mut config = TestChainConfig::new(test_world(&user, &recipient, &fee_asset), 1_000);
+        config.genesis_key = key.clone();
+        let artifacts = [payout_contract_artifact(), pool_contract_artifact()];
+        for (code, manifest) in &artifacts {
+            let artifact_id =
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
+            config.genesis_instructions.push(
+                RegisterSmartContractBytes {
+                    artifact_id,
+                    code: code.clone(),
+                }
+                .into(),
+            );
+            config.genesis_instructions.push(
+                RegisterSmartContractCode {
+                    artifact_id,
+                    manifest: manifest.clone().signed(&key),
+                }
+                .into(),
+            );
+        }
+        for scope in [
+            AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+            AccountAliasPermissionScope::Domain(
+                DomainId::try_new("contracts", "universal").unwrap(),
+            ),
+        ] {
+            let permission: iroha_data_model::permission::Permission =
+                CanManageAccountAlias { scope }.into();
+            config
+                .genesis_instructions
+                .push(Grant::account_permission(permission, user.clone()).into());
+        }
+        let prepared = CertifiedTestChain::prepare(config)
+            .expect("prepare original signed validation-fee genesis");
+        let validator = prepared.validator_keys[0].clone();
+        let mut chain = CertifiedTestChain::from_prepared(prepared)
+            .expect("execute original signed validation-fee genesis");
+        for (nonce, alias, (_, manifest)) in [
+            (0, "fee-payout", &artifacts[0]),
+            (1, "fee-pool", &artifacts[1]),
+        ] {
+            let address =
+                ContractAddress::derive(&chain.network_id(), &user, nonce, DataSpaceId::UNIVERSAL)
+                    .unwrap();
+            let transaction = chain.sign(
+                &key,
+                [CommitContractDeployment {
+                    expected_deploy_nonce: nonce,
+                    contract_address: address,
+                    code_hash: manifest.code_hash.unwrap(),
+                    contract_alias: ContractAlias::from_components(
+                        alias,
+                        Some("contracts"),
+                        "universal",
+                    )
+                    .unwrap(),
+                    lease_expiry_ms: None,
+                    expected_previous_contract_address: None,
+                }
+                .into()],
+                (nonce + 2) * 1_000,
+            );
+            assert_eq!(
+                chain.commit(vec![transaction]),
+                vec![true],
+                "original signed contract deployment: {:?}",
+                chain.committed(nonce + 2).block().execution_outputs(),
+            );
+        }
+        assert_eq!(chain.height(), 3);
+        (chain, validator, user, key, recipient, fee_asset)
     }
     fn test_state() -> (
         Arc<State>,
@@ -44911,23 +45089,10 @@ mod validation_fee_torii_ingress_tests {
         AccountId,
         AssetDefinitionId,
     ) {
-        let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
-        let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let treasury = payout_contract_address(&user).subject_id();
-        let fee_asset = fee_asset_definition_id();
-        let state = State::new_for_testing(
-            test_world(&user, &recipient, &treasury, &fee_asset),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        (
-            Arc::new(state),
-            user,
-            user_key_pair,
-            recipient,
-            treasury,
-            fee_asset,
-        )
+        let (chain, _validator, user, user_key_pair, recipient, fee_asset) = native_fee_fixture();
+        let state = Arc::clone(chain.state());
+        let treasury = payout_contract_address(&state, &user).subject_id();
+        (state, user, user_key_pair, recipient, treasury, fee_asset)
     }
     fn test_app_state() -> (
         crate::SharedAppState,
@@ -44937,14 +45102,30 @@ mod validation_fee_torii_ingress_tests {
         AccountId,
         AssetDefinitionId,
     ) {
-        let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
-        let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let treasury = payout_contract_address(&user).subject_id();
-        let fee_asset = fee_asset_definition_id();
-        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
-            &user, &recipient, &treasury, &fee_asset,
+        let (chain, validator, user, user_key_pair, recipient, fee_asset) = native_fee_fixture();
+        let state = Arc::clone(chain.state());
+        let treasury = payout_contract_address(&state, &user).subject_id();
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let unique = Arc::get_mut(&mut app).expect("exclusive fee ingress app");
+        unique.chain_id = Arc::new(state.chain_id_ref().clone());
+        unique.kura = Arc::clone(chain.kura());
+        unique.state = state;
+        unique.local_peer_id = Some(iroha_model_base::peer::PeerId::new(
+            validator.public_key().clone(),
         ));
-        crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
+        unique.torii_proxy_bridge_signer = validator;
+        unique.signed_query_admission = Arc::new(
+            SignedQueryAdmission::new(
+                chain.network_id(),
+                Duration::from_secs(1),
+                Duration::from_secs(120),
+                NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("original native fee fixture query admission"),
+        );
+        let view = unique.state.view();
+        unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+        drop(view);
         (app, user, user_key_pair, recipient, treasury, fee_asset)
     }
     fn queue() -> Arc<Queue> {
@@ -44959,32 +45140,13 @@ mod validation_fee_torii_ingress_tests {
             events,
         ))
     }
-    fn commit_empty_genesis_like_block(state: &Arc<State>) {
-        let block_signer = fixture_key_pair(
-            240,
-            Algorithm::BlsNormal,
-            "derive validation-fee Torii genesis block signer",
-        );
-        let new_block = BlockBuilder::new(Vec::new())
-            .chain(0, None)
-            .sign(block_signer.private_key())
-            .unpack(|_| {});
-        let source: iroha_data_model::block::SignedBlock = new_block.into();
-        let (mut state_block, recording) = ValidBlock::start_component_execution(&source, state)
-            .expect("original validation-fee component execution");
-        let valid_block =
-            ValidBlock::validate_unchecked(source, &mut state_block, recording).unpack(|_| {});
-        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-        let _events = state_block.apply_without_execution(&committed_block, Vec::new());
-        state_block.commit().expect("commit initial block hash");
-    }
     fn validation_fee_policy(
         state: &Arc<State>,
         user: &AccountId,
         fee_asset: AssetDefinitionId,
         treasury: AccountId,
     ) -> ValidationFeePolicyV1 {
-        let payout_binding = payout_binding(user, &fee_asset);
+        let payout_binding = payout_binding(state, user, &fee_asset);
         assert_eq!(
             treasury, payout_binding.treasury_account_id,
             "policy treasury must be the immutable payout contract subject"
@@ -45390,13 +45552,12 @@ mod validation_fee_torii_ingress_tests {
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
-        authority_key_pair: &KeyPair,
         policy: ValidationFeePolicyV1,
     ) {
         use iroha_data_model::governance::types::{
             ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         };
-        let payout_binding = payout_binding(authority, &policy.ds_asset_id);
+        let payout_binding = payout_binding(state, authority, &policy.ds_asset_id);
         assert_eq!(policy.reward_custody, payout_binding.custody());
         let payout_lifecycle_kind =
             ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
@@ -45459,67 +45620,19 @@ mod validation_fee_torii_ingress_tests {
             1_700_000_001_000,
         ));
         let mut stx = block.transaction();
-        let register_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
-                .into();
-        Grant::account_permission(register_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant payout-contract registration authority");
-        let (contract_artifact, contract_manifest) = payout_contract_artifact();
-        let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
-            authority,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            contract_artifact,
-            &mut stx,
-        )
-        .expect("register payout-contract bytes");
-        iroha_core::smartcontracts::code::register_manifest(
-            authority,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            contract_manifest.signed(authority_key_pair),
-            &mut stx,
-        )
-        .expect("register signed payout-contract manifest");
-        stx.world.bind_inactive_contract_subject_for_testing(
-            payout_binding.contract_address.clone(),
-            authority.clone(),
-        );
-        iroha_core::smartcontracts::code::activate_instance(
-            authority,
-            payout_binding.contract_address,
-            1,
-            registered_code_hash,
-            &mut stx,
-        )
-        .expect("activate immutable payout-contract subject");
-        let (pool_artifact, pool_manifest) = pool_contract_artifact();
-        let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
-            authority,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            pool_artifact,
-            &mut stx,
-        )
-        .expect("register pool-contract bytes");
-        iroha_core::smartcontracts::code::register_manifest(
-            authority,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            pool_manifest.signed(authority_key_pair),
-            &mut stx,
-        )
-        .expect("register signed pool-contract manifest");
-        let pool_contract_address_for_activation = pool_contract_address();
-        stx.world.bind_inactive_contract_subject_for_testing(
-            pool_contract_address_for_activation.clone(),
-            authority.clone(),
-        );
-        iroha_core::smartcontracts::code::activate_instance(
-            authority,
-            pool_contract_address_for_activation,
-            1,
-            pool_code_hash,
-            &mut stx,
-        )
-        .expect("activate protected pool-contract subject");
+        for (address, expected) in [
+            (&payout_binding.contract_address, payout_binding.code_hash),
+            (
+                &payout_binding.pool_contract_address,
+                payout_binding.pool_code_hash,
+            ),
+        ] {
+            assert_eq!(
+                stx.world.contract_instances().get(address).copied(),
+                Some(Hash::prehashed(expected)),
+                "fee custody binds the exact genuinely deployed contract",
+            );
+        }
         for (proposal_id, kind, attempt) in [
             (
                 payout_lifecycle_id,
@@ -45689,10 +45802,11 @@ mod validation_fee_torii_ingress_tests {
         }
     }
     routing_test! { async torii_raw_fee_asset_transfer_reaches_validator_fee_admission
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-        commit_empty_genesis_like_block(&state);
+        assert_eq!(state.committed_height(), 3, "signed genesis and two deployments");
         let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury);
-        install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+        install_validation_fee_policy(&state, &user, policy.clone());
         let missing_fee_queue = queue();
         let missing_fee_tx = signed_transfer(
             &state,
@@ -45755,14 +45869,22 @@ mod validation_fee_torii_ingress_tests {
         ValidationFeePolicyV1,
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
-        commit_empty_genesis_like_block(&app.state);
+        assert_eq!(
+            app.state.committed_height(),
+            3,
+            "signed genesis and two deployments"
+        );
         let policy = validation_fee_policy(&app.state, &user, fee_asset.clone(), treasury);
-        install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
+        install_validation_fee_policy(&app.state, &user, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
     #[cfg(feature = "connect")]
     routing_test! { async public_transaction_handler_requires_authenticated_route_authority
-        let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let (mut app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        // Remove only this genuine peer's ingress identity: a signed transaction
+        // cannot authorize routing when the node lacks its current member binding.
+        Arc::get_mut(&mut app).expect("exclusive route-negative fixture").local_peer_id = None;
         let exact_fee_tx = signed_transfer(
             &app.state,
             &user,
@@ -45794,6 +45916,7 @@ mod validation_fee_torii_ingress_tests {
         );
     }
     routing_test! { async public_batch_raw_fee_transfer_reaches_validation_fee_admission
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
         let (missing_fee_app, user, user_key_pair, recipient, policy) =
             test_app_with_active_policy();
         let missing_fee_tx = signed_transfer(
@@ -45847,6 +45970,7 @@ mod validation_fee_torii_ingress_tests {
         assert_eq!(exact_fee_result, "ok");
     }
     routing_test! { async public_batch_http_raw_fee_transfer_reaches_validation_fee_admission
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
         let (missing_fee_app, user, user_key_pair, recipient, policy) =
             test_app_with_active_policy();
         let missing_fee_tx = signed_transfer(
@@ -51480,7 +51604,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1");
     let collateral_def_id: AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f2");
-    let latest_block = state.view().latest_block();
+    let latest_block = state.view().latest_block().expect("funded canonical history read");
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -54808,7 +54932,7 @@ fn faucet_pow_recent_claims(
         let Some(nonzero_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
             continue;
         };
-        let Some(block) = app.state.block_by_height(nonzero_height) else {
+        let Some(block) = app.state.block_by_height(nonzero_height).map_err(crate::canonical_history::canonical_attempt_error)? else {
             continue;
         };
         let claims_in_block = block
@@ -54913,6 +55037,7 @@ fn faucet_pow_anchor_hash(
     let block = app
         .state
         .block_by_height(height)
+        .map_err(crate::canonical_history::canonical_attempt_error)?
         .ok_or_else(|| faucet_invalid_request("unknown faucet pow anchor height"))?;
     Ok(block.hash())
 }
@@ -54981,7 +55106,7 @@ fn onboarding_committed_anchor(
     state: &CoreState,
 ) -> Result<(iroha_data_model::alias_setup::AliasPlanAnchorV1, u64)> {
     let view = state.view();
-    let block = view.latest_block().ok_or(Error::AppServiceUnavailable {
+    let block = view.latest_block().map_err(crate::canonical_history::canonical_attempt_error)?.ok_or(Error::AppServiceUnavailable {
         code: "alias.onboarding.anchor_pending",
         message: "account onboarding requires a committed block anchor".to_owned(),
     })?;
@@ -59386,8 +59511,7 @@ fn handle_v1_explorer_blocks_sync(
             })?;
             let nonzero_height = NonZeroUsize::new(height_usize)
                 .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let dto = state
-                .block_by_height(nonzero_height)
+            let dto = explorer_optional_block_body(state.block_by_height(nonzero_height))?
                 .map(|block| {
                     crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
                         visibility.allows_external_entrypoint(&block, index)
@@ -59525,7 +59649,7 @@ pub async fn handle_v1_explorer_health(
         let head_height = state.committed_height() as u64;
         let body = crate::explorer::ExplorerHealthDto {
             head_height,
-            head_created_at: latest_block_created_at(kura.as_ref(), head_height),
+            head_created_at: latest_block_created_at(kura.as_ref(), head_height, &state.ivm_execution_budget())?,
             sampled_at: crate::explorer::now_rfc3339(),
         };
         Ok(JsonBody(body).into_response())
@@ -59678,8 +59802,9 @@ async fn explorer_network_metrics_snapshot(
             ms: avg_commit_time_ms,
         })
     };
-    let block_created_at = latest_block_created_at(kura.as_ref(), finalized_block);
-    let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20)
+    let execution_budget = state.ivm_execution_budget();
+    let block_created_at = latest_block_created_at(kura.as_ref(), finalized_block, &execution_budget)?;
+    let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20, &execution_budget)?
         .map(|ms| crate::explorer::ExplorerDurationDto { ms });
     Ok(crate::explorer::ExplorerNetworkMetricsDto {
         peers,
@@ -59695,47 +59820,42 @@ async fn explorer_network_metrics_snapshot(
         avg_block_time,
     })
 }
-fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {
-    let nonzero_height = nonzero_height(height)?;
-    let block = kura.get_block(nonzero_height)?;
-    Some(crate::explorer::block_created_at(
-        block.header().creation_time(),
-    ))
+fn latest_block_created_at(
+    kura: &Kura,
+    height: u64,
+    execution_budget: &iroha_core::state::AllocationBudget,
+) -> Result<Option<String>> {
+    let Some(height) = nonzero_height(height) else { return Ok(None); };
+    let block = kura.get_block(height, execution_budget).map_err(crate::canonical_history::kura_attempt_error)?;
+    Ok(block.map(|block| crate::explorer::block_created_at(block.header().creation_time())))
 }
-fn average_block_time_ms(kura: &Kura, latest: u64, window: usize) -> Option<u64> {
-    if latest <= 1 || window == 0 {
-        return None;
-    }
+fn average_block_time_ms(
+    kura: &Kura,
+    latest: u64,
+    window: usize,
+    execution_budget: &iroha_core::state::AllocationBudget,
+) -> Result<Option<u64>> {
+    if latest <= 1 || window == 0 { return Ok(None); }
     let mut height = latest;
     let mut prev_ts_ms: Option<u128> = None;
     let mut deltas: Vec<u128> = Vec::new();
     let mut remaining = window;
     while height >= 1 && remaining > 0 {
-        let Some(nonzero_height) = nonzero_height(height) else {
-            break;
-        };
-        let Some(block) = kura.get_block(nonzero_height) else {
-            break;
-        };
+        let Some(nonzero_height) = nonzero_height(height) else { break; };
+        let Some(block) = kura.get_block(nonzero_height, execution_budget).map_err(crate::canonical_history::kura_attempt_error)? else { break; };
         let ts_ms = block.header().creation_time().as_millis();
         if let Some(prev) = prev_ts_ms {
-            if prev >= ts_ms {
-                deltas.push(prev - ts_ms);
-            }
+            if prev >= ts_ms { deltas.push(prev - ts_ms); }
         }
         prev_ts_ms = Some(ts_ms);
-        if height == 1 {
-            break;
-        }
+        if height == 1 { break; }
         height -= 1;
         remaining -= 1;
     }
-    if deltas.is_empty() {
-        None
-    } else {
+    Ok(if deltas.is_empty() { None } else {
         let sum: u128 = deltas.iter().copied().sum();
         Some((sum / (deltas.len() as u128)) as u64)
-    }
+    })
 }
 }
 fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
@@ -61645,7 +61765,7 @@ mod explorer_asset_definition_econometrics_tests {
         );
         let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, state.view().latest_block().expect("funded canonical history read").as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
@@ -61987,7 +62107,7 @@ mod explorer_asset_definition_snapshot_tests {
         );
         let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, state.view().latest_block().expect("funded canonical history read").as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
@@ -62159,7 +62279,7 @@ mod explorer_asset_definition_snapshot_tests {
         );
         let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, state.view().latest_block().expect("funded canonical history read").as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
@@ -62315,6 +62435,51 @@ pub async fn handle_v1_explorer_rwa_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
+/// Explorer can display an explicitly absent body as journal metadata, but never
+/// treats allocation refusal or a contradictory body as missing history.
+fn explorer_optional_block_body(
+    read: std::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        iroha_core::execution_attempt::ExecutionAttemptError<iroha_data_model::query::error::CanonicalHistoryError>,
+    >,
+) -> Result<Option<iroha_data_model::block::SharedSignedBlock>> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use iroha_data_model::query::error::CanonicalHistoryError;
+    match read {
+        Ok(block) => Ok(block),
+        Err(ExecutionAttemptError::Rejected(CanonicalHistoryError::BodyUnavailable { .. })) => Ok(None),
+        Err(error) => Err(crate::canonical_history::canonical_attempt_error(error)),
+    }
+}
+#[cfg(test)]
+mod explorer_body_read_tests {
+    use super::*;
+
+    #[test]
+    fn original_explorer_body_refusal_and_corruption_cannot_become_hash_only_metadata() {
+        use iroha_core::execution_attempt::ExecutionAttemptError;
+        use iroha_data_model::query::error::CanonicalHistoryError;
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; 32]));
+        assert!(explorer_optional_block_body(Err(ExecutionAttemptError::Rejected(
+            CanonicalHistoryError::BodyUnavailable { height: 1, expected_hash },
+        ))).unwrap().is_none());
+        let pool = iroha_core::state::AllocationBudget::new(8);
+        let _held = pool.try_reserve_bytes(8).unwrap();
+        let refusal = pool.try_reserve_bytes(1).unwrap_err();
+        let error = explorer_optional_block_body(Err(ExecutionAttemptError::Deferred(refusal.into())))
+            .expect_err("capacity is retryable, never metadata-only success");
+        assert_eq!(error.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+        let corruption = CanonicalHistoryError::BlockHeightMismatch { height: 1, actual_height: 2 };
+        assert!(matches!(
+            explorer_optional_block_body(Err(ExecutionAttemptError::Rejected(corruption))),
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(
+                    CanonicalHistoryError::BlockHeightMismatch { height: 1, actual_height: 2 }
+                )
+            )))
+        ));
+    }
+}
 enum ExplorerBlockIdentifier {
     Height(NonZeroUsize),
     Hash(HashOf<BlockHeader>),
@@ -62367,8 +62532,7 @@ pub async fn handle_v1_explorer_block_detail(
             "explorer block hash lookup",
         )?;
         let dto = match lookup {
-            ExplorerBlockIdentifier::Height(height) => state
-                .block_by_height(height)
+            ExplorerBlockIdentifier::Height(height) => explorer_optional_block_body(state.block_by_height(height))?
                 .map(|block| {
                     crate::explorer::ExplorerBlockDto::from_block_with_visibility(
                         block.as_ref(),
@@ -62376,8 +62540,7 @@ pub async fn handle_v1_explorer_block_detail(
                     )
                 })
                 .or_else(|| explorer_hash_only_block_dto(state.as_ref(), height)),
-            ExplorerBlockIdentifier::Hash(hash) => state
-                .block_by_hash(hash)
+            ExplorerBlockIdentifier::Hash(hash) => explorer_optional_block_body(state.block_by_hash(hash))?
                 .map(|block| {
                     crate::explorer::ExplorerBlockDto::from_block_with_visibility(
                         block.as_ref(),
@@ -67624,6 +67787,12 @@ pub mod block {
                 CLOSE_POLICY_VIOLATION,
                 "invalid_block_subscription".to_owned(),
             ),
+            Error::Consumer(block::Error::History(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_),
+            )) => (CLOSE_TRY_AGAIN_LATER, "block_history_capacity".to_owned()),
+            Error::Consumer(block::Error::History(
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_),
+            )) => (CLOSE_INTERNAL_ERROR, "block_history_error".to_owned()),
             Error::Consumer(block::Error::Stream(StreamError::SendTimeout)) => {
                 (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
             }
@@ -67642,6 +67811,7 @@ pub mod block {
     #[iroha_futures::telemetry_future]
     pub async fn handle_blocks_stream<F>(
         kura: Arc<Kura>,
+        execution_budget: iroha_core::state::AllocationBudget,
         stream: WebSocket,
         ws_message_timeout: std::time::Duration,
         authorization_is_current: F,
@@ -67651,7 +67821,7 @@ pub mod block {
     {
         let mut stream = WebSocketNorito::new(stream, ws_message_timeout);
         let init_and_subscribe = async {
-            let mut consumer = block::Consumer::new(&mut stream, kura).await?;
+            let mut consumer = block::Consumer::new(&mut stream, kura, execution_budget).await?;
             subscribe_forever(&mut consumer, &authorization_is_current).await
         };
         match init_and_subscribe.await {
@@ -67716,6 +67886,28 @@ pub mod block {
         use super::*;
 
         #[test]
+        fn original_block_history_refusal_closes_retryably_without_erasing_owner() {
+            let pool = iroha_core::state::AllocationBudget::new(8);
+            let _held = pool.try_reserve_bytes(8).unwrap();
+            let refusal = pool.try_reserve_bytes(1).unwrap_err();
+            let error = Error::Consumer(block::Error::History(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                    refusal.clone().into(),
+                ),
+            ));
+            let (code, reason) = close_frame_for_error(&error);
+            assert_eq!(code, crate::stream::CLOSE_TRY_AGAIN_LATER);
+            assert_eq!(reason, "block_history_capacity");
+            let Error::Consumer(block::Error::History(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(owner),
+            )) = error
+            else {
+                panic!("original deferred owner");
+            };
+            assert_eq!(owner.allocation_refusal(), Some(&refusal));
+        }
+
+        #[test]
         fn revoked_block_stream_uses_policy_violation_close() {
             let (code, reason) = close_frame_for_error(&Error::AuthorizationRevoked);
             assert_eq!(code, crate::stream::CLOSE_POLICY_VIOLATION);
@@ -67743,6 +67935,10 @@ pub mod event {
         Consumer(#[source] event::Error),
         /// Event reception error
         Event(#[from] tokio::sync::broadcast::error::RecvError),
+        /// Canonical event history could not be read; capacity refusal remains retryable.
+        History(
+            #[source] iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+        ),
         /// Event stream authorization was revoked
         AuthorizationRevoked,
         /// Connection is closed
@@ -67788,6 +67984,12 @@ pub mod event {
             ),
             Error::Consumer(event::Error::Stream(StreamError::SendTimeout)) => {
                 (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::History(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_)) => {
+                (CLOSE_TRY_AGAIN_LATER, "event_history_capacity".to_owned())
+            }
+            Error::History(iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_)) => {
+                (CLOSE_INTERNAL_ERROR, "event_history_error".to_owned())
             }
             Error::AuthorizationRevoked => (
                 CLOSE_POLICY_VIOLATION,
@@ -67904,7 +68106,7 @@ pub mod event {
                             }
                             let event = match visibility {
                                 Some(visibility) => {
-                                    let Some(event) = visibility.filter_current_event(event) else {
+                                    let Some(event) = visibility.filter_current_event(event).map_err(Error::History)? else {
                                         continue;
                                     };
                                     event
@@ -67934,6 +68136,28 @@ pub mod event {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn original_event_history_refusal_closes_retryably_without_visibility_fallback() {
+            let pool = iroha_core::state::AllocationBudget::new(8);
+            let _held = pool.try_reserve_bytes(8).unwrap();
+            let refusal = pool.try_reserve_bytes(1).unwrap_err();
+            let error = Error::History(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                    refusal.clone().into(),
+                ),
+            );
+            let (code, reason) = close_frame_for_error(&error);
+            assert_eq!(code, crate::stream::CLOSE_TRY_AGAIN_LATER);
+            assert_eq!(reason, "event_history_capacity");
+            let Error::History(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                owner,
+            )) = error
+            else {
+                panic!("original deferred owner");
+            };
+            assert_eq!(owner.allocation_refusal(), Some(&refusal));
+        }
 
         #[test]
         fn revoked_event_stream_uses_policy_violation_close() {

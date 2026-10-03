@@ -120,7 +120,10 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
         .as_mut()
         .replace_signatures(BTreeSet::from([signature]))
         .expect("replace signature after completing fixture execution metadata");
-    block.commit(&topology).unpack(|_| {}).unwrap()
+    block
+        .commit(&topology, crate::block::reserve_block_for_tests())
+        .unpack(|_| {})
+        .unwrap()
 }
 fn set_commit_topology_from_keypairs(state: &State, keypairs: &[KeyPair]) {
     let mut topo = state.commit_topology.block();

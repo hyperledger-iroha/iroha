@@ -108,7 +108,7 @@ check-proc-macro-ui:
 
 kotodama-goldens:
 	@python3 scripts/regenerate_kotodama_goldens.py --write \
-		--output-root "$${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute private external publication root}"
+		--output-root "$${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute publication root under ignored target or outside the workspace}"
 
 kotodama-goldens-check:
 	@python3 scripts/regenerate_kotodama_goldens.py --check

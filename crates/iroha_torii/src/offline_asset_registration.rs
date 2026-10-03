@@ -105,7 +105,10 @@ pub(crate) async fn handler(
         .map_err(|_| routing::explorer_not_found())?;
     let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
     let hash = view.latest_block_hash().ok_or_else(unavailable)?;
-    let block = view.latest_block().ok_or_else(unavailable)?;
+    let block = view
+        .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+        .ok_or_else(unavailable)?;
     if block.header().height().get() != height || block.hash() != hash {
         return Err(unavailable());
     }

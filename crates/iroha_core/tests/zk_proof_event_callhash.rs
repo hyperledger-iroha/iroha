@@ -59,7 +59,9 @@ fn proof_event_includes_call_hash() {
         iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
             .expect("original writer-first component execution");
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb, sb_recorder).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
+    let cb = vb
+        .commit_unchecked(iroha_core::block::reserve_block_for_tests())
+        .unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
     // Find a Proof::Rejected event and assert call_hash was set
     let mut found = None;

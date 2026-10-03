@@ -2098,7 +2098,7 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
     let mut publish = |totals: [u128; 3]| {
         let height = chain.height() + 1;
-        let parent = state.view().latest_block().map(|block| block.hash());
+        let parent = state.view().latest_block_hash();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(height).unwrap(),
             parent,

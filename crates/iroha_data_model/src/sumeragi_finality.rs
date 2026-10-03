@@ -24,7 +24,8 @@ pub use epoch_graph::{
 };
 mod beacon;
 pub use beacon::{
-    BeaconPulseShapeError, GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1, election_seed,
+    BeaconPulseShapeError, GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1,
+    GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1, election_seed,
     global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_pulse_id_v1,
     global_threshold_beacon_pulse_payload_v1, validate_beacon_pulse_shape,
 };
@@ -562,6 +563,47 @@ impl VerifiedSumeragiBlock {
     pub fn commitment(&self) -> &ExecutionResultCommitment {
         &self.0.commitment
     }
+    /// Require the authenticated successor to belong to the exact selected Global root.
+    ///
+    /// This compares the native header's certified instance with the existing genesis/network,
+    /// chain-label and Global-scope derivation. It introduces no trust root or new verification
+    /// path; only an already authenticated successor can pass. Caller-supplied scope labels and
+    /// publisher assertions cannot turn a private-root certificate into Global authority.
+    /// # Errors
+    /// Genesis, empty/oversized/control-containing chain labels, a different network or chain,
+    /// or an authenticated private-root native instance.
+    pub fn verify_global_scope(
+        &self,
+        expected_network: NetworkId,
+        expected_chain: &str,
+    ) -> Result<(), FinalityError> {
+        need(
+            !expected_chain.is_empty()
+                && expected_chain.len() <= 1024
+                && !expected_chain.chars().any(char::is_control),
+            "Global scope requires a bounded canonical chain label",
+        )?;
+        need(
+            self.height() >= 2 && self.commitment().schedule.current.network_id == expected_network,
+            "Global scope requires an authenticated successor on the selected network",
+        )?;
+        let header = self.0.header.as_ref().ok_or_else(|| {
+            FinalityError("Global scope requires a certified native header".into())
+        })?;
+        // Instance derivation calls only the existing hash operation. No key roster or
+        // certificate-verification authority is created by this hash-only adapter value.
+        let crypto = ProofCrypto {
+            keys: BTreeMap::new(),
+        };
+        let expected = crate::block::consensus::SumeragiRootScope::Global
+            .instance_id(&crypto, expected_network, expected_chain)
+            .map_err(malformed)?;
+        need(
+            header.instance == expected,
+            "Certified native instance differs from the selected Global network and chain",
+        )
+    }
+
     /// Canonical executed bytes with only the node-local certificate removed.
     ///
     /// # Errors

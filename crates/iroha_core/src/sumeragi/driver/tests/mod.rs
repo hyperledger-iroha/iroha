@@ -32,6 +32,10 @@ std::thread_local! {
 pub(super) fn test_budget() -> iroha_allocation::AllocationBudget {
     TEST_BUDGET.with(Clone::clone)
 }
+/// Prepay every bounded scheduler waiter before this test creates pressure.
+pub(super) fn test_registrations() -> super::exec::ExecutionRegistrations {
+    super::exec::ExecutionRegistrations::admit(&test_budget()).unwrap()
+}
 /// Admit an actual nonempty builder result under the fixture's original pool.
 pub(super) fn payload(bytes: Vec<u8>) -> Option<iroha_sumeragi::availability::PayloadBytes> {
     if bytes.is_empty() {

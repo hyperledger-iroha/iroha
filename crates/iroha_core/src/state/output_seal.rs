@@ -76,10 +76,12 @@ impl SealedExecutionOutputs {
     /// The deterministic carrier tail may already have changed the World delta;
     /// this check authenticates only the immutable wire captured by execution.
     pub(in crate::state) fn verify_wire_binding(&self, block: &SignedBlock) -> Result<(), String> {
-        let wire = block.encode_wire().map_err(|error| error.to_string())?;
+        let (wire_bytes, wire_hash) = block
+            .executed_block_wire_identity()
+            .map_err(|error| error.to_string())?;
         if self.proposal != block.hash()
-            || u64::try_from(wire.len()).ok() != Some(self.wire_bytes)
-            || Hash::new(&wire) != self.wire_hash
+            || wire_bytes != self.wire_bytes
+            || wire_hash != self.wire_hash
         {
             return Err("execution output attachment changed after its seal".into());
         }
@@ -149,7 +151,7 @@ impl StateBlock<'_> {
         witness: &iroha_data_model::block::consensus::ExecWitness,
         certificate: &iroha_data_model::block::CommitCertificate,
         native_execution: crate::sumeragi::executor::NativeExecutionAuthorization,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionAttemptError<String>> {
         self.verify_sumeragi_execution_witness(block.as_ref(), witness)?;
         self.validate_native_execution_authorization(&native_execution, block, certificate)?;
         let height = usize::try_from(block.as_ref().header().height().get())
@@ -159,7 +161,8 @@ impl StateBlock<'_> {
         let durable = self
             .state_ref
             .kura
-            .get_block(height)
+            .get_block(height, &self.state_ref.ivm_execution_budget())
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
             .ok_or("the committed block has not been durably stored")?;
         if durable.hash() != block.as_ref().hash()
             || durable.commit_certificate() != Some(certificate)
@@ -224,15 +227,15 @@ impl StateBlock<'_> {
             finished: false,
         };
         let state = &mut *owner.state;
-        let wire = block
+        let (wire_bytes, wire_hash) = block
             .as_ref()
-            .encode_wire()
+            .executed_block_wire_identity()
             .map_err(|error| invalid(error.to_string()))?;
         if authorized.finality_hash != finality_hash
             || authorized.sealed.proposal != block.as_ref().hash()
             || state._curr_block != block.as_ref().header()
-            || u64::try_from(wire.len()).ok() != Some(authorized.sealed.wire_bytes)
-            || Hash::new(&wire) != authorized.sealed.wire_hash
+            || wire_bytes != authorized.sealed.wire_bytes
+            || wire_hash != authorized.sealed.wire_hash
             || state.world.net_state_delta().map_err(invalid)? != authorized.sealed.world_delta
         {
             return Err(invalid(
@@ -449,16 +452,17 @@ impl StateBlock<'_> {
                     &limits,
                 )
                 .map_err(|error| error.to_string())?;
-            let wire = block.encode_wire().map_err(|error| error.to_string())?;
+            let (wire_bytes, wire_hash) = block
+                .executed_block_wire_identity()
+                .map_err(|error| error.to_string())?;
             Ok(SealedExecutionOutputs {
                 witness_hash: None,
                 witness_surface: None,
                 sources,
                 world_delta,
                 proposal: block.hash(),
-                wire_hash: Hash::new(&wire),
-                wire_bytes: u64::try_from(wire.len())
-                    .map_err(|_| "sealed wire length exceeds u64")?,
+                wire_hash,
+                wire_bytes,
             })
         })();
         match result {

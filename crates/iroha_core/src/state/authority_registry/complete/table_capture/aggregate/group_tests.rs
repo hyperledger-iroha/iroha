@@ -122,6 +122,7 @@ fn state() -> State {
         AccountAlias::domainless("grouped".parse().unwrap(), DataSpaceId::UNIVERSAL),
         account,
     );
+    state.world.rebuild_account_alias_index().unwrap();
     insert_membership(&state, 1, &[key(1), key(2)]);
     insert_membership(&state, 2, &[key(2), key(3)]);
     state

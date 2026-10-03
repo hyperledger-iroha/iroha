@@ -10,6 +10,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
+import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
@@ -20,6 +21,7 @@ import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.core.model.instructions.InstructionKind
 import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -248,6 +250,133 @@ class MusubiInstructionsV1FixtureTest {
         assertFailsWith<IllegalArgumentException> { advance(revision = BigInteger.ONE) }
         assertFailsWith<IllegalArgumentException> { advance(previous = inventory) }
         assertFailsWith<IllegalArgumentException> { advance(revision = BigInteger.valueOf(-1)) }
+    }
+
+    @Test
+    fun `pin outbox Check binds the complete row and retains immutable bytes`() {
+        val semantic = cases(fixture()).first { it.string("id") == "advance-signed-pin-outbox-inventory" }
+            .objectValue("semantic")
+        val network = NetworkId.parse(semantic.string("network_id"))
+        val authority = semantic.string("pin_authority")
+        val session = ByteArray(32) { 3 }
+        val inventory = ByteArray(32) { 4 }
+        val challenge = ByteArray(32) { 5 }
+        val block = ByteArray(32) { 6 }
+        val context = ByteArray(32) { 7 }
+        val transaction = ByteArray(32) { 8 }
+        val maximum = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        val floor = MusubiPinOutboxCheckFloorV1(maximum, block, context)
+        val row = MusubiPinOutboxHighWaterV1(1, network, authority, session, maximum, inventory, maximum, transaction)
+        fun check(
+            expected: MusubiPinOutboxCheckExpectationV1,
+            selectedNetwork: NetworkId = network,
+            selectedAuthority: String = authority,
+            selectedSession: ByteArray = session,
+            selectedInventory: ByteArray = inventory,
+        ) = MusubiInstructionsV1.CheckMusubiPinOutboxV1(
+            selectedNetwork, selectedAuthority, selectedSession, selectedInventory,
+            challenge, floor, expected,
+        )
+        val absent = check(MusubiPinOutboxCheckExpectationV1.Absent)
+        val expectation = MusubiPinOutboxCheckExpectationV1.Present(row)
+        val present = check(expectation)
+        val expectedWire = present.concreteFrame()
+        assertTrue(!expectedWire.contentEquals(absent.concreteFrame()))
+        assertTrue(expectedWire.size <= 4096)
+        val otherNetwork = NetworkId.fromBytes(network.bytes().also {
+            it[0] = (it[0].toInt() xor 1).toByte()
+        })
+        val otherAuthority = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x7d), "ed25519")
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT)
+        assertTrue(otherAuthority != authority)
+        val substitutions = listOf(
+            "network" to { check(expectation, selectedNetwork = otherNetwork) },
+            "authority" to { check(expectation, selectedAuthority = otherAuthority) },
+            "session" to { check(expectation, selectedSession = ByteArray(32) { 9 }) },
+            "inventory" to { check(expectation, selectedInventory = ByteArray(32) { 9 }) },
+        )
+        for ((field, substitute) in substitutions) {
+            val error = assertFailsWith<IllegalArgumentException>(field) { substitute() }
+            assertEquals(
+                "Musubi pin-outbox expected row differs from the signed outer binding",
+                error.message,
+                field,
+            )
+        }
+        for (bytes in listOf(session, inventory, challenge, block, context, transaction)) bytes.fill(0)
+        floor.blockHash().fill(0)
+        floor.contextId().fill(0)
+        row.sessionId().fill(0)
+        row.inventoryDigest().fill(0)
+        row.transactionHash().fill(0)
+        assertContentEquals(expectedWire, present.concreteFrame())
+    }
+
+    @Test
+    fun `pin outbox Check bounds the complete frame for canonical multisig authorities`() {
+        val network = TestNetworkIds.canonical()
+        val bytes = ByteArray(32) { 3 }
+        val floor = MusubiPinOutboxCheckFloorV1(BigInteger.ONE, bytes, bytes)
+        val members = (0 until 64).map {
+            MultisigMemberPayload(1, 1, TestEd25519Keys.publicKey(it))
+        }
+        fun authority(count: Int): String = AccountAddress.fromMultisigPolicy(
+            MultisigPolicyPayload.of(1, 1, members.take(count)),
+        ).toI105(TairaTestnetProfile.I105_DISCRIMINANT)
+        fun check(authority: String, expected: MusubiPinOutboxCheckExpectationV1) =
+            MusubiInstructionsV1.CheckMusubiPinOutboxV1(
+                network, authority, bytes, bytes, bytes, floor, expected,
+            )
+
+        // This identity fits an Absent Check; its second occurrence in Present exceeds 4 KiB.
+        val fittingAuthority = authority(32)
+        val absent = check(fittingAuthority, MusubiPinOutboxCheckExpectationV1.Absent)
+        assertTrue(absent.concreteFrame().size in 2049..4096)
+        val row = MusubiPinOutboxHighWaterV1(
+            1, network, fittingAuthority, bytes, BigInteger.ONE, bytes, BigInteger.ONE, bytes,
+        )
+        val presentError = assertFailsWith<IllegalArgumentException> {
+            check(fittingAuthority, MusubiPinOutboxCheckExpectationV1.Present(row))
+        }
+        assertEquals("Musubi pin-outbox Check exceeds its frame bound", presentError.message)
+
+        val absentError = assertFailsWith<IllegalArgumentException> {
+            check(authority(64), MusubiPinOutboxCheckExpectationV1.Absent)
+        }
+        assertEquals("Musubi pin-outbox Check exceeds its frame bound", absentError.message)
+    }
+
+    @Test
+    fun `pin outbox Check refuses zero identities and invalid counters`() {
+        val semantic = cases(fixture()).first { it.string("id") == "advance-signed-pin-outbox-inventory" }
+            .objectValue("semantic")
+        val network = NetworkId.parse(semantic.string("network_id"))
+        val authority = semantic.string("pin_authority")
+        val bytes = ByteArray(32) { 3 }
+        val zero = ByteArray(32)
+        val floor = MusubiPinOutboxCheckFloorV1(BigInteger.ONE, bytes, bytes)
+        for (height in listOf(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(64))) {
+            assertFailsWith<IllegalArgumentException> { MusubiPinOutboxCheckFloorV1(height, bytes, bytes) }
+        }
+        for (context in listOf(zero, ByteArray(31), ByteArray(32) { 2 }, ByteArray(32).also { it[31] = 1 })) {
+            assertFailsWith<IllegalArgumentException> { MusubiPinOutboxCheckFloorV1(BigInteger.ONE, bytes, context) }
+        }
+        assertFailsWith<IllegalArgumentException> { MusubiPinOutboxCheckFloorV1(BigInteger.ONE, zero, bytes) }
+        for (field in 0..2) {
+            assertFailsWith<IllegalArgumentException> {
+                MusubiInstructionsV1.CheckMusubiPinOutboxV1(network, authority,
+                    if (field == 0) zero else bytes, if (field == 1) zero else bytes,
+                    if (field == 2) zero else bytes, floor, MusubiPinOutboxCheckExpectationV1.Absent)
+            }
+        }
+        for (field in 0..5) {
+            assertFailsWith<IllegalArgumentException> {
+                MusubiPinOutboxHighWaterV1(if (field == 0) 0 else 1, network, authority,
+                    if (field == 1) zero else bytes, if (field == 2) BigInteger.ZERO else BigInteger.ONE,
+                    if (field == 3) zero else bytes, if (field == 4) BigInteger.ZERO else BigInteger.ONE,
+                    if (field == 5) zero else bytes)
+            }
+        }
     }
 
     @Test
@@ -1108,6 +1237,16 @@ class MusubiInstructionsV1FixtureTest {
                     value.toInstructionBox(),
                 )
             }
+            "check-authority-wide-pin-outbox-absent", "check-complete-pin-outbox-present" -> {
+                val value = parsePinOutboxCheck(semantic)
+                MutationEncoding(
+                    MusubiInstructionsV1.CheckMusubiPinOutboxV1.WIRE_ID,
+                    MusubiInstructionsV1.CheckMusubiPinOutboxV1.SCHEMA_NAME,
+                    value.barePayload(),
+                    value.concreteFrame(),
+                    value.toInstructionBox(),
+                )
+            }
             "register-provider-bundle-attestation" -> {
                 semantic.requireKeys("attestation", "expected_location_revision")
                 val value = MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1(
@@ -1732,6 +1871,42 @@ class MusubiInstructionsV1FixtureTest {
         )
     }
 
+    private fun parsePinOutboxCheck(semantic: MutableMap<String, Any?>): MusubiInstructionsV1.CheckMusubiPinOutboxV1 {
+        semantic.requireKeys("network_id", "pin_authority", "session_id", "inventory_digest", "challenge", "floor", "expected")
+        val floor = semantic.objectValue("floor")
+        floor.requireKeys("height", "block_hash", "context_id")
+        val expectation = semantic.objectValue("expected")
+        val expected = when (expectation.string("kind")) {
+            "Absent" -> {
+                expectation.requireKeys("kind", "value")
+                assertEquals(null, expectation["value"])
+                MusubiPinOutboxCheckExpectationV1.Absent
+            }
+            "Present" -> {
+                expectation.requireKeys("kind", "value")
+                val row = expectation.objectValue("value")
+                row.requireKeys("version", "network_id", "pin_authority", "session_id", "revision", "inventory_digest", "recorded_at_height", "transaction_hash")
+                MusubiPinOutboxCheckExpectationV1.Present(MusubiPinOutboxHighWaterV1(
+                    row.bigInteger("version").intValueExact(),
+                    NetworkId.parse(row.string("network_id")), row.string("pin_authority"),
+                    fixedBytes32(row["session_id"]), row.bigInteger("revision"),
+                    fixedBytes32(row["inventory_digest"]), row.bigInteger("recorded_at_height"),
+                    fixedBytes32(row["transaction_hash"]),
+                ))
+            }
+            else -> error("unknown closed pin-outbox expectation")
+        }
+        return MusubiInstructionsV1.CheckMusubiPinOutboxV1(
+            NetworkId.parse(semantic.string("network_id")), semantic.string("pin_authority"),
+            fixedBytes32(semantic["session_id"]), fixedBytes32(semantic["inventory_digest"]),
+            fixedBytes32(semantic["challenge"]),
+            MusubiPinOutboxCheckFloorV1(
+                floor.bigInteger("height"), fixedBytes32(floor["block_hash"]),
+                HashLiteral.decode(floor["context_id"].arrayValue().single() as String),
+            ), expected,
+        )
+    }
+
     private fun parseDigest(value: Any?): MusubiDigest32V1 {
         val bytes = value.arrayValue().single().arrayValue()
         require(bytes.size == 32)
@@ -1895,6 +2070,8 @@ class MusubiInstructionsV1FixtureTest {
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
             "advance-signed-pin-outbox-inventory",
+            "check-authority-wide-pin-outbox-absent",
+            "check-complete-pin-outbox-present",
             "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",

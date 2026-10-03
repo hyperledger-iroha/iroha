@@ -38,7 +38,7 @@ fn stage(input: BatchInput<'_, '_>) -> Result<HostOutput<u8>, CudaFailure> {
         }
     }) {
         Ok(output) if output.len() == count && output.iter().all(|&byte| byte <= 1) => {
-            super::imp::record_completed_cuda_dispatch();
+            super::imp::record_completed_cuda_dispatch(Kernel::Ed25519, ARTIFACT);
             Ok(output)
         }
         Ok(_) => {

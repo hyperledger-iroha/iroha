@@ -5,7 +5,7 @@ use crate::state::authority_registry::{
     Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, classified_owner, schema,
 };
 
-classified_owner!(Set, check_trigger_fields, AUTHORITY_FIELDS, {
+classified_owner!(Set, check_trigger_fields, AUTHORITY_FIELDS, readers = SetReadReleases, {
     data_triggers: Storage<TriggerId, LoadedAction<DataEventFilter>> => ("triggers.data",
         Role::Canonical(Canonical::Table { key: schema::<TriggerId>(), value: Schema::Semantic {
             identity: "iroha:state:trigger-data-action:v1", encoder: "set::BorrowedWorldAction<DataEventFilter>; hash_world_action", layout: V1_LAYOUT,

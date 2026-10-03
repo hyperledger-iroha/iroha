@@ -253,10 +253,7 @@ impl RoutingSnapshot {
             policy: super::lane_policy(view.world())?,
             lanes: view.world().sumeragi_lanes().clone(),
             dataspaces: view.nexus().dataspace_catalog.clone(),
-            ledger_time_ms: view
-                .latest_block()
-                .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
-                .unwrap_or(0),
+            ledger_time_ms: view.authenticated_query_ledger_time_ms().unwrap_or(0),
         })
     }
 

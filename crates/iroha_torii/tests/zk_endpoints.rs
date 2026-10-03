@@ -68,6 +68,7 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     assert_eq!(hash, hex::encode(signed_genesis.hash().as_ref()));
     assert_eq!(
         view.latest_block()
+            .expect("funded canonical history read")
             .expect("fixture signed block body")
             .hash(),
         signed_genesis.hash()

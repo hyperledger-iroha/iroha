@@ -91,7 +91,11 @@ fn contract_artifact_with_frame_at(
     Arc::from(program)
 }
 
-pub(super) fn contract(body: &[u32], max_cycles: u64, mode: u8) -> PreparedContract {
+pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn contract(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+) -> PreparedContract {
     ivm::prepare_contract(contract_artifact(body, max_cycles, mode))
         .expect("admitted V1 scalar fixture")
 }
@@ -390,14 +394,14 @@ impl Fixture {
             row[HALT_INVERSE] = difference.inv().unwrap_or(F::ZERO);
         }
         if memory {
-            p[STORE_BASE] = event(
+            p[MEMORY_BASE] = event(
                 Space::Register,
                 0,
                 if store { wide::rd(w) } else { wide::rs1(w) } as u32,
                 base,
                 base,
                 false,
-                clocks[STORE_BASE],
+                clocks[MEMORY_BASE],
                 false,
                 false,
             );
@@ -463,7 +467,7 @@ impl Fixture {
             packets: OriginalPackets::candidate(p),
         }
     }
-    fn set_depth(&mut self, before: u64, after: u64) {
+    pub(super) fn set_depth(&mut self, before: u64, after: u64) {
         for (side, value) in [before, after].into_iter().enumerate() {
             bits(
                 &mut self.row[DEPTH_BITS + side * DEPTH_BITS_PER_VALUE
@@ -486,18 +490,7 @@ impl Fixture {
     }
     pub(super) fn padding() -> Self {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
-        let mut packets = [[F::ZERO; packet::WIDTH]; PORTS];
-        packets[RUNNING_WRITE] = event(
-            Space::Owner,
-            0,
-            RUNNING_OWNER,
-            0,
-            0,
-            true,
-            clocks[RUNNING_WRITE],
-            false,
-            false,
-        );
+        let packets = [[F::ZERO; packet::WIDTH]; PORTS];
         Self {
             schedule: Schedule::new(7, clocks).unwrap(),
             row: {
@@ -611,6 +604,8 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
         assert!(role(w).is_none());
     }
     assert!(role(enc::encode_rr(wide::arithmetic::SLL, 2, 3, 1)) == Some(Role::Scalar));
+    assert!(role(enc::encode_jump(wide::control::JAL, 0, 2)) == Some(Role::Jump));
+    assert!(role(enc::encode_offset24(wide::control::JMP, -2)) == Some(Role::Jump));
     assert!(matches!(
         role(enc::encode_rr(wide::arithmetic::DIV_CEIL, 2, 3, 1)),
         Some(Role::Scalar)
@@ -649,7 +644,7 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
 fn gaspacing_cycles_private_base_and_protected_return_have_no_fault_bypass() {
     let program = program();
     for (slot, role_port, field) in [
-        (2, STORE_BASE, packet::BEFORE_TAG),
+        (2, MEMORY_BASE, packet::BEFORE_TAG),
         (3, RETURN_REGISTER, packet::BEFORE_TAG),
         (3, RETURN_PROTECTED_PC, packet::BEFORE),
         (0, CHILD_PARENT, packet::AFTER),
@@ -772,7 +767,7 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
         let aux_rows = (0..=count)
             .map(|index| aux.iter().map(|column| column[index]).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        let schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
+        let schedule = private_history::Schedule::new(bus.trace_log2, 1).unwrap();
         let fixed = (0..count)
             .map(|index| schedule.fixed(index).unwrap())
             .collect::<Vec<_>>();
@@ -926,4 +921,23 @@ fn protected_depth_refuses_coherent_overflow_underflow_and_wrong_root_identity()
             assert!(!invalid.accepts(&program));
         }
     }
+}
+
+/// Original dispatch columns for the artifact-owned callable composition tests.
+pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_witness(
+    program: &Program,
+    slot: Option<usize>,
+    root: bool,
+) -> ([F; WIDTH], [[F; packet::WIDTH]; PORTS]) {
+    let fixture = slot.map_or_else(Fixture::padding, |slot| {
+        Fixture::new(program, slot, root, 0)
+    });
+    (fixture.row, fixture.packets.fields)
+}
+
+/// Admitted original image for callable-composition adversarial fixtures.
+pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_contract(
+    body: &[u32],
+) -> PreparedContract {
+    contract(body, 1_000, ivm::ivm_mode::ZK)
 }

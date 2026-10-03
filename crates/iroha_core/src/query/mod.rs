@@ -11,6 +11,8 @@ mod finalized_archive_fs;
 mod fixture_write_tests;
 pub mod index_status;
 mod journal_io;
+/// Challenged native Musubi inventory readback; daemon effects remain separately owned.
+pub mod musubi_pin_outbox;
 /// Original complete native context projection archive, authenticated by canonical R.
 pub mod native_context_archive;
 /// Historical receipt openings from original writes and native certified execution.

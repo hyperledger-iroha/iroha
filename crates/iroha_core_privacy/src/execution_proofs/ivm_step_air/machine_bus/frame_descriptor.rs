@@ -3,10 +3,11 @@
 //! Root entry uses the original Memory stack-top Owner word. Child entry uses
 //! the original public-tagged r31 and immediate-parent stack Owner words. Exact
 //! callable fields are borrowed from the program relation, not a host digest.
-// TODO: Join authenticated callable lookup and per-word role validation, root
-// table public-memory scans, child argument initialization scans, call gas and
-// actual success/fault dispatch. This bank constrains successful publication;
-// a prover cannot be allowed to select an arbitrary successful-entry activation.
+// The callable_lookup component joins child publication to original artifact
+// metadata and CALL activation. Root entry has no corresponding authority yet.
+// TODO: Join root selection, per-word role validation, root table public-memory
+// scans, child argument initialization scans, call gas and actual success/fault
+// dispatch. Successful opcode selection alone cannot authorize a failed entry.
 
 use super::{F, bit, packet};
 use packet::{
@@ -61,13 +62,6 @@ impl Schedule {
     }
 }
 
-/// Original selected callable fields owned by authenticated artifact lookup.
-pub(super) struct Callable<'a> {
-    pub(super) entry_pc: &'a [F; 4],
-    pub(super) frame_bytes: F,
-    pub(super) argument_words: F,
-    pub(super) result_words: F,
-}
 /// Original lifecycle packet plus exact ordered semantic producer/read packets.
 pub(super) struct Ports<'a> {
     /// Same active-generation write constrained by `frame_lifecycle`.
@@ -118,11 +112,11 @@ fn comparison_operands(row: &[F; WIDTH], index: usize) -> ([F; 64], [F; 64]) {
 /// Constrain every successful descriptor to original call operands and bounds.
 /// This neither selects success nor erases native failed-call register/gas work.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: Schedule,
     row: &[F; WIDTH],
     selected: F,
-    callable: Callable<'_>,
+    callable: &super::callable_lookup::SelectedCallable,
     ports: Ports<'_>,
 ) {
     let start = out.len();
@@ -207,11 +201,11 @@ pub(super) fn append_residues(
         }
     }
     for limb_index in 0..4 {
-        out.push(limb(row, ENTRY, limb_index).sub(callable.entry_pc[limb_index]));
+        out.push(limb(row, ENTRY, limb_index).sub(callable.entry_pc()[limb_index]));
     }
-    out.push(pack(&bits(row, FRAME)[..32]).sub(callable.frame_bytes));
-    out.push(pack(&bits(row, ARGUMENT_COUNT)[..14]).sub(callable.argument_words));
-    out.push(pack(&bits(row, RESULT_COUNT)[..14]).sub(callable.result_words));
+    out.push(pack(&bits(row, FRAME)[..32]).sub(callable.frame_bytes()));
+    out.push(pack(&bits(row, ARGUMENT_COUNT)[..14]).sub(callable.argument_words()));
+    out.push(pack(&bits(row, RESULT_COUNT)[..14]).sub(callable.result_words()));
     // Exact inclusive power-of-two caps. A set top bit requires all lower bits zero.
     for (word, cap_bit) in [(FRAME, 22), (ARGUMENT_COUNT, 13), (RESULT_COUNT, 13)] {
         for &value in &bits(row, word)[cap_bit + 1..] {
@@ -377,7 +371,7 @@ pub(super) fn append_residues(
 }
 
 fn header(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     port: &[F; packet::WIDTH],
     schedule: Schedule,
     slot: usize,
@@ -418,7 +412,7 @@ fn header(
     }
 }
 fn read(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     port: &[F; packet::WIDTH],
     schedule: Schedule,
     slot: usize,
@@ -435,7 +429,7 @@ fn read(
     }
 }
 fn write(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     port: &[F; packet::WIDTH],
     schedule: Schedule,
     slot: usize,

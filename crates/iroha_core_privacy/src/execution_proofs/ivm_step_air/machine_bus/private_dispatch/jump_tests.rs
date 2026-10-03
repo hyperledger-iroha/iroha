@@ -387,7 +387,7 @@ fn direct_jump_encoding_scope_and_prepared_target_ownership_remain_exact() {
 #[test]
 fn native_direct_jump_oog_and_cycle_limit_cannot_be_successful_rows() {
     let root = crate::ivm_test_support::unit_callable(0);
-    let root_gas = (root.result_words.len() * (ivm::call::CALL_WORD_BYTES_V1 + 1)) as u64;
+    let root_gas = (root.result_word_count().unwrap() * (ivm::call::CALL_WORD_BYTES_V1 + 1)) as u64;
     for opcode in [wide::control::JAL, wide::control::JMP] {
         let (program, recorder) = recorded(&[jump(opcode, 0)], 4, root_gas + 1);
         let record = &recorder.records()[0];
@@ -618,7 +618,7 @@ fn every_original_direct_jump_port_joins_all_private_history_stages() {
         let aux_rows = (0..bus.size())
             .map(|i| aux.iter().map(|column| column[i]).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        let schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
+        let schedule = private_history::Schedule::new(bus.trace_log2, 1).unwrap();
         let fixed = (0..bus.size())
             .map(|i| schedule.fixed(i).unwrap())
             .collect::<Vec<_>>();

@@ -32,6 +32,16 @@ impl<'lock, T> DeferredPublicationRwLock<'lock, T> {
         }
     }
 
+    /// Probe the original reader while keeping all actual unlocks with this owner.
+    pub(crate) fn try_read_or_wait(
+        &mut self,
+    ) -> Result<DeferredReadGuard<'_, 'lock, T>, ReleaseWait> {
+        Ok(DeferredReadGuard {
+            guard: Some(self.lock.try_read_or_wait()?),
+            releases: &mut self.releases,
+        })
+    }
+
     /// Acquire the original writer without delivering its release on guard Drop.
     pub(crate) fn write(&mut self) -> DeferredWriteGuard<'_, 'lock, T> {
         DeferredWriteGuard {
@@ -85,7 +95,6 @@ impl<T> std::ops::DerefMut for DeferredWriteGuard<'_, '_, T> {
 mod tests {
     use super::*;
     use std::{
-        future::Future,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -111,6 +120,10 @@ mod tests {
 
     #[test]
     fn enclosing_owner_coalesces_read_write_and_unwind_after_outer_unlock() {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         for unwind in [false, true] {
             let index = Arc::new(PublicationRwLock::new(1_u64));
             let outer = Arc::new(parking_lot::Mutex::new(()));
@@ -131,8 +144,8 @@ mod tests {
                     .try_write_or_wait()
                     .err()
                     .expect("actual reader blocks writer");
-                let mut future = Box::pin(wait.wait_for_release());
-                assert!(future.as_mut().poll(&mut context).is_pending());
+                let future = wait;
+                assert!(registration.poll_wait(&future, &mut context).is_pending());
                 pending = Some(future);
                 assert_eq!(*reader, 1);
                 drop(reader);
@@ -149,11 +162,8 @@ mod tests {
             assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
             assert!(!probe.blocked.load(Ordering::SeqCst));
             assert!(
-                pending
-                    .as_mut()
-                    .unwrap()
-                    .as_mut()
-                    .poll(&mut context)
+                registration
+                    .poll_wait(pending.as_ref().unwrap(), &mut context)
                     .is_ready()
             );
             assert_eq!(*index.read(), 2);

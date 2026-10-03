@@ -41,7 +41,7 @@ use iroha_sumeragi::{
     types::{ChainParams, Hash32},
 };
 use mv::storage::StorageReadOnly as _;
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 fn chain_id() -> ChainId {
     ChainId::from("native-committee-evidence-tests")
@@ -292,7 +292,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         Vec::new(), // Genesis is the signed root, not a native proposal.
     )));
     let mut parent_core = Hash32(*network.as_bytes());
-    let mut history = vec![Arc::new(genesis)];
+    let mut history = vec![crate::block::reserve_block_for_tests().initialize(genesis)];
     let mut boundary_pulse = None;
     let mut selected_fixture = None;
     for height in 2..=14 {
@@ -469,7 +469,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         ));
         parent_core = header.hash(&BlsCrypto::new());
         parent_result = qc.result;
-        history.push(Arc::new(block));
+        history.push(crate::block::reserve_block_for_tests().initialize(block));
         if let Some(pulse) = pulse {
             boundary_pulse = Some(pulse);
         }

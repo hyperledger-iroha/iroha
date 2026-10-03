@@ -840,3 +840,371 @@ def test_beacon_generation_binding_has_genuine_dkg_kill_controls():
     assert not rule.scenarios
     assert gate.has_switch("HC54", core=True)
     assert not gate.has_switch("HC54")
+
+
+def test_fee_reward_claim_has_exact_signed_entitlement_kill_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC55"]
+    assert rule.tests == (
+        'validation_fee_rewards::tests::signed_fee_reward_claim_rejects_every_changed_binding_before_mutation',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC55", core=True)
+    assert not gate.has_switch("HC55")
+
+
+def test_shared_staking_custody_has_additive_fee_reserve_kill_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC56"]
+    assert rule.tests == (
+        'validation_fee_rewards::tests::shared_fee_stake_reward_custody_is_additive',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC56", core=True)
+    assert not gate.has_switch("HC56")
+
+
+def test_completed_replay_requires_exact_certificate_and_source_kill_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC57"]
+    assert rule.tests == (
+        'sumeragi::executor::replay::tests::completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC57", core=True)
+    assert not gate.has_switch("HC57")
+
+
+def test_fee_rewards_require_canonical_network_xor_kill_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC58"]
+    assert rule.tests == (
+        'validation_fee_rewards::tests::canonical_network_xor_is_required_before_fee_reward_state_changes',
+        'state::network_xor::tests::network_xor_rejects_wrong_definition_scope_and_precision',
+        'smartcontracts::isi::staking::tests::staking_registration_rejects_wrong_xor_shape_with_transaction_rollback',
+        'smartcontracts::isi::staking::tests::reward_claim_rejects_wrong_xor_shape_with_transaction_rollback',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC58", core=True)
+    assert not gate.has_switch("HC58")
+    assert 'sumeragi_core_mutation = "HC58"' in (
+        gate.REPO / "crates/iroha_core/src/state/network_xor.rs"
+    ).read_text()
+
+
+def test_inline_beacon_reducer_verifies_each_share_before_retention():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC59"]
+    assert rule.tests == (
+        'beacon::tests::threshold_beacon_inline_reducer_rejects_invalid_share_without_losing_original_slots',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC59", core=True)
+    assert not gate.has_switch("HC59")
+
+
+def test_preparation_capacity_source_survives_queued_publication_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC60"]
+    assert rule.tests == (
+        'sumeragi::executor::preparation::tests::certificate_capacity_refusal_reaches_scheduler_with_original_release_and_execution',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC60", core=True)
+    assert not gate.has_switch("HC60")
+
+
+def test_lane_anchor_history_preserves_original_refusal_and_same_source_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC61"]
+    assert rule.tests == (
+        'sumeragi::lanes::executor::native_decode_tests::anchor_read_refusal_retains_original_lane_body_until_capacity_returns',
+        'sumeragi::lanes::evidence::tests::anchor_history_refusal_retains_exact_source_through_lane_evidence_retry',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC61", core=True)
+    assert not gate.has_switch("HC61")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/lanes/mod.rs"
+    assert 'sumeragi_core_mutation = "HC61"' in source.read_text()
+
+
+def test_prepared_block_keeps_original_shared_execution_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC62"]
+    assert rule.tests == (
+        'sumeragi::executor::publication_tests::prepared_block_moves_original_graph_and_rejects_replaced_shared_control',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC62", core=True)
+    assert not gate.has_switch("HC62")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor.rs"
+    assert 'sumeragi_core_mutation = "HC62"' in source.read_text()
+
+
+def test_state_publication_preserves_original_resource_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC63"]
+    assert rule.tests == (
+        'sumeragi::executor::publication::tests::state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
+        'sumeragi::executor::publication::tests::state_execution_and_membership_refusals_preserve_actual_release_owners',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC63", core=True)
+    assert not gate.has_switch("HC63")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor/publication.rs"
+    assert 'sumeragi_core_mutation = "HC63"' in source.read_text()
+
+
+def test_committed_archive_capture_preserves_original_resource_owners():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC64"]
+    assert rule.tests == (
+        'sumeragi::executor::archive_tests::committed_archive_index_refusal_retains_original_release_and_exact_publication',
+        'sumeragi::executor::archive_tests::committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC64", core=True)
+    assert not gate.has_switch("HC64")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor.rs"
+    assert 'sumeragi_core_mutation = "HC64"' in source.read_text()
+
+
+def test_cold_preparation_preserves_original_execution_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC65"]
+    assert rule.tests == (
+        'sumeragi::executor::preparation::tests::cold_prepare_refusal_retains_original_finishing_owner_and_exact_release',
+        'sumeragi::executor::preparation::tests::cold_prepare_validation_refusals_retain_original_storage_owners',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC65", core=True)
+    assert not gate.has_switch("HC65")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor.rs"
+    assert 'sumeragi_core_mutation = "HC65"' in source.read_text()
+
+
+def test_original_cell_acquisition_preserves_nonblocking_physical_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC71"]
+    assert rule.tests == (
+        'sumeragi::executor::preparation::tests::cold_prepare_validation_refusals_retain_original_storage_owners',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC71", core=True)
+    assert not gate.has_switch("HC71")
+    source = gate.REPO / "crates/iroha_core/src/state/world_acquisition.rs"
+    assert 'sumeragi_core_mutation = "HC71"' in source.read_text()
+
+
+def test_physical_history_contention_ignores_logical_membership_release():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC73"]
+    assert rule.tests == (
+        'state::storage_transactions::history::tests::physical_history_busy_ignores_logical_cleanup_and_retries_actual_release',
+        'sumeragi::executor::publication::tests::state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC73", core=True)
+    assert not gate.has_switch("HC73")
+    source = gate.REPO / "crates/iroha_core/src/state/storage_transactions.rs"
+    assert 'sumeragi_core_mutation = "HC73"' in source.read_text()
+
+
+def test_opaque_host_and_replay_preserve_signed_staking_authority():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC66"]
+    assert rule.tests == (
+        'executor::opaque_monetary_tests::raw_ivm_staking_trigger_requires_signed_monetary_plan',
+        'executor::opaque_monetary_tests::supplied_proved_staking_effects_require_signed_monetary_plan',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC66", core=True)
+    assert not gate.has_switch("HC66")
+    source = gate.REPO / "crates/iroha_core/src/deferred_authority.rs"
+    assert 'sumeragi_core_mutation = "HC66"' in source.read_text()
+
+
+def test_live_multisig_proposals_preserve_original_decoder_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC67"]
+    assert rule.tests == (
+        'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_decode_refusal_retries_original_signed_xor_claim',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC67", core=True)
+    assert not gate.has_switch("HC67")
+    source = gate.REPO / "crates/iroha_core/src/smartcontracts/isi/multisig.rs"
+    assert 'sumeragi_core_mutation = "HC67"' in source.read_text()
+
+
+def test_retained_multisig_proposals_bind_exact_approved_body_and_physical_row():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC68"]
+    assert rule.tests == (
+        'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_body_binding_rolls_back_original_signed_xor_claim',
+        'smartcontracts::isi::multisig::tests::proposal_attempt::proposal_migration_validates_original_physical_key_and_body_before_writes',
+        'queue::router::tests::persisted_multisig_body_binding_and_local_refusal_reach_signed_queue_admission',
+        'state::deserialize::decode_tests::restored_multisig_proposals_require_exact_body_and_preserve_local_read_refusal',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC68", core=True)
+    assert not gate.has_switch("HC68")
+    source = gate.REPO / "crates/iroha_core/src/smartcontracts/isi/multisig.rs"
+    assert 'sumeragi_core_mutation = "HC68"' in source.read_text()
+
+
+def test_multisig_cancellation_and_expiry_keep_original_custom_decode_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC69"]
+    assert rule.tests == (
+        'smartcontracts::isi::multisig::tests::proposal_attempt::cancel_wrapper_decode_refusal_rolls_back_and_retries_original_signed_approval',
+        'smartcontracts::isi::multisig::tests::proposal_attempt::expiry_child_decode_refusal_rolls_back_and_retries_original_signed_approval',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC69", core=True)
+    assert not gate.has_switch("HC69")
+    source = gate.REPO / "crates/iroha_core/src/smartcontracts/isi/multisig.rs"
+    assert 'sumeragi_core_mutation = "HC69"' in source.read_text()
+
+
+def test_multisig_queue_traversal_preserves_native_depth_bound():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC70"]
+    assert rule.tests == (
+        'queue::router::tests::persisted_multisig_chain_is_checked_in_linear_expansions',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC70", core=True)
+    assert not gate.has_switch("HC70")
+    source = gate.REPO / "crates/iroha_core/src/queue/router.rs"
+    assert 'sumeragi_core_mutation = "HC70"' in source.read_text()
+
+
+def test_prepared_certificate_preserves_original_state_reader_release():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC72"]
+    assert rule.tests == (
+        'sumeragi::executor::validation_refusal_tests::prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC72", core=True)
+    assert not gate.has_switch("HC72")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor_attestation.rs"
+    assert 'sumeragi_core_mutation = "HC72"' in source.read_text()
+
+
+def test_da_cold_refunds_retain_original_writer_custody():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC75"]
+    assert rule.tests == (
+        'state::da_hydration::release_tests::original_cold_da_refunds_follow_all_rebuild_and_rewind_writers',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC75", core=True)
+    assert not gate.has_switch("HC75")
+    source = gate.REPO / "crates/iroha_core/src/state/da_hydration.rs"
+    assert 'sumeragi_core_mutation = "HC75"' in source.read_text()
+
+
+def test_committed_head_retries_require_the_original_source_release():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC74"]
+    assert rule.tests == (
+        'sumeragi::driver::exec::source_retry_tests::committed_head_waits_for_original_release_across_prepare_append_and_commit',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC74", core=True)
+    assert not gate.has_switch("HC74")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/exec.rs"
+    assert 'sumeragi_core_mutation = "HC74"' in source.read_text()
+
+
+
+def test_all_execution_producer_retries_require_original_physical_release():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC76"]
+    assert rule.tests == (
+        'sumeragi::driver::exec::producer_retry_tests::every_execution_producer_retains_original_source_until_actual_release',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC76", core=True)
+    assert not gate.has_switch("HC76")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/exec.rs"
+    assert 'sumeragi_core_mutation = "HC76"' in source.read_text()
+
+
+
+def test_cancelled_execution_producers_cannot_resume_when_context_returns():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC78"]
+    assert rule.tests == (
+        'sumeragi::driver::exec::producer_retry_tests::cancellation_stays_final_when_the_identical_context_and_request_return',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC78", core=True)
+    assert not gate.has_switch("HC78")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/exec.rs"
+    assert 'sumeragi_core_mutation = "HC78"' in source.read_text()
+
+
+def test_pending_ingress_admission_requires_its_exact_original_capacity_source():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC77"]
+    assert rule.tests == (
+        'sumeragi::driver::witness_admission_tests::pending_capacity_requires_original_release_despite_foreign_wake_and_huge_clock',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC77", core=True)
+    assert not gate.has_switch("HC77")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/mod.rs"
+    assert 'sumeragi_core_mutation = "HC77"' in source.read_text()
+
+
+
+def test_admitted_ingress_refunds_follow_both_original_mutexes():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC80"]
+    assert rule.tests == (
+        'sumeragi::driver::witness_admission_tests::admitted_ingress_eviction_refunds_only_after_pending_and_ingress_mutexes_release',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC80", core=True)
+    assert not gate.has_switch("HC80")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/mod.rs"
+    assert 'sumeragi_core_mutation = "HC80"' in source.read_text()
+
+
+def test_completed_replay_retains_original_encoding_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC79"]
+    assert rule.tests == (
+        'sumeragi::executor::replay::tests::completed_replay_retains_exact_receipt_through_original_pool_scratch_refusal',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC79", core=True)
+    assert not gate.has_switch("HC79")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    assert 'sumeragi_core_mutation = "HC79"' in source.read_text()
+
+
+def test_native_beacon_startup_retains_original_readiness_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC81"]
+    assert rule.tests == (
+        "sumeragi::executor::publication_tests::beacon_startup_retains_original_capacity_through_worker_channel_and_node",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC81", core=True)
+    assert not gate.has_switch("HC81")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor_control.rs"
+    assert 'sumeragi_core_mutation = "HC81"' in source.read_text()
+
+
+def test_scheduler_retirement_cancels_original_waiters_before_refunds():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC83"]
+    assert rule.tests == (
+        "sumeragi::driver::exec::producer_retry_tests::cancelling_and_dropping_scheduler_unlinks_all_waiters_before_original_refunds",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC83", core=True)
+    assert not gate.has_switch("HC83")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/exec.rs"
+    assert 'sumeragi_core_mutation = "HC83"' in source.read_text()
+
+
+def test_world_root_verification_retains_original_storage_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC82"]
+    assert rule.tests == (
+        'sumeragi::test_chain::tests::world_state_tests::world_root_verification_preserves_original_writer_refusal_and_exact_retry',
+        'sumeragi::test_chain::tests::world_state_tests::world_root_verification_preserves_original_capacity_refusal_and_exact_retry',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC82", core=True)
+    assert not gate.has_switch("HC82")
+    source = gate.REPO / "crates/iroha_core/src/state/world_state_accumulator.rs"
+    assert 'sumeragi_core_mutation = "HC82"' in source.read_text()
+
+
+def test_startup_history_retains_original_cold_kura_read_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC84"]
+    assert rule.tests == (
+        "kura::tests::startup_history_retains_original_cold_kura_refusal_and_exact_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC84", core=True)
+    assert not gate.has_switch("HC84")
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/driver/mod.rs"
+    assert 'sumeragi_core_mutation = "HC84"' in source.read_text()

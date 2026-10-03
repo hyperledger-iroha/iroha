@@ -4,7 +4,7 @@ use super::*;
 use crate::config_tests::minimal_config_table;
 use iroha_config::base::{WithOrigin, toml::TomlSource};
 use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-use iroha_data_model::block::SignedBlock;
+use iroha_data_model::block::SharedSignedBlock;
 use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
 fn minimal_config() -> Config {
@@ -25,7 +25,7 @@ fn storage_config(root: &Path) -> Config {
 }
 
 /// Persist original signed genesis and native certified successors into a Strict Kura.
-fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
+fn populate_store(config: &Config, blocks: usize) -> Vec<SharedSignedBlock> {
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config.kura,
         &config.nexus.lane_config,
@@ -35,12 +35,12 @@ fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
     let mut chain =
         CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
             .expect("execute original signed genesis");
-    let mut persisted: Vec<Arc<SignedBlock>> = Vec::new();
+    let mut persisted: Vec<SharedSignedBlock> = Vec::new();
     for height in 1..=blocks {
         if height > 1 {
             chain.commit(Vec::new());
         }
-        let block = Arc::clone(chain.committed(height as u64).block());
+        let block = chain.committed(height as u64).block().clone();
         kura.persist_block_immediate_for_bench(&block)
             .expect("persist fixture block");
         persisted.push(block);

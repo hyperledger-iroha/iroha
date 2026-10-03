@@ -22,11 +22,14 @@ use std::{
 };
 
 mod admission;
+pub(crate) mod bn254;
 use admission::KernelAdmission;
 
 struct DevicePolicy {
+    slot: usize,
     identity: DeviceIdentity,
     kernels: [KernelAdmission; Kernel::ALL.len()],
+    bn254_costs: [crate::cuda_bn254_cost::ProfileCell; 3],
 }
 struct Policies {
     records: Mutex<ChargedBuffer<ChargedShared<DevicePolicy>>>,
@@ -88,7 +91,7 @@ pub(crate) fn configure(enabled: bool, cap: Option<usize>) {
     ENABLED.store(enabled, Ordering::Release);
 }
 
-fn policy_for(device: &CudaDevice<'static>) -> Option<ChargedShared<DevicePolicy>> {
+fn policy_for(device: &CudaDevice<'static>, slot: usize) -> Option<ChargedShared<DevicePolicy>> {
     initialize_policy().ok()?;
     let mut policies = POLICIES.get()?.records.try_lock()?;
     if let Some(policy) = policies
@@ -107,8 +110,10 @@ fn policy_for(device: &CudaDevice<'static>) -> Option<ChargedShared<DevicePolicy
         .ok()?;
     let policy = ChargedShared::from_reservation(
         DevicePolicy {
+            slot,
             identity: device.identity(),
             kernels: std::array::from_fn(|_| KernelAdmission::default()),
+            bn254_costs: std::array::from_fn(|_| crate::cuda_bn254_cost::ProfileCell::default()),
         },
         &mut reservation,
     )
@@ -189,7 +194,7 @@ pub(crate) fn admit_kernel(
         let Some(device) = process.device(index) else {
             return false;
         };
-        let Some(policy) = policy_for(&device) else {
+        let Some(policy) = policy_for(&device, index) else {
             return false;
         };
         ACTIVE.with(|slot| {
@@ -217,6 +222,65 @@ pub(crate) fn admit_kernel(
         admitted
     })
     .is_some()
+}
+
+/// Read retained policy owners, including quarantined devices, without discovery.
+pub(crate) fn completion_snapshot(
+    slot: usize,
+) -> Result<Option<crate::cuda::CudaCompletionSnapshot>, crate::cuda::CudaCompletionError> {
+    let Some(policies) = POLICIES.get() else {
+        return Ok(None);
+    };
+    let records = policies
+        .records
+        .try_lock()
+        .ok_or(crate::cuda::CudaCompletionError::Busy)?;
+    Ok(records
+        .as_slice()
+        .iter()
+        .find(|policy| policy.slot == slot)
+        .map(|policy| {
+            crate::cuda::CudaCompletionSnapshot::new(
+                policy.identity,
+                std::array::from_fn(|index| policy.kernels[index].completed()),
+            )
+        }))
+}
+
+/// Credit only the exact healthy owner selected for this admitted production batch.
+pub(crate) fn record_completed(kernel: Kernel, artifact: PtxArtifact) {
+    ACTIVE.with(|slot| {
+        let active = slot.borrow();
+        let Some(active) = active.as_ref() else {
+            return;
+        };
+        if active.kernel == kernel && active.artifact == artifact && active.device.usable() {
+            active.policy.kernels[kernel as usize].record_completed(artifact, !active.qualifying);
+        }
+    });
+}
+
+/// Attribute a validated compound batch to both exact kernels on the pinned owner.
+pub(crate) fn record_completed_compound(
+    kernel: Kernel,
+    artifact: PtxArtifact,
+    other: Kernel,
+    other_artifact: PtxArtifact,
+) {
+    ACTIVE.with(|slot| {
+        let active = slot.borrow();
+        let Some(active) = active.as_ref() else {
+            return;
+        };
+        if active.kernel == kernel && active.artifact == artifact && active.device.usable() {
+            active.policy.kernels[kernel as usize].record_completed_with(
+                artifact,
+                &active.policy.kernels[other as usize],
+                other_artifact,
+                !active.qualifying,
+            );
+        }
+    });
 }
 
 /// Borrow the already selected physical device and matching immutable artifact.

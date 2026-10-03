@@ -439,6 +439,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn daemon_outbox_open_rejects_locally_valid_inventory_without_finalized_anchor() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
         let (context, temp) = factory_context();
         let root = temp.path().join("signed-pin-outbox");
         fs::create_dir(&root).expect("create owner-only outbox");
@@ -464,14 +466,89 @@ mod tests {
             limits,
         )
         .expect("locally valid immutable outbox marker");
-        assert!(matches!(
+        // An empty local State cannot authenticate absence of the publisher's high-water.
+        // Keep its typed local deferral distinct from a finalized view with no such row.
+        assert_eq!(
             context.audit_local_pin_intent_outbox(&root, policy.clone(), limits),
+            Err(MusubiPinIntentOutboxErrorV1::LocallyAhead)
+        );
+        let opened = context.open_pin_intent_outbox(&root, policy.clone(), limits);
+        assert!(
+            matches!(
+                opened,
+                Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
+            ),
+            "stock open stays closed before local finality: {opened:?}",
+        );
+
+        let mut config = TestChainConfig::new(World::new(), 100);
+        config.genesis_key = authority.clone();
+        let mut chain = CertifiedTestChain::start(config).expect("original native signed genesis");
+        let tick = chain.sign(
+            &authority,
+            [iroha_data_model::isi::Log::new(
+                iroha_logger::Level::INFO,
+                "authenticate absent pin-outbox high-water".to_owned(),
+            )
+            .into()],
+            chain.committed(chain.height()).block_time_ms() + 1,
+        );
+        assert_eq!(
+            chain.commit(vec![tick]),
+            [true],
+            "actual successor execution"
+        );
+        let finalized_context = MusubiPublicationPrivateServiceContextV1::new(
+            chain.network_id(),
+            Arc::clone(chain.state()),
+            context.queue,
+            context.sorafs_node,
+        );
+        assert!(Arc::ptr_eq(&finalized_context.state(), chain.state()));
+        let reader = finalized_context.finalized_pin_outbox_high_water_reader();
+        let anchor = reader
+            .read_current_anchor(&policy.transaction_authority)
+            .expect("authenticate the original finalized State/Kura tip");
+        assert_eq!(anchor.network_id, chain.network_id());
+        assert_eq!(anchor.tip_height, chain.height());
+        assert_eq!(
+            anchor.tip_block_hash,
+            *chain.committed(chain.height()).block_hash().as_ref(),
+        );
+        assert_eq!(anchor.high_water, None);
+        assert_eq!(reader.read_current(&policy.transaction_authority), Ok(None));
+
+        let finalized_root = temp.path().join("signed-pin-outbox-finalized-tip");
+        fs::create_dir(&finalized_root).expect("create original finalized-network outbox");
+        fs::set_permissions(&finalized_root, fs::Permissions::from_mode(0o700))
+            .expect("owner-only finalized-network outbox");
+        let finalized_root = finalized_root
+            .canonicalize()
+            .expect("canonical finalized outbox");
+        DurableMusubiPinIntentOutboxV1::initialize(
+            &finalized_root,
+            finalized_context.network_id(),
+            [0xa1; 32],
+            policy.clone(),
+            limits,
+        )
+        .expect("local marker bound to the actual finalized network");
+        assert_eq!(
+            finalized_context.audit_local_pin_intent_outbox(
+                &finalized_root,
+                policy.clone(),
+                limits,
+            ),
             Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-        ));
-        assert!(matches!(
-            context.open_pin_intent_outbox(&root, policy, limits),
-            Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-        ));
+        );
+        let opened = finalized_context.open_pin_intent_outbox(&finalized_root, policy, limits);
+        assert!(
+            matches!(
+                opened,
+                Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
+            ),
+            "authenticated absence cannot activate stock custody: {opened:?}",
+        );
     }
     #[cfg(unix)]
     #[test]

@@ -412,81 +412,10 @@ impl<'a> norito::json::FastFromJson<'a> for EntrypointValueTypeV1 {
 // These nominal names are compiler-reserved. Matching their complete subtree
 // here keeps artifact admission from trusting a forged name with different
 // fields or pointer kinds.
-fn core_query_view_nodes_name(nodes: &[EntrypointValueTypeNodeV1]) -> Option<(&str, usize)> {
-    use EntrypointValueKindV1 as Kind;
-    use EntrypointValueTypeNodeV1 as Node;
-    match nodes {
-        [
-            Node::Struct(view),
-            Node::Leaf(Kind::AccountId),
-            Node::Leaf(Kind::Json),
-            ..,
-        ] if view.name == "AccountView" && view.fields.as_slice() == ["id", "metadata"] => {
-            Some((view.name.as_str(), 3))
-        }
-        [
-            Node::Struct(view),
-            Node::Leaf(Kind::AssetId),
-            Node::Leaf(Kind::Quantity),
-            ..,
-        ] if view.name == "AssetView" && view.fields.as_slice() == ["id", "amount"] => {
-            Some((view.name.as_str(), 3))
-        }
-        [
-            Node::Struct(view),
-            Node::Leaf(Kind::AssetDefinitionId),
-            Node::Leaf(Kind::String),
-            Node::Option,
-            Node::Leaf(Kind::String),
-            Node::Leaf(Kind::AccountId),
-            Node::Leaf(Kind::Quantity),
-            Node::Option,
-            Node::Leaf(Kind::Int),
-            Node::Leaf(Kind::Json),
-            ..,
-        ] if view.name == "AssetDefinitionView"
-            && view.fields.as_slice()
-                == [
-                    "id",
-                    "name",
-                    "description",
-                    "owned_by",
-                    "total_quantity",
-                    "numeric_scale",
-                    "metadata",
-                ] =>
-        {
-            Some((view.name.as_str(), 10))
-        }
-        [
-            Node::Struct(view),
-            Node::Leaf(Kind::DomainId),
-            Node::Leaf(Kind::AccountId),
-            Node::Leaf(Kind::Json),
-            ..,
-        ] if view.name == "DomainView"
-            && view.fields.as_slice() == ["id", "owned_by", "metadata"] =>
-        {
-            Some((view.name.as_str(), 4))
-        }
-        [
-            Node::Struct(view),
-            Node::Leaf(Kind::NftId),
-            Node::Leaf(Kind::AccountId),
-            Node::Leaf(Kind::Json),
-            ..,
-        ] if view.name == "NftView" && view.fields.as_slice() == ["id", "owned_by", "content"] => {
-            Some((view.name.as_str(), 4))
-        }
-        _ => None,
-    }
-}
-fn is_core_query_view_name(name: &str) -> bool {
-    matches!(
-        name,
-        "AccountView" | "AssetView" | "AssetDefinitionView" | "DomainView" | "NftView"
-    )
-}
+/// Shared allocation-free flat-tree and reserved nominal shape validation.
+pub mod type_structure;
+use type_structure::{is_core_query_view_name, validate_reserved_nominal_shapes_v1};
+
 fn entrypoint_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
     match node {
         EntrypointValueTypeNodeV1::Struct(node) => node.fields.len(),
@@ -509,123 +438,11 @@ pub fn entrypoint_value_subtree_range_v1(
     nodes: &[EntrypointValueTypeNodeV1],
     start: usize,
 ) -> Option<std::ops::Range<usize>> {
-    let mut index = start;
-    let mut pending = 1_usize;
-    while pending != 0 {
-        let node = nodes.get(index)?;
-        index = index.checked_add(1)?;
-        pending = pending
-            .checked_sub(1)?
-            .checked_add(entrypoint_node_child_count(node))?;
-    }
-    Some(start..index)
+    type_structure::subtree_range_v1(nodes, start)
 }
+
 fn entrypoint_subtree_end(nodes: &[EntrypointValueTypeNodeV1], start: usize) -> Option<usize> {
     entrypoint_value_subtree_range_v1(nodes, start).map(|range| range.end)
-}
-fn core_query_view_range(
-    nodes: &[EntrypointValueTypeNodeV1],
-    start: usize,
-) -> Option<(&str, std::ops::Range<usize>)> {
-    let (name, consumed) = core_query_view_nodes_name(nodes.get(start..)?)?;
-    let expected_end = start.checked_add(consumed)?;
-    let range = entrypoint_value_subtree_range_v1(nodes, start)?;
-    (range.end == expected_end).then_some((name, range))
-}
-fn valid_state_page_shape(nodes: &[EntrypointValueTypeNodeV1], start: usize) -> bool {
-    use EntrypointValueTypeNodeV1 as Node;
-    let Some(Node::Struct(page)) = nodes.get(start) else {
-        return false;
-    };
-    if page.fields.as_slice() != ["items", "next"] {
-        return false;
-    }
-    let Some(Node::List(list)) = nodes.get(start + 1) else {
-        return false;
-    };
-    if !(1..=64).contains(&list.capacity) || nodes.get(start + 2) != Some(&Node::Tuple(2)) {
-        return false;
-    }
-    let Some(Node::Leaf(key)) = nodes.get(start + 3) else {
-        return false;
-    };
-    if *key == EntrypointValueKindV1::Json {
-        return false;
-    }
-    let Some(value_end) = entrypoint_subtree_end(nodes, start + 4) else {
-        return false;
-    };
-    nodes.get(value_end) == Some(&Node::Option)
-        && nodes.get(value_end + 1) == Some(&Node::StateCursor(*key))
-        && entrypoint_subtree_end(nodes, start) == Some(value_end + 2)
-}
-fn validate_reserved_nominal_shapes(schema: &EntrypointValueTypeV1) -> bool {
-    use EntrypointValueKindV1 as Kind;
-    use EntrypointValueTypeNodeV1 as Node;
-    for (start, node) in schema.nodes.iter().enumerate() {
-        let Node::Struct(node) = node else {
-            continue;
-        };
-        if is_core_query_view_name(&node.name) {
-            if core_query_view_range(&schema.nodes, start).is_none() {
-                return false;
-            }
-            continue;
-        }
-        if node.name == "StatePage" {
-            if !valid_state_page_shape(&schema.nodes, start) {
-                return false;
-            }
-            continue;
-        }
-        if node.name != "QueryPage" {
-            continue;
-        }
-        if node.fields.as_slice() != ["items", "next_offset"] {
-            return false;
-        }
-        let Some(root_range) = entrypoint_value_subtree_range_v1(&schema.nodes, start) else {
-            return false;
-        };
-        let Some(list_start) = start.checked_add(1) else {
-            return false;
-        };
-        let Some(Node::List(items)) = schema.nodes.get(list_start) else {
-            return false;
-        };
-        if items.capacity != MAX_ENTRYPOINT_LIST_CAPACITY_V1 {
-            return false;
-        }
-        let Some(element_start) = list_start.checked_add(1) else {
-            return false;
-        };
-        let Some((_, element_range)) = core_query_view_range(&schema.nodes, element_start) else {
-            return false;
-        };
-        let Some(list_range) = entrypoint_value_subtree_range_v1(&schema.nodes, list_start) else {
-            return false;
-        };
-        let next_offset_start = element_range.end;
-        let Some(next_offset_leaf) = next_offset_start.checked_add(1) else {
-            return false;
-        };
-        let Some(next_offset_end) = next_offset_leaf.checked_add(1) else {
-            return false;
-        };
-        if list_range.end != element_range.end
-            || !matches!(schema.nodes.get(next_offset_start), Some(Node::Option))
-            || !matches!(
-                schema.nodes.get(next_offset_leaf),
-                Some(Node::Leaf(Kind::Int))
-            )
-            || entrypoint_value_subtree_range_v1(&schema.nodes, next_offset_start)
-                != Some(next_offset_start..next_offset_end)
-            || root_range.end != next_offset_end
-        {
-            return false;
-        }
-    }
-    true
 }
 struct RenderedEntrypointType {
     text: String,
@@ -742,7 +559,7 @@ impl EntrypointValueTypeV1 {
         while stack.last().is_some_and(|frame| frame.remaining == 0) {
             stack.pop();
         }
-        if !stack.is_empty() || !validate_reserved_nominal_shapes(self) {
+        if !stack.is_empty() || !validate_reserved_nominal_shapes_v1(&self.nodes) {
             return None;
         }
         Some(EntrypointTypeAnalysisV1 { max_words })
@@ -1356,9 +1173,15 @@ pub fn is_canonical_kotodama_struct_name(value: &str) -> bool {
     if value.contains("__kotodama_link_") {
         return false;
     }
-    let parts = value.split("::").collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["local", digest, unit, name] => {
+    let mut parts = value.split("::");
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("local"), Some(digest), Some(unit), Some(name), None) => {
             digest.len() == 64
                 && digest
                     .bytes()
@@ -1366,7 +1189,7 @@ pub fn is_canonical_kotodama_struct_name(value: &str) -> bool {
                 && declaration(unit)
                 && declaration(name)
         }
-        [package, unit, name] => {
+        (Some(package), Some(unit), Some(name), None, None) => {
             is_canonical_kotodama_package_identity(package)
                 && declaration(unit)
                 && declaration(name)

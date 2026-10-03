@@ -302,7 +302,11 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
     let large_limit = 50_000;
     {
         let vm_small = loaded
-            .checkout_runtime_for_gas_limit(small_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                small_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout small");
         assert_eq!(
             vm_small.memory.stack_limit(),
@@ -312,7 +316,11 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
     }
     {
         let vm_large = loaded
-            .checkout_runtime_for_gas_limit(large_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                large_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout large");
         assert_eq!(
             vm_large.memory.stack_limit(),
@@ -331,12 +339,10 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     const LARGE_HEAP_LIMIT: u64 = 128;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-    // This fixture measures two small governed variants. The constructor's unused
-    // default geometry is outside that comparison and consumes the same fixed pool.
-    loaded.runtime_pool.lock().unwrap().clear_storage();
+    // Static admission creates no eager default VM; both governed variants are funded below.
     {
         let mut runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT, &executor_test_budget())
             .expect("small heap runtime");
         assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
         assert_eq!(
@@ -346,13 +352,13 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     }
     {
         let runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, LARGE_HEAP_LIMIT)
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, LARGE_HEAP_LIMIT, &executor_test_budget())
             .expect("large heap runtime");
         assert_eq!(runtime.memory.heap_max_limit(), LARGE_HEAP_LIMIT);
     }
     let (after_distinct_limits, _) = loaded.runtime_pool_snapshot();
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT, &executor_test_budget())
         .expect("warm small heap runtime");
     assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
     drop(runtime);
@@ -375,7 +381,11 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     });
     fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
         let mut runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                GAS_LIMIT,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout runtime");
         let allocation = runtime
             .memory
@@ -391,12 +401,13 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     }
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-    // Keep the bounded validation baseline and its VM within the actual
-    // retention budget instead of retaining the maximum-stack default too.
-    loaded.runtime_pool.lock().unwrap().clear_storage();
     drop(
         loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                GAS_LIMIT,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("warm bounded-stack executor runtime"),
     );
     let (before, _) = loaded.runtime_pool_snapshot();
@@ -413,7 +424,7 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
         ivm::cache_memory::memory_stats()
     );
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .expect("warm checkout");
     assert_eq!(runtime.register(7), 0);
     assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
@@ -459,7 +470,11 @@ fn loaded_executor_runtime_variants_are_bounded() {
             "test gas limits must resolve to distinct stack variants"
         );
         let runtime = loaded
-            .checkout_runtime_for_gas_limit(gas_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                gas_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout gas/stack variant");
         assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
     }
@@ -668,7 +683,13 @@ fn validate_native_query_with_world(
 ) -> Result<(), ValidationFail> {
     let world_view = world.view();
     executor
-        .validate_query_with_world_parts(&world_view, None, authority, query)
+        .validate_query_with_world_parts(
+            &world_view,
+            None,
+            authority,
+            query,
+            &executor_test_budget(),
+        )
         .map_err(|error| match error {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
             crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
@@ -944,6 +965,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &orderbook,
+            &executor_test_budget(),
         )
         .expect_err("orderbook state must not be public under the Initial executor");
     assert!(matches!(
@@ -956,6 +978,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reserve_events,
+            &executor_test_budget(),
         )
         .expect_err("reserve committed events must remain governance-readable");
     assert!(matches!(
@@ -968,6 +991,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_policy,
+            &executor_test_budget(),
         )
         .expect_err("reputation authority policy must remain operator-readable");
     assert!(matches!(
@@ -980,6 +1004,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_event,
+            &executor_test_budget(),
         )
         .expect("payload-free finalized reputation events must remain public");
     executor
@@ -988,6 +1013,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &own_eligibility,
+            &executor_test_budget(),
         )
         .expect("a juror must be able to read their own eligibility");
     let eligibility_error = executor
@@ -996,6 +1022,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &foreign_eligibility,
+            &executor_test_budget(),
         )
         .expect_err("another juror's eligibility must remain private");
     assert!(matches!(
@@ -1008,6 +1035,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &moderation_snapshot,
+            &executor_test_budget(),
         )
         .expect_err("complete moderation snapshots must remain private");
     assert!(matches!(
@@ -1020,6 +1048,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &moderation_events,
+            &executor_test_budget(),
         )
         .expect("payload-free committed moderation events must remain public");
     state_transaction.world.account_permissions.insert(
@@ -1039,6 +1068,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &orderbook,
+            &executor_test_budget(),
         )
         .expect("pricing operators must be able to read orderbook state");
     executor
@@ -1047,6 +1077,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reserve_events,
+            &executor_test_budget(),
         )
         .expect("reserve governors must be able to read committed reserve events");
     executor
@@ -1055,6 +1086,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_policy,
+            &executor_test_budget(),
         )
         .expect("reputation policy managers must be able to read the active authority policy");
     executor
@@ -1063,6 +1095,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &foreign_eligibility,
+            &executor_test_budget(),
         )
         .expect("moderation managers must be able to read juror eligibility");
     executor
@@ -1071,11 +1104,18 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block),
             &ALICE_ID,
             &moderation_snapshot,
+            &executor_test_budget(),
         )
         .expect("moderation managers must be able to read complete snapshots");
     let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     executor
-        .validate_query_with_world_parts(&state_transaction.world, None, &ALICE_ID, &public_query)
+        .validate_query_with_world_parts(
+            &state_transaction.world,
+            None,
+            &ALICE_ID,
+            &public_query,
+            &executor_test_budget(),
+        )
         .expect("standard public queries must remain available");
 }
 #[test]
@@ -1500,6 +1540,7 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
                 Some(latest_block.clone()),
                 &ALICE_ID,
                 $query,
+                &executor_test_budget(),
             )
         };
     }
@@ -1905,34 +1946,20 @@ fn executor_cache_test_in_child(name: &str) -> bool {
 }
 
 #[test]
-fn loaded_executor_reclaims_unused_default_for_governed_runtime() {
-    if executor_cache_test_in_child("loaded_executor_reclaims_unused_default_for_governed_runtime")
-    {
+fn loaded_executor_materializes_only_governed_runtime() {
+    if executor_cache_test_in_child("loaded_executor_materializes_only_governed_runtime") {
         return;
     }
     const GAS_LIMIT: u64 = 10_000;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
-    let loaded = super::LoadedExecutor::load(raw).expect("load constructor geometry");
-    let defaults = iroha_data_model::parameter::SmartContractParameters::default();
-    let constructor =
-        super::ExecutorRuntimeKey::for_limits(defaults.fuel().get(), defaults.memory().get());
-    let governed = super::ExecutorRuntimeKey::for_limits(GAS_LIMIT, Memory::HEAP_MAX_SIZE);
-    assert_ne!(constructor, governed);
-    assert!(
-        loaded
-            .runtime_pool
-            .lock()
-            .unwrap()
-            .variants
-            .get(&constructor)
-            .unwrap()
-            .available
-            .is_some(),
-        "the original constructor runtime must remain retained for the regression"
+    let loaded = super::LoadedExecutor::load(raw).expect("validate executor without a runtime");
+    assert_eq!(
+        loaded.runtime_pool_snapshot(),
+        (super::ExecutorRuntimePoolStats::default(), 0)
     );
     let limit_before = ivm::cache_memory::memory_stats().limit_bytes;
     let mut runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .unwrap();
     let allocation = runtime.memory.load_region(0, 1).unwrap().as_ptr();
     runtime.set_register(7, 99);
@@ -1940,13 +1967,13 @@ fn loaded_executor_reclaims_unused_default_for_governed_runtime() {
     drop(runtime);
     let (before_reuse, _) = loaded.runtime_pool_snapshot();
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .unwrap();
     let (after_reuse, _) = loaded.runtime_pool_snapshot();
     assert_eq!(
         after_reuse.hits,
         before_reuse.hits + 1,
-        "an unused local default must not force every governed checkout to load cold"
+        "governed checkout must reuse its original funded runtime"
     );
     assert_eq!(after_reuse.program_loads, before_reuse.program_loads);
     assert_eq!(after_reuse.template_builds, before_reuse.template_builds);
@@ -1977,7 +2004,11 @@ fn executor_idle_retention_reclamation_preserves_lru_identity_and_original_owner
     .unwrap();
     loaded.runtime_pool.lock().unwrap().clear_storage();
     for heap in [64, 128] {
-        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+        drop(
+            loaded
+                .checkout_runtime_for_gas_limit(GAS, heap, &executor_test_budget())
+                .unwrap(),
+        );
     }
     let first = super::ExecutorRuntimeKey::for_limits(GAS, 64);
     let second = super::ExecutorRuntimeKey::for_limits(GAS, 128);
@@ -2077,7 +2108,11 @@ fn executor_idle_retention_reclamation_rejects_replaced_or_filled_returning_slot
     .unwrap();
     loaded.runtime_pool.lock().unwrap().clear_storage();
     for heap in [64, 256] {
-        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+        drop(
+            loaded
+                .checkout_runtime_for_gas_limit(GAS, heap, &executor_test_budget())
+                .unwrap(),
+        );
     }
     let idle_key = super::ExecutorRuntimeKey::for_limits(GAS, 64);
     let competing_idle = super::ExecutorRuntimeKey::for_limits(GAS, 256);

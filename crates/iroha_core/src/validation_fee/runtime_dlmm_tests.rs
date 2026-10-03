@@ -63,6 +63,85 @@ pub(super) fn execute_pool(
     Ok(host.into_execution_artifacts(Some(context)).unwrap())
 }
 
+/// Run one exact signed body and publish its effects only after successful execution.
+/// Failed VM work is discarded with the actual transaction overlay.
+pub(super) fn execute_signed_body(
+    block: &mut crate::state::StateBlock<'_>,
+    signer: &KeyPair,
+    executable: Executable,
+) -> Result<
+    iroha_data_model::transaction::DataTriggerSequence,
+    crate::execution_attempt::ExecutionAttemptError<TransactionRejectionReason>,
+> {
+    use iroha_data_model::transaction::{FeePaymentIntent, TransactionBuilder};
+    let authority = AccountId::new(signer.public_key().clone());
+    let signed = TransactionBuilder::new(
+        block.network_id,
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(100_000_000)),
+    )
+    .with_executable(executable)
+    .sign(signer.private_key());
+    let call = Hash::from(signed.hash_as_entrypoint());
+    let fragments_before = block.committed_fragment_count();
+    let mut stx = block.transaction_for_fastpq_testing(call);
+    stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    let executor = stx.world.executor.clone();
+    executor
+        .execute_transaction(
+            &mut stx,
+            &authority,
+            signed,
+            &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+        )
+        .map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))?;
+    // Consume the actual journal once before applying. An unconsumed callback
+    // journal correctly refuses State publication even if the VM completed.
+    let callbacks = stx.complete_direct_callbacks(call)?;
+    stx.apply();
+    assert_eq!(
+        block.committed_fragment_count(),
+        fragments_before + 1,
+        "the exact successful signed execution must publish its fragment"
+    );
+    Ok(callbacks)
+}
+
+pub(super) fn execute_signed_pool(
+    block: &mut crate::state::StateBlock<'_>,
+    pool: &ContractAddress,
+    code: &[u8],
+    signer: &KeyPair,
+    entrypoint: &str,
+    arguments: Json,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<TransactionRejectionReason>> {
+    let prepared = ivm::prepare_contract(std::sync::Arc::<[u8]>::from(code)).unwrap();
+    let schema = prepared
+        .entrypoint_descriptor(entrypoint)
+        .unwrap()
+        .argument_schema
+        .as_ref()
+        .unwrap();
+    let arguments = ivm::encode_argument_record_from_json(schema, &arguments).unwrap();
+    execute_signed_body(
+        block,
+        signer,
+        Executable::ContractCall(ContractInvocation {
+            contract_address: pool.clone(),
+            expected_code_hash: ivm::contract_code_hash(code),
+            entrypoint: entrypoint.to_owned(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    arguments,
+                )
+                .unwrap(),
+            ),
+        }),
+    )
+    .map(drop)
+}
+
 fn balance(
     stx: &StateTransaction<'_, '_>,
     asset: &AssetDefinitionId,
@@ -112,8 +191,8 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
         (2, -1000, false, "10", "1000", "10", "9.96"),
         (2, 1000, true, "100", "10.02", "10.07", "10.02"),
         (2, 1000, false, "100", "10.02", "10.05", "10.02"),
-        // The launch pair has 18-place XOR and two-place SBD. These cases
-        // exercise recurring output and input rounding at their distinct units.
+        // An unrelated precision-test asset exercises recurring output and
+        // input rounding at 18 places against a two-place quote asset.
         (18, 1000, true, "10", "1000", "10", "9.960039960039960039"),
         (18, 1000, false, "10", "1000", "10", "9.97"),
         (18, -1000, true, "10", "1000", "10", "9.97997"),
@@ -129,7 +208,9 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             "10.02",
         ),
     ] {
-        with_validation_fee_payout_state_at_height(10, |stx, deployer, _, _| {
+        with_validation_fee_payout_block_at_time(10, 0, |block, deployer, _, _| {
+            let mut setup = block.transaction_for_callback_testing();
+            let stx = &mut setup;
             let pool =
                 ContractAddress::derive(&stx.network_id, deployer, 220, DataSpaceId::UNIVERSAL)
                     .unwrap();
@@ -152,12 +233,11 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 .bind_inactive_contract_subject_for_testing(pool.clone(), deployer.clone());
             crate::smartcontracts::code::activate_instance(deployer, pool.clone(), 1, hash, stx)
                 .unwrap();
-            crate::smartcontracts::code::set_pending_contract_lifecycle(stx, &pool, None);
-            let base = xor_asset();
+            let base = asset_definition("dlmm_precision_test_base");
             let quote = fee_asset();
             let definition = iroha_data_model::asset::AssetDefinition::new(
                 base.clone(),
-                "xor",
+                "dlmm_precision_test_base",
                 NumericSpec::fractional(base_scale),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
@@ -181,6 +261,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 }
             }
             for (who, entrypoint) in [
+                (deployer, "hajimari"),
                 (deployer, "seed_bin"),
                 (&trader, "swap_exact_in_quote_public"),
             ] {
@@ -193,6 +274,13 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 &trader,
                 iroha_data_model::permission::Permission::new("AssetOps".into(), Json::new(())),
             );
+            stx.world.add_account_permission(
+                deployer,
+                iroha_data_model::permission::Permission::new(
+                    iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.into(),
+                    Json::new(()),
+                ),
+            );
             let initialize = Json::from(norito::json!({
                 "base_asset": (base.to_string()), "quote_asset": (quote.to_string()),
                 "vault_account": (pool.subject_id().to_string()), "fee_pips": "3000",
@@ -200,24 +288,23 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 "min_reserve_base": "0", "min_reserve_quote": "0", "max_bins_per_swap": "32",
                 "bin_liquidity_cap": "0",
             }));
-            execute_pool(stx, &pool, &code, deployer, "hajimari", initialize)
-                .expect("production initialization")
-                .apply_to_transaction(stx, deployer)
-                .unwrap();
-            execute_pool(
-                stx,
+            setup.apply();
+            execute_signed_pool(block, &pool, &code, &key_pair(55), "hajimari", initialize)
+                .expect("signed production initialization consumes the pending lifecycle");
+            execute_signed_pool(
+                block,
                 &pool,
                 &code,
-                deployer,
+                &key_pair(55),
                 "seed_bin",
                 Json::from(norito::json!({
                     "position_id": "precision-liquidity", "bin_id": (bin.to_string()),
                     "base_amount": liquidity, "quote_amount": liquidity,
                 })),
             )
-            .expect("production liquidity seeding")
-            .apply_to_transaction(stx, deployer)
-            .unwrap();
+            .expect("signed production liquidity seeding");
+            let snapshot = block.transaction();
+            let stx = &snapshot;
             let (input, output, field, output_scale) = if quote_input {
                 (&quote, &base, "BinReserveBase", base_scale)
             } else {
@@ -228,26 +315,29 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             let vault_input_before = balance(stx, input, &pool.subject_id());
             let vault_output_before = balance(stx, output, &pool.subject_id());
             let bin_before = pool_bin_quantity(stx, &pool, field, bin);
+            drop(snapshot);
             if base_scale == 18 && bin == 1000 && quote_input {
                 // Failure cannot leak contract reserve writes or queued input
                 // transfers into the transaction, including a full-fill call
                 // against the same partial liquidity used below.
                 for (bad_input, bad_minimum) in [("10.001", "0"), (input_amount, "1000")] {
-                    assert!(
-                        execute_pool(
-                            stx,
-                            &pool,
-                            &code,
-                            &trader,
-                            "swap_exact_in_quote_public",
-                            Json::from(norito::json!({
-                                "amount_in": bad_input,
-                                "min_out": bad_minimum,
-                            })),
-                        )
-                        .is_err(),
-                        "unrepresentable input, unmet minimum, or partial full-fill must reject"
+                    execute_signed_pool(
+                        block,
+                        &pool,
+                        &code,
+                        &key_pair(2),
+                        "swap_exact_in_quote_public",
+                        Json::from(norito::json!({
+                            "amount_in": bad_input,
+                            "min_out": bad_minimum,
+                        })),
+                    )
+                    .map_err(crate::execution_attempt::expect_completed_rejection)
+                    .expect_err(
+                        "unrepresentable input, unmet minimum, or partial full-fill must reject",
                     );
+                    let snapshot = block.transaction();
+                    let stx = &snapshot;
                     assert_eq!(balance(stx, input, &trader), input_before);
                     assert_eq!(balance(stx, output, &trader), output_before);
                     assert_eq!(balance(stx, input, &pool.subject_id()), vault_input_before);
@@ -267,13 +357,18 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             } else {
                 "swap_exact_in_base"
             };
+            // Inspect a read-only preview, then execute the identical bound call
+            // through the real signed root. Preview effects are never applied.
+            let arguments =
+                Json::from(norito::json!({"amount_in": input_amount, "min_out": expected}));
+            let mut preview = block.transaction();
             let artifacts = execute_pool(
-                stx,
+                &mut preview,
                 &pool,
                 &code,
                 &trader,
                 entrypoint,
-                Json::from(norito::json!({"amount_in": input_amount, "min_out": expected})),
+                arguments.clone(),
             )
             .expect("full real pool execution at a non-integral bin price");
             let instructions = artifacts.queued_instructions_with_authority();
@@ -292,9 +387,12 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                     .unwrap(),
                 crate::validation_fee_rewards::minor_units(&expected, output_scale).unwrap()
             );
-            artifacts
-                .apply_to_transaction(stx, &trader)
-                .expect("native asset scale checks accept actual output");
+            drop(artifacts);
+            drop(preview);
+            execute_signed_pool(block, &pool, &code, &key_pair(2), entrypoint, arguments)
+                .expect("signed execution accepts the exact native asset output");
+            let snapshot = block.transaction();
+            let stx = &snapshot;
             assert_eq!(
                 balance(stx, input, &trader),
                 input_before.checked_sub(&expected_input).unwrap()

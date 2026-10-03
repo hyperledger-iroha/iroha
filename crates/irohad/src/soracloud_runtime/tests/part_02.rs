@@ -966,7 +966,7 @@ fn remote_hydration_sources_exclude_noncompleted_orders_and_prefer_newest() -> R
         |fixture| fixture.issued_epoch != 45,
     )?;
     let view = state.view();
-    let sources = collect_remote_hydration_sources(&view, &state);
+    let sources = collect_remote_hydration_sources(&view, &state)?;
     assert_eq!(sources.len(), 2);
     assert_eq!(
         sources[0].manifest_digest_hex,

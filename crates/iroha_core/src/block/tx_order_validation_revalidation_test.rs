@@ -82,7 +82,14 @@ async fn tx_order_same_in_validation_and_revalidation() {
     // Creating a block of two identical transactions and validating it
     let transactions = vec![tx0, tx, tx2];
     let unverified_block = BlockBuilder::new(transactions)
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(alice_keypair.private_key())
         .unpack(|_| {});
     let (mut state_block, state_block_recorder) =

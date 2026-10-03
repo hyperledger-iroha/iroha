@@ -396,6 +396,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
         fixture.chain.network_id(),
         &hashes,
         fixture.chain.kura(),
+        &fixture.chain.state().ivm_execution_budget(),
     )
     .unwrap();
     drop(source);
@@ -423,11 +424,14 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
         fixture.chain.network_id(),
         &hashes,
         fixture.chain.kura(),
+        &fixture.chain.state().ivm_execution_budget(),
     )
     .unwrap_err();
     assert_eq!(
         error,
-        "restored beacon history adds or omits certified native pulse work"
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            "restored beacon history adds or omits certified native pulse work".to_owned()
+        )
     );
 }
 

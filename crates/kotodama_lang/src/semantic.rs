@@ -1,6 +1,6 @@
 //! Type checking, nominal value resolution, and deterministic effect analysis.
 use super::ast::*;
-use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS, SourceId, SourceRange};
+use crate::source::{MAX_NESTING_DEPTH, SourceId, SourceRange};
 use indexmap::{IndexMap, IndexSet};
 use iroha_data_model::events::data::prelude::{
     AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
@@ -62,7 +62,7 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// The limit shares the fixed V1 token budget: a compact DAG of named value types cannot make the
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
-pub const MAX_EXPANDED_TYPE_NODES: usize = MAX_TOKENS;
+pub const MAX_EXPANDED_TYPE_NODES: usize = ivm_abi::call::MAX_CALL_SCHEMA_NODES_V1;
 #[cfg(test)]
 mod multifile_tests;
 mod trigger_lowering;

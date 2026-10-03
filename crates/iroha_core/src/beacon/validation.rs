@@ -282,8 +282,6 @@ impl DkgSnapshotRef<'_> {
             return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey.into());
         }
         for (position, key) in self.recipient_keys.iter().enumerate() {
-            admit(key.mlkem768_public_key.len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
             admit(DkgSignaturePreimage::RecipientKey(self.session, key).encoded_len())
                 .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
             verify_global_threshold_beacon_dkg_recipient_key_v1(self.session, key)?;
@@ -345,8 +343,6 @@ impl DkgSnapshotRef<'_> {
                 .binary_search_by_key(&edge.recipient_index, |key| key.recipient_index)
                 .map(|index| &self.recipient_keys[index])
                 .map_err(|_| GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
-            admit(edge.mlkem768_ciphertext.len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
             admit(DkgSignaturePreimage::EncryptedShare(self.session, edge).encoded_len())
                 .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
             verify_global_threshold_beacon_dkg_encrypted_share_v1(
@@ -420,9 +416,7 @@ mod tests {
 
     #[test]
     fn beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work() {
-        use iroha_crypto::threshold_bls::{
-            AdaptiveThresholdBlsPublicShare, DasRenCoefficientCommitment,
-        };
+        use iroha_crypto::threshold_bls::DasRenCoefficientCommitment;
         use norito::core::DecodeResourceError;
 
         let fixture = adaptive_beacon_fixture();
@@ -430,7 +424,6 @@ mod tests {
         let dkg = &original.adaptive_dkg;
         let mut expected = Vec::new();
         for key in &dkg.recipient_keys {
-            expected.push(key.mlkem768_public_key.len());
             expected.push(DkgSignaturePreimage::RecipientKey(&dkg.session, key).encoded_len());
         }
         for dealer in &dkg.dealer_commitments {
@@ -438,7 +431,6 @@ mod tests {
                 .push(DkgSignaturePreimage::DealerCommitment(&dkg.session, dealer).encoded_len());
         }
         for edge in &dkg.encrypted_shares {
-            expected.push(edge.mlkem768_ciphertext.len());
             expected.push(DkgSignaturePreimage::EncryptedShare(&dkg.session, edge).encoded_len());
         }
         for acceptance in &dkg.share_acceptances {
@@ -456,11 +448,7 @@ mod tests {
                     * core::mem::size_of::<DasRenCoefficientCommitment<BeaconPurpose>>(),
             );
         }
-        expected.push(
-            usize::from(original.committee_size)
-                * core::mem::size_of::<AdaptiveThresholdBlsPublicShare<BeaconPurpose>>(),
-        );
-        expected.push(dkg.qualified_dealers.len() * core::mem::size_of::<u16>());
+        // Inline finalized indices/shares add no phantom buffer admissions.
         let total: usize = expected.iter().sum();
         let mut observed = Vec::new();
         let verified = validate_global_threshold_beacon_session_with_admission_v1(
@@ -925,3 +913,7 @@ mod tests {
         assert_eq!(*Hash::new(&expected).as_ref(), transcript.event_hash);
     }
 }
+
+#[cfg(test)]
+#[path = "validation/hybrid_borrow_tests.rs"]
+mod hybrid_borrow_tests;

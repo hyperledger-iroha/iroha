@@ -38,7 +38,7 @@ use sorafs_manifest::signer::{
         SignerOperationIntentV1, SignerPurposeBindingV1, SignerRoleV1,
     },
 };
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 const DEPLOYMENT: &str = "promotion-primary";
 fn key(seed: u8) -> KeyPair {
@@ -189,7 +189,13 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
     let header = signed.header().clone();
     state
         .kura()
-        .store_block(Arc::new(signed))
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                signed,
+                &state.ivm_execution_budget(),
+            )
+            .expect("admit original fixture block control"),
+        )
         .expect("fixture committed block");
     state.push_block_hash_for_testing(hash);
     state.update_latest_block_header_cache_for_tests(header);
@@ -229,7 +235,8 @@ fn instruction(
                 &signed,
                 &native.clone().into(),
                 true,
-            );
+            )
+            .expect("original source allocation is available");
     }
     native
 }

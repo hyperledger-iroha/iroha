@@ -2986,7 +2986,7 @@ pub(crate) mod tests {
         let committed_header = signed_block.header().clone();
         state
             .kura()
-            .store_block(Arc::new(signed_block))
+            .store_block(crate::block::reserve_block_for_tests().initialize(signed_block))
             .expect("store reputation Kura fixture block");
         state.push_block_hash_for_testing(block_hash);
         state.update_latest_block_header_cache_for_tests(committed_header);
@@ -3328,7 +3328,10 @@ pub(crate) mod tests {
         )
         .expect("commit later empty Kura block");
         let view = state.view();
-        let latest_block = view.latest_block().expect("latest Kura block");
+        let latest_block = view
+            .latest_block()
+            .expect("completed original State read")
+            .expect("latest Kura block");
         let cursor = finalized_cursor(&view).expect("resolve finalized cursor");
         assert_eq!(
             cursor.finalized_at_unix_ms,

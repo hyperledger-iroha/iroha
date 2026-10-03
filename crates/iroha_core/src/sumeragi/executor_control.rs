@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::sumeragi::epoch_beacon::producer::{
-    NativeBeaconError, NativeBeaconProducer, NativeBeaconReadiness, NativeControlFailure,
+    NativeBeaconError, NativeBeaconProducer, NativeBeaconReadiness, NativeBeaconReadinessError,
+    NativeControlFailure,
 };
 use iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1;
 
@@ -31,6 +32,24 @@ pub(super) fn transaction_rejection(error: &BlockValidationError) -> bool {
     )
 }
 
+/// Keep the actual readiness admission through the serialized worker response.
+fn readiness_failure(error: NativeBeaconReadinessError) -> PublicationError {
+    if cfg!(all(test, sumeragi_core_mutation = "HC81")) {
+        return PublicationError::Retryable(error.to_string());
+    }
+    match error {
+        NativeBeaconReadinessError::Admission(original) => PublicationError::Deferred(
+            crate::execution_attempt::ExecutionDeferred::from(original).into(),
+        ),
+        NativeBeaconReadinessError::Allocator(original) => PublicationError::Deferred(
+            crate::sumeragi::driver::traits::PublicationDeferral::SharedControl(original),
+        ),
+        NativeBeaconReadinessError::AlreadyAttached => {
+            PublicationError::RecoveryRequired(error.to_string())
+        }
+    }
+}
+
 impl Worker<'_> {
     pub(super) fn attach_beacon(
         &mut self,
@@ -50,7 +69,7 @@ impl Worker<'_> {
         let mut producer = NativeBeaconProducer::new(instance, local_bls, signer);
         let reporting = producer
             .attach_readiness(&self.state.ivm_execution_budget())
-            .map_err(PublicationError::Retryable)?;
+            .map_err(readiness_failure)?;
         self.beacon = Some(producer);
         Ok(reporting)
     }
@@ -120,16 +139,13 @@ impl Worker<'_> {
         let state = self.state;
         let generation = state.state_view_generation();
         let view = match state.try_view_once() {
-            Ok(Some(view)) => view,
-            Ok(None) => {
-                return Err(PublicationError::Retryable(
-                    "native control parent publication is busy".into(),
-                ));
-            }
+            Ok(view) => view,
             Err(error) => {
-                let reason = error.to_string();
-                self.recovery = Some(reason.clone());
-                return Err(PublicationError::RecoveryRequired(reason));
+                let error = PublicationError::from(error);
+                if let PublicationError::RecoveryRequired(reason) = &error {
+                    self.recovery = Some(reason.clone());
+                }
+                return Err(error);
             }
         };
         let observed = self
@@ -168,16 +184,13 @@ impl Worker<'_> {
         self.control_available()?;
         let state = self.state;
         let view = match state.try_view_once() {
-            Ok(Some(view)) => view,
-            Ok(None) => {
-                return Err(PublicationError::Retryable(
-                    "native control parent publication is busy".into(),
-                ));
-            }
+            Ok(view) => view,
             Err(error) => {
-                let reason = error.to_string();
-                self.recovery = Some(reason.clone());
-                return Err(PublicationError::RecoveryRequired(reason));
+                let error = PublicationError::from(error);
+                if let PublicationError::RecoveryRequired(reason) = &error {
+                    self.recovery = Some(reason.clone());
+                }
+                return Err(error);
             }
         };
         let accepted = self
@@ -203,6 +216,8 @@ impl Worker<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sumeragi::driver::traits::PublicationDeferral;
+    use iroha_allocation::{AllocationBudget, ChargedShared, PrepaidSharedError};
 
     #[test]
     fn control_and_local_source_failures_never_authorize_transaction_quarantine() {
@@ -220,5 +235,23 @@ mod tests {
         assert!(transaction_rejection(
             &BlockValidationError::TransactionInTheFuture
         ));
+    }
+    #[test]
+    fn readiness_allocator_failure_retains_concrete_non_source_error() {
+        let budget = AllocationBudget::new(0);
+        let mut reservation = budget.try_reserve_bytes(0).unwrap();
+        let (original, error) = ChargedShared::from_reservation(17u8, &mut reservation)
+            .expect_err("an empty reservation cannot construct the physical control");
+        assert_eq!(original, 17);
+        assert!(matches!(error, PrepaidSharedError::Reservation(_)));
+        let failure = readiness_failure(NativeBeaconReadinessError::Allocator(error));
+        let PublicationError::Deferred(ref retained) = failure else {
+            panic!("retain the concrete allocator failure, got {failure:?}");
+        };
+        assert_eq!(retained, &PublicationDeferral::SharedControl(error));
+        assert!(retained.allocation_refusal().is_none());
+        assert!(retained.release_wait().is_none());
+        assert!(retained.execution().is_none());
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }

@@ -9,6 +9,9 @@
 
 use super::{F, bit, packet, wide};
 
+mod payload;
+pub(super) use payload::payload_limb;
+
 /// Sixteen private-mask bits and two canonical zero-test inverses.
 /// The zero/full flags are derived polynomials, not extra witness columns.
 pub(super) const WIDTH: usize = 18;
@@ -181,7 +184,7 @@ pub(super) fn append_residues(
             let expected = if limb >= 4 {
                 F::ZERO
             } else if slot < 2 {
-                read[BEFORE + half * 4 + limb]
+                payload_limb(read[BEFORE + limb], read[BEFORE + 4 + limb], F(half as u64))
             } else {
                 write[BEFORE + limb]
             };

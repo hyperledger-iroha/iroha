@@ -188,7 +188,13 @@ fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is
     block
         .commit_world_overlay_for_testing()
         .expect("install mismatched policy without finalizing a block");
-    assert!(app.state.view().latest_block().is_none());
+    assert!(
+        app.state
+            .view()
+            .latest_block()
+            .expect("funded canonical history read")
+            .is_none()
+    );
     assert!(app.state.world_view().accounts().iter().next().is_none());
     assert!(matches!(
         iroha_core::sns::ensure_namespace_policy_payment_asset_matches_configured(
@@ -1816,6 +1822,7 @@ async fn alias_setup_plan_after_idle_keeps_ledger_quote_and_fresh_request_deadli
         app.state
             .view()
             .latest_block()
+            .expect("funded canonical history read")
             .unwrap()
             .header()
             .creation_time()
@@ -1901,6 +1908,7 @@ async fn alias_auto_renew_plan_after_idle_keeps_anchor_and_fresh_request_deadlin
         app.state
             .view()
             .latest_block()
+            .expect("funded canonical history read")
             .unwrap()
             .header()
             .creation_time()

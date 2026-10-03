@@ -1,4 +1,4 @@
-//! Original successful ZK LOAD packets, ordered value/tag writes and history adversaries.
+//! Original successful ZK LOAD packets, atomic destinations and history adversaries.
 
 use super::super::{tests as dispatch_tests, wide};
 use super::*;
@@ -175,14 +175,14 @@ impl Fixture {
         );
         for i in 0..12 {
             if frame.ports[i][ENABLED] == F::ONE {
-                frame.ports[i][CLOCK] = F(u64::from(schedule.clock(21 + i)));
+                frame.ports[i][CLOCK] = F(u64::from(schedule.clock(20 + i)));
             }
         }
         let frame_schedule = frame_access::Schedule::new(
             7,
             8,
             false,
-            core::array::from_fn(|i| schedule.clock(21 + i)),
+            core::array::from_fn(|i| schedule.clock(20 + i)),
         )
         .unwrap();
         let addr = core::array::from_fn(|i| F((address >> (16 * i)) & 0xffff));
@@ -212,7 +212,7 @@ impl Fixture {
                 i,
                 word_event(
                     POLICY_INDEXES[i],
-                    schedule.clock(18 + i),
+                    schedule.clock(17 + i),
                     value,
                     value,
                     false,
@@ -247,7 +247,7 @@ impl Fixture {
                 Space::Memory,
                 0,
                 (address >> 4) as u32,
-                schedule.clock(33),
+                schedule.clock(32),
                 cell,
                 cell,
                 [mask; 2],
@@ -262,22 +262,8 @@ impl Fixture {
                     Space::Register,
                     0,
                     destination as u32,
-                    schedule.clock(34),
+                    schedule.clock(33),
                     (old_value as u128).to_le_bytes(),
-                    (value as u128).to_le_bytes(),
-                    [old_tag as u16; 2],
-                    true,
-                ),
-            );
-            set_port(
-                &mut rows[3],
-                2,
-                event(
-                    Space::Register,
-                    0,
-                    destination as u32,
-                    schedule.clock(35),
-                    (value as u128).to_le_bytes(),
                     (value as u128).to_le_bytes(),
                     [old_tag as u16, private as u16],
                     true,
@@ -285,8 +271,16 @@ impl Fixture {
             );
         }
         for i in 0..3 {
-            set_port(&mut rows[3], 3 + i, dispatch.packets.fields[18 + i]);
+            set_port(&mut rows[3], 2 + i, dispatch.packets.fields[18 + i]);
         }
+        // Fetch and memory consume one original atomic destination, including
+        // the old value/tag authenticated by the global history.
+        let destination_packet = *port(&rows[3], 1);
+        set_port(
+            &mut rows[0],
+            super::super::SCALAR_DESTINATION,
+            destination_packet,
+        );
         rows[3][..effect::WIDTH].copy_from_slice(&effect::witness(address, true, policies, mask));
         let mut carry = [F::ZERO; CARRY_WIDTH];
         carry[ADDRESS..ADDRESS + 4].copy_from_slice(&addr);
@@ -327,7 +321,7 @@ impl Fixture {
         }
         rows[3][..effect::WIDTH].copy_from_slice(&effect::witness(0, false, [0; 3], 0));
         for i in 0..3 {
-            set_port(&mut rows[3], 3 + i, dispatch.packets.fields[18 + i]);
+            set_port(&mut rows[3], 2 + i, dispatch.packets.fields[18 + i]);
         }
         for phase in 0..PHASES {
             for i in 0..3 {
@@ -385,13 +379,13 @@ fn successful_load_owns_all_regions_halves_tags_aliases_and_original_controls() 
                                 3
                             );
                             assert_eq!(
-                                packet::half(originals.producer(37), AFTER, 0)
-                                    - packet::half(originals.producer(37), BEFORE, 0),
+                                packet::half(originals.producer(35), AFTER, 0)
+                                    - packet::half(originals.producer(35), BEFORE, 0),
                                 1
                             );
                             assert_eq!(
-                                packet::half(originals.producer(36), AFTER, 0)
-                                    - packet::half(originals.producer(36), BEFORE, 0),
+                                packet::half(originals.producer(34), AFTER, 0)
+                                    - packet::half(originals.producer(34), BEFORE, 0),
                                 4
                             );
                         }
@@ -428,17 +422,15 @@ fn every_load_phase_original_tuple_and_carry_rejects_arbitrary_substitution() {
         reordered.rows.swap(phase, (phase + 1) % PHASES);
         assert!(!reordered.accepts(&program));
     }
-    for (phase, used) in [21, 3, 12, 6].into_iter().enumerate() {
+    for (phase, used) in [21, 3, 12, 5].into_iter().enumerate() {
         for slot in 0..used {
             for field in 0..packet::WIDTH {
                 let mut bad = original.clone();
                 let c = PACKETS + slot * packet::WIDTH + field;
                 bad.rows[phase][c] = bad.rows[phase][c].add(F(0x1234567));
-                // The overwritten old destination value is supplied only by original history.
-                let history_only = phase == 3 && slot == 1 && (BEFORE..BEFORE + 4).contains(&field);
                 assert_eq!(
                     bad.accepts(&program),
-                    history_only,
+                    false,
                     "phase={phase} slot={slot} field={field}"
                 );
             }
@@ -516,7 +508,7 @@ fn every_load_effect_and_padding_workspace_column_has_a_canonical_owner() {
             assert!(!bad.accepts(&program), "effect={field}");
         }
     }
-    for (phase, used) in [21, 3, 12, 6].into_iter().enumerate() {
+    for (phase, used) in [21, 3, 12, 5].into_iter().enumerate() {
         for field in PACKETS + used * packet::WIDTH..CARRY {
             let mut bad = original.clone();
             bad.rows[phase][field] = F::ONE;
@@ -546,14 +538,14 @@ fn four_phases_and_all_success_joins_preserve_degree_four_and_explicit_geometry(
         },
     );
     assert_eq!(degree, 4);
-    assert_eq!((WIDTH, CARRY_WIDTH, PORTS, PHASES), (2411, 165, 39, 4));
-    assert_eq!(PORTS * super::super::super::PHASES, 312);
-    assert!(Schedule::new(7, u32::MAX - 38).is_some());
-    assert!(Schedule::new(7, u32::MAX - 37).is_none());
+    assert_eq!((WIDTH, CARRY_WIDTH, PORTS, PHASES), (2411, 165, 37, 4));
+    assert_eq!(PORTS * super::super::super::PHASES, 296);
+    assert!(Schedule::new(7, u32::MAX - 36).is_some());
+    assert!(Schedule::new(7, u32::MAX - 35).is_none());
 }
 
 #[test]
-fn all_thirty_nine_original_packets_and_all_eight_stages_share_one_private_history() {
+fn all_thirty_seven_original_packets_and_all_eight_stages_share_one_private_history() {
     use super::super::super::{
         E, NOTE_COPY_WIDTH_V1, ORDERED, PREVIOUS, PublicPacketBus, ROW_WIDTH, SORTED,
     };
@@ -625,7 +617,8 @@ fn all_thirty_nine_original_packets_and_all_eight_stages_share_one_private_histo
     let aux_rows = (start..=start + count)
         .map(|i| aux.iter().map(|column| column[i]).collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    let history_schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
+    // This fixture owns exactly one complete PublicPacketBus segment.
+    let history_schedule = private_history::Schedule::new(bus.trace_log2, 1).unwrap();
     let fixed = (start..start + count)
         .map(|i| history_schedule.fixed(i).unwrap())
         .collect::<Vec<_>>();
@@ -699,12 +692,12 @@ fn all_thirty_nine_original_packets_and_all_eight_stages_share_one_private_histo
         }
     }
     assert_eq!(
-        original.producer(32)[SPACE],
+        original.producer(31)[SPACE],
         F(Space::Initialization as u64)
     );
-    assert_eq!(original.producer(33)[SPACE], F(Space::Memory as u64));
-    assert_eq!(original.producer(34)[SPACE], F(Space::Register as u64));
-    assert_eq!(original.producer(35)[INDEX], original.producer(34)[INDEX]);
+    assert_eq!(original.producer(32)[SPACE], F(Space::Memory as u64));
+    assert_eq!(original.producer(33)[SPACE], F(Space::Register as u64));
+    assert_eq!(original.producer(33)[INDEX], F(3));
 }
 
 const NATIVE_STACK: u64 = Memory::STACK_START + Memory::MIN_STACK_SIZE - 16;
@@ -762,21 +755,24 @@ fn assert_native_load_events(
         ));
     }
     let originals = fixture.borrowed();
-    expected.extend([4, 34, 35].into_iter().filter_map(|slot| {
-        let p = originals.producer(slot);
-        (p[ENABLED] == F::ONE).then(|| {
-            (
-                p[WRITE] == F::ONE,
-                p[INDEX].0 as usize,
-                packet::half(p, if p[WRITE] == F::ONE { AFTER } else { BEFORE }, 0),
-                p[if p[WRITE] == F::ONE {
-                    AFTER_TAG
-                } else {
-                    BEFORE_TAG
-                }] == F::ONE,
-            )
-        })
-    }));
+    let base = originals.producer(4);
+    expected.push((
+        false,
+        base[INDEX].0 as usize,
+        packet::half(base, BEFORE, 0),
+        base[BEFORE_TAG] == F::ONE,
+    ));
+    let destination = originals.producer(33);
+    if destination[ENABLED] == F::ONE {
+        assert_eq!(destination[WRITE], F::ONE);
+        let index = destination[INDEX].0 as usize;
+        let value = packet::half(destination, AFTER, 0);
+        // The semantic history owns one atomic value/tag transition. Native
+        // diagnostic logging exposes its ordered value write, retaining the
+        // old tag, and then the tag write with the same completed value.
+        expected.push((true, index, value, destination[BEFORE_TAG] == F::ONE));
+        expected.push((true, index, value, destination[AFTER_TAG] == F::ONE));
+    }
     assert_eq!(
         actual, expected,
         "complete root setup, stack initialization, base read and ordered value/tag writes"
@@ -835,7 +831,7 @@ fn native_load_case(
     assert!(fixture.accepts(&program));
     let mut vm = native(&program, gas);
     let originals = fixture.borrowed();
-    let memory = originals.producer(33);
+    let memory = originals.producer(32);
     let data = core::array::from_fn::<_, 16, _>(|i| {
         ((memory[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8
     });
@@ -890,9 +886,9 @@ fn native_load_case(
         (before_gas, 2)
     );
     for (slot, before, after) in [
-        (36, step.before.pc, step.after.pc),
+        (34, step.before.pc, step.after.pc),
         (1, step.before.gas_remaining, step.after.gas_remaining),
-        (37, step.before.cycles, step.after.cycles),
+        (35, step.before.cycles, step.after.cycles),
     ] {
         assert_eq!(packet::half(originals.producer(slot), BEFORE, 0), before);
         assert_eq!(packet::half(originals.producer(slot), AFTER, 0), after);
@@ -901,7 +897,7 @@ fn native_load_case(
     let value = if destination == 0 {
         0
     } else {
-        packet::half(originals.producer(35), AFTER, 0)
+        packet::half(originals.producer(33), AFTER, 0)
     };
     let mut values = step.before.registers;
     let mut tags = step.before.tags;
@@ -966,7 +962,8 @@ fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_i
 }
 
 #[test]
-fn actual_native_private_stack_load_preserves_value_then_tag_and_rejects_failed_success_paths() {
+fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_failed_success_paths()
+ {
     for half in [0, 8] {
         for destination in [0, 2, 3] {
             native_load_case(NATIVE_STACK, half, destination, 0, false, true);
@@ -1089,7 +1086,7 @@ fn other_running_opcodes_cannot_bypass_the_closed_load_step() {
             }
         }
         for i in 0..3 {
-            set_port(&mut fixture.rows[3], 3 + i, dispatch.packets.fields[18 + i]);
+            set_port(&mut fixture.rows[3], 2 + i, dispatch.packets.fields[18 + i]);
         }
         let nonzero = fixture
             .residues(&program)

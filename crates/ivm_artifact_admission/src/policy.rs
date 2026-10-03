@@ -501,7 +501,6 @@ fn validate_callable_tables(
     entrypoint_pcs: &BTreeSet<u64>,
     zk_enabled: bool,
 ) -> Result<(), ContractArtifactError> {
-    use ivm_abi::call::CallWordV1;
     let mut expected_roots = entrypoint_pcs.clone();
     for instruction in decoded
         .iter()
@@ -519,11 +518,7 @@ fn validate_callable_tables(
         if !callable.validate()
             || previous.is_some_and(|pc| callable.entry_pc <= pc)
             || (!zk_enabled
-                && callable
-                    .argument_words
-                    .iter()
-                    .chain(&callable.result_words)
-                    .any(|word| word.is_private()))
+                && (callable.arguments.contains_private() || callable.results.contains_private()))
         {
             return Err(ContractArtifactError::invalid(
                 "CNTR callables must have increasing unique roots, bounded aligned frames/tables, and valid role/privacy declarations",
@@ -546,30 +541,17 @@ fn validate_callable_tables(
             .ok_or_else(|| {
                 ContractArtifactError::invalid("entrypoint has no callable descriptor")
             })?;
-        let argument_words = match &entrypoint.argument_schema {
-            None => Vec::new(),
-            Some(schema) => schema
-                .word_kinds()
-                .ok_or_else(|| {
-                    ContractArtifactError::invalid("entrypoint has an invalid call argument schema")
-                })?
-                .into_iter()
-                .map(CallWordV1::from_entrypoint_word)
-                .collect(),
+        let arguments_match = match &entrypoint.argument_schema {
+            None => callable.arguments.nodes.is_empty(),
+            Some(schema) => callable.arguments.matches_entrypoint_arguments(schema),
         };
-        let result_words = entrypoint
+        let results_match = entrypoint
             .return_schema
             .as_ref()
-            .and_then(ivm_abi::entrypoint::EntrypointValueTypeV1::word_kinds)
-            .ok_or_else(|| {
-                ContractArtifactError::invalid("entrypoint has an invalid call result schema")
-            })?
-            .into_iter()
-            .map(CallWordV1::from_entrypoint_word)
-            .collect::<Vec<_>>();
-        if callable.argument_words != argument_words || callable.result_words != result_words {
+            .is_some_and(|schema| callable.results.matches_entrypoint_type(schema));
+        if !arguments_match || !results_match {
             return Err(ContractArtifactError::invalid(format!(
-                "entrypoint `{}` callable roles do not match its canonical argument/result schemas",
+                "entrypoint `{}` complete callable types do not match its canonical argument/result schemas",
                 entrypoint.name
             )));
         }
@@ -1206,6 +1188,18 @@ fn validate_error_types(
             }
         }
     }
+    for callable in &contract_interface.callables {
+        for node in callable
+            .arguments
+            .nodes
+            .iter()
+            .chain(&callable.results.nodes)
+        {
+            if let ivm_abi::call::CallTypeNodeV1::Error(error) = node {
+                require_declared(error)?;
+            }
+        }
+    }
     let mut pending = contract_interface
         .states
         .iter()
@@ -1455,15 +1449,169 @@ mod tests {
             .iter_mut()
             .find(|callable| callable.entry_pc == public_pc)
             .unwrap()
-            .result_words[0] = ivm_abi::call::CallWordV1::Unit;
+            .results
+            .nodes[0] = ivm_abi::call::CallTypeNodeV1::Unit;
         assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
         interface.callables = original.clone();
-        interface.callables[0].argument_words[0] =
-            ivm_abi::call::CallWordV1::SecretNumeric(ivm_abi::pointer_abi::PointerType::Int as u16);
+        interface.callables[0].arguments.nodes[0] = ivm_abi::call::CallTypeNodeV1::SecretNumeric(
+            ivm_abi::pointer_abi::PointerType::Int as u16,
+        );
         assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
         interface.callables = original;
         interface.callables[0].frame_bytes += 1;
         assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+    }
+    #[test]
+    fn callable_artifacts_reject_the_retired_erased_schema_surface_hash() {
+        let mut bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+            "seiyaku Cursors { view fn main(StateCursor<int> value) -> StateCursor<int> { value } }"
+        ).unwrap();
+        crate::verify_contract_artifact(&bytes).expect("current cursor artifact");
+        // Previous unfinished V1 surface erased every Sum payload and List element type.
+        let erased_schema_surface = [
+            0x5e, 0x36, 0x46, 0xa0, 0xd2, 0xf4, 0x1, 0xc8, 0x37, 0x24, 0x5, 0x98, 0x55, 0xc9, 0x48,
+            0xb4, 0x31, 0x4d, 0xf2, 0x56, 0x43, 0x48, 0xa6, 0xf7, 0xbb, 0x9c, 0xeb, 0x5f, 0xa6,
+            0x26, 0xa1, 0x29,
+        ];
+        let current = ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1);
+        assert_ne!(current, erased_schema_surface);
+        bytes[17..49].copy_from_slice(&erased_schema_surface);
+        assert_eq!(
+            crate::verify_contract_artifact(&bytes)
+                .err()
+                .expect("retired surface must reject"),
+            ContractArtifactError::abi_hash_mismatch(current, erased_schema_surface)
+        );
+    }
+    #[test]
+    fn callable_tables_bind_cursor_keys_at_public_and_private_boundaries() {
+        use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1 as Kind};
+        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+            "seiyaku Cursors { fn echo(StateCursor<int> value) -> StateCursor<int> { value } view fn main(StateCursor<int> value) -> StateCursor<int> { echo(value: value) } }"
+        ).expect("compile cursor calls");
+        let parsed = ProgramMetadata::parse(&bytes).unwrap();
+        let decoded = crate::decode_instruction_stream(&bytes[parsed.code_offset..]).unwrap();
+        let mut interface = parsed.contract_interface.unwrap();
+        let roots = interface
+            .entrypoints
+            .iter()
+            .map(|entry| entry.entry_pc)
+            .collect();
+        validate_callable_tables(&interface, &decoded, &roots, false).unwrap();
+        let public_pc = interface.entrypoints[0].entry_pc;
+        let original = interface.callables.clone();
+        assert!(
+            original.len() >= 2,
+            "both public wrapper and private callee must be described"
+        );
+        for callable in &original {
+            assert_eq!(
+                callable.arguments.nodes,
+                [CallTypeNodeV1::StateCursor(Kind::Int)]
+            );
+            assert_eq!(
+                callable.results.nodes,
+                [CallTypeNodeV1::StateCursor(Kind::Int)]
+            );
+        }
+        for results in [false, true] {
+            interface.callables = original.clone();
+            let callable = interface
+                .callables
+                .iter_mut()
+                .find(|callable| callable.entry_pc == public_pc)
+                .unwrap();
+            let words = if results {
+                &mut callable.results.nodes
+            } else {
+                &mut callable.arguments.nodes
+            };
+            words[0] = CallTypeNodeV1::StateCursor(Kind::Bool);
+            assert!(
+                validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                "public cursor key substitution (results={results})"
+            );
+            for index in 0..original.len() {
+                interface.callables = original.clone();
+                let callable = &mut interface.callables[index];
+                let words = if results {
+                    &mut callable.results.nodes
+                } else {
+                    &mut callable.arguments.nodes
+                };
+                words[0] = CallTypeNodeV1::StateCursor(Kind::Json);
+                assert!(
+                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    "Json cursor key in callable {index} (results={results})"
+                );
+            }
+        }
+    }
+    #[test]
+    fn callable_schemas_bind_nested_payloads_capacity_and_nominal_identity() {
+        use ivm_abi::{call::CallTypeNodeV1 as Node, entrypoint::EntrypointValueKindV1 as Kind};
+        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+            "seiyaku Nested { struct Payload { Option<List<StateCursor<int>, 2>> values; } fn echo(Payload value) -> Payload { value } view fn main(Payload value) -> Payload { echo(value: value) } }"
+        ).expect("compile complete recursive call schemas");
+        let parsed = ProgramMetadata::parse(&bytes).unwrap();
+        let decoded = crate::decode_instruction_stream(&bytes[parsed.code_offset..]).unwrap();
+        let mut interface = parsed.contract_interface.unwrap();
+        let roots = interface
+            .entrypoints
+            .iter()
+            .map(|entry| entry.entry_pc)
+            .collect();
+        let public_pc = interface.entrypoints[0].entry_pc;
+        let original = interface.callables.clone();
+        validate_callable_tables(&interface, &decoded, &roots, false).unwrap();
+        for result in [false, true] {
+            for replacement in [
+                Node::Struct {
+                    name: "OtherPayload".into(),
+                    fields: vec!["values".into()],
+                },
+                Node::Result,
+                Node::List { capacity: 3 },
+                Node::StateCursor(Kind::Bool),
+            ] {
+                interface.callables = original.clone();
+                let callable = interface
+                    .callables
+                    .iter_mut()
+                    .find(|callable| callable.entry_pc == public_pc)
+                    .unwrap();
+                let schema = if result {
+                    &mut callable.results
+                } else {
+                    &mut callable.arguments
+                };
+                let index = match replacement {
+                    Node::Struct { .. } => 0,
+                    Node::Result => 1,
+                    Node::List { .. } => 2,
+                    _ => 3,
+                };
+                schema.nodes[index] = replacement;
+                assert!(
+                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    "nested substitution (result={result}, node={index})"
+                );
+            }
+            for index in 0..original.len() {
+                interface.callables = original.clone();
+                let callable = &mut interface.callables[index];
+                let schema = if result {
+                    &mut callable.results
+                } else {
+                    &mut callable.arguments
+                };
+                schema.nodes.pop();
+                assert!(
+                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    "missing nested payload (callable={index}, result={result})"
+                );
+            }
+        }
     }
     #[test]
     fn state_cursor_is_an_opaque_value_with_a_supported_scalar_key() {

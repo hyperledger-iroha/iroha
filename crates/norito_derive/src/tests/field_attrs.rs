@@ -219,42 +219,68 @@ fn malformed_enum_field_attribute_is_rejected_before_codegen() {
 }
 
 #[test]
-fn required_attribute_recognizes_transparent_macro_and_parenthesized_option_types() {
-    for ty in [
+fn required_option_accepts_transparent_group_and_parenthesis_types() {
+    fn group(ty: syn::Type) -> syn::Type {
+        syn::Type::Group(syn::TypeGroup {
+            group_token: Default::default(),
+            elem: Box::new(ty),
+        })
+    }
+    let types: [syn::Type; 5] = [
         syn::parse_quote!(Option<u32>),
         syn::parse_quote!(::core::option::Option<u32>),
         syn::parse_quote!((Option<u32>)),
-    ] {
-        let grouped = syn::Type::Group(syn::TypeGroup {
-            group_token: Default::default(),
-            elem: Box::new(ty),
-        });
-        let nested = syn::Type::Group(syn::TypeGroup {
-            group_token: Default::default(),
-            elem: Box::new(grouped),
-        });
-        let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
-        field.ty = nested;
-        let attrs = FieldAttr::parse(&field.attrs).unwrap();
-        validate_required_attr(&field, &attrs, true).expect("transparent Option remains required");
+        syn::parse_quote!(std::option::Option<String>),
+        syn::parse_quote!(core::option::Option<Vec<u32>>),
+    ];
+    for ty in types {
+        let paren: syn::Type = syn::parse_quote!((#ty));
+        let nested = group(syn::parse_quote!((#paren)));
+        for wrapped in [ty.clone(), group(ty), paren, group(nested)] {
+            assert!(
+                is_option_type(&wrapped),
+                "transparent Option type: {}",
+                wrapped.to_token_stream()
+            );
+            let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
+            field.ty = wrapped;
+            let attrs = FieldAttr::parse(&field.attrs).unwrap();
+            validate_required_attr(&field, &attrs, true)
+                .expect("required applies to the same Option through transparent syntax");
+        }
     }
-    for ty in [
+}
+
+#[test]
+fn transparent_wrappers_do_not_make_non_option_types_optional() {
+    let types: [syn::Type; 5] = [
         syn::parse_quote!(u32),
         syn::parse_quote!(Vec<Option<u32>>),
-        syn::parse_quote!(&Option<u32>),
         syn::parse_quote!((Option<u32>,)),
-    ] {
-        let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
-        field.ty = syn::Type::Group(syn::TypeGroup {
+        syn::parse_quote!(&Option<u32>),
+        syn::parse_quote!(Box<Option<u32>>),
+    ];
+    for ty in types {
+        let paren: syn::Type = syn::parse_quote!((#ty));
+        let group = syn::Type::Group(syn::TypeGroup {
             group_token: Default::default(),
-            elem: Box::new(ty),
+            elem: Box::new(paren.clone()),
         });
-        let attrs = FieldAttr::parse(&field.attrs).unwrap();
-        assert_eq!(
-            validate_required_attr(&field, &attrs, true)
-                .unwrap_err()
-                .to_string(),
-            "#[norito(required)] can only be used on Option fields"
-        );
+        for wrapped in [ty, paren, group] {
+            assert!(
+                !is_option_type(&wrapped),
+                "non-Option type: {}",
+                wrapped.to_token_stream()
+            );
+            let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
+            field.ty = wrapped;
+            let attrs = FieldAttr::parse(&field.attrs).unwrap();
+            let error = validate_required_attr(&field, &attrs, true)
+                .expect_err("wrappers cannot make a non-Option required attribute valid");
+            assert_eq!(
+                error.to_string(),
+                "#[norito(required)] can only be used on Option fields"
+            );
+        }
     }
 }

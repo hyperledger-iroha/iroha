@@ -1267,7 +1267,11 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
             .commit_world_overlay_for_testing()
             .expect("commit registered pin fixture");
     }
-    let previous = state.view().latest_block().map(|block| block.hash());
+    let previous = state
+        .view()
+        .latest_block()
+        .expect("canonical history read completes")
+        .map(|block| block.hash());
     {
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
@@ -1358,7 +1362,11 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
             .commit_world_overlay_for_testing()
             .expect("commit registered pin fixture");
     }
-    let previous = state.view().latest_block().map(|block| block.hash());
+    let previous = state
+        .view()
+        .latest_block()
+        .expect("canonical history read completes")
+        .map(|block| block.hash());
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         previous,

@@ -29,11 +29,12 @@ impl Wake for PairProbe {
         }
     }
 }
-fn watch(
+fn watch<'a>(
     source: &ReleaseNotification,
     probe: &Arc<PairProbe>,
-) -> iroha_allocation::release::ReleaseFuture {
-    let mut future = source.observe().wait_for_release();
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> iroha_allocation::release::ReleaseFuture<'a> {
+    let mut future = source.observe().wait_for_release(registration_1);
     let waker = Waker::from(Arc::clone(probe));
     assert!(
         Pin::new(&mut future)
@@ -68,6 +69,8 @@ fn admitted_scoped_acquisition_rejects_foreign_scope_before_locks_or_policy() {
 #[test]
 fn admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release() {
     let budget = AllocationBudget::new(1 << 20);
+    let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+    let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
     let target = fixture(&budget);
     let predecessor = target.publication.capture();
     let before = budget.reserved_bytes();
@@ -80,7 +83,12 @@ fn admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release()
                 .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes() - allowed)
                 .unwrap();
             let probe = Probe::new(&target);
-            let (_, _, mut undo_future, mut current_future) = register(&target, &probe);
+            let (_, _, mut undo_future, mut current_future) = register(
+                &target,
+                &probe,
+                &mut helper_release_registration_1,
+                &mut helper_release_registration_2,
+            );
             let _healthy = StartFault::set(0);
             let mut slot = target.try_block_acquisition_admitted(scope).unwrap();
             assert!(matches!(
@@ -128,6 +136,7 @@ fn admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release()
     });
     assert_original(&target, &predecessor);
     drop((predecessor, target));
+    drop((helper_release_registration_1, helper_release_registration_2));
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -135,6 +144,11 @@ fn admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release()
 fn admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes() {
     for mode in [1, 2] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_3 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_4 = crate::release_test_support::registration(&budget);
+
         let first = fixture(&budget);
         let second = fixture(&budget);
         let first_predecessor = first.publication.capture();
@@ -152,10 +166,26 @@ fn admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes() {
             let _healthy = StartFault::set(0);
             first_slot.try_initialize(BlockMode::Ordinary).unwrap();
             let waits = [
-                watch(&first.revert_released, &probe),
-                watch(&first.blocks_released, &probe),
-                watch(&second.revert_released, &probe),
-                watch(&second.blocks_released, &probe),
+                watch(
+                    &first.revert_released,
+                    &probe,
+                    &mut helper_release_registration_1,
+                ),
+                watch(
+                    &first.blocks_released,
+                    &probe,
+                    &mut helper_release_registration_2,
+                ),
+                watch(
+                    &second.revert_released,
+                    &probe,
+                    &mut helper_release_registration_3,
+                ),
+                watch(
+                    &second.blocks_released,
+                    &probe,
+                    &mut helper_release_registration_4,
+                ),
             ];
             let fault = StartFault::set(mode);
             let result = catch_unwind(AssertUnwindSafe(|| {
@@ -198,6 +228,12 @@ fn admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes() {
         assert_original(&first, &first_predecessor);
         assert_original(&second, &second_predecessor);
         drop((first_predecessor, second_predecessor, probe, first, second));
+        drop((
+            helper_release_registration_1,
+            helper_release_registration_2,
+            helper_release_registration_3,
+            helper_release_registration_4,
+        ));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -311,6 +347,7 @@ fn admitted_owned_acquisition_rejects_foreign_pool_without_locking() {
 #[test]
 fn admitted_returned_block_retains_original_scope_until_both_writers_release() {
     let budget = AllocationBudget::new(1 << 20);
+    let mut registration = crate::release_test_support::registration(&budget);
     let target = fixture(&budget);
     let before = budget.reserved_bytes();
     let mut block = {
@@ -329,7 +366,7 @@ fn admitted_returned_block_retains_original_scope_until_both_writers_release() {
         panic!("original finite pool is exhausted");
     };
     let probe = Probe::new(&target);
-    let mut future = release.wait_for_release();
+    let mut future = release.wait_for_release(&mut registration);
     let waker = Waker::from(Arc::clone(&probe));
     assert!(
         Pin::new(&mut future)
@@ -344,6 +381,7 @@ fn admitted_returned_block_retains_original_scope_until_both_writers_release() {
     assert_eq!(budget.reserved_bytes(), before);
     assert_eq!(target.view().get(&7), Some(&71));
     drop((future, waker, probe, target));
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

@@ -209,6 +209,9 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
     let counters = Arc::new(Counters::default());
     let _context = PolicyContext::new(&counters);
     let budget = AllocationBudget::new(8 << 20);
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let mut registration = crate::release_test_support::registration(&budget);
     let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
     let foreign = NativeStorage::try_new_admitted(budget.clone()).unwrap();
     seed(&storage, &budget, 0x31);
@@ -251,7 +254,8 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
                     .try_prepare_admitted(scope, &storage)
                 {
                     Err((original, PublicationPreparationError::Busy(wait), _)) => {
-                        let mut future = std::pin::pin!(wait.clone().wait_for_release());
+                        let mut future =
+                            std::pin::pin!(wait.clone().wait_for_release(&mut registration));
                         assert!(
                             future
                                 .as_mut()
@@ -269,7 +273,7 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
         .unwrap_err();
     {
         let wait = release.unwrap();
-        let mut future = std::pin::pin!(wait.wait_for_release());
+        let mut future = std::pin::pin!(wait.wait_for_release(&mut registration));
         assert!(
             future
                 .as_mut()
@@ -302,10 +306,12 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
         assert_eq!(
             budget.reserved_bytes(),
             iroha_allocation::release::ReleaseNotification::allocation_layout::<AllocationCharge>()
-                .size(),
+                .size()
+                + registration_bytes,
             "the completed wait future still retains the original release source",
         );
     }
+    drop(registration);
     assert_eq!(
         budget.reserved_bytes(),
         0,
@@ -420,6 +426,7 @@ fn captured_prepaid_pair_shares_one_scope_through_publication_abort_and_unwind()
         let counters = Arc::new(Counters::default());
         let _context = PolicyContext::new(&counters);
         let budget = AllocationBudget::new(8 << 20);
+        let mut registration = crate::release_test_support::registration(&budget);
         let first = Arc::new(NativeStorage::try_new_admitted(budget.clone()).unwrap());
         let second = Arc::new(NativeStorage::try_new_admitted(budget.clone()).unwrap());
         seed(&first, &budget, 0x51);
@@ -443,8 +450,12 @@ fn captured_prepaid_pair_shares_one_scope_through_publication_abort_and_unwind()
         else {
             panic!("pool full");
         };
-        let mut future = std::pin::pin!(release.wait_for_release());
-        assert!(future.as_mut().poll(&mut context).is_pending());
+        let mut future = release.wait_for_release(&mut registration);
+        assert!(
+            std::pin::Pin::new(&mut future)
+                .poll(&mut context)
+                .is_pending()
+        );
         let result = catch_unwind(AssertUnwindSafe(|| {
             budget.with_deferred_refund_notifications(|scope| {
                 let a = prepare(a, scope, &first);
@@ -476,7 +487,11 @@ fn captured_prepaid_pair_shares_one_scope_through_publication_abort_and_unwind()
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(wake.wakes.load(SeqCst), 1);
-        assert!(future.as_mut().poll(&mut context).is_ready());
+        assert!(
+            std::pin::Pin::new(&mut future)
+                .poll(&mut context)
+                .is_ready()
+        );
         if mode == 2 {
             marker(first_before.get(&7), 0x51);
             marker(second_before.get(&7), 0x61);
@@ -489,6 +504,8 @@ fn captured_prepaid_pair_shares_one_scope_through_publication_abort_and_unwind()
         drop((first_before, second_before));
         drop((waker, wake, first, second));
         reclaimed_since(0);
+        drop(future);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }

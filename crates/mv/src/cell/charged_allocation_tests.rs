@@ -435,7 +435,10 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
     }
 
     let pair = pair_bytes::<GatedValue>();
-    let budget = AllocationBudget::new(4 * pair);
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(4 * pair + registration_bytes);
+    let mut registration = crate::release_test_support::registration(&budget);
     let gate = Arc::new(Mutex::new(None));
     let cell = ChargedCell::new_charged(
         GatedValue {
@@ -470,7 +473,7 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
             .unwrap();
         assert_eq!(
             budget.reserved_bytes(),
-            4 * pair,
+            4 * pair + registration_bytes,
             "both charges were admitted before the first clone"
         );
         let (journal, error, _cleanup) = journal
@@ -484,7 +487,7 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
         let wake = Arc::new(WakeCount(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wake));
         let mut context = Context::from_waker(&waker);
-        let mut wait = observation.wait_for_release();
+        let mut wait = observation.wait_for_release(&mut registration);
         assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
         release.0.send(()).unwrap();
         assert!(writer.join().is_err());
@@ -516,5 +519,6 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
     drop(journal);
     drop(cell);
     drop(pinned);
+    drop(registration);
     collect_until(&budget, conservatively_retained);
 }

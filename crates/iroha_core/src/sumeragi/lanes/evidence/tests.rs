@@ -46,8 +46,8 @@ impl AnchorView for Anchors {
     fn applied_hash(&self, height: u64) -> Option<HashOf<GlobalHeader>> {
         (self.available && height == 3).then_some(self.hash)
     }
-    fn creation_time_ms(&self, height: u64) -> Option<u64> {
-        self.applied_hash(height).map(|_| 10_000)
+    fn creation_time_ms(&self, height: u64) -> Result<Option<u64>, Attempt<io::Error>> {
+        Ok(self.applied_hash(height).map(|_| 10_000))
     }
 }
 impl AnchorSource for Anchors {
@@ -345,6 +345,57 @@ fn source_context_predecessor_pop_and_exact_quorum_are_all_required() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn anchor_history_refusal_retains_exact_source_through_lane_evidence_retry() {
+    struct FundedAnchor<'a> {
+        original: &'a Anchors,
+        budget: iroha_allocation::AllocationBudget,
+    }
+    impl AnchorView for FundedAnchor<'_> {
+        fn applied_hash(&self, height: u64) -> Option<HashOf<GlobalHeader>> {
+            self.original.applied_hash(height)
+        }
+        fn creation_time_ms(&self, height: u64) -> Result<Option<u64>, Attempt<io::Error>> {
+            let _read = self
+                .budget
+                .try_reserve(std::alloc::Layout::new::<u64>())
+                .map_err(|original| Attempt::Deferred(original.into()))?;
+            self.original.creation_time_ms(height)
+        }
+    }
+    let fixture = Fixture::new();
+    let anchors = FundedAnchor {
+        original: &fixture.anchors,
+        budget: iroha_allocation::AllocationBudget::new(std::mem::size_of::<u64>()),
+    };
+    let layout = std::alloc::Layout::new::<u64>();
+    let occupied = anchors.budget.try_reserve(layout).unwrap();
+    let expected = crate::execution_attempt::ExecutionDeferred::from(
+        anchors.budget.try_reserve(layout).unwrap_err(),
+    );
+    let verify = || {
+        verify_lane_entry(
+            &fixture.record,
+            &fixture.network,
+            CHAIN,
+            &anchors,
+            &LaneChainView::default(),
+            &fixture.prior,
+            &fixture.body,
+            &fixture.qc,
+        )
+    };
+    let pointer = fixture.body.payload().as_slice().as_ptr();
+    for _ in 0..2 {
+        assert!(
+            matches!(verify(), Err(LaneEntryError::AnchorDeferred(reason)) if reason == expected)
+        );
+        assert_eq!(fixture.body.payload().as_slice().as_ptr(), pointer);
+    }
+    drop(occupied);
+    assert_eq!(verify().unwrap().hash(), fixture.qc.result);
 }
 
 #[test]

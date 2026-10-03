@@ -4,19 +4,21 @@ use super::*;
 
 #[test]
 fn original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry() {
-    use crate::sumeragi::runtime_availability::NativeLaneStoreAuthorities;
-    use std::{future::Future, pin::pin, task::Context};
+    use crate::{state::StateReadOnly, sumeragi::runtime_availability::NativeLaneStoreAuthorities};
+    use std::task::Context;
     let (chain, record, _epoch) =
         crate::sumeragi::runtime_availability::tests::npos_fixed_lane_chain_at(4);
     let state = chain.state();
     let budget = state.ivm_execution_budget();
     let baseline = budget.reserved_bytes();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ceiling = budget.limit_bytes();
     for height in 1..=4 {
         chain
             .kura()
-            .get_block(std::num::NonZeroUsize::new(height).unwrap())
-            .unwrap();
+            .get_block(std::num::NonZeroUsize::new(height).unwrap(), &budget)
+            .expect("original committed history read completes")
+            .expect("original committed block is retained");
     }
     let crypto = Arc::new(crate::sumeragi::crypto::BlsCrypto::new());
     let authorities = Arc::new(NativeLaneStoreAuthorities::new(
@@ -44,21 +46,22 @@ fn original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry(
     else {
         panic!("actual original archive capacity")
     };
-    let mut wait = pin!(release.clone().wait_for_release());
+    let wait = release.clone();
     let mut context = Context::from_waker(std::task::Waker::noop());
-    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(registration.poll_wait(&wait, &mut context).is_pending());
     assert!(
         matches!(crate::block::BlockValidationError::from(crate::sumeragi::lanes::merge::MergeError::Storage(error)), crate::block::BlockValidationError::ExecutionDeferred(retained) if retained == original)
     );
     assert_eq!(budget.reserved_bytes(), ceiling);
     drop(occupied);
-    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert!(registration.poll_wait(&wait, &mut context).is_ready());
     assert_eq!(
         stores.tip(record.lane, &record.incarnation).unwrap(),
         Some(0)
     );
     assert_eq!(budget.limit_bytes(), ceiling);
     drop(stores);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), baseline);
 }
 use crate::execution_attempt::ExecutionAttemptError as Attempt;

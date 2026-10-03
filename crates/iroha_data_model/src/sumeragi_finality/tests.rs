@@ -1120,3 +1120,66 @@ fn availability_scratch_resource_keeps_its_exact_category() {
         invalid
     );
 }
+
+#[test]
+fn authenticated_successor_requires_exact_global_network_and_bounded_chain() {
+    use crate::{
+        block::consensus::SumeragiRootScope,
+        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    };
+    let mut global = NativeFinalityFixture::start("selected-global-root");
+    let block = global.block_with_submitted_work(global.next_header());
+    let proof = global.certify(block);
+    let verified = global.verifier().verify_retained_decision(&proof).unwrap();
+    verified
+        .verify_global_scope(global.network_id(), global.chain_id())
+        .unwrap();
+    for chain in [
+        "",
+        "foreign-chain",
+        "selected-global-root\n",
+        &"x".repeat(1025),
+    ] {
+        assert!(
+            verified
+                .verify_global_scope(global.network_id(), chain)
+                .is_err()
+        );
+    }
+    // The chain label is external to signed genesis, so changing that label alone
+    // preserves NetworkId. Select a genuinely different signed genesis here.
+    let foreign = NativeFinalityFixture::start_with_mode(
+        "selected-global-root",
+        crate::parameter::system::SumeragiConsensusMode::Npos,
+    );
+    assert_ne!(foreign.network_id(), global.network_id());
+    assert!(
+        verified
+            .verify_global_scope(foreign.network_id(), global.chain_id())
+            .is_err()
+    );
+    let genesis = global
+        .verifier()
+        .verify_retained_decision(global.genesis_proof())
+        .unwrap();
+    assert!(
+        genesis
+            .verify_global_scope(global.network_id(), global.chain_id())
+            .is_err()
+    );
+    let mut private = NativeFinalityFixture::start_with_scope(
+        "selected-global-root",
+        SumeragiRootScope::Dataspace {
+            parent_network_id: global.network_id(),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+        },
+    );
+    let block = private.block_with_submitted_work(private.next_header());
+    let proof = private.certify(block);
+    let verified = private.verifier().verify_retained_decision(&proof).unwrap();
+    assert!(
+        verified
+            .verify_global_scope(private.network_id(), private.chain_id())
+            .is_err()
+    );
+}

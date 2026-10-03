@@ -776,7 +776,31 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
                 .chain(native_execution_tip::TipCell::allocation_layouts())
                 .map(|layout| layout.size())
                 .sum::<usize>();
-        assert_eq!(retained_bytes, retained_layout_bytes);
+        let lock_releases = [
+            probe.latest_block_header.observe_release(),
+            probe.da_commitments.observe_release(),
+            probe.da_confidential_compute.observe_release(),
+            probe.da_receipt_cursors.observe_release(),
+            probe.da_shard_cursors.observe_release(),
+            probe.da_pin_intents.observe_release(),
+            probe.lane_manifests.observe_release(),
+            probe.lane_privacy_registry.observe_release(),
+            probe.da_indexes_hydrated.observe_release(),
+            probe.pipeline_ivm_prepared_cache.observe_release(),
+            probe.nexus.observe_release(),
+            probe.crypto.observe_release(),
+            probe.kagemusha_v1_runtime_verifier.observe_release(),
+            probe.state_write_lock.observe_release(),
+        ];
+        let notification_bytes = lock_releases.len()
+            * iroha_allocation::release::ReleaseNotification::allocation_layout::<
+                iroha_allocation::AllocationCharge,
+            >()
+            .size();
+        // Count every actual admitted lock control without retaining a release
+        // observation across State retirement.
+        drop(lock_releases);
+        assert_eq!(retained_bytes, retained_layout_bytes + notification_bytes);
         assert!(retired_ebr_bytes > 0);
         assert!(retired_ebr_bytes < retained_bytes);
         assert!(restore_peak >= retained_bytes);

@@ -325,27 +325,202 @@ including coherent wrong-gas forgeries, seven unary/select controls, four
 multiplication controls and four bit-count controls. POPCNT, CLZ and CTZ reuse
 the original zero-prefix equations over canonical source bits with native
 six-gas, one-cycle behavior. CMOV/CMOVI now bind the full public condition and
-only the native conditionally read source and written destination; native controls
-pass. DIV/DIVU/REM/REMU reuse the original arithmetic bank and preserve public
-trap-sensitive operands, native gas and the original 21 packet ports. The GETGAS, ABS and signed MEAN/shared-bank controls pass in the retained
-78-test private-dispatch namespace; all seven shared public MEAN controls also
-pass. MEAN owns exact 65-bit signed addition and truncation toward zero, 44 result
-cells, 21 original ports and native two-gas/three-cycle behavior. The newly applied
-ISQRT relation constrains the 32-bit floor root and exact remainder in the existing
-product bank; DIV_CEIL constrains signed correction in the shared MEAN bank.
-Their original tags, history ports and native gas/cycles are retained. All 97
-private-dispatch controls pass on the rebuilt artifact, including the repaired
-inventories and padding control. The newly applied successful LOAD64 and STORE64
-relations bind the original memory, initialization, frame, control and history
-ports in four phases. Closed opcode selection rejects other running opcodes.
-The earlier namespace's 112 passes and two LOAD-fixture failures remain recorded.
-The repaired fixtures retain the original prepared code prefix, root-frame
-initialization and exact step/control events; the rebuilt optimized artifact
-passes all nine LOAD controls and all 114 private-dispatch controls. All eight
-private STORE controls and the seven public MEAN controls pass on their recorded
-artifacts. These results do not complete the entire instruction relation.
-Complete instruction/region semantics and finalized State binding remain
-open; these components do not enable IVM proof admission.
+only the native conditionally read source and written destination. DIV/DIVU/REM/REMU
+reuse the original arithmetic bank and preserve public trap-sensitive operands,
+native gas and the original 21 packet ports. GETGAS binds the destination directly
+to the original gas port, preserves its native zero-gas tariff and one-cycle
+transition, clears the destination's private tag, and ignores both encoded source
+bytes. Register zero remains unwritable, including at zero remaining opcode gas.
+ABS constrains the public operand and rejects signed overflow. MEAN owns exact
+65-bit signed addition and truncation toward zero, 44 shared result cells and
+native two-gas/three-cycle behavior. ISQRT constrains the 32-bit floor root and
+exact remainder in the existing product bank; DIV_CEIL constrains signed correction
+in the shared MEAN bank; GCD uses bounded exact products and Bezout arithmetic.
+The same append-only, bounded residue stream evaluates these shared banks without
+accumulating or rereading private equations. Their original tags, history ports
+and native gas/cycles remain constrained.
+
+Successful LOAD64 and STORE64 relations bind the original memory, initialization,
+frame, control and history ports in four phases. LOAD64 shares the dispatcher's
+original atomic destination value/tag transition; its 37-packet schedule places
+that destination after the physical memory read, with no duplicate register or
+tag event. An `r0` destination suppresses only the register write, preserving
+memory checks and the three-gas debit. Closed opcode selection rejects other
+running operations. Current merged native controls require fresh validation.
+Complete instruction/region semantics and finalized State binding remain open;
+these components do not enable IVM proof admission.
+
+The separate callable-lookup component derives frame sizes and exact argument
+and result word counts once from the original admitted artifact's complete flat
+schemas. Child selection uses the existing canonical fetch columns and binds
+the loaded-image target separately from the executable-relative callable entry.
+Return selection uses the original active frame generation's protected entry
+read, not the return continuation. The same lifecycle packets feed child
+descriptor publication, return operands and all 4,097 initialization/copyback
+cells without duplicate lifecycle producers. The composed evaluator joins all
+8,243 original packets and 54 reserved zero gaps to their actual clocks in one
+immutable global history view. It derives every current/next row and fixed phase
+from that view; caller-selected row lists and reclocked producer copies are not
+accepted. This establishes the complete 8,297-slot window's consistency, not
+initialization authority or a complete invocation history outside the window.
+Ordinary constructors cannot supply independent callable truth fields. The
+composed relation retains the dispatcher's degree-four bound; callable and scan
+equations have degree at most three. Admitted compiled returns remain nonempty:
+Unit occupies one word, and a zero-result schema is rejected by admission.
+
+The scan retains one funded, move-only 11,012,736-byte allocation and wipes its
+private fields before release. Equation output uses reusable 721-field scratch
+instead of accumulating scan/history residues. The 66,376 history rows require
+log 17 under the existing public diagnostic profile; a second such window exceeds
+that profile's unchanged 16,384-slot cap. The internal relation view can borrow
+exactly one or two original segment banks with the same per-segment log 13..17
+geometry. It uses absolute clocks, global first/last masks and the actual next
+segment's lookup state, counters and auxiliary products across the seam. One
+borrowed permutation challenge family serves the whole view and every callable
+window; no window can substitute a second family. The view retains only fixed
+column descriptors and scrubbed row scratch, without copying the backing banks.
+This bounded component does not enlarge the public adapter's degree-four,
+136-query, 4-MiB, single-segment proof profile. Joint base-commitment/transcript
+ownership, aggregate FRI and masking, exhaustive native packet production,
+full-invocation sizing and complete proof-memory admission remain open.
+Root entry is deliberately absent: the presence of a
+private callable does not authorize a public invocation. Recursive typed
+traversal, TLV/canonical payload and privacy relations, staged gas and exact
+faults, authoritative initialization and terminal publication,
+statement/code/finalized-State binding and whole-invocation masking remain open.
+This component has no production prover, verifier registration or admission path.
+
+A separate native producer component now owns a fresh ordinary IVM invocation
+from the original admitted artifact, selected public entrypoint and initial gas.
+Its sole constructor accepts no warmed VM, initial memory/register arrays, host,
+raw packet data or caller clocks. Coverage is restricted to empty public arguments,
+a Unit result, no child calls or syscalls, and bounded public scalar,
+LDI64/LOAD64/STORE64/root JALR execution with at most 64 total instructions
+including the return. Packet
+backing for all 16,384 private slots is partitioned from
+original parent credit before execution. Native commit hooks capture actual
+register/control and frame state, successful physical memory/initialization
+changes, both staged root and result-validation debits, all 4,097 return-scan
+slots and ordinary ZK padding. Unsupported reached operations refuse the local
+capture before their effects; failed or unwound attempts publish no owner.
+Final-owner cleanup erases payloads and packet metadata before refunding the
+original charge; allocation and reservation refusals retain their original
+typed ownership.
+
+The native initializer/instruction/history component moves this original owner into a sole
+source, projects one scrubbed packet at a time, and streams every original clock
+through the existing private history relation with one borrowed challenge family.
+It requires exactly the complete 16,384-slot history, including both global
+endpoints. All 64 initializer slots, including reserved zeros, have linear
+constraints derived from the admitted public entrypoint, its callable schema,
+public initial gas and the V1 stack policy. These bind staged root allocation and
+frame gas, registers, heap bounds, generation and protected frame/return words;
+absolute fetch PC and relative callable entry remain distinct. The initializer
+never derives expected values from captured observations or private-callable
+presence alone. Its bounded instruction workspace admits public scalar ALU,
+comparison, shift, rotate, multiply and bit-count operations, LDI64, public-root
+LOAD64/STORE64 and root JALR through
+the existing fetch/control/scalar relation. Additional native-source
+equations restrict the selected original code words to that subset and require
+the original return parent to be zero; constructor refusal is not an AIR premise.
+Every compact instruction
+captures an actual protected-depth read; the root return captures the original
+depth before and after the native pop. All 64 compact windows and the fixed
+return window are evaluated. Inactive windows have only zero packets; the former
+synthetic running write is removed. All 65 private witness rows are funded before
+construction and erased before their final backing refund, while the bounded
+public code stays inline. The sole source owns both native packets and derived
+workspace, so composed callers cannot substitute another packet bank.
+
+The public scalar subset is exactly ADD/SUB/AND/OR/XOR,
+ADDI/ANDI/ORI/XORI, NEG/NOT, SLT/SLTU/SEQ/SNE, signed MIN/MAX,
+SLL/SRL/SRA, ROTL/ROTR, ROTL_IMM/ROTR_IMM, MUL/MULH/MULHU/MULHSU
+and POPCNT/CLZ/CTZ.
+The native producer and constrained consumer share the immutable instruction
+operand-shape lookup. Actual source reads occupy the original left/right slots,
+including `r0` and aliases; immediate and unary operations never invent a second
+register read. One atomic destination packet carries the original value and tag
+transition. Native subset equations require public operands independently of
+constructor checks; the broader private scalar diagnostic bank does not authorize
+general Secret arithmetic. Shared canonical word, ALU, comparison and barrel-shift witness
+algorithms populate the existing fully constrained banks without expected-output
+inputs. Shift and rotate counts use the low six bits while authenticating the
+full original register word; rotate immediates are zero-extended eight-bit code
+values and never authorize a register read. SRA preserves the original sign bit.
+The full 128-bit product bank constrains the low and unsigned high halves,
+including bounded carries and signed-high corrections for the first or both
+original operands. Bit counts consume all 64 canonical source bits; CLZ alone
+reverses the prefix traversal selected by the immutable artifact word. Zero has
+64 leading and trailing zeros. Unused operand ports remain entirely zero.
+Comparisons and rotates consume two gas, products three, bit counts six and the
+other admitted scalars one; all advance one cycle and four code bytes. The canonical public gas
+descriptor supplies witness debit arithmetic; equations bind the actual original
+debit. Native packet geometry remains fixed. The shared instruction workspace has
+1,512 fields per row, including disabled arithmetic banks; all 65 rows reserve
+786,240 bytes before private construction. The composed maximum degree remains four. Conditional moves, GETGAS, division, branching and
+fault outcomes remain outside this native source's coverage.
+
+Public-root LOAD64/STORE64 consume the original compact memory and initialization
+packets. Checked 64-bit address/end arithmetic and comparisons prove containment
+in the immutable public root stack frame or Unit result region; native preflight
+acceptance is not a permission premise. The shared scalar payload selection and
+initialization OR arithmetic bind the selected half-cell, preserve the other
+half, and require public payloads and the original generation. Its 64 additional
+422-field witness rows reserve exactly 216,064 bytes before private construction
+and erase them before refund. All nine other compact slots are constrained to
+zero, completing the 32-slot compact schedule without synthetic events or clock
+changes. LOAD64 requires complete containment in the stack frame and all eight
+selected initialization bits; the result table remains write-only to guest code.
+Both read ports preserve their original values. The original atomic destination
+receives the selected half and a public tag, with no manufactured second tag event.
+An `r0` destination suppresses only the register write, preserving memory checks
+and the three-gas debit. LDI64 resolves its full 16-bit index through the same
+immutable prepared artifact's admitted scalar table; pointer entries cannot
+supply scalar coefficients or confer pointer provenance. Its one-gas debit and
+atomic destination remain in the same dispatcher and history. Neither operation
+increases packet or witness geometry. Memory equations have maximum degree three;
+the composed instruction relation retains the existing maximum degree four.
+
+The Unit root return consumes its actual public-entrypoint callable, original
+operands and every one of the 4,097 initialization-scan cells through the existing
+return equations. Its additional 9,308,384-byte workspace is reserved before
+private construction and erased before the original allocation is refunded;
+scan packets remain solely owned by the native capture. The original NODE and
+WORD debits are constrained separately to 1 and 8 gas with bounded subtraction,
+and the original typed memory read must contain a public zero Unit word.
+The three occupied typed-work slots are consumed directly, with the other return
+gaps constrained to zero; the callable-window diagnostic's zero-gap
+schedule is not used for this native composition.
+
+The successful terminal bank consumes original return cycles and final Unit gas,
+then constrains optional native padding at clocks 10,409 and 10,410. One 96-byte
+zeroizing witness is admitted before private construction. Bounded delta bits and
+an inverse require padding exactly when the public artifact's cycle horizon has
+not been reached; checked limb subtraction charges one gas per padded cycle.
+Disabled packets are entirely zero, and all 5,973 remaining packet slots must be
+zero. Compact activity is a contiguous prefix of at most 63 non-return
+instructions before the mandatory fixed root return. These new equations have
+maximum degree two; the composed component retains maximum degree four.
+Native gas/cycle summary getters are not expected-output coefficients. Final gas
+is derived from the constrained original gas packets; no external output or
+statement-authority constructor is added.
+
+This closes bounded initializer, fetch/control/public scalar arithmetic and bit operations, admitted scalar literals,
+public-root LOAD64/STORE64, Unit return, compact scheduling, successful padding and
+original-source history joins only. The successful private LOAD bank and native invocation both consume atomic
+destinations; diagnostic setter logs are compared to that completed native
+transition only in tests. General private/wide memory, pointer literals and other
+instruction semantics, general typed validation and its staged gas, faults,
+terminal statement publication and masked transcript ownership remain open. Native output and history consistency
+grant no signed-intent/finalized-State authority or production proof admission.
+
+The focused native capture bridge is runnable with
+`python3 scripts/check_ivm_native_frame_equations.py --ivm-test-binary <exact-ivm-libtest-path> --privacy-test-binary <exact-privacy-libtest-path> --output-dir target/<fresh-directory>`.
+It runs both native producers and all four exact equation consumers, retains
+owner-only captures/logs and records executed binary hashes in a bounded local
+receipt. Supplied binary paths do not establish common source/build provenance.
+The captures check native frame/call-method equivalence; they do not supply
+original instruction-packet ownership or a complete invocation proof.
 
 A reviewed successful JMP/JAL rd0 dispatcher relation is applied with the
 original 21 ports, artifact-bound signed target and native two-gas/one-cycle

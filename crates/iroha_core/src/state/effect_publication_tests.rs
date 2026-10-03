@@ -103,6 +103,8 @@ fn refusal<G>(
     field: &'static str,
     blocked_index: usize,
     before: &[(&'static str, String)],
+    blocker_registration: &mut iroha_allocation::release::ReleaseRegistration,
+    prefix_registration: &mut iroha_allocation::release::ReleaseRegistration,
 ) {
     // Retained cleanup precedes the outer fence, as in the real publisher.
     let mut cleanup = StateEffectLocks::new(state);
@@ -115,7 +117,7 @@ fn refusal<G>(
         "refusal must return the exact blocking source and observation"
     );
     assert_physical_prefix(&cleanup, blocked_index);
-    let mut blocker_wait = wait.wait_for_release();
+    let mut blocker_wait = wait.wait_for_release(blocker_registration);
     assert!(
         Pin::new(&mut blocker_wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -130,7 +132,7 @@ fn refusal<G>(
             .try_write_or_wait()
             .err()
             .expect("actual first original writer retained")
-            .wait_for_release();
+            .wait_for_release(prefix_registration);
         assert!(Pin::new(&mut pending).poll(&mut context).is_pending());
         Some(pending)
     } else {
@@ -175,6 +177,10 @@ fn refusal<G>(
 #[test]
 fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
     let state = state();
+    let mut blocker_registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+    let mut prefix_registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = contents(&state);
     macro_rules! check {
         ($($field:ident: $ty:ty,)*) => {{
@@ -182,10 +188,10 @@ fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
             $(
                 let held = state.$field.read();
                 let expected = state.$field.try_write_or_wait().err().expect("actual original reader");
-                refusal(&state, held, expected, stringify!($field), index, &before);
+                refusal(&state, held, expected, stringify!($field), index, &before, &mut blocker_registration, &mut prefix_registration);
                 let held = state.$field.write();
                 let expected = state.$field.try_write_or_wait().err().expect("actual original writer");
-                refusal(&state, held, expected, stringify!($field), index, &before);
+                refusal(&state, held, expected, stringify!($field), index, &before, &mut blocker_registration, &mut prefix_registration);
                 index += 1;
             )*
             index
@@ -196,6 +202,8 @@ fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
 
 fn complete_scope(unwind: bool) {
     let state = state();
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = contents(&state);
     let generation = state.state_view_generation();
     let probe = Probe::new(&state);
@@ -216,7 +224,7 @@ fn complete_scope(unwind: bool) {
         .try_write_or_wait()
         .err()
         .expect("original index writer")
-        .wait_for_release();
+        .wait_for_release(&mut registration);
     assert!(Pin::new(&mut pending).poll(&mut context).is_pending());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let scope = cleanup.physical_scope();

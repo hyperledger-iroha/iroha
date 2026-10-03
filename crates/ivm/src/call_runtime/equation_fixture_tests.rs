@@ -37,7 +37,10 @@ fn runtime_capture() -> Value {
     let child_callable = interface
         .callables
         .iter()
-        .find(|callable| callable.argument_words.len() == 1 && callable.result_words.len() == 1)
+        .find(|callable| {
+            callable.argument_word_count().unwrap() == 1
+                && callable.result_word_count().unwrap() == 1
+        })
         .unwrap();
     let mut vm = IVM::new(1_000_000);
     vm.load_program(&code).unwrap();
@@ -51,7 +54,7 @@ fn runtime_capture() -> Value {
     let root_sp = vm.registers.get(31);
     let root_entry = json!({"operands": (operands(&vm)), "owner": (observe(&vm.memory, root_result & !15)),
         "frame_bytes": (root_callable.frame_bytes as u64), "entry_pc": (root_callable.entry_pc),
-        "argument_words": (root_callable.argument_words.len() as u64), "result_words": (root_callable.result_words.len() as u64)});
+        "argument_words": (root_callable.argument_word_count().unwrap() as u64), "result_words": (root_callable.result_word_count().unwrap() as u64)});
     let parent_start = root_entry["owner"]["descriptors"][0][0].as_u64().unwrap();
     let parent_end = root_entry["owner"]["descriptors"][0][1].as_u64().unwrap();
     assert!(parent_end - parent_start >= 16);
@@ -74,8 +77,8 @@ fn runtime_capture() -> Value {
         .unwrap();
     let child_entry = json!({"operands": child_operands, "before_owner": before_child,
         "owner": (observe(&vm.memory, child_result & !15)), "frame_bytes": (child_callable.frame_bytes as u64),
-        "entry_pc": (child_callable.entry_pc), "argument_words": (child_callable.argument_words.len() as u64),
-        "result_words": (child_callable.result_words.len() as u64)});
+        "entry_pc": (child_callable.entry_pc), "argument_words": (child_callable.argument_word_count().unwrap() as u64),
+        "result_words": (child_callable.result_word_count().unwrap() as u64)});
     vm.registers.set(10, child_result);
     vm.registers.set(11, 1);
     assert_eq!(vm.finish_call(), Err(VMError::AssertionFailed));

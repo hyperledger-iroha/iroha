@@ -111,7 +111,11 @@ impl Wake for Probe {
         // Only genuine nonblocking physical probes; assertions stay outside Wake.
     }
 }
-fn arm(target: &Arc<Targets>, wait: ReleaseWait) -> (Arc<Probe>, ReleaseFuture, Waker) {
+fn arm<'a>(
+    target: &Arc<Targets>,
+    wait: ReleaseWait,
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> (Arc<Probe>, ReleaseFuture<'a>, Waker) {
     let probe = Arc::new(Probe {
         target: Arc::clone(target),
         calls: AtomicUsize::new(0),
@@ -119,7 +123,7 @@ fn arm(target: &Arc<Targets>, wait: ReleaseWait) -> (Arc<Probe>, ReleaseFuture, 
         poisoned: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&probe));
-    let mut future = wait.wait_for_release();
+    let mut future = wait.wait_for_release(registration_1);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))
@@ -127,7 +131,7 @@ fn arm(target: &Arc<Targets>, wait: ReleaseWait) -> (Arc<Probe>, ReleaseFuture, 
     );
     (probe, future, waker)
 }
-fn complete(probe: &Probe, mut future: ReleaseFuture, waker: &Waker) {
+fn complete(probe: &Probe, mut future: ReleaseFuture<'_>, waker: &Waker) {
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(waker))
@@ -143,6 +147,14 @@ fn complete(probe: &Probe, mut future: ReleaseFuture, waker: &Waker) {
 
 #[test]
 fn detached_slots_preserve_exact_originals_retry_and_publication_in_both_modes() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for mode in [BlockMode::Ordinary, BlockMode::Replace] {
         let target = seeded();
         let old_cell = target.cell.view();
@@ -151,7 +163,11 @@ fn detached_slots_preserve_exact_originals_retry_and_publication_in_both_modes()
         let cp = std::ptr::from_ref(c.touched_value().unwrap().after);
         let mp = std::ptr::from_ref(m.touched_entries().next().unwrap().after.unwrap());
         let mut slots = pair(&target, c, m);
-        let (probe, future, waker) = arm(&target, target.cell.revert_released.observe());
+        let (probe, future, waker) = arm(
+            &target,
+            target.cell.revert_released.observe(),
+            &mut helper_release_registration_1,
+        );
         slots
             .cell
             .as_mut()
@@ -177,7 +193,11 @@ fn detached_slots_preserve_exact_originals_retry_and_publication_in_both_modes()
         drop(slots);
         complete(&probe, future, &waker);
         let mut slots = pair(&target, c, m);
-        let (probe, future, waker) = arm(&target, target.cell.revert_released.observe());
+        let (probe, future, waker) = arm(
+            &target,
+            target.cell.revert_released.observe(),
+            &mut helper_release_registration_2,
+        );
         slots
             .cell
             .as_mut()
@@ -206,11 +226,23 @@ fn detached_slots_preserve_exact_originals_retry_and_publication_in_both_modes()
 
 #[test]
 fn detached_slots_retain_late_admission_refusal_and_caught_panic_cleanup() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for panic in [false, true] {
         let target = seeded();
         let (c, m) = originals(&target, BlockMode::Ordinary);
         let mut slots = pair(&target, c, m);
-        let (probe, future, waker) = arm(&target, target.map.publication.released.observe());
+        let (probe, future, waker) = arm(
+            &target,
+            target.map.publication.released.observe(),
+            &mut helper_release_registration_1,
+        );
         slots
             .cell
             .as_mut()
@@ -257,7 +289,11 @@ fn detached_slots_retain_late_admission_refusal_and_caught_panic_cleanup() {
     let target = seeded();
     let (c, m) = originals(&target, BlockMode::Replace);
     let mut slots = pair(&target, c, m);
-    let (probe, future, waker) = arm(&target, target.cell.publication.released.observe());
+    let (probe, future, waker) = arm(
+        &target,
+        target.cell.publication.released.observe(),
+        &mut helper_release_registration_2,
+    );
     slots
         .map
         .as_mut()
@@ -291,12 +327,22 @@ fn detached_slots_retain_late_admission_refusal_and_caught_panic_cleanup() {
 
 #[test]
 fn detached_slots_current_busy_retains_acquired_undo_until_original_retry() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let target = seeded();
     let (c, m) = originals(&target, BlockMode::Ordinary);
     let original = std::ptr::from_ref(m.touched_entries().next().unwrap().after.unwrap());
     let mut slots = pair(&target, c, m);
     let current = target.map.blocks.try_acquire_writer().unwrap();
-    let (probe, future, waker) = arm(&target, target.map.revert_released.observe());
+    let (probe, future, waker) = arm(
+        &target,
+        target.map.revert_released.observe(),
+        &mut helper_release_registration_1,
+    );
     slots
         .cell
         .as_mut()
@@ -341,11 +387,21 @@ fn detached_slots_current_busy_retains_acquired_undo_until_original_retry() {
 
 #[test]
 fn detached_slots_late_identity_refusal_retains_native_reader_and_writer_cleanup() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let target = seeded();
     let (c, m) = originals(&target, BlockMode::Replace);
     let mut held = None;
     let mut slots = pair(&target, c, m);
-    let (probe, future, waker) = arm(&target, target.map.blocks.observe_reader_release());
+    let (probe, future, waker) = arm(
+        &target,
+        target.map.blocks.observe_reader_release(),
+        &mut helper_release_registration_1,
+    );
     slots
         .cell
         .as_mut()
@@ -387,6 +443,14 @@ fn detached_slots_late_identity_refusal_retains_native_reader_and_writer_cleanup
 
 #[test]
 fn detached_slots_known_native_poison_is_retained_without_early_notification() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let target = seeded();
     let (c, m) = originals(&target, BlockMode::Ordinary);
     assert!(
@@ -398,7 +462,11 @@ fn detached_slots_known_native_poison_is_retained_without_early_notification() {
     );
     let mut slots = pair(&target, c, m);
     let observed = target.map.blocks_released.observe();
-    let (probe, future, waker) = arm(&target, observed.clone());
+    let (probe, future, waker) = arm(
+        &target,
+        observed.clone(),
+        &mut helper_release_registration_1,
+    );
     slots
         .cell
         .as_mut()
@@ -431,7 +499,11 @@ fn detached_slots_known_native_poison_is_retained_without_early_notification() {
     );
     let mut slots = pair(&target, c, m);
     let observed = target.cell.blocks_released.observe();
-    let (probe, future, waker) = arm(&target, observed.clone());
+    let (probe, future, waker) = arm(
+        &target,
+        observed.clone(),
+        &mut helper_release_registration_2,
+    );
     slots
         .map
         .as_mut()
@@ -456,10 +528,20 @@ fn detached_slots_known_native_poison_is_retained_without_early_notification() {
 
 #[test]
 fn detached_slots_outer_unwind_releases_siblings_before_original_poison_wakes() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let target = seeded();
     let (c, m) = originals(&target, BlockMode::Ordinary);
     let observed = target.cell.revert_released.observe();
-    let (probe, future, waker) = arm(&target, observed.clone());
+    let (probe, future, waker) = arm(
+        &target,
+        observed.clone(),
+        &mut helper_release_registration_1,
+    );
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
             let mut slots = pair(&target, c, m);
@@ -529,6 +611,7 @@ fn detached_slots_prepaid_preserve_original_scope_and_refusal_custody_without_ne
     use concread::bptree::Prepaid;
     use iroha_allocation::AllocationBudget;
     let budget = AllocationBudget::new(1 << 20);
+    let mut registration = crate::release_test_support::registration(&budget);
     let target = Storage::<u64, u64, Prepaid<Scalar>>::try_new_admitted(budget.clone()).unwrap();
     let original = target
         .try_capture_admitted_block(BlockMode::Ordinary, |block| {
@@ -552,7 +635,7 @@ fn detached_slots_prepaid_preserve_original_scope_and_refusal_custody_without_ne
         let held = target.blocks.try_acquire_writer().unwrap();
         let mut slot = original.try_publication_slot(scope, &target).ok().unwrap();
         let wait = target.revert_released.observe();
-        let mut future = wait.wait_for_release();
+        let mut future = wait.wait_for_release(&mut registration);
         assert!(matches!(slot.try_prepare(), Err(Refusal::Busy(_))));
         assert_eq!(budget.reserved_bytes(), before);
         let original = slot.recover_original();
@@ -584,5 +667,6 @@ fn detached_slots_prepaid_preserve_original_scope_and_refusal_custody_without_ne
         drop(published);
     });
     drop(target);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }

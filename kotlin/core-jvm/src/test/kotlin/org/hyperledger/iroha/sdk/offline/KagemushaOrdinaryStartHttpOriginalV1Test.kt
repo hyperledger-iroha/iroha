@@ -62,7 +62,7 @@ class KagemushaOrdinaryStartHttpOriginalV1Test {
         return Base64.getDecoder().decode(vectors.first()["signed_preparation_base64"] as String)
     }
     private fun body(c:ByteArray,credential:ByteArray,platform:ByteArray)=json(linkedMapOf(
-        "wallet" to "inert-setup-data-only", 
+        "wallet" to "inert-setup-data-only",
         "signed_preparation_base64" to base64(c),"raw_admission_original_base64" to base64(ByteArray(314) { 2 }),
         "platform_original_base64" to base64(platform),"core_possession_original_base64" to base64(byteArrayOf(8)),
         "app_certificate_base64" to base64(credential),"selected_integrity" to null))

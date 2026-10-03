@@ -302,6 +302,8 @@ fn certified_capture_contention_returns_release_without_mutation_and_retries_exa
         task::{Context, Waker},
     };
     let chain = certified_reputation_chain();
+    let waiter_budget = chain.state().ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
     let directory = tempdir().unwrap();
     let archive = open_archive(&directory, bounds());
     let reader = archive.read_index().unwrap();
@@ -312,7 +314,7 @@ fn certified_capture_contention_returns_release_without_mutation_and_retries_exa
     assert_eq!(reader.generation, 0);
     assert_eq!(fs::read_dir(&archive.anchors).unwrap().count(), 0);
     assert_eq!(fs::read_dir(&archive.policies).unwrap().count(), 0);
-    let mut released = wait.wait_for_release();
+    let mut released = wait.wait_for_release(&mut registration);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     drop(reader);
@@ -332,6 +334,14 @@ fn certified_capture_contention_returns_release_without_mutation_and_retries_exa
     );
     assert_eq!(archive.health_generation().unwrap(), 1);
     assert_eq!(fs::read(path).unwrap(), original);
+    drop(released);
+    let with_registration = waiter_budget.reserved_bytes();
+    drop(registration);
+    assert_eq!(
+        waiter_budget.reserved_bytes(),
+        with_registration
+            - iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]

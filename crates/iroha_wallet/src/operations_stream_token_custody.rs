@@ -4,7 +4,10 @@
 //! must authenticate them independently; native execution checks provider ownership, the exact
 //! `CanManageSorafsStreamTokenCustody` permission, finality, revocation and predecessor CAS.
 
-use super::*;
+use super::{
+    bounded::{decode_bounded, encode_bounded, validate_options},
+    *,
+};
 use iroha_data_model::{
     isi::sorafs::MutateSorafsStreamTokenCustody,
     sorafs::{
@@ -34,9 +37,7 @@ const MAX_PLAN_BYTES: usize = 128 * 1024;
 /// This is an untrusted request value. Constructing it proves neither native execution nor
 /// current finality. The caller must authenticate the current record before preparing an action.
 #[derive(Clone, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_wallet::operations::stream_token_custody::StreamTokenCustodySelection"
-)]
+#[norito_schema(name = "iroha_wallet::operations::StreamTokenCustodySelection")]
 pub struct StreamTokenCustodySelection {
     /// Exact governed provider.
     pub provider_id: ProviderId,
@@ -103,48 +104,6 @@ struct Plan {
     action: Action,
     validated_at_unix_ms: u64,
     deadline_unix_ms: u64,
-}
-
-fn encode_bounded<T: norito::core::NoritoSerialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
-    eyre::ensure!(
-        norito::canonical_frame_len(value)? <= maximum,
-        "custody frame exceeds its byte bound"
-    );
-    Ok(norito::encode_canonical(value)?)
-}
-fn decode_bounded<T>(bytes: &[u8], maximum: usize) -> Result<T>
-where
-    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
-{
-    eyre::ensure!(
-        !bytes.is_empty() && bytes.len() <= maximum,
-        "custody frame exceeds its byte bound"
-    );
-    Ok(norito::decode_canonical_with_limits(
-        bytes,
-        norito::DecodeLimits::new(4096, maximum, maximum, 16 * 1024 * 1024, 32),
-    )?)
-}
-
-fn validate_options(options: &BoundedTransactionOptions) -> Result<()> {
-    // Admit container cardinalities before cloning any caller-controlled fee authorization.
-    eyre::ensure!(
-        options.max_total_fees.len() <= 16 && options.fee_payment.charge_limits().len() <= 16,
-        "custody fee authorization exceeds sixteen entries"
-    );
-    eyre::ensure!(
-        matches!(options.fee_payment, FeePaymentIntent::Authority(_)),
-        "custody operations require explicit manager-paid fees"
-    );
-    options.fee_payment.validate()?;
-    eyre::ensure!(
-        options
-            .max_total_fees
-            .values()
-            .all(|value| !value.is_zero()),
-        "custody aggregate fee maxima must be positive"
-    );
-    Ok(())
 }
 
 impl StreamTokenCustodySelection {
@@ -228,20 +187,34 @@ impl Plan {
         self.selection.admit()?;
         let current = self.selection.validate(config)?;
         eyre::ensure!(
-            self.validated_at_unix_ms > 0 && self.deadline_unix_ms > self.validated_at_unix_ms,
+            self.validated_at_unix_ms > 0
+                && self.deadline_unix_ms != u64::MAX
+                && self.deadline_unix_ms > self.validated_at_unix_ms,
             "custody operation has no original finite UTC interval"
+        );
+        let policy = match &self.action {
+            Action::Configure(policy) => policy,
+            Action::Enroll { .. } => {
+                &current
+                    .as_ref()
+                    .ok_or_else(|| eyre!("missing custody predecessor"))?
+                    .policy
+            }
+        };
+        eyre::ensure!(
+            config.key_pair.public_key() != &policy.binding.public_key
+                && config.key_pair.public_key() != &policy.attester_public_key,
+            "custody manager must be independent of signer and attester keys"
         );
         let action = match &self.action {
             Action::Configure(policy) => {
+                let policy_bytes = encode_bounded(policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
                 eyre::ensure!(
                     policy.binding == self.selection.binding,
                     "custody policy differs from selected signer"
                 );
                 configure_signer_custody_policy_v1(current.as_ref(), policy.clone())?;
-                SorafsStreamTokenCustodyActionV1::Configure(encode_bounded(
-                    policy,
-                    SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1,
-                )?)
+                SorafsStreamTokenCustodyActionV1::Configure(policy_bytes)
             }
             Action::Enroll {
                 anchor,
@@ -286,15 +259,6 @@ impl Plan {
                 SorafsStreamTokenCustodyActionV1::Enroll(enrollment.clone())
             }
         };
-        let policy = match &self.action {
-            Action::Configure(policy) => policy,
-            Action::Enroll { .. } => &current_policy(&self.selection)?,
-        };
-        eyre::ensure!(
-            config.key_pair.public_key() != &policy.binding.public_key
-                && config.key_pair.public_key() != &policy.attester_public_key,
-            "custody manager must be independent of signer and attester keys"
-        );
         Ok(MutateSorafsStreamTokenCustody {
             provider_id: self.selection.provider_id,
             expected_revision: self.selection.expected_revision,
@@ -303,16 +267,6 @@ impl Plan {
         }
         .into())
     }
-}
-
-fn current_policy(selection: &StreamTokenCustodySelection) -> Result<SignerCustodyPolicyV1> {
-    let record = selection
-        .current
-        .as_ref()
-        .ok_or_else(|| eyre!("missing custody predecessor"))?;
-    let state: SignerCustodyControlStateV1 =
-        decode_bounded(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
-    Ok(state.policy)
 }
 
 pub(super) fn instructions(
@@ -443,12 +397,13 @@ impl AccountService {
         &self,
         journal: &Path,
         expected: CustodyExpectation<'_>,
-    ) -> Result<()> {
+    ) -> Result<SignedTransaction> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let journal = Journal::open(journal)?;
         let record: TransactionJournal = journal.read_operation()?;
-        record.verify(&self.config)?;
-        expected.verify(&record)
+        let transaction = record.verify(&self.config)?;
+        expected.verify(&record)?;
+        Ok(transaction)
     }
     fn run_custody(
         &self,
@@ -490,23 +445,25 @@ impl AccountService {
         self.prepare_custody(CustodyExpectation::Enroll(request), journal)
     }
     /// Inspect an original Configure journal, including after its UTC deadline, without I/O to a node.
+    /// Returns its exact validated signed envelope for independent native inclusion verification.
     /// # Errors
     /// Rejects substituted request, signed wire, network, fees or local custody.
     pub fn verify_stream_token_custody_configure_journal(
         &self,
         journal: &Path,
         expected: &StreamTokenCustodyConfigureRequest,
-    ) -> Result<()> {
+    ) -> Result<SignedTransaction> {
         self.verify_custody_journal(journal, CustodyExpectation::Configure(expected))
     }
     /// Inspect an original Enroll journal without renewing its attestation or transaction lifetime.
+    /// Returns its exact validated signed envelope, never a freshly signed replacement.
     /// # Errors
     /// Rejects substituted request, signed wire, original interval, fees or local custody.
     pub fn verify_stream_token_custody_enroll_journal(
         &self,
         journal: &Path,
         expected: &StreamTokenCustodyEnrollRequest,
-    ) -> Result<()> {
+    ) -> Result<SignedTransaction> {
         self.verify_custody_journal(journal, CustodyExpectation::Enroll(expected))
     }
     /// Submit the original Configure at most once, comparing its request while holding the journal.

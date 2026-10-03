@@ -618,6 +618,204 @@ public enum ValidatorStakingNoritoV1 {
         public var noritoPayload: Data { record.encode() }
     }
 
+    /// Retained reward-processing cursor; epoch zero is a valid completed epoch.
+    public struct RewardClaimState: Sendable {
+        private let record: Record
+        public let throughEpoch: UInt64?
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 1)
+            self.record = record
+            throughEpoch = try record.option(0, Record.decodeU64)
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact immutable reward record selected by a signed claim.
+    public struct RewardRecordRef: Sendable {
+        private let record: Record
+        public let epoch: UInt64
+        public let recordHash: Data
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 2)
+            self.record = record
+            epoch = try record.u64(0)
+            recordHash = try record.fixed(1, count: 32)
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// One exact reward custody source, previous accrual and signed payout.
+    public struct RewardClaimSource: Sendable {
+        private let record: Record
+        public let sourceAsset: AssetID
+        public let destinationAsset: AssetID
+        public let expectedAccrued: Quantity?
+        public let payout: Quantity
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 4)
+            self.record = record
+            sourceAsset = try AssetID(noritoPayload: record.field(0))
+            destinationAsset = try AssetID(noritoPayload: record.field(1))
+            expectedAccrued = try record.option(2, Quantity.init(noritoPayload:))
+            payout = try Quantity(noritoPayload: record.field(3))
+            guard sourceAsset.definition == destinationAsset.definition,
+                  sourceAsset.scopeDataspace == destinationAsset.scopeDataspace,
+                  expectedAccrued?.mantissaLittleEndian.isEmpty != true else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid reward source asset or prior accrual")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Independently accrued fee reward payment, bound to its custody and receipt sequence.
+    /// Authenticated beneficiary ownership and the signing recipient are verified by native execution.
+    public struct FeeRewardClaim: Sendable {
+        private let record: Record
+        public let lifecycleSeal: Data
+        public let beneficiaryID: Data
+        public let beneficiaryRevision: UInt64
+        public let sourceAsset: AssetID
+        public let destinationAsset: AssetID
+        public let amount: Quantity
+        public let expectedClaimSequence: UInt64
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 7)
+            self.record = record
+            lifecycleSeal = try record.fixed(0, count: 32)
+            beneficiaryID = record.field(1)
+            beneficiaryRevision = try record.u64(2)
+            sourceAsset = try AssetID(noritoPayload: record.field(3))
+            destinationAsset = try AssetID(noritoPayload: record.field(4))
+            amount = try Quantity(noritoPayload: record.field(5))
+            expectedClaimSequence = try record.u64(6)
+            guard lifecycleSeal.contains(where: { $0 != 0 }),
+                  !beneficiaryID.isEmpty,
+                  !amount.mantissaLittleEndian.isEmpty,
+                  sourceAsset.scopeDataspace == nil, destinationAsset.scopeDataspace == nil,
+                  sourceAsset.definition == destinationAsset.definition else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid fee reward claim custody or amount")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Bounded reward plan with an explicit optional fee reward payment.
+    /// Sources retain Rust AssetId order; native execution authenticates the signer and ledger preconditions.
+    public struct RewardClaimPlan: Sendable {
+        private let record: Record
+        public let networkScope: NetworkId?
+        public let validUntilHeight: UInt64
+        public let expectedState: RewardClaimState?
+        public let records: [RewardRecordRef]
+        public let sources: [RewardClaimSource]
+        public let feeClaim: FeeRewardClaim?
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 6)
+            self.record = record
+            let scope = try record.variant(0)
+            switch scope.tag {
+            case 0:
+                guard record.field(0).count == 4 else {
+                    throw CanonicalNoritoDecodingError.invalidField("genesis monetary scope must be a unit variant")
+                }
+                networkScope = nil
+            case 1: networkScope = try NetworkId(bytes: scope.value)
+            default: throw CanonicalNoritoDecodingError.invalidField("unknown staking monetary scope")
+            }
+            validUntilHeight = try record.u64(1)
+            expectedState = try record.option(2, RewardClaimState.init(noritoPayload:))
+            records = try record.vector(3, limit: 64, RewardRecordRef.init(noritoPayload:))
+            sources = try record.vector(4, limit: 64, RewardClaimSource.init(noritoPayload:))
+            feeClaim = try record.option(5, FeeRewardClaim.init(noritoPayload:))
+            guard validUntilHeight > 0 else {
+                throw CanonicalNoritoDecodingError.invalidField("reward plan expiry must be positive")
+            }
+            var previous = expectedState?.throughEpoch
+            for reward in records {
+                if let prior = previous, prior >= reward.epoch {
+                    throw CanonicalNoritoDecodingError.invalidField("reward epochs must advance the retained cursor")
+                }
+                previous = reward.epoch
+            }
+            var previousSource: AssetID?
+            let recipient = sources.first?.destinationAsset.account ?? feeClaim?.destinationAsset.account
+            for source in sources {
+                if let previousSource, try !ValidatorStakingNoritoV1.assetPrecedes(previousSource, source.sourceAsset) {
+                    throw CanonicalNoritoDecodingError.invalidField("reward sources must use strict AssetId order")
+                }
+                guard source.destinationAsset.account == recipient else {
+                    throw CanonicalNoritoDecodingError.invalidField("reward plan changes recipient")
+                }
+                previousSource = source.sourceAsset
+            }
+            if let feeClaim, feeClaim.destinationAsset.account != recipient {
+                throw CanonicalNoritoDecodingError.invalidField("fee reward claim changes recipient")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    // AccountId orders controller fields, not their variable-length Norito frames.
+    // Integer order components use big endian; public keys use algorithm then key bytes.
+    private static func accountOrderKey(_ payload: Data) throws -> [Data] {
+        let controller = try Record.decodeVariant(payload)
+        switch controller.tag {
+        case 0: return [Data([0]), try publicKeyOrderKey(controller.value)]
+        case 1:
+            let policy = try Record(controller.value, fields: 3)
+            let version = try policy.fixed(0, count: 1)
+            let threshold = try policy.u16(1)
+            guard version == Data([1]), threshold > 0 else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid multisig ordering fields")
+            }
+            let members = try policy.vector(2, limit: 65535) { bytes -> [Data] in
+                let member = try Record(bytes, fields: 2)
+                let weight = try member.u16(1)
+                return [try publicKeyOrderKey(member.field(0)),
+                        Data([UInt8(weight >> 8), UInt8(truncatingIfNeeded: weight)])]
+            }
+            return [Data([1]), version,
+                    Data([UInt8(threshold >> 8), UInt8(truncatingIfNeeded: threshold)])] + members.flatMap { $0 }
+        default:
+            throw CanonicalNoritoDecodingError.invalidField("unknown account controller")
+        }
+    }
+
+    private static func publicKeyOrderKey(_ payload: Data) throws -> Data {
+        var reader = CanonicalNoritoReader(data: payload)
+        let count = try reader.readUInt64LE()
+        guard (2...65536).contains(count) else {
+            throw CanonicalNoritoDecodingError.invalidField("invalid public key ordering bytes")
+        }
+        return try Record.fixedByteArray(reader.readBytes(reader.remaining()), count: Int(count))
+    }
+
+    private static func assetPrecedes(_ left: AssetID, _ right: AssetID) throws -> Bool {
+        let leftAccount = try accountOrderKey(left.account)
+        let rightAccount = try accountOrderKey(right.account)
+        if leftAccount != rightAccount {
+            return leftAccount.lexicographicallyPrecedes(rightAccount) { $0.lexicographicallyPrecedes($1) }
+        }
+        if left.definition != right.definition {
+            return left.definition.lexicographicallyPrecedes(right.definition)
+        }
+        switch (left.scopeDataspace, right.scopeDataspace) {
+        case (nil, .some): return true
+        case let (.some(lhs), .some(rhs)): return lhs < rhs
+        default: return false
+        }
+    }
+
     /// Exact validator rebind with mandatory replacement-peer signature.
     public struct RebindPeer: Sendable {
         private let record: Record

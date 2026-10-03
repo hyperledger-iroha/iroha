@@ -843,18 +843,73 @@ def require_parliament_commit_publication(state: str) -> None:
     # authority. It selects observations only, after the real replay path has
     # admitted sources, witnesses and finality through the ordinary pipeline.
     executor_path = "crates/iroha_core/src/sumeragi/executor.rs"
-    executor = compact_rust(read(executor_path))
+    executor_source = read(executor_path)
+    executor = compact_rust(executor_source)
     require_all(executor_path, executor, (
-        ".prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::HistoricalReplay)",
         "self.prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::Forward)",
         "require_body_admission(block,&self.execution_budget)?;require_qc_witness_admission(commit_qc,&self.execution_budget)?;self.call(|reply|Request::Prepare(block.clone(),commit_qc.clone(),origin,reply))",
         "Request::Prepare(block,qc,origin,reply)=>{let_=reply.send(self.prepare_with_origin(&block,&qc,origin));}",
+        "Request::Replay(block,qc,reply)=>{let_=reply.send(self.replay(&block,&qc));}",
         "pending.matches(block,qc)&&pending.telemetry_origin==origin",
-        "iflive.telemetry_origin.is_some_and(|original|original!=origin){returnErr(\"preparedexecutiontelemetryorigincannotbereplaced\".into());}",
+        "iflive.telemetry_origin.is_some_and(|original|original!=origin){returnErr(PublicationError::Retryable(\"preparedexecutiontelemetryorigincannotbereplaced\".into(),));}",
         "live.telemetry_origin=Some(origin);",
         'telemetry_origin:live.telemetry_origin.expect("originalpreparedtelemetryorigin")',
         "pub(crate)fntelemetry_origin(&self)->CommitTelemetryOrigin{self.telemetry_origin}",
         "let(state,tip,telemetry_origin)=original.into_parts();Self{state,tip,parent:None,telemetry_origin,}",
+    ))
+    replay_modules = list(re.finditer(
+        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)\bmod\s+replay\s*;",
+        mask_rust(executor_source),
+    ))
+    if len(replay_modules) != 1 or replay_modules[0].group("attrs").strip():
+        raise RuntimeError(f"{executor_path}: replay must use its original unconditional module")
+    replay_dispatch = compact_rust(mask_rust(rust_item(
+        executor_source, "    pub fn replay(", executor_path,
+    )))
+    # Admission and the serialized result keep the original PublicationError.
+    # Pin their direct order and final expression so a diagnostic conversion,
+    # ignored guard or substituted successful reply cannot erase local refusal.
+    require_all(executor_path, replay_dispatch, (
+        "->Result<(),PublicationError>{"
+        "require_body_admission(block,&self.execution_budget)?;"
+        "require_qc_witness_admission(commit_qc,&self.execution_budget)?;"
+        "self.call(|reply|Request::Replay(block.clone(),commit_qc.clone(),reply))"
+        ".unwrap_or_else(||Err(control::stopped()))}",
+    ))
+    replay_path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    replay_source = read(replay_path)
+    worker_replay = compact_rust(mask_rust(rust_item(
+        replay_source, "    pub(super) fn replay(", replay_path,
+    )))
+    require_all(replay_path, worker_replay, ("self.replay_with_encoder(block,qc,encode)",))
+    replay = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn replay_with_encoder(", replay_path,
+    )))
+    require_all(replay_path, replay, (
+        "require_body_admission(block,&budget)?;require_qc_witness_admission(qc,&budget)?;",
+        "returncompleted.acknowledge(block,qc,&budget,&mutencode);",
+        "matchself.prepare_with_origin(block,qc,CommitTelemetryOrigin::HistoricalReplay)?{Some(result)ifresult==qc.result=>{}",
+        "self.commit(block,qc)?;",
+        "ifletErr(reason)=self.retire_completed_replay(block,qc)",
+    ))
+    retirement = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn retire_completed_replay(", replay_path,
+    )))
+    require_all(replay_path, retirement, (
+        "iforiginal!=qc||live.header!=*block.header()||live.availability!=*block.availability()||live.source!=*block.source()||live.telemetry_origin!=Some(CommitTelemetryOrigin::HistoricalReplay)",
+        "letqc=Hash::new(certificate.commit_qc());",
+        "letpayload=Hash::new(block.payload().as_slice());",
+        "self.completed_replay=Some(CompletedReplay{source:live.source,tip,header,qc,availability,payload,});",
+    ))
+    acknowledgement = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn acknowledge(", replay_path,
+    )))
+    require_all(replay_path, acknowledgement, (
+        "else{preparation::encoding_failure(&error)}",
+        "letheader=digest(CertificatePart::Header(block.header()))?;",
+        "letqc=digest(CertificatePart::Qc(qc))?;",
+        "letavailability=digest(CertificatePart::Availability(block.availability()))?;",
+        "self.source!=*block.source()||self.payload!=Hash::new(block.payload().as_slice())||self.header!=header||self.qc!=qc||self.availability!=availability",
     ))
     startup_path = "crates/iroha_core/src/sumeragi/startup.rs"
     require_all(startup_path, compact_rust(read(startup_path)), (
@@ -1392,9 +1447,13 @@ def require_native_beacon_pulse_application(
     """)
     request_order = (
         compact_rust("""
-            let root_scope = if height == genesis_height {
-                iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
-                    .map_err(ScheduleError::Epoch)?
+                let root_scope = if height == genesis_height {
+                    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                        .map_err(|error| {
+                            crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                                ScheduleError::Epoch(error.to_string())
+                            })
+                        })?
                     .sumeragi_context
                     .root_scope
             } else {
@@ -1661,16 +1720,30 @@ def require_signed_deferred_authority_and_native_fees(
 
     deferred = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(", fee_path)
     require(fee_path, deferred, (
-        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;"
+        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)"
+        ".map_err(|error| transaction_attempt_rejection(stx, error))?;"
         "let registry = validated_policy_registry(stx)",
         "active_policy_from_validated_registry(registry.as_ref(), stx)",
     ))
     authoritative = item(authority, "pub(crate) fn reject_opaque_deferred_authority(", authority_path)
     require(authority_path, authoritative, (
-        "for instructions in instruction_groups.values()",
+        "Result<(), Attempt<TransactionRejectionReason>>",
+        "reject_opaque_instruction_authority(instruction_groups.values()"
+        ".flat_map(|instructions| instructions.iter()),state_transaction,)",
+        ".map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))",
+    ))
+    shared_authority = item(authority, "pub(crate) fn reject_opaque_instruction_authority<'a>(", authority_path)
+    require(authority_path, shared_authority, (
+        "Result<(), Attempt<ValidationFail>>",
         "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
         "live_proposal_instructions_for_approval(state_transaction, approve)",
-        "TransactionRejectionReason::Validation(ValidationFail::NotPermitted(",
+        ".map_err(|error| {error.map_rejection(|error| {ValidationFail::NotPermitted(",
+    ))
+    refusal = item(fee, "fn transaction_attempt_rejection(", fee_path)
+    require(fee_path, refusal, (
+        "ExecutionAttemptError::Rejected(error) => error",
+        "ExecutionAttemptError::Deferred(reason) => {"
+        "TransactionRejectionReason::Validation(state.defer_execution(reason))}",
     ))
     classifier = item(authority, "fn monetary_staking_wire_id(", authority_path)
     require(authority_path, classifier, (
@@ -1687,20 +1760,26 @@ def require_signed_deferred_authority_and_native_fees(
         "if let Some(instruction_wire_id) = monetary_staking_wire_id(instruction)",
         "return Err(OpaqueDeferredAuthorityError::StakingOperation {instruction_index, instruction_wire_id,});",
     ))
-    recursive = item(authority, "fn reject_opaque_committee_operations_with<F>(", authority_path)
+    recursive = item(authority, "fn reject_opaque_committee_operations_with<'a, F>(", authority_path)
     require(authority_path, recursive, (
-        "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded);}",
+        "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
         "MultisigInstructionBox::Propose(proposal)",
-        "reject_opaque_committee_operations_with(&proposal.instructions, visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve,)?;",
         "MultisigInstructionBox::Approve(approval)",
-        "let Some((authority, instructions)) = resolve(&approval) else",
+        "Result<(), Attempt<OpaqueDeferredAuthorityError>>",
+        "multisig_instruction_decode_attempt(error, |_| ())",
+        "Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason))",
+        "Attempt::Rejected(()) => None",
+        "let Some((authority, instructions)) = resolve(&approval).map_err(|error| {"
+        "error.map_rejection(|error| {OpaqueDeferredAuthorityError::ProposalReadFailed(error.to_string())})})?else",
+        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve,)?;",
         "return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval",
         "if visited.insert(identity)",
         "Executable::Instructions(nested)",
-        "reject_opaque_committee_operations_with(nested, visited, depth + 1, resolve)?;",
+        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve,)?;",
         "Executable::IvmProved(proved)",
-        "reject_opaque_committee_operations_with(&proved.overlay, visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve,)?;",
         "Executable::Batch(items)",
         "std::slice::from_ref(instruction), visited, depth + 1, resolve,",
     ))

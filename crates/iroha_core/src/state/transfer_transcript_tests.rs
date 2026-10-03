@@ -483,6 +483,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     let parent = state_batch
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("original three-lane parent");
     let batch_header = BlockHeader::new(
         nonzero!(2_u64),

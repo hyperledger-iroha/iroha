@@ -51,7 +51,8 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
             .reader
             .read_current_archive(&query)
             .map_err(|error| match error {
-                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
+                | MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(_) => {
                     MusubiPublicationServiceBackendErrorV1::Retryable
                 }
                 MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {

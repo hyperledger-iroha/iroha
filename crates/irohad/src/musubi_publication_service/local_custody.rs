@@ -14,7 +14,7 @@ use iroha_musubi_service::{
 use std::path::Path;
 
 /// Failure assembling the exact local publication-custody owners.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPrivateLocalCustodyErrorV1 {
     /// The supplied service configuration is for another genesis-derived network.
     NetworkMismatch,

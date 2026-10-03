@@ -2038,11 +2038,13 @@ impl NativeCompletionPayloadBuilderV1 {
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
         let finalized_at_unix_ms = view
             .block_by_height(finalized_height)
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .header()
             .creation_time_ms;
         let head_at_unix_ms = view
             .latest_block()
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .header()
             .creation_time_ms;
@@ -2216,7 +2218,7 @@ impl NativeTransactionIngressV1 {
                 ProviderIngestTransactionObservationV1::Unknown
             };
         };
-        let Some(block) = self.state.block_by_height(height) else {
+        let Ok(Some(block)) = self.state.block_by_height(height) else {
             return ProviderIngestTransactionObservationV1::Unavailable;
         };
         observe_committed_provider_transaction(&block, hash)

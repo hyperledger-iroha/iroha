@@ -10,6 +10,37 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
 }
 
 #[test]
+fn portable_name_checks_preserve_case_insensitive_device_and_unicode_boundaries() {
+    for device in [
+        "CON", "con", "CoN", "PrN", "aUX", "nuL", "conIn$", "CoNoUt$", "com1", "CoM9", "Lpt1",
+        "lPT9", "com¹", "CoM²", "com³", "lpt¹", "LpT²", "lPT³",
+    ] {
+        for extension in ["", ".txt", ".archive.car"] {
+            let name = format!("{device}{extension}");
+            assert!(checked_name(OsStr::new(&name)).is_err(), "{name}");
+        }
+    }
+    for name in [
+        "conman",
+        "prefix.con",
+        "com0",
+        "COM10",
+        "com١",
+        "lpt0",
+        "LPT10",
+        "COM¹x",
+        "conout",
+        "com4x",
+        "éCOM1",
+        "報告",
+        "a報告",
+        ".receipt",
+    ] {
+        assert_eq!(checked_name(OsStr::new(name)).unwrap(), OsStr::new(name));
+    }
+}
+
+#[test]
 fn exact_directory_open_rejects_alias_spelling_and_missing_custody() {
     let (_temporary, directory) = store();
     let exact = PrivateDirectory::open_exact(directory.path()).unwrap();

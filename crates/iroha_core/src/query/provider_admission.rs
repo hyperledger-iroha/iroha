@@ -220,11 +220,9 @@ pub fn read_finalized_provider_admission_v1(
 ) -> Result<Option<AdmissionRecord>, Error> {
     authenticate_current(view)?;
     let finalized_secs = view
-        .latest_block()
+        .authenticated_query_ledger_time_ms()
         .ok_or(ProviderAdmissionErrorV1)?
-        .header()
-        .creation_time()
-        .as_secs();
+        / 1_000;
     let Some(policy) = read_policy(view.world())? else {
         return Ok(None);
     };

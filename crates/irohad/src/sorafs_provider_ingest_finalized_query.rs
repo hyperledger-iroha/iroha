@@ -2462,8 +2462,14 @@ mod tests {
             chain_id.clone(),
             network_id,
         ));
-        kura.store_block(Arc::new(genesis))
-            .expect("store signed-capture test genesis");
+        kura.store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                genesis,
+                &state.ivm_execution_budget(),
+            )
+            .expect("admit signed-capture genesis owner"),
+        )
+        .expect("store signed-capture test genesis");
         let first_key =
             ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, genesis_hash, 1_000)
                 .expect("signed capture first key");

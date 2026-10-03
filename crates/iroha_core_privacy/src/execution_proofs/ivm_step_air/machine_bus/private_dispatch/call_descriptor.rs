@@ -117,7 +117,10 @@ fn callable(program: &Program, slot: usize) -> Option<&ivm::call::EmbeddedCallab
 /// artifact, never from an unbounded prover-provided tariff. Prepared callable
 /// validation bounds it by 532480; each selected 16-bit limb remains bounded.
 fn frame_work(callable: &ivm::call::EmbeddedCallableV1) -> u64 {
-    u64::from(callable.frame_bytes).div_ceil(8) + callable.result_words.len() as u64
+    u64::from(callable.frame_bytes).div_ceil(8)
+        + callable
+            .result_word_count()
+            .expect("admitted result schema") as u64
 }
 
 fn gas_limb(row: &[F; FRAME_WORK_WIDTH], index: usize) -> F {
@@ -199,30 +202,17 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
             .child
             .sub(originals.fields[super::RUNNING_WRITE][BEFORE]),
     );
-    let mut selected = F::ZERO;
-    let mut entry = [F::ZERO; 4];
-    let mut absolute = [F::ZERO; 4];
-    let mut frame = F::ZERO;
-    let mut arguments = F::ZERO;
-    let mut results = F::ZERO;
+    let (child, selected, absolute) = program
+        .callables()
+        .select_child(program.fetch(row.dispatch));
     let mut frame_cost = [F::ZERO; 4];
     for slot in 0..program.words.len() {
         let fetch = row.dispatch[super::FETCH + slot];
         if let Some(callable) = callable(program, slot) {
-            selected = selected.add(fetch);
             for limb in 0..4 {
                 frame_cost[limb] = frame_cost[limb]
                     .add(fetch.mul(super::constant_limb(frame_work(callable), limb)));
-                entry[limb] =
-                    entry[limb].add(fetch.mul(super::constant_limb(callable.entry_pc, limb)));
-                absolute[limb] = absolute[limb].add(fetch.mul(super::constant_limb(
-                    u64::from(program.first_pc) + callable.entry_pc,
-                    limb,
-                )));
             }
-            frame = frame.add(fetch.mul(F(u64::from(callable.frame_bytes))));
-            arguments = arguments.add(fetch.mul(F(callable.argument_words.len() as u64)));
-            results = results.add(fetch.mul(F(callable.result_words.len() as u64)));
         }
     }
     out.push(selected.sub(decoded.child));
@@ -234,12 +224,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
         schedule.descriptor(),
         row.descriptor,
         decoded.child,
-        frame_descriptor::Callable {
-            entry_pc: &entry,
-            frame_bytes: frame,
-            argument_words: arguments,
-            result_words: results,
-        },
+        &child,
         frame_descriptor::Ports {
             active: decoded.child_active,
             packets: core::array::from_fn(|slot| row.packets[descriptor_slot(slot)]),

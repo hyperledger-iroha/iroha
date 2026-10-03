@@ -143,7 +143,10 @@ pub fn commit_native_accepted_inputs(
     accepted: Vec<AcceptedTransaction<'static>>,
 ) -> CommittedBlock {
     let view = chain.state().view();
-    let parent = view.latest_block().expect("original applied genesis");
+    let parent = view
+        .latest_block()
+        .expect("funded canonical history read")
+        .expect("original applied genesis");
     let schedule = view
         .world()
         .consensus_schedule()
@@ -1523,6 +1526,7 @@ mod tests {
         assert_eq!(view.height(), 2);
         let first_block = view
             .latest_block()
+            .expect("funded canonical history read")
             .expect("committed test block remains readable from Kura");
         let first_block_hash = first_block.hash();
         assert_eq!(first_block.header().height().get(), 2);
@@ -1561,6 +1565,7 @@ mod tests {
         assert_eq!(view.height(), 3);
         let second_block = view
             .latest_block()
+            .expect("funded canonical history read")
             .expect("second committed test block remains readable from Kura");
         assert_eq!(second_block.header().height().get(), 3);
         assert_eq!(

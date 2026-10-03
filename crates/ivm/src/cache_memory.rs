@@ -58,6 +58,9 @@ pub(crate) fn with_refused_shared_allocation_for_test<T>(operation: impl FnOnce(
     operation()
 }
 
+mod reg_log_owner;
+pub(crate) use reg_log_owner::SharedRegLog;
+
 pub(crate) mod strong_owner;
 use strong_owner::StrongOwner;
 
@@ -523,173 +526,10 @@ impl Drop for MemoryReservation {
     }
 }
 
-#[derive(Debug)]
-struct Allocation<T> {
-    values: Box<[T]>,
-    reservation: MemoryReservation,
-}
-
-/// An immutable shared slice whose memory charge follows its final owner.
-///
-/// Clones retain the same reservation. This deliberately does not expose a raw
-/// `Arc` to the slice, which could otherwise outlive its accounting owner.
-/// Elements are inline `Copy` values. Metadata with owned nested allocations
-/// uses [`SharedValue`] and supplies its complete dynamic footprint.
-#[derive(Debug)]
-pub struct SharedAllocation<T: Copy>(StrongOwner<Allocation<T>>, bool);
-
-impl<T: Copy> SharedAllocation<T> {
-    pub(crate) fn try_from_iter<E: From<crate::error::VMError>>(
-        values: impl ExactSizeIterator<Item = Result<T, E>>,
-    ) -> Result<Self, E> {
-        Self::try_from_iter_with_budget(values, global_budget())
-    }
-
-    fn try_from_iter_with_budget<E: From<crate::error::VMError>>(
-        values: impl ExactSizeIterator<Item = Result<T, E>>,
-        budget: &MemoryBudget,
-    ) -> Result<Self, E> {
-        use crate::error::{ExecutionDeferral, VMError};
-
-        let allocation_refusal =
-            || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
-        #[cfg(test)]
-        if REFUSE_NEXT_SHARED_ALLOCATION.replace(false) {
-            return Err(allocation_refusal().into());
-        }
-        let len = values.len();
-        let slice_bytes = std::alloc::Layout::array::<T>(len)
-            .map(|layout| layout.size())
-            .map_err(|_| allocation_refusal())?;
-        let owner_bytes = std::mem::size_of::<Allocation<T>>()
-            .checked_add(2 * std::mem::size_of::<usize>())
-            .ok_or_else(allocation_refusal)?;
-        let bytes = slice_bytes
-            .checked_add(owner_bytes)
-            .ok_or_else(allocation_refusal)?;
-        let mut reservation = budget.reserve(bytes);
-        let mut output = Vec::new();
-        output
-            .try_reserve_exact(len)
-            .map_err(|_| allocation_refusal())?;
-        let conversion_peak_bytes = std::alloc::Layout::array::<T>(output.capacity())
-            .ok()
-            .and_then(|layout| layout.size().checked_add(slice_bytes))
-            .and_then(|bytes| bytes.checked_add(owner_bytes))
-            .ok_or_else(allocation_refusal)?;
-        // Shrinking the Vec into a boxed slice may allocate the exact-sized
-        // destination while the temporary Vec allocation is still alive.
-        reservation.set_known_bytes(conversion_peak_bytes);
-        for value in values {
-            if output.len() == len {
-                return Err(VMError::DecodeError.into());
-            }
-            output.push(value?);
-        }
-        if output.len() != len {
-            return Err(VMError::DecodeError.into());
-        }
-        let values = output.into_boxed_slice();
-        reservation.set_known_bytes(Self::bytes_for_len(values.len()));
-        let owner = Self(
-            StrongOwner::new(Allocation {
-                values,
-                reservation,
-            }),
-            false,
-        );
-        owner.0.reservation.register_shared_initial();
-        Ok(owner)
-    }
-
-    /// Take exclusive ownership of a slice and begin tracking its allocation.
-    pub fn from_boxed(values: Box<[T]>) -> Self {
-        Self::with_budget(values, global_budget())
-    }
-
-    fn with_budget(values: Box<[T]>, budget: &MemoryBudget) -> Self {
-        let bytes = Self::bytes_for_len(values.len());
-        let owner = Self(
-            StrongOwner::new(Allocation {
-                values,
-                reservation: budget.reserve(bytes),
-            }),
-            false,
-        );
-        owner.0.reservation.register_shared_initial();
-        owner
-    }
-
-    fn bytes_for_len(len: usize) -> usize {
-        // The owner allocation contains the Box and reservation, plus Arc's two
-        // reference counters. The slice is its own exact-sized allocation.
-        len * std::mem::size_of::<T>()
-            + std::mem::size_of::<Allocation<T>>()
-            + 2 * std::mem::size_of::<usize>()
-    }
-
-    /// Admit this allocation for cache retention without waiting for other owners.
-    pub fn try_retain(&self) -> bool {
-        self.0.reservation.try_retain()
-    }
-
-    /// Clone one cache-held reference; ordinary clones remain borrower references.
-    pub fn cache_clone(&self) -> Self {
-        self.0.reservation.add_shared_handle(true);
-        Self(self.0.clone(), true)
-    }
-
-    /// Transfer this reference into a cache without copying the allocation.
-    pub fn into_cache_owner(mut self) -> Self {
-        if !self.1 {
-            self.0.reservation.promote_shared_cache_handle();
-            self.1 = true;
-        }
-        self
-    }
-
-    pub(crate) fn allocation_bytes(&self) -> usize {
-        self.0.reservation.bytes()
-    }
-
-    /// Whether two handles refer to the same allocation.
-    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        StrongOwner::ptr_eq(&this.0, &other.0)
-    }
-}
-
-impl<T: Copy> From<Vec<T>> for SharedAllocation<T> {
-    fn from(values: Vec<T>) -> Self {
-        Self::from_boxed(values.into_boxed_slice())
-    }
-}
-
-impl<T: Copy> Clone for SharedAllocation<T> {
-    fn clone(&self) -> Self {
-        self.0.reservation.add_shared_handle(false);
-        Self(self.0.clone(), false)
-    }
-}
-
-impl<T: Copy> Drop for SharedAllocation<T> {
-    fn drop(&mut self) {
-        self.0.reservation.remove_shared_handle(self.1);
-    }
-}
-
-impl<T: Copy> Deref for SharedAllocation<T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0.values
-    }
-}
-
-impl<T: Copy> AsRef<[T]> for SharedAllocation<T> {
-    fn as_ref(&self) -> &[T] {
-        self
-    }
-}
+mod shared_allocation;
+#[cfg(test)]
+use shared_allocation::Allocation;
+pub use shared_allocation::SharedAllocation;
 
 #[derive(Debug)]
 struct ValueAllocation<T> {

@@ -70,7 +70,11 @@ mod public_contract_creation_fees {
                     .into();
                 let native_chain = component_chain(state);
                 let state = native_chain.state();
-                let genesis = state.view().latest_block().expect("original genesis");
+                let genesis = state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .expect("original genesis");
                 let address = iroha_data_model::smart_contract::ContractAddress::derive(
                     &state.network_id,
                     &developer,
@@ -138,7 +142,8 @@ mod public_contract_creation_fees {
                         &state_block.world,
                         &state_block.nexus.fees.fee_asset_id,
                         20,
-                    ).expect("completed pin read"),
+                    )
+                    .expect("completed pin read"),
                     Some(payer_asset.definition().clone()),
                     "the payer and signed fee limits use the network XOR identity"
                 );
@@ -167,14 +172,22 @@ mod public_contract_creation_fees {
                         "ordinary paid artifact creation failed (parallel_apply={parallel_apply}): {errors:?}"
                     );
                     assert_eq!(
-                        state_block.world.contract_code().get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)),
+                        state_block.world.contract_code().get(
+                            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                                code_hash
+                            )
+                        ),
                         Some(&artifact)
                     );
                     assert!(
                         state_block
                             .world
                             .contract_manifests()
-                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash))
+                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                                code_hash
+                            ))
                             .is_some()
                     );
                     assert_eq!(
@@ -200,12 +213,24 @@ mod public_contract_creation_fees {
                         2,
                         "both stages must fail fee admission: {errors:?}"
                     );
-                    assert!(state_block.world.contract_code().get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
+                    assert!(
+                        state_block
+                            .world
+                            .contract_code()
+                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                                code_hash
+                            ))
+                            .is_none()
+                    );
                     assert!(
                         state_block
                             .world
                             .contract_manifests()
-                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash))
+                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                                code_hash
+                            ))
                             .is_none()
                     );
                     assert!(state_block.world.contract_code_uploads().is_empty());

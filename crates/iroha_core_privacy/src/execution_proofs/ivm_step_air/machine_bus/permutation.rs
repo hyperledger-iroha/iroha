@@ -97,7 +97,7 @@ pub(super) fn columns(
 /// Every coordinate is an explicit base-field polynomial; no product equality
 /// supplied by the witness is accepted without all intermediate multiplications.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     row: &[F],
     next: &[F],
     ordered: &[F],

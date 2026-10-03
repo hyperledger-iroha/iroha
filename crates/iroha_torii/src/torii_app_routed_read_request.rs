@@ -454,6 +454,7 @@ fn app_routed_read_form_encode_response(
             limit,
         ),
         norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::ScopedDecodeResource(_)
         | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -547,6 +548,7 @@ fn torii_routed_read_form_encode_response(
             )
         }
         norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::ScopedDecodeResource(_)
         | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",

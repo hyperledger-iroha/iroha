@@ -373,7 +373,10 @@ fn sandbox_genesis_and_queued_input_share_original_native_network() {
     let view = sandbox.state.view();
     assert_eq!(view.height(), 1);
     assert_eq!(view.kura().blocks_count(), 1);
-    let genesis = view.latest_block().expect("original Sandbox genesis");
+    let genesis = view
+        .latest_block()
+        .expect("completed original State read")
+        .expect("original Sandbox genesis");
     assert_eq!(
         sandbox.state.network_id_ref().into_genesis_hash(),
         genesis.hash()
@@ -418,6 +421,7 @@ impl Sandbox {
             .state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .map(|block| block.header().creation_time().as_millis())
             .and_then(|ms| u64::try_from(ms).ok())
             .unwrap_or(0);
@@ -641,7 +645,14 @@ impl Sandbox {
                     .collect::<Vec<_>>()
             };
             BlockBuilder::new(transactions)
-                .chain(0, self.state.view().latest_block().as_deref())
+                .chain(
+                    0,
+                    self.state
+                        .view()
+                        .latest_block()
+                        .expect("completed original State read")
+                        .as_deref(),
+                )
                 .sign(&GENESIS_ACCOUNT.key)
                 .unpack(|_| {})
                 .into()
@@ -667,7 +678,9 @@ impl SandboxBlock<'_> {
             self.recording.take().expect("original execution recorder"),
         )
         .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
+        let committed = valid
+            .commit_unchecked(crate::block::reserve_block_for_tests())
+            .unpack(|_| {});
         let events = self.state.apply_without_execution(
             &committed,
             // topology in state is only used by sumeragi

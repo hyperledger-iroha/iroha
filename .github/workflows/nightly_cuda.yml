@@ -125,17 +125,57 @@ jobs:
           cd kotlin
           ./gradlew :core-jvm:cudaHardwareTest --console=plain
       - name: IVM checked-in PTX identity and bundled hardware qualification
+        env:
+          CUDA_APPROVED_IMAGE: ${{ vars.IVM_CUDA_QUALIFICATION_IMAGE }}
+          CUDA_REVIEWED_IMAGE_SHA256: ${{ vars.IVM_CUDA_IMAGE_SHA256 }}
+          CUDA_REVIEWED_KEY_SHA256: ${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}
         run: |
           set -o pipefail
           # Missing artifacts fail this release gate explicitly. Generated-candidate
           # receipts above remain diagnostics, never evidence for bundled binaries.
-          IVM_CUDA_PTX_MODE=check cargo build --locked -p ivm --features cuda \
-            2>&1 | tee dist/cuda-nightly/ivm-ptx-identity.log
-          sha256sum crates/ivm/cuda/*.cu crates/ivm/cuda/*.ptx \
-            > dist/cuda-nightly/ivm-ptx.sha256
-          IVM_CUDA_PTX_MODE=bundled cargo test --locked -p ivm --test cuda_hardware \
-            --features cuda-hardware-tests -- --nocapture \
-            2>&1 | tee dist/cuda-nightly/ivm-bundled-hardware.log
+          # These reviewed repository variables are mandatory; neither an ambient
+          # runner key nor the bundle's own image claim supplies this authority.
+          python3 - <<'PY'
+          import os
+          from scripts.check_ivm_cuda_release_image import configured_image
+          configured_image(os.environ['CUDA_APPROVED_IMAGE'],
+                           os.environ['CUDA_REVIEWED_KEY_SHA256'],
+                           os.environ['CUDA_REVIEWED_IMAGE_SHA256'])
+          PY
+          docker pull "$CUDA_APPROVED_IMAGE"
+          docker image inspect --format '{{json .}}' "$CUDA_APPROVED_IMAGE" \
+            > dist/cuda-nightly/image-inspection.json
+          python3 scripts/check_ivm_cuda_release_image.py \
+            --image-reference "$CUDA_APPROVED_IMAGE" \
+            --trusted-key-sha256 "$CUDA_REVIEWED_KEY_SHA256" \
+            --image-sha256 "$CUDA_REVIEWED_IMAGE_SHA256" \
+            --inspection dist/cuda-nightly/image-inspection.json \
+            --bundle-dir crates/ivm/cuda \
+            --output dist/cuda-nightly/image-binding.json
+          image_id="$(python3 -c 'import json; print(json.load(open("dist/cuda-nightly/image-binding.json"))["image_config_digest"])')"
+          docker run --rm --gpus all --entrypoint /bin/bash \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/workspace" \
+            --workdir /workspace \
+            --env "IVM_CUDA_TRUSTED_KEY_SHA256=${CUDA_REVIEWED_KEY_SHA256}" \
+            --env IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 \
+            --env CARGO_TARGET_DIR=target/cuda-bundled-release \
+            --env CARGO_TERM_COLOR=always --env RUST_TEST_THREADS=1 \
+            "$image_id" -euc '
+              set -o pipefail
+              IVM_CUDA_PTX_MODE=check cargo build --locked -p ivm --features cuda \
+                2>&1 | tee dist/cuda-nightly/ivm-ptx-identity.log
+              sha256sum crates/ivm/cuda/*.cu crates/ivm/cuda/*.ptx \
+                > dist/cuda-nightly/ivm-ptx.sha256
+              IVM_CUDA_PTX_MODE=bundled cargo test --locked -p ivm --test cuda_hardware \
+                --features cuda-hardware-tests -- --nocapture \
+                2>&1 | tee dist/cuda-nightly/ivm-bundled-hardware.log
+            '
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          receipt = json.loads(pathlib.Path('dist/cuda-nightly/image-binding.json').read_bytes())
+          actual = hashlib.sha256(pathlib.Path('crates/ivm/cuda/provenance.v1').read_bytes()).hexdigest()
+          assert actual == receipt['source_manifest_sha256'], 'CUDA source manifest changed during qualification'
+          PY
       - name: Upload CUDA inventory
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

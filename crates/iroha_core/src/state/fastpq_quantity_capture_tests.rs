@@ -118,7 +118,10 @@ fn authenticate_quantity_state(component: State) -> State {
 
 fn quantity_successor_header(state: &State) -> BlockHeader {
     let view = state.view();
-    let parent = view.latest_block().expect("original quantity genesis");
+    let parent = view
+        .latest_block()
+        .expect("completed original State read")
+        .expect("original quantity genesis");
     let time_ms = u64::try_from(parent.header().creation_time().as_millis())
         .expect("quantity fixture timestamp fits")
         + 2;
@@ -145,7 +148,12 @@ fn quantity_fixture_preserves_balances_and_original_authenticated_network_root()
     );
     assert!(
         quantity_successor_header(&state).creation_time()
-            > view.latest_block().unwrap().header().creation_time()
+            > view
+                .latest_block()
+                .expect("completed original State read")
+                .unwrap()
+                .header()
+                .creation_time()
     );
     assert_eq!(
         view.world.assets.get(&alice).unwrap().as_ref(),

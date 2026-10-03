@@ -4,12 +4,12 @@
 //! existing CertifiedChain verifier their exact contiguous hash cut. No projected context,
 //! fabricated genesis QC, alternate verifier, storage database or mutable World is introduced.
 
-use std::sync::Arc;
+use iroha_allocation::AllocationBudget;
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SharedSignedBlock, SignedBlock},
     sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
 };
 use iroha_model_base::chain::ChainId;
@@ -41,13 +41,15 @@ pub fn with_verified_native_journal<T>(
     read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, String>,
 ) -> Result<T, String> {
     journal.validate_source(limits)?;
+    // One explicit offline operation allowance funds every retained shared control.
+    let control_budget = AllocationBudget::new(limits.allocated_bytes);
     norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
         // Admission precedes each concrete side allocation; canonical blocks themselves use
         // the same active Norito counters. No per-block scope resets the aggregate counter.
         let count = journal.blocks.len();
         let side_bytes = count
             .checked_mul(
-                core::mem::size_of::<Arc<SignedBlock>>()
+                core::mem::size_of::<iroha_data_model::block::SharedSignedBlock>()
                     + core::mem::size_of::<HashOf<BlockHeader>>(),
             )
             .ok_or("native journal index allocation overflow")?;
@@ -61,6 +63,8 @@ pub fn with_verified_native_journal<T>(
             .try_reserve_exact(count)
             .map_err(|_| "native journal hash index allocation failed")?;
         for (offset, artifact) in journal.blocks.iter().enumerate() {
+            let shell =
+                SharedSignedBlock::reserve(&control_budget).map_err(|error| error.to_string())?;
             let block = artifact.decode_block(limits)?;
             let expected = u64::try_from(offset)
                 .ok()
@@ -69,12 +73,10 @@ pub fn with_verified_native_journal<T>(
             if block.header().height().get() != expected {
                 return Err("native journal is not a complete consecutive prefix".into());
             }
-            norito::core::reserve_decode_allocation(
-                core::mem::size_of::<SignedBlock>() + 2 * core::mem::size_of::<usize>(),
-            )
-            .map_err(|error| error.to_string())?;
+            norito::core::reserve_decode_allocation(SharedSignedBlock::allocation_layout().size())
+                .map_err(|error| error.to_string())?;
             hashes.push(block.hash());
-            frames.push(Arc::new(block));
+            frames.push(shell.initialize(block));
         }
         let reader = CertifiedChain::from_frames(chain_id, network, &hashes, &frames)
             .map_err(|error| error.to_string())?

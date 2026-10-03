@@ -6,6 +6,10 @@
 //!
 //! The metadata header encodes the VM version, the ABI-v1 `ZK` and `VECTOR`
 //! mode flags, an optional logical vector length, and a cycle limit.
+mod literal_table;
+mod section_decode;
+pub use literal_table::{LiteralDirectory, ValidatedLiteral};
+
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorMessage, ContractErrorTypeDescriptor, EntryPointKind,
@@ -1655,11 +1659,10 @@ fn parse_contract_interface_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractInterfaceV1>(
+    let decoded = section_decode::decode::<EmbeddedContractInterfaceV1>(
         &bytes[payload_start..payload_end],
         CONTRACT_INTERFACE_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    )?;
     Ok((decoded, payload_end))
 }
 fn parse_contract_debug_section(
@@ -1683,11 +1686,10 @@ fn parse_contract_debug_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractDebugInfoV1>(
+    let decoded = section_decode::decode::<EmbeddedContractDebugInfoV1>(
         &bytes[payload_start..payload_end],
         CONTRACT_DEBUG_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    )?;
     Ok((decoded, payload_end))
 }
 fn parse_literal_section(

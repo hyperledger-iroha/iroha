@@ -46,7 +46,8 @@ fn registers_merkle_dirs_match_path() {
     vm.set_register(3, 0x0123_4567_89AB_CDEF);
     vm.set_register(7, 0xA5A5_A5A5_A5A5_A5A5);
     for &idx in &[0usize, 3, 7] {
-        let path = vm.registers.merkle_path(idx).unwrap();
+        let path: [[u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH] =
+            vm.registers.merkle_path(idx).unwrap();
         let depth_cap = Some(16);
         // Two independent derivations of compact proof
         let (cp_regs, _root_regs) = vm.registers.merkle_compact(idx, depth_cap).unwrap();

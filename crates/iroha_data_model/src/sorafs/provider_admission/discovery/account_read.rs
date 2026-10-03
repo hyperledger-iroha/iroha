@@ -4,31 +4,6 @@ use super::*;
 pub use sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1;
 use sorafs_manifest::signer::custody::{SignerCustodyUseContextV1, verify_signer_custody_use_v1};
 
-/// Exact original current native custody index and control record.
-/// Token bodies and signer operation/audit journals are not part of this projection.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::Encode,
-    norito::Decode,
-    iroha_schema::IntoSchema,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito(deny_unknown_fields, no_fast_from_json)]
-#[norito_schema(
-    name = "iroha_data_model::sorafs::provider_admission::discovery::account_read::StreamTokenDiscoveryProofV1"
-)]
-pub struct StreamTokenDiscoveryProofV1 {
-    /// Original complete canonical current-head index frame.
-    pub head: Vec<u8>,
-    /// Original complete canonical control record, including its enrolled public attestation.
-    pub record: Vec<u8>,
-}
-
 /// Provider policy and current token key authenticated under one independently selected decision.
 /// This grants no provider, signer, account spending, or transaction submission authority.
 #[derive(Clone, Debug)]

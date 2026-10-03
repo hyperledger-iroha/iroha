@@ -49,7 +49,11 @@ mod tests {
             .kura
             .corrupt_commit_certificate_for_testing(height, None)
             .unwrap();
-        let changed = chain.kura.get_block(height).unwrap();
+        let changed = chain
+            .kura
+            .get_block(height, &chain.state().ivm_execution_budget())
+            .expect("original block read attempt")
+            .unwrap();
         assert!(changed.commit_certificate().is_none());
         assert_eq!(
             changed.executed_block_wire_identity().unwrap(),

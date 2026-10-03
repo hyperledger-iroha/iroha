@@ -8,6 +8,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     block::{
+        SignedBlock,
         builder::BlockBuilder as ModelBlockBuilder,
         execution_output::{
             ExecutionOutputV1, InvocationCompletionV1, NetworkExecutionOutputV1,
@@ -305,8 +306,10 @@ fn canonical_query_internal_output_substitution_cannot_verify_as_transaction() {
 #[test]
 fn canonical_query_measures_full_projected_row_before_cloning() {
     let block = fixture();
-    let projection =
-        NetworkCarrierProjection::new(std::sync::Arc::new(block.clone())).expect("valid carrier");
+    let projection = NetworkCarrierProjection::new(
+        crate::block::reserve_block_for_tests().initialize(block.clone()),
+    )
+    .expect("valid carrier");
     for index in 0..projection.count {
         let mut charged = None;
         let transaction = projection
@@ -326,8 +329,10 @@ fn canonical_query_measures_full_projected_row_before_cloning() {
 fn canonical_query_refuses_a_row_before_materialization_and_preserves_carrier() {
     let block = fixture();
     let before = block.encode_wire().unwrap();
-    let projection =
-        NetworkCarrierProjection::new(std::sync::Arc::new(block.clone())).expect("valid carrier");
+    let projection = NetworkCarrierProjection::new(
+        crate::block::reserve_block_for_tests().initialize(block.clone()),
+    )
+    .expect("valid carrier");
     let mut admission_calls = 0;
     let error = projection
         .transaction_at(1, |bytes| {
@@ -345,8 +350,10 @@ fn canonical_query_refuses_a_row_before_materialization_and_preserves_carrier() 
 #[test]
 fn canonical_query_projects_only_the_requested_row_after_full_validation() {
     let block = fixture();
-    let projection =
-        NetworkCarrierProjection::new(std::sync::Arc::new(block.clone())).expect("valid carrier");
+    let projection = NetworkCarrierProjection::new(
+        crate::block::reserve_block_for_tests().initialize(block.clone()),
+    )
+    .expect("valid carrier");
     let mut admitted = 0;
     let selected = projection
         .transaction_at(1, |_| {

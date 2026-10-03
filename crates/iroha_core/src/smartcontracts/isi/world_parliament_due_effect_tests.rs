@@ -1295,6 +1295,10 @@ fn parliament_validation_fee_policy_enacts_at_the_exact_due_height() {
             wrapper.binding.pool_contract_address = pool.binding.contract_address;
             wrapper.binding.pool_code_hash = pool.binding.code_hash;
             let binding = wrapper.binding;
+            validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+                &binding, execution,
+            )
+            .expect("exact-due policy fixture owns authenticated payout runtime scopes");
             let payout_fixture = seed_due_parliament_certificate(
                 execution,
                 ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {

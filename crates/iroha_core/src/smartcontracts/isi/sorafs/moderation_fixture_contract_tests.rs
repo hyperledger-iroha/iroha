@@ -131,8 +131,12 @@ fn moderation_authenticated_fixture_keeps_original_balances_and_signed_root() {
     assert_eq!(state.kura().blocks_count(), 1);
     let genesis = state
         .kura()
-        .get_block(std::num::NonZeroUsize::new(1).unwrap())
-        .unwrap();
+        .get_block(
+            std::num::NonZeroUsize::new(1).unwrap(),
+            &state.ivm_execution_budget(),
+        )
+        .expect("original history read completes")
+        .expect("signed genesis is retained");
     let view = state.view();
     assert_eq!(
         state.network_id_ref(),

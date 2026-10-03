@@ -17,6 +17,11 @@ use super::{
     LeafError, LeafLimits, Role, STATE_FIELDS, capture_account_alias_table_once,
     capture_accounts_table_once, capture_domains_table_once, require_complete_inventory, visit,
 };
+use super::{
+    capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
+    capture_contract_alias_bindings_once, capture_escrows_once, capture_nfts_once,
+    capture_repo_agreements_once, capture_rwas_once,
+};
 use crate::state::deserialize::musubi_source_work::{
     self, SourceValidationError, SourceWorkLimits, observation::MusubiSemanticTable,
 };
@@ -38,6 +43,9 @@ const ALIAS_MATERIALIZER: TableMaterializer = TableMaterializer::Single {
 
 include!("table_capture/capture_macros.rs");
 
+#[cfg(test)]
+#[path = "table_capture/checked_group_tests.rs"]
+mod checked_group_tests;
 #[cfg(test)]
 #[path = "table_capture/native_test_support.rs"]
 mod native_test_support;
@@ -113,11 +121,6 @@ capture_world_table_once!(
     "world.identifier_claims"
 );
 capture_world_table_once!(
-    capture_account_rekey_records_once,
-    account_rekey_records,
-    "world.account_rekey_records"
-);
-capture_world_table_once!(
     capture_account_recovery_policies_once,
     account_recovery_policies,
     "world.account_recovery_policies"
@@ -128,28 +131,15 @@ capture_world_table_once!(
     "world.account_recovery_requests"
 );
 capture_world_table_once!(
-    capture_asset_definitions_once,
-    asset_definitions,
-    "world.asset_definitions"
-);
-capture_world_table_once!(
     capture_asset_definition_alias_bindings_once,
     asset_definition_alias_bindings,
     "world.asset_definition_alias_bindings"
 );
 capture_world_table_once!(
-    capture_contract_alias_bindings_once,
-    contract_alias_bindings,
-    "world.contract_alias_bindings"
-);
-capture_world_table_once!(capture_assets_once, assets, "world.assets");
-capture_world_table_once!(
     capture_asset_metadata_once,
     asset_metadata,
     "world.asset_metadata"
 );
-capture_world_table_once!(capture_nfts_once, nfts, "world.nfts");
-capture_world_table_once!(capture_rwas_once, rwas, "world.rwas");
 capture_world_table_once!(capture_roles_once, roles, "world.roles");
 capture_world_table_once!(
     capture_account_permissions_once,
@@ -225,11 +215,6 @@ capture_world_table_once!(
     capture_viral_bonus_paid_once,
     viral_bonus_paid,
     "world.viral_bonus_paid"
-);
-capture_world_table_once!(
-    capture_asset_escrows_once,
-    asset_escrows,
-    "world.asset_escrows"
 );
 capture_world_table_once!(
     capture_execution_proof_profiles_once,
@@ -802,7 +787,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     },
     TableMaterializer::Single {
         id: "world.asset_escrows",
-        capture: capture_asset_escrows_once,
+        capture: capture_escrows_once,
     },
     TableMaterializer::Single {
         id: "world.execution_proof_profiles",
@@ -1269,7 +1254,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     },
     TableMaterializer::Single {
         id: "world.repo_agreements",
-        capture: native_world::capture_repo_agreements_once,
+        capture: capture_repo_agreements_once,
     },
     TableMaterializer::Single {
         id: "world.settlement_receipts",
@@ -2572,6 +2557,7 @@ mod tests {
             .world
             .account_aliases
             .insert(alias.clone(), owner.clone());
+        state.world.rebuild_account_alias_index().unwrap();
         let before = capture_tables_once(&state, ONE_TABLE, ALIAS_ONLY, policy(limits()))
             .expect("bounded actual table")
             .expect("stable generation");
@@ -2648,6 +2634,7 @@ mod tests {
             crate::state::AccountValue::new(AccountDetails::default()),
         );
         state.world.account_aliases.insert(alias.clone(), alternate);
+        state.world.rebuild_account_alias_index().unwrap();
         let tampered = capture_tables_once(&state, ONE_TABLE, ALIAS_ONLY, policy(limits()))
             .unwrap()
             .unwrap();

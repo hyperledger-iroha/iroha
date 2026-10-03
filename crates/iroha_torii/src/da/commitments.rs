@@ -33,7 +33,10 @@ pub async fn handler_list_commitments(
     let snapshot = list_snapshot_for_state(app.state.as_ref());
     let nexus = app.state.nexus_snapshot();
     let page = {
-        let store = app.state.da_commitments();
+        let store = app
+            .state
+            .da_commitments()
+            .map_err(crate::canonical_history::da_hydration_error)?;
         list_active_from_store(&store, &request, &nexus, snapshot).map_err(commitment_list_error)?
     };
     let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
@@ -61,7 +64,7 @@ pub async fn handler_prove_commitment(
             message: error.to_string(),
         })?;
     let nexus = app.state.nexus_snapshot();
-    let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
+    let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref())?;
     proof.map_or_else(
         || Ok(JsonBody(None)),
         |(proof, policies)| {
@@ -77,7 +80,7 @@ pub async fn handler_verify_commitment(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaCommitmentProof>,
 ) -> Result<JsonBody<DaCommitmentVerifyResponse>, Error> {
-    let response = verify_against_kura_block(&proof, app.state.as_ref());
+    let response = verify_against_kura_block(&proof, app.state.as_ref())?;
     Ok(JsonBody(response))
 }
 /// HTTP handler for `/v1/da/proof-policies`.
@@ -248,82 +251,104 @@ fn build_active_proof_from_state(
     request: &DaCommitmentProofRequest,
     nexus: &Nexus,
     state: &iroha_core::state::State,
-) -> Option<(DaCommitmentProof, DaProofPolicyBundle)> {
+) -> Result<Option<(DaCommitmentProof, DaProofPolicyBundle)>, Error> {
     let policy_context = ActiveLaneProofPolicyContext::new(nexus);
     let target = {
-        let store = state.da_commitments();
-        find_in_store(&store, request)?
+        let store = state
+            .da_commitments()
+            .map_err(crate::canonical_history::da_hydration_error)?;
+        find_in_store(&store, request)
+    };
+    let Some(target) = target else {
+        return Ok(None);
     };
     if !commitment_lane_is_active(&policy_context, &target) {
-        return None;
+        return Ok(None);
     }
-    let block_height = usize::try_from(target.location.block_height).ok()?;
-    let block = state.block_by_height(NonZeroUsize::new(block_height)?)?;
-    let bundle = block.as_ref().da_commitments()?;
-    let index = usize::try_from(target.location.index_in_bundle).ok()?;
-    if bundle.commitments.get(index) != Some(&target.commitment) {
-        return None;
-    }
-    let policies = block.as_ref().da_proof_policies()?.clone();
-    let proof = build_da_commitment_proof(bundle, target.location.block_height, index)?;
-    Some((proof, policies))
+    let Some(block_height) = usize::try_from(target.location.block_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+    else {
+        return Ok(None);
+    };
+    let Some(block) = state
+        .block_by_height(block_height)
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
+        return Ok(None);
+    };
+    Ok((|| {
+        let bundle = block.as_ref().da_commitments()?;
+        let index = usize::try_from(target.location.index_in_bundle).ok()?;
+        if bundle.commitments.get(index) != Some(&target.commitment) {
+            return None;
+        }
+        let policies = block.as_ref().da_proof_policies()?.clone();
+        let proof = build_da_commitment_proof(bundle, target.location.block_height, index)?;
+        Some((proof, policies))
+    })())
 }
 fn verify_against_kura_block(
     proof: &DaCommitmentProof,
     state: &iroha_core::state::State,
-) -> DaCommitmentVerifyResponse {
+) -> Result<DaCommitmentVerifyResponse, Error> {
     let Ok(block_height) = usize::try_from(proof.location.block_height) else {
-        return DaCommitmentVerifyResponse {
+        return Ok(DaCommitmentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block height {} does not fit into usize for lookup",
                 proof.location.block_height
             )),
-        };
+        });
     };
     let Some(nonzero_height) = NonZeroUsize::new(block_height) else {
-        return DaCommitmentVerifyResponse {
+        return Ok(DaCommitmentVerifyResponse {
             valid: false,
             error: Some("proof references block height 0".to_string()),
-        };
+        });
     };
-    let Some(block) = state.block_by_height(nonzero_height) else {
-        return DaCommitmentVerifyResponse {
+    let Some(block) = state
+        .block_by_height(nonzero_height)
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
+        return Ok(DaCommitmentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block {} not available in Kura",
                 proof.location.block_height
             )),
-        };
+        });
     };
     if block.as_ref().da_commitments().is_none() {
-        return DaCommitmentVerifyResponse {
+        return Ok(DaCommitmentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block {} does not contain a DA commitment bundle",
                 proof.location.block_height
             )),
-        };
+        });
     }
     let Some(policies) = block.as_ref().da_proof_policies() else {
-        return DaCommitmentVerifyResponse {
+        return Ok(DaCommitmentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block {} does not contain a DA proof-policy bundle",
                 proof.location.block_height
             )),
-        };
+        });
     };
-    match verify_da_commitment_proof(proof, &block.header(), policies) {
-        Ok(()) => DaCommitmentVerifyResponse {
-            valid: true,
-            error: None,
+    Ok(
+        match verify_da_commitment_proof(proof, &block.header(), policies) {
+            Ok(()) => DaCommitmentVerifyResponse {
+                valid: true,
+                error: None,
+            },
+            Err(err) => DaCommitmentVerifyResponse {
+                valid: false,
+                error: Some(err.to_string()),
+            },
         },
-        Err(err) => DaCommitmentVerifyResponse {
-            valid: false,
-            error: Some(err.to_string()),
-        },
-    }
+    )
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
@@ -556,13 +581,23 @@ mod tests {
         let block_height = header.height().get();
         let block_hash = block.hash();
         app.kura
-            .store_block(Arc::new(block))
+            .store_block(
+                iroha_data_model::block::SharedSignedBlock::try_new(
+                    block,
+                    &app.state.ivm_execution_budget(),
+                )
+                .expect("fund DA fixture block"),
+            )
             .expect("store DA commitment block");
         let mut block_hashes = app.state.block_hashes.block();
         block_hashes.push_for_tests(block_hash);
         block_hashes.commit_for_tests();
         app.state.update_latest_block_header_cache_for_tests(header);
-        drop(app.state.da_commitments());
+        drop(
+            app.state
+                .da_commitments()
+                .expect("hydrate original DA fixture index"),
+        );
         {
             let mut store = app.state.da_commitments.write();
             store.insert_bundle(block_height, bundle_for_store);
@@ -1145,6 +1180,46 @@ mod tests {
                 .expect("verify handler should succeed");
         assert!(verification.valid, "proof should verify: {verification:?}");
         assert!(verification.error.is_none());
+    }
+    #[tokio::test]
+    async fn original_commitment_history_capacity_is_retryable_for_prove_and_verify() {
+        use axum::response::IntoResponse as _;
+        let record = sample_record(1, 1, 1);
+        let request = DaCommitmentProofRequest {
+            manifest_hash: Some(record.manifest_hash),
+            ..DaCommitmentProofRequest::default()
+        };
+        let app = app_with_da_commitment_bundle(vec![record]);
+        let proof = prove_for_manifest(app.clone(), request.manifest_hash.unwrap()).await;
+        app.kura
+            .forget_cached_block_for_testing(NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        let pool = app.state.ivm_execution_budget();
+        let held = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        for error in [
+            handler_prove_commitment(State(app.clone()), NoritoJson(request.clone()))
+                .await
+                .unwrap_err(),
+            handler_verify_commitment(State(app.clone()), NoritoJson(proof.clone()))
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(
+                error.into_response().status(),
+                axum::http::StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        drop(held);
+        let JsonBody(retried) = handler_prove_commitment(State(app.clone()), NoritoJson(request))
+            .await
+            .unwrap();
+        assert_eq!(retried.unwrap().proof, proof);
+        let JsonBody(verified) = handler_verify_commitment(State(app), NoritoJson(proof))
+            .await
+            .unwrap();
+        assert!(verified.valid);
     }
     #[tokio::test]
     async fn prove_handler_returns_none_for_unknown_commitment_keys() {

@@ -35,8 +35,8 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-code-bytes-test".to_owned(),

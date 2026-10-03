@@ -59,8 +59,9 @@ fn matrix_v1(rows: usize) -> Result<Matrix, ZkX509StarkErrorV1> {
 }
 
 /// Entire simultaneous caller payload, additional to the unchanged MAIN plan.
-/// Six base columns cover four weighted columns, the in-place public inverse
-/// prefix/table and one native source. Two extension columns cover the private
+/// Twelve base columns cover four weighted columns, the in-place public inverse
+/// prefix/table and at most seven native source columns. Each side retains at
+/// most three columns after its current column has been consumed and dropped. Two extension columns cover the private
 /// result and mask quotient; the original masks are borrowed, never resampled.
 fn payload_v1(rows: usize, masks: usize, links: usize) -> Result<usize, ZkX509StarkErrorV1> {
     let metadata = 8 * core::mem::size_of::<Fields>()
@@ -68,15 +69,17 @@ fn payload_v1(rows: usize, masks: usize, links: usize) -> Result<usize, ZkX509St
         + 2 * core::mem::size_of::<E>()
         + core::mem::size_of::<Matrix>()
         + 4 * core::mem::size_of::<Vec<F>>()
-        + core::mem::size_of::<Vec<ZeroizingMainTraceColumnV1>>()
-        + core::mem::size_of::<ZeroizingMainTraceColumnV1>()
+        + 2 * core::mem::size_of::<NativeFamilyCacheV1>()
+        + core::mem::size_of::<[u8; 2 * LINK_COUNT_V1]>()
+        + 2 * core::mem::size_of::<Vec<ZeroizingMainTraceColumnV1>>()
+        + 17 * core::mem::size_of::<ZeroizingMainTraceColumnV1>()
         + core::mem::size_of::<[bool; 2 * LINK_COUNT_V1]>()
         + core::mem::size_of::<[F; MAX_POINTS]>()
         + 2048; // bounded borrowed descriptors and scalar loop/field temporaries
     if metadata > METADATA_BYTES {
         return Err(ZkX509StarkErrorV1::ProofTooLarge);
     }
-    rows.checked_mul(6)
+    rows.checked_mul(12)
         .and_then(|n| links.checked_mul(2).and_then(|l| n.checked_add(l)))
         .and_then(|n| n.checked_add(4))
         .and_then(|n| n.checked_mul(core::mem::size_of::<F>()))
@@ -176,6 +179,136 @@ fn mask_quotient_v1(
     Ok(())
 }
 
+/// Width-four requests are restricted to the existing grouped arithmetic/value
+/// sources and one exact public family. Width one already computes every lane of
+/// that family; changing the copied columns introduces no new source recurrence.
+fn family_widths_v1(
+    plan: &MainTerminalLinkPlanV1,
+    layout: &AggregateProofLayoutV1,
+) -> Result<[u8; 2 * LINK_COUNT_V1], ZkX509StarkErrorV1> {
+    use super::super::super::super::p256_aggregate_adapter::{
+        P256PrivateLinkFamilyV1 as Family, p256_private_link_columns_v1,
+    };
+    let mut widths = [1; 2 * LINK_COUNT_V1];
+    for (index, link) in plan.links.iter().enumerate() {
+        for (side, column) in [Some(link.left), link.right].into_iter().enumerate() {
+            let Some(column) = column else { continue };
+            let (registration, local) = registered_main_group_column_v1(
+                layout,
+                column.group,
+                MainTraceColumnKindV1::Aux,
+                column.column,
+            )?;
+            if !matches!(
+                registration.segment.adapter,
+                SegmentAdapterIdV1::P256Arithmetic | SegmentAdapterIdV1::P256ValueBus
+            ) {
+                continue;
+            }
+            let identity = p256_main_registration_from_main_layout_v1(registration)?;
+            // BindingSink shares the ValueBus segment tag at local two but its
+            // source is scalar; it must not acquire later-lane errors eagerly.
+            if !matches!(
+                (identity.adapter_v1(), identity.local_instance_v1()),
+                (P256MainAdapterV1::Arithmetic, 0) | (P256MainAdapterV1::ValueBus, 0 | 1)
+            ) {
+                continue;
+            }
+            let is_family = [
+                Family::Value,
+                Family::Copy,
+                Family::ArithmeticScalar,
+                Family::WindowScalar,
+                Family::ChainStart,
+                Family::ChainTerminal,
+            ]
+            .into_iter()
+            .any(|family| {
+                p256_private_link_columns_v1(identity, family)
+                    .is_ok_and(|columns| columns == core::array::from_fn(|lane| local + lane))
+            });
+            if is_family && contiguous_family_v1(&plan.links, index, side) {
+                widths[2 * index + side] = 4;
+            }
+        }
+    }
+    Ok(widths)
+}
+
+/// Public link order, point, native geometry and group must all stay identical.
+fn contiguous_family_v1(links: &[LinkV1], first: usize, side: usize) -> bool {
+    let Some(family) = first.checked_add(4).and_then(|end| links.get(first..end)) else {
+        return false;
+    };
+    let column = |link: &LinkV1| match side {
+        0 => Some(link.left),
+        1 => link.right,
+        _ => None,
+    };
+    let Some(start) = column(&family[0]) else {
+        return false;
+    };
+    family.iter().enumerate().all(|(lane, link)| {
+        link.point == family[0].point
+            && column(link).is_some_and(|current| {
+                current.group == start.group
+                    && current.native_log2 == start.native_log2
+                    && start.column.checked_add(lane) == Some(current.column)
+            })
+    })
+}
+
+/// A FIFO of source-owned columns, never of private endpoint/equality results.
+/// Removing the current owner before the other side fills bounds simultaneous
+/// storage by three retained columns plus four newly produced columns.
+#[derive(Default)]
+struct NativeFamilyCacheV1 {
+    next: Option<(usize, ColumnV1)>,
+    columns: Vec<ZeroizingMainTraceColumnV1>,
+}
+impl NativeFamilyCacheV1 {
+    fn take_v1(
+        &mut self,
+        index: usize,
+        column: ColumnV1,
+        width: usize,
+        native: &mut impl FnMut(
+            ColumnV1,
+            usize,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        if self.columns.is_empty() {
+            if self.next.is_some() || !matches!(width, 1 | 4) {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            self.columns = native(column, width)?;
+            if self.columns.len() != width || self.columns.capacity() != width {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+        } else if self.next != Some((index, column)) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let value = self.columns.remove(0);
+        self.next = if self.columns.is_empty() {
+            None
+        } else {
+            Some((
+                index
+                    .checked_add(1)
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                ColumnV1 {
+                    column: column
+                        .column
+                        .checked_add(1)
+                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                    ..column
+                },
+            ))
+        };
+        Ok(value)
+    }
+}
+
 pub(super) fn accumulate_v1(
     plan: &MainTerminalLinkPlanV1,
     layout: &AggregateProofLayoutV1,
@@ -186,18 +319,20 @@ pub(super) fn accumulate_v1(
     chunk: &mut Vec<E>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     polynomials.validate_v1(layout, MainTraceColumnKindV1::Aux)?;
-    accumulate_with_v1(
+    let widths = family_widths_v1(plan, layout)?;
+    accumulate_with_batches_v1(
         &plan.links,
+        &widths,
         alphas,
         MASK_DEGREE + 1,
         policy,
         chunk,
-        |column| {
+        |column, width| {
             sources.native_columns_v1(
                 layout,
                 MainTraceColumnKindV1::Aux,
                 column.group,
-                column.column..column.column + 1,
+                column.column..column.column + width,
             )
         },
         |column| {
@@ -224,6 +359,8 @@ pub(super) fn accumulate_v1(
     )
 }
 
+// The one-column callback remains a test oracle for the same accumulator.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn accumulate_with_v1<'a>(
     links: &[LinkV1],
@@ -232,6 +369,39 @@ fn accumulate_with_v1<'a>(
     policy: main_bounded_transform::MainBoundedTransformPolicyV1,
     chunk: &mut Vec<E>,
     mut native: impl FnMut(ColumnV1) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    original_mask: impl FnMut(ColumnV1) -> Result<&'a [F], ZkX509StarkErrorV1>,
+    transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+    uncertain: impl FnMut() -> bool,
+) -> Result<(), ZkX509StarkErrorV1> {
+    accumulate_with_batches_v1(
+        links,
+        &[1; 2 * LINK_COUNT_V1],
+        alphas,
+        masks,
+        policy,
+        chunk,
+        |column, width| {
+            assert_eq!(width, 1);
+            native(column)
+        },
+        original_mask,
+        transform,
+        uncertain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_with_batches_v1<'a>(
+    links: &[LinkV1],
+    widths: &[u8; 2 * LINK_COUNT_V1],
+    alphas: &[E],
+    masks: usize,
+    policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    chunk: &mut Vec<E>,
+    mut native: impl FnMut(
+        ColumnV1,
+        usize,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     mut original_mask: impl FnMut(ColumnV1) -> Result<&'a [F], ZkX509StarkErrorV1>,
     mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
     mut uncertain: impl FnMut() -> bool,
@@ -245,6 +415,15 @@ fn accumulate_with_v1<'a>(
         || chunk.iter().any(|value| !value.is_canonical())
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    for index in 0..links.len() {
+        for side in 0..2 {
+            match widths[2 * index + side] {
+                1 => {}
+                4 if contiguous_family_v1(links, index, side) => {}
+                _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
+            }
+        }
     }
     let mut points = [F::ZERO; MAX_POINTS];
     let mut point_count = 0;
@@ -323,6 +502,7 @@ fn accumulate_with_v1<'a>(
                 .mul(F(2).inv().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?)
                 .mul(point_inverse);
             weighted_mask.fill(E::ZERO);
+            let mut caches: [NativeFamilyCacheV1; 2] = core::array::from_fn(|_| Default::default());
             for (index, (link, &alpha)) in links.iter().zip(alphas).enumerate() {
                 if link.point != point {
                     continue;
@@ -332,22 +512,25 @@ fn accumulate_with_v1<'a>(
                         continue;
                     };
                     main_bounded_transform::check_completion_v1(uncertain())?;
-                    let values = native(column)?;
-                    if values.len() != 1
-                        || values.capacity() != 1
-                        || values[0].len() != rows
-                        || values[0].0.capacity() != rows
-                    {
+                    let values = caches[side].take_v1(
+                        index,
+                        column,
+                        usize::from(widths[2 * index + side]),
+                        &mut native,
+                    )?;
+                    // Validate only this original link/side now. A later cached
+                    // lane must not outrank the other side's mask or endpoint.
+                    if values.len() != rows || values.0.capacity() != rows {
                         return Err(ZkX509StarkErrorV1::ProofTooLarge);
                     }
-                    if values[0].iter().any(|value| !value.is_canonical()) {
+                    if values.iter().any(|value| !value.is_canonical()) {
                         return Err(ZkX509StarkErrorV1::ProfileMismatch);
                     }
                     let mask = original_mask(column)?;
                     if mask.len() != masks || mask.iter().any(|value| !value.is_canonical()) {
                         return Err(ZkX509StarkErrorV1::ProfileMismatch);
                     }
-                    scalar[0] = values[0][endpoint];
+                    scalar[0] = values[endpoint];
                     endpoints[2 * index + side] = scalar[0];
                     seen[2 * index + side] = true;
                     if seen[2 * index]
@@ -361,10 +544,10 @@ fn accumulate_with_v1<'a>(
                     let mut x = F::ONE;
                     for row in 0..rows {
                         if row != endpoint {
-                            scalar[2] = values[0][row].sub(scalar[0]).mul(inverse[row]);
+                            scalar[2] = values[row].sub(scalar[0]).mul(inverse[row]);
                             // L_i'(a) = -x_i/(a*(x_i-a)); only public inversion.
                             scalar[1] = scalar[1]
-                                .sub(values[0][row].mul(x).mul(inverse[row]).mul(point_inverse));
+                                .sub(values[row].mul(x).mul(inverse[row]).mul(point_inverse));
                             for lane in 0..4 {
                                 weighted[lane][row] = weighted[lane][row]
                                     .add(scale.coefficients()[lane].mul(scalar[2]));
@@ -380,9 +563,16 @@ fn accumulate_with_v1<'a>(
                         *target = target.add(scale.mul_base(value));
                     }
                     scalar.fill(F::ZERO);
-                    // The source drops here, before the next source or transform.
+                    // Drop this owner before the next side can allocate its batch.
                 }
             }
+            if caches
+                .iter()
+                .any(|cache| !cache.columns.is_empty() || cache.next.is_some())
+            {
+                return Err(ZkX509StarkErrorV1::InternalInvariant);
+            }
+            drop(caches);
             mask_quotient_v1(&weighted_mask, rows, point, &mut quotient)?;
             for (target, &value) in result.iter_mut().zip(quotient.iter()) {
                 *target = target.add(value);
@@ -864,7 +1054,7 @@ mod tests {
         );
         let payload = payload_v1(1 << 19, MASK_DEGREE + 1, LINK_COUNT_V1).unwrap();
         let independent =
-            (6 * (1 << 19) + 384 + 4) * 8 + (2 * ((1 << 19) + 1816) + 1816) * 32 + 16 * 1024;
+            (12 * (1 << 19) + 384 + 4) * 8 + (2 * ((1 << 19) + 1816) + 1816) * 32 + 16 * 1024;
         assert_eq!(payload, independent);
         let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
             &layout,
@@ -1033,4 +1223,10 @@ mod tests {
         .unwrap();
         assert_eq!(actual, expected);
     }
+}
+
+#[cfg(test)]
+mod family_batch_tests {
+    //! Ordered, clearing-owned family replay controls.
+    include!("main_terminal_family_batch_tests.rs");
 }

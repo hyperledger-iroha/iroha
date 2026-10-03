@@ -260,7 +260,7 @@ fn approve_sorafs_manifests(
         .collect::<Result<Vec<_>>>()?;
     approve_remote_hydration_sources(state, &fixtures)?;
     let view = state.view();
-    let sources = collect_remote_hydration_sources(&view, state);
+    let sources = collect_remote_hydration_sources(&view, state)?;
     for fixture in &fixtures {
         assert!(
             sources.iter().any(|source| source.manifest_digest_hex

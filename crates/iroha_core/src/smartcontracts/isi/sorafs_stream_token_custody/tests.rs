@@ -20,7 +20,6 @@ use sorafs_manifest::signer::{
     },
     protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
 };
-use std::sync::Arc;
 /// Fixed chain label of the fixture State.
 const FIXTURE_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Fixed genesis-derived network identity of the fixture State.
@@ -144,7 +143,13 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
     let header = signed.header().clone();
     state
         .kura()
-        .store_block(Arc::new(signed))
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                signed,
+                &state.ivm_execution_budget(),
+            )
+            .expect("admit original fixture block control"),
+        )
         .expect("fixture committed block");
     state.push_block_hash_for_testing(hash);
     state.update_latest_block_header_cache_for_tests(header);

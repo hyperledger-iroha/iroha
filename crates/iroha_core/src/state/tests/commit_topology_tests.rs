@@ -22,7 +22,7 @@ state_test! { sync apply_without_execution_preserves_supplied_committee_without_
     store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
@@ -62,12 +62,12 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
     }
     let first_block = empty_signed_block_after(None, 1);
     let second_block = empty_signed_block_after(Some(&first_block), 2);
-    state.kura.store_block(Arc::new(first_block)).expect("retain exact predecessor");
+    state.kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block)).expect("retain exact predecessor");
     seed_committed_height_for_state_test(&state, 1);
     store_block_for_state_commit(&state.kura, &second_block);
     let mut state_block = state.block(second_block.header());
     let valid = ValidBlock::new_unverified_for_tests(second_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     assert_eq!(state_block.prev_commit_topology.iter().cloned().collect::<Vec<_>>(), base_topology,
         "metadata preparation must stage the old topology before publication fails");
@@ -185,7 +185,7 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
     store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
@@ -224,7 +224,7 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
         peers.apply();
     }
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
@@ -300,7 +300,7 @@ state_test! { sync apply_without_execution_keeps_active_candidate_outside_suppli
     store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
@@ -344,7 +344,7 @@ state_test! { sync apply_without_execution_uses_npos_parameters_for_commit_topol
         peers.apply();
     }
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
@@ -376,7 +376,7 @@ state_test! { sync apply_without_execution_does_not_invent_committee_when_roster
         peers.apply();
     }
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit state block");
     // This is an isolated metadata preparation component, not native consensus
@@ -407,7 +407,7 @@ state_test! { sync apply_without_execution_prefers_checkpoint_topology_when_worl
         peers.apply();
     }
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = valid.commit_unchecked(crate::block::reserve_block_for_tests()).unpack(|_| {});
     let block_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");

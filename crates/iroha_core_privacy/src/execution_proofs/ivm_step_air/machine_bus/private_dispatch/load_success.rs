@@ -1,7 +1,7 @@
 //! Four fixed phases composing the complete successful private ZK LOAD64 step.
 //!
-//! Non-ZK native execution omits the tag write and is outside this relation.
-//! Thirty-nine original packets are joined exactly once to the same private history.
+//! The original destination commits its value and privacy tag atomically.
+//! Thirty-seven original packets are joined exactly once to the same private history.
 //! A fixed memory outcome, caller permission, descriptor copy or public event
 //! digest cannot authorize a read or register write. The existing dispatcher owns gas and all
 //! architectural completion packets; their clocks follow the memory effects.
@@ -18,8 +18,8 @@ use packet::{
     WRITE,
 };
 
-/// Existing dispatch tuples plus three policies, twelve frame slots and three effects.
-pub(super) const PORTS: usize = 39;
+/// Existing dispatch tuples plus three policies, twelve frame slots and one memory read.
+pub(super) const PORTS: usize = 37;
 /// Fixed semantic phases; their shape never depends on the private opcode.
 pub(super) const PHASES: usize = 4;
 const WORK: usize = 0;
@@ -61,7 +61,7 @@ impl Schedule {
     fn dispatch(self) -> super::Schedule {
         super::Schedule::new(
             self.vm,
-            core::array::from_fn(|slot| self.clock(if slot < 18 { slot } else { slot + 18 })),
+            core::array::from_fn(|slot| self.clock(if slot < 17 { slot } else { slot + 16 })),
         )
         .unwrap()
     }
@@ -90,10 +90,10 @@ impl Rows<'_> {
     /// Exactly one original producer for every scheduled clock, including disabled slots.
     fn producer(&self, slot: usize) -> &[F; packet::WIDTH] {
         match slot {
-            0..18 => port(self.phases[0], slot),
-            18..21 => port(self.phases[1], slot - 18),
-            21..33 => port(self.phases[2], slot - 21),
-            33..39 => port(self.phases[3], slot - 33),
+            0..17 => port(self.phases[0], slot),
+            17..20 => port(self.phases[1], slot - 17),
+            20..32 => port(self.phases[2], slot - 20),
+            32..37 => port(self.phases[3], slot - 32),
             _ => unreachable!("closed original LOAD packet schedule"),
         }
     }
@@ -140,7 +140,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
     for pair in rows.phases.windows(2) {
         link(out, &pair[0][CARRY..], &pair[1][CARRY..]);
     }
-    for (phase, (&row, used)) in rows.phases.iter().zip([21, 3, 12, 6]).enumerate() {
+    for (phase, (&row, used)) in rows.phases.iter().zip([21, 3, 12, 5]).enumerate() {
         for &value in &row[PACKETS + used * packet::WIDTH..CARRY] {
             out.push(value);
         }
@@ -161,13 +161,13 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
     link(
         out,
         &dispatch[CARRY + ADDRESS..CARRY + ADDRESS + 4],
-        &decoded.load_address,
+        &core::array::from_fn::<_, 4, _>(|i| decoded.load.mul(decoded.memory_address[i])),
     );
     out.push(dispatch[CARRY + LOAD].sub(decoded.load));
     // This bank proves only a complete LOAD success or canonical inactive padding.
     out.push(decoded.load.sub(port(dispatch, 20)[BEFORE]));
-    out.push(dispatch[CARRY + DESTINATION].sub(decoded.load_destination));
-    out.push(dispatch[CARRY + DESTINATION_ENABLED].sub(decoded.load_destination_enabled));
+    out.push(dispatch[CARRY + DESTINATION].sub(decoded.load_destination_index));
+    out.push(dispatch[CARRY + DESTINATION_ENABLED].sub(decoded.load_destination));
     for i in 0..3 {
         link(
             out,
@@ -185,7 +185,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
             Space::Owner,
             F::ZERO,
             F(u64::from(index)),
-            18 + i,
+            17 + i,
             policies[CARRY + LOAD],
             F::ZERO,
         );
@@ -212,7 +212,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
             schedule.vm,
             8,
             false,
-            core::array::from_fn(|i| schedule.clock(21 + i)),
+            core::array::from_fn(|i| schedule.clock(20 + i)),
         )
         .unwrap(),
         frame[..frame_access::WIDTH].try_into().unwrap(),
@@ -237,11 +237,14 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
     let effects = rows.phases[3];
     out.push(effects[CARRY + PERMITTED].sub(effects[CARRY + LOAD]));
     out.push(effects[CARRY + RANGE_ERROR]);
+    // The same original atomic destination is consumed by fetch/scalar ownership
+    // and the memory effect, then joined once at its actual post-read clock.
+    link(out, port(effects, 1), decoded.destination);
     effect::append_residues(out, schedule, effects);
     for i in 0..3 {
         link(
             out,
-            port(effects, 3 + i),
+            port(effects, 2 + i),
             carry_port(effects, COMPLETION + i * packet::WIDTH),
         );
     }

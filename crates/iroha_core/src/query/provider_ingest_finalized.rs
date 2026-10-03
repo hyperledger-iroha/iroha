@@ -1418,6 +1418,16 @@ impl ProviderInsertionPlan {
     }
 }
 impl ProviderIngestFinalizedArchiveV1 {
+    /// Hold the actual archive reader while a component test attempts publication.
+    #[cfg(test)]
+    pub(crate) fn with_index_reader_for_testing<T>(
+        &self,
+        inspect: impl FnOnce() -> T,
+    ) -> Result<T, ProviderIngestFinalizedArchiveErrorV1> {
+        let _reader = self.read_index()?;
+        Ok(inspect())
+    }
+
     /// Open or create one direct single-writer archive and validate every
     /// immutable record before making it queryable.
     ///
@@ -5002,6 +5012,9 @@ fn certified_authentication_error(
     error: ArchiveFinalityError,
 ) -> ProviderIngestFinalizedArchiveErrorV1 {
     match error {
+        ArchiveFinalityError::Deferred(original) => {
+            ProviderIngestFinalizedArchiveErrorV1::Deferred(original)
+        }
         ArchiveFinalityError::BoundaryChanged => {
             ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
                 boundary: "certified Kura",
@@ -6524,6 +6537,9 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
 /// Fail-closed errors returned by the finalized provider-ingest archive.
 #[derive(Debug, Error)]
 pub enum ProviderIngestFinalizedArchiveErrorV1 {
+    /// The original authenticated history read has not completed locally.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// A physical index reader or writer currently prevents retained publication.
     #[error("finalized provider-ingest archive index is busy")]
     IndexBusy {
