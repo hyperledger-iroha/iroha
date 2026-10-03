@@ -3,10 +3,12 @@
 //! This reusable capture prerequisite supplies no table reader or finality token.
 //! Its required limits are local policy; refusals never become transaction gas
 //! or validity. Semantic NFC scratch is prepaid for the complete sequential validation call.
-//! Signature/backend workspaces and nested helper-error ownership remain separate.
+//! Concrete signature/model helpers use borrowed fixed-error paths; their native
+//! allocation census and the exact semantic codecs cover the registered readers.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_allocation::AllocationBudget;
 use iroha_data_model::musubi::source_work::{
     SourceGeometry, SourceGeometryError, SourceGeometryLimits, SourceShape,
@@ -49,7 +51,7 @@ pub(in crate::state) enum WorkRefusal {
 }
 
 /// Validation remains incomplete locally or completes with its original error.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(in crate::state) enum SourceValidationError {
     Work(WorkRefusal),
     Attempt(ExecutionAttemptError<ProjectionRejection>),
@@ -181,26 +183,26 @@ impl Plan {
 }
 
 /// Admit complete source geometry and every audited repeated operation first.
-fn admit_passes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<(), WorkRefusal> {
-    let archives = world.musubi_archives();
-    let availability = world.musubi_archive_availability();
-    let attestations = world.musubi_provider_bundle_attestations();
-    let locations = world.musubi_archive_locations();
-    let resolver = world.musubi_resolver_index();
-    let packages = world.musubi_packages();
-    let releases = world.musubi_releases();
-    let directory = world.musubi_public_directory();
+fn admit_passes(world: &impl MusubiSourceReadOnly, plan: &mut Plan) -> Result<(), WorkRefusal> {
+    let archives = world.source_musubi_archives();
+    let availability = world.source_musubi_archive_availability();
+    let attestations = world.source_musubi_provider_bundle_attestations();
+    let locations = world.source_musubi_archive_locations();
+    let resolver = world.source_musubi_resolver_index();
+    let packages = world.source_musubi_packages();
+    let releases = world.source_musubi_releases();
+    let directory = world.source_musubi_public_directory();
     // Source predicates only reach these additional fixed-key indexes through
     // locations. Their retained population bounds point-lookup depth without
     // pretending unrelated payloads were visited or creating a new authority.
     if !locations.is_empty() {
         for count in [
-            world.musubi_locations_by_pin().len(),
-            world.musubi_locations_by_provider().len(),
-            world.musubi_locations_by_replication_order().len(),
-            world.pin_manifests().len(),
-            world.replication_orders().len(),
-            world.provider_owners().len(),
+            world.source_musubi_locations_by_pin().len(),
+            world.source_musubi_locations_by_provider().len(),
+            world.source_musubi_locations_by_replication_order().len(),
+            world.source_pin_manifests().len(),
+            world.source_replication_orders().len(),
+            world.source_provider_owners().len(),
         ] {
             plan.add(WorkDimension::LookupIndexEntries, count)?;
         }
@@ -268,14 +270,17 @@ fn admit_passes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<(), WorkR
     Ok(())
 }
 
-fn admit_source_shapes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<(), WorkRefusal> {
-    let archives = world.musubi_archives();
-    let attestations = world.musubi_provider_bundle_attestations();
-    let locations = world.musubi_archive_locations();
-    let resolver = world.musubi_resolver_index();
-    let packages = world.musubi_packages();
-    let releases = world.musubi_releases();
-    let directory = world.musubi_public_directory();
+fn admit_source_shapes(
+    world: &impl MusubiSourceReadOnly,
+    plan: &mut Plan,
+) -> Result<(), WorkRefusal> {
+    let archives = world.source_musubi_archives();
+    let attestations = world.source_musubi_provider_bundle_attestations();
+    let locations = world.source_musubi_archive_locations();
+    let resolver = world.source_musubi_resolver_index();
+    let packages = world.source_musubi_packages();
+    let releases = world.source_musubi_releases();
+    let directory = world.source_musubi_public_directory();
     // Full payloads and variable keys are independent inputs, even when semantic
     // validation will reject a duplicated identity or an orphan row later.
     for (_, row) in archives.iter() {
@@ -312,9 +317,12 @@ fn admit_source_shapes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<()
     Ok(())
 }
 
-fn admit_current_evidence(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<(), WorkRefusal> {
-    let locations = world.musubi_archive_locations();
-    let attestations = world.musubi_provider_bundle_attestations();
+fn admit_current_evidence(
+    world: &impl MusubiSourceReadOnly,
+    plan: &mut Plan,
+) -> Result<(), WorkRefusal> {
+    let locations = world.source_musubi_archive_locations();
+    let attestations = world.source_musubi_provider_bundle_attestations();
     for (_, location) in locations.iter() {
         if location.state == MusubiArchiveLocationStateV1::Retired {
             continue;
@@ -333,21 +341,24 @@ fn admit_current_evidence(world: &impl WorldReadOnly, plan: &mut Plan) -> Result
             plan.operation(operation, 1)?;
         }
         if let Some(row) = world
-            .musubi_locations_by_replication_order()
+            .source_musubi_locations_by_replication_order()
             .get(&location.replication_order)
         {
             plan.shape(SourceShape::OrderBinding(row))?;
         }
-        if let Some(row) = world.pin_manifests().get(&location.pin_manifest) {
+        if let Some(row) = world.source_pin_manifests().get(&location.pin_manifest) {
             plan.shape(SourceShape::Pin(row))?;
         }
-        if let Some(row) = world.replication_orders().get(&location.replication_order) {
+        if let Some(row) = world
+            .source_replication_orders()
+            .get(&location.replication_order)
+        {
             plan.shape(SourceShape::Order(row))?;
         }
         // The complete provider shape was admitted above. Its repeated traversals
         // belong to the named operation graph; signature calls are never deduplicated.
         for provider in &location.providers {
-            if let Some(owner) = world.provider_owners().get(provider) {
+            if let Some(owner) = world.source_provider_owners().get(provider) {
                 plan.shape(SourceShape::Account(owner))?;
             }
             let key = MusubiProviderBundleAttestationKeyV1 {
@@ -376,7 +387,7 @@ fn admit_current_evidence(world: &impl WorldReadOnly, plan: &mut Plan) -> Result
     Ok(())
 }
 
-fn admit(world: &impl WorldReadOnly, limits: SourceWorkLimits) -> Result<Plan, WorkRefusal> {
+fn admit(world: &impl MusubiSourceReadOnly, limits: SourceWorkLimits) -> Result<Plan, WorkRefusal> {
     let mut plan = Plan::new(limits);
     admit_passes(world, &mut plan)?;
     admit_source_shapes(world, &mut plan)?;
@@ -389,16 +400,9 @@ pub(in crate::state) mod observation;
 
 /// Validate and retain access to this exact World borrow after source-work admission.
 ///
-/// The returned token binds semantic projection reads only. Crypto/backend and remaining helper-error
-/// allocation custody and physical State finality remain independent prerequisites.
-/// Original memory refusals retain their pool identity; no reader is registered here.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: complete crypto/helper-error custody before semantic table-reader registration"
-    )
-)]
+/// The returned token binds semantic projection reads only. Original memory
+/// refusals retain their pool identity. Physical State finality and publication
+/// remain independent prerequisites; this validator cannot authorize a root.
 pub(in crate::state) fn validate<'cut, W: observation::MusubiObservationCut>(
     world: &'cut W,
     execution_budget: &'cut AllocationBudget,

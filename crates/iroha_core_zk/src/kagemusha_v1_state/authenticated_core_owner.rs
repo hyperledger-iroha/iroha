@@ -28,7 +28,10 @@ pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
-    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaNativeOrdinaryCashOwnerV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1,
+    KagemushaAuthenticatedOrdinaryMintAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryMintFundingTransportV1,
+    KagemushaAuthenticatedOrdinaryMintTransactionSigningV1, KagemushaNativeOrdinaryCashOwnerV1,
     KagemushaNativeOrdinaryPreparedCashApprovalV1, KagemushaOrdinaryLogicalApprovalJournalV1,
 };
 pub(crate) use ordinary_enrollment::{
@@ -591,3 +594,8 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+pub(crate) use ordinary_enrollment::{
+    OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
+};

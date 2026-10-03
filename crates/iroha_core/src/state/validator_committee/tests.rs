@@ -1,5 +1,7 @@
 //! Real paired-key and threshold-share tests for frozen committee preparation.
 
+#[path = "tests/generation.rs"]
+mod generation;
 #[path = "tests/incumbent.rs"]
 mod incumbent;
 #[path = "tests/liability.rs"]

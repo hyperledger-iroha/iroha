@@ -14,7 +14,11 @@ TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha
 TESTNET_VALUE_LEDGER_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_value_ledger_v1.rs"
 TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_startup_v1.rs"
 ORDINARY_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_native_startup.rs"
-ORDINARY_CONTROL_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_current_control.rs"
+ORDINARY_CURRENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_current_control.rs"
+ORDINARY_OUTGOING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_outgoing_driver.rs"
+ORDINARY_INCOMING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_incoming_driver.rs"
+ORDINARY_INTEGRITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_integrity_refresh.rs"
+ORDINARY_MINT_FUNDING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_mint_funding_driver.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
@@ -30,6 +34,15 @@ SELF_TESTS=(
   --self-test-missing-reserve-finality-rust-symbol
   --self-test-bad-reserve-finality-checkpoint-signature
   --self-test-missing-reserve-finality-request-binding
+  --self-test-missing-ordinary-startup-header-symbol
+  --self-test-missing-ordinary-startup-rust-symbol
+  --self-test-bad-ordinary-startup-signature
+  --self-test-missing-ordinary-current-header-symbol
+  --self-test-missing-ordinary-current-rust-symbol
+  --self-test-bad-ordinary-current-signature
+  --self-test-missing-ordinary-outgoing-header-symbol
+  --self-test-missing-ordinary-outgoing-rust-symbol
+  --self-test-bad-ordinary-outgoing-signature
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-close-header-symbol
   --self-test-missing-kagemusha-install-header-symbol
@@ -37,10 +50,15 @@ SELF_TESTS=(
   --self-test-bad-kagemusha-install-signature
   --self-test-missing-kagemusha-testnet-observation-header-symbol
   --self-test-missing-kagemusha-rust-symbol
-  --self-test-missing-ordinary-startup-header-symbol
-  --self-test-missing-ordinary-startup-rust-symbol
-  --self-test-missing-ordinary-control-header-symbol
-  --self-test-missing-ordinary-control-rust-symbol
+  --self-test-missing-ordinary-incoming-header-symbol
+  --self-test-missing-ordinary-incoming-rust-symbol
+  --self-test-bad-ordinary-incoming-signature
+  --self-test-missing-ordinary-integrity-header-symbol
+  --self-test-missing-ordinary-integrity-rust-symbol
+  --self-test-bad-ordinary-integrity-signature
+  --self-test-missing-ordinary-mint-funding-header-symbol
+  --self-test-missing-ordinary-mint-funding-rust-symbol
+  --self-test-bad-ordinary-mint-funding-signature
   --self-test-bad-kagemusha-signature
   --self-test-missing-kagemusha-command-binding
   --self-test-bad-kagemusha-error-code
@@ -104,7 +122,11 @@ run_contract_check() {
   local testnet_value_ledger_rust="${10}"
   local testnet_startup_rust="${11}"
   local ordinary_startup_rust="${12}"
-  local ordinary_control_rust="${13}"
+  local ordinary_current_rust="${13}"
+  local ordinary_outgoing_rust="${14}"
+  local ordinary_incoming_rust="${15}"
+  local ordinary_integrity_rust="${16}"
+  local ordinary_mint_funding_rust="${17}"
 
   python3 - \
     "${rust_lib}" \
@@ -119,7 +141,11 @@ run_contract_check() {
     "${testnet_value_ledger_rust}" \
     "${testnet_startup_rust}" \
     "${ordinary_startup_rust}" \
-    "${ordinary_control_rust}" <<'PY'
+    "${ordinary_current_rust}" \
+    "${ordinary_outgoing_rust}" \
+    "${ordinary_incoming_rust}" \
+    "${ordinary_integrity_rust}" \
+    "${ordinary_mint_funding_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -137,6 +163,10 @@ rust += "\n" + Path(sys.argv[10]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[11]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[12]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[13]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[14]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[15]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[16]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[17]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -175,6 +205,10 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
+    "connect_norito_kagemusha_ordinary_incoming_v1",
+    "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
+    "connect_norito_kagemusha_ordinary_mint_funding_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -709,7 +743,11 @@ make_negative_workspace() {
   cp "${TESTNET_VALUE_LEDGER_RUST}" "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs"
   cp "${TESTNET_STARTUP_RUST}" "${tmp}/kagemusha_testnet_native_startup_v1.rs"
   cp "${ORDINARY_STARTUP_RUST}" "${tmp}/ordinary_native_startup.rs"
-  cp "${ORDINARY_CONTROL_RUST}" "${tmp}/ordinary_current_control.rs"
+  cp "${ORDINARY_CURRENT_RUST}" "${tmp}/ordinary_current_control.rs"
+  cp "${ORDINARY_OUTGOING_RUST}" "${tmp}/ordinary_outgoing_driver.rs"
+  cp "${ORDINARY_INCOMING_RUST}" "${tmp}/ordinary_incoming_driver.rs"
+  cp "${ORDINARY_INTEGRITY_RUST}" "${tmp}/ordinary_integrity_refresh.rs"
+  cp "${ORDINARY_MINT_FUNDING_RUST}" "${tmp}/ordinary_mint_funding_driver.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${RETAIL_MODEL}" "${tmp}/retail_fee_model.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -734,7 +772,11 @@ expect_contract_rejection() {
       "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
       "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
       "${tmp}/ordinary_native_startup.rs" \
-      "${tmp}/ordinary_current_control.rs" 2>&1)"; then
+      "${tmp}/ordinary_current_control.rs" \
+      "${tmp}/ordinary_outgoing_driver.rs" \
+      "${tmp}/ordinary_incoming_driver.rs" \
+      "${tmp}/ordinary_integrity_refresh.rs" \
+      "${tmp}/ordinary_mint_funding_driver.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -770,7 +812,11 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${TESTNET_VALUE_LEDGER_RUST}" \
     "${TESTNET_STARTUP_RUST}" \
     "${ORDINARY_STARTUP_RUST}" \
-    "${ORDINARY_CONTROL_RUST}" >/dev/null
+    "${ORDINARY_CURRENT_RUST}" \
+    "${ORDINARY_OUTGOING_RUST}" \
+    "${ORDINARY_INCOMING_RUST}" \
+    "${ORDINARY_INTEGRITY_RUST}" \
+    "${ORDINARY_MINT_FUNDING_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -854,6 +900,60 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
+    --self-test-missing-ordinary-startup-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_runtime_startup_v1' \
+        'removed_ordinary_startup_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
+      ;;
+    --self-test-missing-ordinary-startup-rust-symbol)
+      replace_once "${tmp}/ordinary_native_startup.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_runtime_startup_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_startup_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
+      ;;
+    --self-test-bad-ordinary-startup-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_runtime_startup_v1\s*\([^;]*?)uint64_t id' \
+        '\g<1>uint32_t id'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_runtime_startup_v1"
+      ;;
+    --self-test-missing-ordinary-current-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_current_control_v1' \
+        'removed_ordinary_current_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
+      ;;
+    --self-test-missing-ordinary-current-rust-symbol)
+      replace_once "${tmp}/ordinary_current_control.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_current_control_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_current_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
+      ;;
+    --self-test-bad-ordinary-current-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_current_control_v1\s*\([^;]*?)uint64_t core_handle' \
+        '\g<1>uint32_t core_handle'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_current_control_v1"
+      ;;
+    --self-test-missing-ordinary-outgoing-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_outgoing_v1' \
+        'removed_ordinary_outgoing_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
+      ;;
+    --self-test-missing-ordinary-outgoing-rust-symbol)
+      replace_once "${tmp}/ordinary_outgoing_driver.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_outgoing_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_outgoing_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
+      ;;
+    --self-test-bad-ordinary-outgoing-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_outgoing_v1\s*\([^;]*?)size_t input_len' \
+        '\g<1>uint32_t input_len'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_outgoing_v1"
+      ;;
     --self-test-missing-kagemusha-header-symbol)
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_v1_payment_validate" \
@@ -889,21 +989,53 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "removed_kagemusha_testnet_state_proof_observe_v1"
       expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_state_proof_observe_v1']"
       ;;
-    --self-test-missing-ordinary-startup-header-symbol)
-      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_runtime_startup_v1" "removed_connect_norito_kagemusha_ordinary_runtime_startup_v1"
+    --self-test-missing-ordinary-incoming-header-symbol)
+      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_incoming_v1" "removed_connect_norito_kagemusha_ordinary_incoming_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_incoming_v1']"
       ;;
-    --self-test-missing-ordinary-startup-rust-symbol)
-      replace_regex_once "${tmp}/ordinary_native_startup.rs" \
-        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_runtime_startup_v1\b' \
-        '\g<1>removed_connect_norito_kagemusha_ordinary_runtime_startup_v1'
+    --self-test-missing-ordinary-incoming-rust-symbol)
+      replace_regex_once "${tmp}/ordinary_incoming_driver.rs" \
+        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_incoming_v1\b' \
+        '\g<1>removed_connect_norito_kagemusha_ordinary_incoming_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_incoming_v1']"
       ;;
-    --self-test-missing-ordinary-control-header-symbol)
-      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_current_control_v1" "removed_connect_norito_kagemusha_ordinary_current_control_v1"
+    --self-test-bad-ordinary-incoming-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_incoming_v1\s*\([^;]*?)size_t input_len' \
+        '\g<1>uint32_t input_len'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_incoming_v1"
       ;;
-    --self-test-missing-ordinary-control-rust-symbol)
-      replace_regex_once "${tmp}/ordinary_current_control.rs" \
-        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_current_control_v1\b' \
-        '\g<1>removed_connect_norito_kagemusha_ordinary_current_control_v1'
+    --self-test-missing-ordinary-integrity-header-symbol)
+      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_integrity_refresh_v1" "removed_connect_norito_kagemusha_ordinary_integrity_refresh_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_integrity_refresh_v1']"
+      ;;
+    --self-test-missing-ordinary-integrity-rust-symbol)
+      replace_regex_once "${tmp}/ordinary_integrity_refresh.rs" \
+        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_integrity_refresh_v1\b' \
+        '\g<1>removed_connect_norito_kagemusha_ordinary_integrity_refresh_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_integrity_refresh_v1']"
+      ;;
+    --self-test-bad-ordinary-integrity-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_integrity_refresh_v1\s*\([^;]*?)size_t original_len' \
+        '\g<1>uint32_t original_len'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_integrity_refresh_v1"
+      ;;
+    --self-test-missing-ordinary-mint-funding-header-symbol)
+      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_mint_funding_v1" "removed_connect_norito_kagemusha_ordinary_mint_funding_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_mint_funding_v1']"
+      ;;
+    --self-test-missing-ordinary-mint-funding-rust-symbol)
+      replace_regex_once "${tmp}/ordinary_mint_funding_driver.rs" \
+        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_mint_funding_v1\b' \
+        '\g<1>removed_connect_norito_kagemusha_ordinary_mint_funding_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_mint_funding_v1']"
+      ;;
+    --self-test-bad-ordinary-mint-funding-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_mint_funding_v1\s*\([^;]*?)size_t input_len' \
+        '\g<1>uint32_t input_len'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_mint_funding_v1"
       ;;
     --self-test-missing-kagemusha-rust-symbol)
       replace_once "${tmp_rust}" \
@@ -1116,7 +1248,11 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
         "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
         "${tmp}/ordinary_native_startup.rs" \
-        "${tmp}/ordinary_current_control.rs"
+        "${tmp}/ordinary_current_control.rs" \
+        "${tmp}/ordinary_outgoing_driver.rs" \
+        "${tmp}/ordinary_incoming_driver.rs" \
+        "${tmp}/ordinary_integrity_refresh.rs" \
+        "${tmp}/ordinary_mint_funding_driver.rs"
       echo "[connect-norito-header] positive control preserved canonical umbrella: ${MODE}"
       exit 0
       ;;
@@ -1153,5 +1289,9 @@ run_contract_check \
   "${TESTNET_VALUE_LEDGER_RUST}" \
   "${TESTNET_STARTUP_RUST}" \
   "${ORDINARY_STARTUP_RUST}" \
-  "${ORDINARY_CONTROL_RUST}"
+  "${ORDINARY_CURRENT_RUST}" \
+  "${ORDINARY_OUTGOING_RUST}" \
+  "${ORDINARY_INCOMING_RUST}" \
+  "${ORDINARY_INTEGRITY_RUST}" \
+  "${ORDINARY_MINT_FUNDING_RUST}"
 compile_header

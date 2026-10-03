@@ -130,8 +130,11 @@ impl Fixture {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
         let schedule = Schedule::new(7, clocks).unwrap();
         let mut row = [F::ZERO; WIDTH];
-        row[SCALAR + scalar::COMPARE..SCALAR + scalar::SHIFT]
+        row[SCALAR + scalar::COMPARE
+            ..SCALAR + scalar::COMPARE + super::super::super::branch::BANK_WIDTH]
             .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
+        row[SCALAR + scalar::COUNT..SCALAR + scalar::MOVE].fill(F::ONE);
+        row[SCALAR + scalar::MOVE] = F::ONE;
         row[SCALAR + scalar::SHIFT..].copy_from_slice(&super::super::super::shift::bank_witness(
             wide::arithmetic::SLL,
             0,
@@ -429,8 +432,11 @@ impl Fixture {
             schedule: Schedule::new(7, clocks).unwrap(),
             row: {
                 let mut row = [F::ZERO; WIDTH];
-                row[SCALAR + scalar::COMPARE..SCALAR + scalar::SHIFT]
+                row[SCALAR + scalar::COMPARE
+                    ..SCALAR + scalar::COMPARE + super::super::super::branch::BANK_WIDTH]
                     .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
+                row[SCALAR + scalar::COUNT..SCALAR + scalar::MOVE].fill(F::ONE);
+                row[SCALAR + scalar::MOVE] = F::ONE;
                 row[SCALAR + scalar::SHIFT..].copy_from_slice(
                     &super::super::super::shift::bank_witness(wide::arithmetic::SLL, 0, 0),
                 );
@@ -531,10 +537,11 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
-        enc::encode_rr(wide::arithmetic::SLL, 2, 3, 1),
+        enc::encode_rr(wide::arithmetic::DIV, 2, 3, 1),
     ] {
         assert!(role(w).is_none());
     }
+    assert!(role(enc::encode_rr(wide::arithmetic::SLL, 2, 3, 1)) == Some(Role::Scalar));
     let changed = Program::new(contract(
         &[enc::encode_ri(wide::arithmetic::ADDI, 2, 3, 1)],
         1_000,

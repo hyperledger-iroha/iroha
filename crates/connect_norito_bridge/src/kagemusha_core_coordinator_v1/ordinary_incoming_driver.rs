@@ -2,9 +2,11 @@
 //! No frame carries a key, verifier, release, clock, financial grant or decoded capability.
 use super::*;
 use iroha_core_zk::kagemusha_v1_recursion::{
+    KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1 as OUTGOING_MAX,
     KAGEMUSHA_ORDINARY_INCOMING_COMMIT_BUNDLE_MAX_BYTES_V1 as COMMIT_MAX,
     KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1 as RESERVE_MAX,
 };
+use iroha_core_zk::kagemusha_v1_state::KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1 as RECEIVED_MAX;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1 as CREDIT_MAX,
     KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1 as FINALIZED_MAX,
@@ -14,7 +16,8 @@ use iroha_data_model::kagemusha::{
 use sha2::{Digest as _, Sha256};
 const DATA_MAX: usize = 128 * 1024;
 const AUTHORITY_MAX: usize = 128 * 1024 * 1024;
-const FRAME_MAX: usize = AUTHORITY_MAX + SIGNED_MAX + FINALIZED_MAX + CREDIT_MAX + 4096;
+const FRAME_MAX: usize =
+    AUTHORITY_MAX + SIGNED_MAX + FINALIZED_MAX + CREDIT_MAX + OUTGOING_MAX + RECEIVED_MAX + 4096;
 const REQUEST_MAX: usize = 192 * 1024;
 
 /// Closed incoming phase request. This serializable type is data only.
@@ -27,7 +30,9 @@ pub struct KagemushaOrdinaryNativeIncomingRequestV1 {
     /// 5 prove/fsync candidate; 6 Native signed Reserve transport; 7 intake global result;
     /// 8 select fresh W1 from real Reserve; 9 fence W1; 10 retain raw W1; 11 recover W1;
     /// 12 prove/fsync Commit; 13 Native signed Commit transport; 14 StateAdvance; 15 Ack;
-    /// 16 refresh genuine installed four-node Native signed clock.
+    /// 16 refresh genuine installed four-node Native signed clock; 17 authenticate/retain actual
+    /// received source by the captured request, then select fresh Receive W2; 18 read the actual
+    /// separately retained platform counter for this exact operation and W purpose.
     pub phase: u8,
     /// Same already-opened ordinary descriptor; it cannot install an owner.
     pub core_handle: u64,
@@ -56,6 +61,10 @@ fn require_shape(phase: u8, handle: u64, lengths: &[usize]) -> Result<(), Error>
         (1, [finalized, credit]) => {
             (1..=FINALIZED_MAX).contains(finalized) && (1..=CREDIT_MAX).contains(credit)
         }
+        (17, [32, outgoing, assertion]) => {
+            (1..=OUTGOING_MAX).contains(outgoing) && (1..=RECEIVED_MAX).contains(assertion)
+        }
+        (18, [32, 1]) => true,
         (3 | 10, [raw]) => (1..=4096).contains(raw),
         (7, [signed, data, authority]) => {
             (1..=SIGNED_MAX).contains(signed)
@@ -77,7 +86,7 @@ fn key(raw: &[u8]) -> Result<[u8; 32], Error> {
 }
 fn require_fields(phase: u8, fields: &[Vec<u8>]) -> Result<(), Error> {
     let valid = match (phase, fields) {
-        (1 | 8, [operation, w, subject, credential]) => {
+        (1 | 8 | 17, [operation, w, subject, credential]) => {
             operation.len() == 32
                 && w.len() == 325
                 && subject.len() == 460
@@ -128,6 +137,9 @@ fn require_fields(phase: u8, fields: &[Vec<u8>]) -> Result<(), Error> {
                 )
             )
         }
+        (18, [platform, floor]) => {
+            matches!((platform.as_slice(), floor.len()), ([5], 0) | ([4], 4))
+        }
         (14 | 15 | 16, []) => true,
         _ => false,
     };
@@ -151,16 +163,29 @@ fn invoke_originals(
     if installed.attempted_path.as_deref() != backend.path.to_str() {
         return Err(Error::Rejected);
     }
-    backend.source.recheck_originals(&backend.path)?;
+    // Renewal alone checks installed originals and the same registry/account selection first.
+    // The expired S/W cut and shared clock are replaced only by the real startup read below.
+    if phase == 16 {
+        backend
+            .source
+            .recheck_installed_originals_for_refresh(&backend.path)?;
+    } else if matches!(phase, 5 | 12) {
+        // Proof work consumes captured approvals and historical decisions only. The
+        // exact installed account, retirement and journal remain held; current S/W
+        // observations need not last through potentially long pure computation.
+        backend
+            .source
+            .recheck_retained_owner_originals(&backend.path)?;
+    } else {
+        backend.source.recheck_originals(&backend.path)?;
+    }
     drop(installed);
     let session = backend
         .source
         .native_account_session
         .as_ref()
         .ok_or(Error::Unavailable)?;
-    session.recheck()?;
-    // Public finality refresh uses the existing installed transport and Native nonce, before
-    // borrowing Main. No owner callback, managed clock or new endpoint enters this phase.
+    // No Main borrower/effect, callback, managed clock or caller endpoint enters renewal.
     if phase == 16 {
         {
             let owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
@@ -169,13 +194,25 @@ fn invoke_originals(
             }
         }
         session.refresh_incoming_clock()?;
+        session.recheck()?;
         backend.source.recheck_originals(&backend.path)?;
+        {
+            let owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
+            if owner.handle != Some(handle) {
+                return Err(Error::Rejected);
+            }
+        }
         return Ok(KagemushaOrdinaryNativeIncomingResponseV1 {
             version: 1,
             phase,
             core_handle: handle,
             fields: vec![],
         });
+    }
+    if matches!(phase, 5 | 12) {
+        session.recheck_retained_account_identity()?;
+    } else {
+        session.recheck()?;
     }
     let mut owner = backend.owner.lock().map_err(|_| Error::Rejected)?;
     if owner.handle != Some(handle) {
@@ -187,6 +224,9 @@ fn invoke_originals(
     let fields = match phase {
         1 => cash
             .prepare_finalized_incoming_mint_platform(&originals[0], &originals[1])
+            .map_err(|_| Error::Rejected)?,
+        17 => cash
+            .prepare_received_incoming_platform(key(&originals[0])?, &originals[1], &originals[2])
             .map_err(|_| Error::Rejected)?,
         2 | 9 => cash
             .fence_incoming_platform(phase == 9)
@@ -208,15 +248,15 @@ fn invoke_originals(
                 .ok_or(Error::Unavailable)?;
             let resolver = super::super::native_core_work::Resolver(proving.resolver.clone());
             let digest = if phase == 5 {
-                cash.prove_retained_incoming_mint_reservation(proving.profile.clone(), resolver)
+                cash.prove_retained_incoming_reservation(proving.profile.clone(), resolver)
             } else {
-                cash.prove_retained_incoming_mint_commit(proving.profile.clone(), resolver)
+                cash.prove_retained_incoming_commit(proving.profile.clone(), resolver)
             }
             .map_err(|_| Error::Rejected)?;
             vec![digest.to_vec()]
         }
         6 => cash
-            .sign_incoming_mint_reservation_transport(|original| {
+            .sign_incoming_reservation_transport(|original| {
                 session.sign_lineage(original).map_err(|_| {
                     iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity
                 })
@@ -228,32 +268,50 @@ fn invoke_originals(
                 .to_vec(),
         ],
         8 => {
-            cash.select_retained_incoming_mint_terminal(key(&originals[0])?)
+            cash.select_retained_incoming_terminal(key(&originals[0])?)
                 .map_err(|_| Error::Rejected)?;
             cash.incoming_platform_fields(true)
                 .map_err(|_| Error::Rejected)?
         }
+        18 => {
+            let terminal = match originals[1].as_slice() {
+                [2] => false,
+                [1] => true,
+                _ => return Err(Error::Rejected),
+            };
+            cash.incoming_platform_counter_original(terminal, key(&originals[0])?)
+                .map_err(|_| Error::Rejected)?
+        }
         13 => cash
-            .sign_incoming_mint_commit_transport(|original| {
+            .sign_incoming_commit_transport(|original| {
                 session.sign_lineage(original).map_err(|_| {
                     iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity
                 })
             })
             .map_err(|_| Error::Rejected)?,
         14 => {
-            cash.advance_incoming_mint_commit(key(&originals[0])?)
+            cash.advance_incoming_commit(key(&originals[0])?)
                 .map_err(|_| Error::Rejected)?;
             vec![]
         }
         15 => {
-            cash.acknowledge_incoming_mint_state_advance(key(&originals[0])?)
+            cash.acknowledge_incoming_commit_state_advance(key(&originals[0])?)
                 .map_err(|_| Error::Rejected)?;
             vec![]
         }
         _ => return Err(Error::Rejected),
     };
-    session.recheck()?;
-    backend.source.recheck_originals(&backend.path)?;
+    if matches!(phase, 5 | 12) {
+        session.recheck_retained_account_identity()?;
+        backend
+            .source
+            .recheck_retained_owner_originals(&backend.path)?;
+    } else {
+        // Signing, submission, selection and State effects still require their
+        // genuine fresh account cut. Phase16 alone obtains another same-S/W cut.
+        session.recheck()?;
+        backend.source.recheck_originals(&backend.path)?;
+    }
     require_fields(phase, &fields)?;
     Ok(KagemushaOrdinaryNativeIncomingResponseV1 {
         version: 1,
@@ -313,17 +371,26 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_incoming_v1(
         _ => crate::ERR_KAGEMUSHA_V1,
     }
 }
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIncomingV1(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIncomingV1<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
     phase: jni::sys::jint,
     handle: jni::sys::jlong,
-    originals: jni::objects::JObjectArray<'_>,
+    originals: jni::objects::JObjectArray<'local>,
 ) -> jni::sys::jobjectArray {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || -> Result<jni::sys::jobjectArray, ()> {
+            #[cfg(any(target_os = "android", test))]
+            super::super::ordinary_android_installed_context::AndroidOrdinaryInstalledContextOwnerV1::require_early_retained_jni_class(&mut env, &_class).map_err(|_| ())?;
             let phase = u8::try_from(phase).map_err(|_| ())?;
             let handle = u64::from_ne_bytes(handle.to_ne_bytes());
             let count = usize::try_from(env.get_array_length(&originals).map_err(|_| ())?)
@@ -368,6 +435,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryR
                 env.set_object_array_element(&output, n as i32, &a)
                     .map_err(|_| ())?;
             }
+            #[cfg(any(target_os = "android", test))]
+            super::super::ordinary_android_installed_context::AndroidOrdinaryInstalledContextOwnerV1::require_early_retained_jni_class(&mut env, &_class).map_err(|_| ())?;
             Ok(output.into_raw())
         },
     ));
@@ -400,6 +469,22 @@ mod tests {
         assert!(key(&[0; 32]).is_err());
     }
     #[test]
+    fn receive_phase_requires_complete_original_roles_without_mint_fallback() {
+        assert!(require_shape(17, 1, &[32, OUTGOING_MAX, RECEIVED_MAX]).is_ok());
+        for lengths in [
+            [31, 1, 1],
+            [32, 0, 1],
+            [32, 1, 0],
+            [32, OUTGOING_MAX + 1, 1],
+            [32, 1, RECEIVED_MAX + 1],
+        ] {
+            assert!(require_shape(17, 1, &lengths).is_err());
+        }
+        assert!(require_shape(17, 1, &[1, 1]).is_err());
+        assert!(require_shape(1, 1, &[32, 1, 1]).is_err());
+        assert!(require_shape(17, 0, &[32, 1, 1]).is_err());
+    }
+    #[test]
     fn incoming_c_entry_resets_before_oversized_pointer_read() {
         let mut out = std::ptr::dangling_mut();
         let mut len = 1;
@@ -430,5 +515,60 @@ mod tests {
         assert!(invoke_kagemusha_native_ordinary_incoming_v1(&raw).is_err());
         assert!(require_fields(14, &[vec![1]]).is_err());
         assert!(require_fields(6, &[]).is_err());
+    }
+    #[test]
+    fn actual_swift_incoming_frames_match_native_canonical_codec() {
+        // Actual Swift116 canonical vectors. This checks codecs only, without an owner,
+        // signer, proof, financial grant or physical/release qualification.
+        let corpus = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/kagemusha/ordinary_native_incoming_transport_v1.tsv"
+        ));
+        let mut count = 0;
+        for line in corpus
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            let (name, bytes) = line.split_once('\t').expect("finite named codec vector");
+            let bytes = hex::decode(bytes).expect("public canonical vector hex");
+            if name.ends_with("_request") {
+                let value: KagemushaOrdinaryNativeIncomingRequestV1 =
+                    norito::decode_canonical_with_limits(
+                        &bytes,
+                        norito::canonical_decode_limits(FRAME_MAX),
+                    )
+                    .expect("actual Swift request must decode through sole Native codec");
+                assert_eq!(value.version, 1);
+                assert_eq!(value.core_handle, 19);
+                assert_eq!(
+                    value.phase,
+                    if name.starts_with("refresh") { 16 } else { 3 }
+                );
+                require_shape(
+                    value.phase,
+                    value.core_handle,
+                    &value.originals.iter().map(Vec::len).collect::<Vec<_>>(),
+                )
+                .unwrap();
+                assert_eq!(norito::encode_canonical(&value).unwrap(), bytes);
+            } else {
+                let value: KagemushaOrdinaryNativeIncomingResponseV1 =
+                    norito::decode_canonical_with_limits(
+                        &bytes,
+                        norito::canonical_decode_limits(FRAME_MAX),
+                    )
+                    .expect("actual Swift response must decode through sole Native codec");
+                assert_eq!(value.version, 1);
+                assert_eq!(value.core_handle, 19);
+                assert_eq!(
+                    value.phase,
+                    if name.starts_with("refresh") { 16 } else { 3 }
+                );
+                require_fields(value.phase, &value.fields).unwrap();
+                assert_eq!(norito::encode_canonical(&value).unwrap(), bytes);
+            }
+            count += 1;
+        }
+        assert_eq!(count, 4);
     }
 }

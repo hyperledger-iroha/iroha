@@ -71,6 +71,7 @@ thread_local! {
 
 fn policy() -> TableCaptureLimits {
     TableCaptureLimits {
+        musubi: crate::state::authority_registry::complete::table_capture::musubi_test_limits(),
         tables: LeafLimits {
             max_tables: 4,
             max_rows: 16,

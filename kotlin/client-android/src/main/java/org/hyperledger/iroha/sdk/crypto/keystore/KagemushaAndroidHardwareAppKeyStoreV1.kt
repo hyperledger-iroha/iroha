@@ -141,6 +141,29 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
     fun approveOrdinaryTerminal(prepared: org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryTerminalApprovalV1): ByteArray =
         approveNativeOrdinaryTerminalOriginalV1(prepared, ::signNativeOriginal)
 
+    /** Separate genuine Native incoming holder chooses W2 purpose2 or scoped W1 purpose1.
+     * Full W/S correlation runs before Native fence; no raw message/alias can enter this API.
+     */
+    fun approveOrdinaryIncoming(prepared: org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryIncomingApprovalV1): ByteArray =
+        prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, terminal, guard ->
+            signNativeOriginal(alias, generationChallenge, point, keyId, message, policy,
+                if (terminal) KagemushaAndroidAppSignaturePurposeV1.ORDINARY_INCOMING_TERMINAL_APPROVAL
+                else KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL, guard)
+        }
+
+    fun approveOrdinaryIntegrityRefresh(prepared:org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryIntegrityRefreshV1):ByteArray =
+        prepared.performPlatformSigning { alias,challenge,point,id,message,policy,guard ->
+            signNativeOriginal(alias,challenge,point,id,message,policy,
+                KagemushaAndroidAppSignaturePurposeV1.ORDINARY_INTEGRITY_REFRESH_POSSESSION,guard)
+        }
+
+    /** Dedicated actual Native Mint pre-debit purpose, separate from W2/W1 approval. */
+    fun approveOrdinaryMintFunding(prepared:org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryMintApprovalV1):ByteArray =
+        prepared.performPlatformSigning {alias,challenge,point,id,message,policy,guard ->
+            signNativeOriginal(alias,challenge,point,id,message,policy,
+                KagemushaAndroidAppSignaturePurposeV1.ORDINARY_MINT_PRE_DEBIT_APPROVAL,guard)
+        }
+
     /** Prove possession over the separate native-owned E without creating a monetary qualification. */
     fun proveEnrollmentPossession(prepared: KagemushaNativePreparedAppEnrollmentPossessionV1): ByteArray =
         prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->

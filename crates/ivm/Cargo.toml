@@ -72,6 +72,9 @@ dispatch2 = { version = "0.3.1", optional = true }
 
 
 [dev-dependencies]
+# Driverless admission tests use the real failure type and runtime-loaded owner.
+# This does not enable IVM's CUDA/PTX build path.
+iroha_accel = { workspace = true, features = ["cuda"] }
 criterion = { workspace = true }
 kotodama_lang = { path = "../kotodama_lang" }
 kotodama_surface = { path = "../kotodama_surface" }

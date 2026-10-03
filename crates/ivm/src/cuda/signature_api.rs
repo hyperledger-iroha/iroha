@@ -21,8 +21,8 @@ static ARTIFACT: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn stage(input: BatchInput<'_, '_>) -> Option<HostOutput<u8>> {
-    let count = input.checked_len()?;
+fn stage(input: BatchInput<'_, '_>) -> Result<HostOutput<u8>, CudaFailure> {
+    let count = input.checked_len().ok_or(CudaFailure::InvalidRequest)?;
     match crate::cuda_dispatch::with_selected(Kernel::Ed25519, ARTIFACT, |device| {
         // SAFETY: exact embedded artifact and fixed-width input generators own
         // the kernel ABI. All original inputs remain borrowed through completion.
@@ -36,14 +36,14 @@ fn stage(input: BatchInput<'_, '_>) -> Option<HostOutput<u8>> {
                 |i| input.hram(i),
             )
         }
-    })? {
+    }) {
         Ok(output) if output.len() == count && output.iter().all(|&byte| byte <= 1) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Ok(_) => {
             crate::cuda_dispatch::quarantine_current_kernel();
-            None
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -52,7 +52,7 @@ fn stage(input: BatchInput<'_, '_>) -> Option<HostOutput<u8>> {
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -61,7 +61,7 @@ pub(super) fn admit() -> bool {
     crate::cuda_dispatch::admit_kernel(Kernel::Ed25519, ARTIFACT, || {
         use ed25519_dalek::{Signer, SigningKey};
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         let key = SigningKey::from_bytes(&[0x51; 32]);
         let message = b"IVM native Ed25519 admission";
@@ -105,14 +105,12 @@ pub(super) fn admit() -> bool {
                 true, false, false, false, false, false, false, false, false, false,
             ]
         {
-            return false;
+            return Ok(false);
         }
         let input = BatchInput::Items(&items);
-        let Some(native) = stage(input) else {
-            return false;
-        };
+        let native = stage(input)?;
         let mut output = [false; 10];
-        input.publish(&native, &mut output) && output == expected
+        Ok(input.publish(&native, &mut output) && output == expected)
     })
 }
 
@@ -132,7 +130,7 @@ fn into(input: BatchInput<'_, '_>, destination: &mut [bool]) -> bool {
         if !super::imp::ensure_cuda_kernel(Kernel::Ed25519) {
             return false;
         }
-        let Some(native) = stage(input) else {
+        let Ok(native) = stage(input) else {
             return false;
         };
         input.publish(&native, destination)

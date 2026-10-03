@@ -296,7 +296,9 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
         0,
     );
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    // Component execution retains its finite invocation before borrowing State. This
+    // authenticates no Network input and grants no block publication authority.
+    let mut state_tx = block.transaction_for_callback_testing();
     let deployment_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(

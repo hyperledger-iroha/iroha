@@ -728,7 +728,7 @@ fn disk_history_store_same_length_tamper_poison_prevents_new_acknowledgment() {
     fs::write(&journal, &data).unwrap();
     assert_eq!(fs::metadata(&journal).unwrap().len(), original_len);
     assert_ne!(
-        JournalFileVersion::from_metadata(&fs::metadata(&journal).unwrap()),
+        JournalFileVersion::from_file(&fs::File::open(&journal).unwrap()).unwrap(),
         original_version
     );
     assert_eq!(

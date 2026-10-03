@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use zeroize::Zeroizing;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", all(test, unix)))]
 pub(crate) mod android_startup;
 pub(crate) mod frame;
 type Result<T> = std::result::Result<T, Error>;
@@ -211,11 +211,23 @@ impl KagemushaNativeHardwareEvidenceSourceV1 {
 fn validate_path(path: &Path) -> Result<()> {
     if !path.is_absolute()
         || path.as_os_str().len() > 4096
-        || path.components().any(|c| {
-            matches!(
-                c,
-                Component::CurDir | Component::ParentDir | Component::Prefix(_)
-            )
+        || path.components().any(|component| match component {
+            Component::CurDir | Component::ParentDir => true,
+            Component::Prefix(prefix) => {
+                #[cfg(windows)]
+                {
+                    !matches!(
+                        prefix.kind(),
+                        std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+                    )
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = prefix;
+                    true
+                }
+            }
+            _ => false,
         })
     {
         return Err(Error::Rejected);
@@ -283,4 +295,32 @@ pub(crate) fn invoke(handle: u64, method: i32, fields: Vec<Vec<u8>>) -> Result<V
         .get()
         .ok_or(Error::Custody)?
         .invoke(handle, method, &fields)
+}
+
+#[cfg(test)]
+mod portable_hardware_path_tests {
+    use super::*;
+    #[test]
+    fn hardware_custody_path_rejects_relative_and_parent_selection() {
+        assert!(validate_path(Path::new("relative/original")).is_err());
+        #[cfg(unix)]
+        {
+            assert!(validate_path(Path::new("/ordinary/native")).is_ok());
+            assert!(validate_path(Path::new("/ordinary/../replacement")).is_err());
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn hardware_custody_path_accepts_only_real_absolute_windows_drives() {
+        assert!(validate_path(Path::new(r"C:\ordinary\native")).is_ok());
+        assert!(validate_path(Path::new(r"\\?\C:\ordinary\native")).is_ok());
+        for refused in [
+            r"C:relative",
+            r"\\server\share\ordinary",
+            r"\\.\device",
+            r"C:\ordinary\..\replacement",
+        ] {
+            assert!(validate_path(Path::new(refused)).is_err());
+        }
+    }
 }

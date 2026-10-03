@@ -145,8 +145,15 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         held.e.acceptOriginalCredential(credential)
         val request = held.e.retailStartRequestOriginal(held.reservation, held.identity)
         assertEquals("/v1/kagemusha/enrollment/ordinary/start", request.path)
-        assertEquals(mapOf("signed_preparation_base64" to base64(e.signedC),
-            "app_certificate_base64" to base64(credential)), fields(request.body()))
+        assertEquals(mapOf("wallet" to String(e.reserved[1], Charsets.UTF_8),
+            "signed_preparation_base64" to base64(e.signedC),
+            "raw_admission_original_base64" to base64(ByteArray(314) { 0x39 }),
+            "platform_original_base64" to base64(e.raw),
+            "core_possession_original_base64" to base64(e.eMessage + der),
+            "app_certificate_base64" to base64(credential), "selected_integrity" to null), fields(request.body()))
+        assertFails { KagemushaOrdinaryIdentityHttpCodecV1.requireRetailStartOriginal(
+            json(linkedMapOf("signed_preparation_base64" to base64(e.signedC),
+                "app_certificate_base64" to base64(credential))), e.signedC, credential) }
         val retail = held.e.prepareOriginalRetailEnrollment(held.reservation, held.identity) { original ->
             assertContentEquals(request.body(), original.body()); e.retailStartReply()
         }
@@ -552,6 +559,21 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
                     5 -> arrayOf(byteArrayOf(2), der.copyOf(), receipt())
                     6 -> arrayOf(pending.copyOf(), sha(eMessage))
                     8 -> { credentialIntakes++; credential = fields[2].copyOf(); arrayOf(sha(credential), pending.copyOf()) }
+                    15 -> {
+                        // Complete fake endpoint DATA projection only; no hardware/issuer claim.
+                        check(credential.isNotEmpty())
+                        val body = json(linkedMapOf("wallet" to String(reserved[1], Charsets.UTF_8),
+                            "signed_preparation_base64" to base64(signedC),
+                            "raw_admission_original_base64" to base64(ByteArray(314) { 0x39 }),
+                            "platform_original_base64" to base64(raw),
+                            "core_possession_original_base64" to base64(eMessage + der),
+                            "app_certificate_base64" to base64(credential), "selected_integrity" to null))
+                        val index = ByteBuffer.wrap(fields[2]).order(ByteOrder.LITTLE_ENDIAN).int
+                        val offset = index * 65536
+                        check(offset < body.size)
+                        arrayOf(fields[2].copyOf(), body.copyOfRange(offset, minOf(body.size, offset + 65536)),
+                            sha(body), KagemushaCoreCoordinatorFrameV1.u32(body.size), pending.copyOf(), sha(credential))
+                    }
                     9 -> {
                         assertContentEquals(retailChallenge, fields[2]); assertContentEquals(retailMessage, fields[3])
                         check(credential.isNotEmpty()); retailIntakes++

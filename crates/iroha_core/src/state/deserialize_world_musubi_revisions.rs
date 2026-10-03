@@ -6,13 +6,14 @@
 //! authority. All prior semantic checks run before scratch admission.
 
 use super::*;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_allocation::{ChargedBuffer, ChargedBufferError};
 
 pub(super) fn validate_directory_revisions(
-    world: &impl WorldReadOnly,
+    world: &impl MusubiSourceReadOnly,
     execution_budget: &AllocationBudget,
 ) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
-    let directory = world.musubi_public_directory();
+    let directory = world.source_musubi_public_directory();
     let mut entries = ChargedBuffer::new(directory.len(), execution_budget).map_err(|error| {
         ExecutionAttemptError::Deferred(match error {
             ChargedBufferError::Admission(refusal) => refusal.into(),
@@ -28,7 +29,7 @@ pub(super) fn validate_directory_revisions(
         .as_mut_slice()
         .sort_unstable_by(|left, right| left.package.cmp(&right.package));
     let mut entries = entries.as_slice().iter().copied().peekable();
-    let mut rows = world.musubi_resolver_index().iter().peekable();
+    let mut rows = world.source_musubi_resolver_index().iter().peekable();
     while let Some(entry) = entries.next() {
         while rows
             .next_if(|(release, _)| release.package < entry.package)

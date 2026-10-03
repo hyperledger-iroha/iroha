@@ -1,17 +1,17 @@
 //! Semantic projections tied to the original immutable Musubi World borrow.
 //!
-//! This prerequisite exposes neither table nodes nor a State/finality root. The
-//! source-work validator retains static rejections and prepays sequential NFC
-//! scratch, but nested helper errors and all-algorithm crypto custody remain
-//! open. This token proves only completed predicates on the borrowed cut; it
-//! does not retain the temporary NFC lease after validation returns.
-//! TODO: complete that resource contract before any catalog reader uses this owner.
+//! The source-work validator retains static rejections and prepays sequential
+//! NFC scratch. Concrete codec and borrowed verifier/helper controls cover the
+//! three registered semantic readers. This token proves completed predicates on
+//! the borrowed cut and keeps its original pool; temporary validation scratch
+//! is released before tree capture. It cannot establish State finality.
 
 use super::super::*;
 use crate::state::authority_registry::world::{
     musubi_availability_policy::MusubiAvailabilityAuthorityV1,
     musubi_universal_policy::{MusubiDirectoryAuthorityV1, MusubiResolverAuthorityV1},
 };
+use crate::state::deserialize::musubi_source_read::{MusubiSourceReadOnly, StateMusubiSourceCut};
 use iroha_allocation::AllocationBudget;
 
 // The public WorldReadOnly trait alone cannot promise immutable observations:
@@ -19,6 +19,7 @@ use iroha_allocation::AllocationBudget;
 mod sealed {
     /// Closed implementation marker for native immutable observation carriers.
     pub trait NativeCut {}
+    impl NativeCut for super::StateMusubiSourceCut<'_> {}
     impl NativeCut for crate::state::WorldView<'_> {}
     impl NativeCut for crate::state::WorldBlock<'_> {}
     impl NativeCut for crate::state::WorldTransaction<'_, '_> {}
@@ -28,10 +29,11 @@ mod sealed {
 /// Native immutable borrow carriers admitted by this semantic observation owner.
 /// The private supertrait prevents third-party WorldReadOnly implementations.
 pub(in crate::state) trait MusubiObservationCut:
-    WorldReadOnly + sealed::NativeCut
+    MusubiSourceReadOnly + sealed::NativeCut
 {
 }
 impl MusubiObservationCut for WorldView<'_> {}
+impl MusubiObservationCut for StateMusubiSourceCut<'_> {}
 impl MusubiObservationCut for WorldBlock<'_> {}
 impl MusubiObservationCut for WorldTransaction<'_, '_> {}
 impl MusubiObservationCut for Box<WorldTransaction<'_, '_>> {}
@@ -56,7 +58,7 @@ impl<W: MusubiObservationCut> std::fmt::Debug for ValidatedMusubiSource<'_, W> {
     not(test),
     expect(
         dead_code,
-        reason = "TODO: complete verifier/helper-error custody before reader registration"
+        reason = "row-only observation helpers are currently exercised by source-custody controls"
     )
 )]
 impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
@@ -78,7 +80,7 @@ impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
         &self,
     ) -> impl Iterator<Item = (&ArchiveId, MusubiAvailabilityAuthorityV1)> {
         self.world
-            .musubi_archive_availability()
+            .source_musubi_archive_availability()
             .iter()
             .map(|(key, row)| (key, MusubiAvailabilityAuthorityV1::from_record(row)))
     }
@@ -88,7 +90,7 @@ impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
         &self,
     ) -> impl Iterator<Item = (&MusubiReleaseIdV1, MusubiResolverAuthorityV1)> {
         self.world
-            .musubi_resolver_index()
+            .source_musubi_resolver_index()
             .iter()
             .map(|(key, row)| (key, MusubiResolverAuthorityV1::from_record(row)))
     }
@@ -98,7 +100,7 @@ impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
         &self,
     ) -> impl Iterator<Item = (&MusubiPackageSelectorV1, MusubiDirectoryAuthorityV1)> {
         self.world
-            .musubi_public_directory()
+            .source_musubi_public_directory()
             .iter()
             .map(|(key, row)| (key, MusubiDirectoryAuthorityV1::from_record(row)))
     }
@@ -108,6 +110,6 @@ impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
 #[path = "deserialize_world_musubi_source_observation_tests.rs"]
 mod tests;
 
-#[cfg(test)]
 #[path = "deserialize_world_musubi_capture_candidate.rs"]
 mod capture_candidate;
+pub(in crate::state) use capture_candidate::MusubiSemanticTable;

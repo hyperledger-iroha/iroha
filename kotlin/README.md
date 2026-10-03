@@ -685,6 +685,60 @@ Torii `kagemusha_operation_not_found` 404 whose JSON body and
 `X-Iroha-Reject-Code` header agree. Other 404 responses fail; an absent
 operation permits only byte-identical retry of the retained signed transaction.
 
+### Petal Stream optical transport
+
+Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
+"streaming QR" used to hand an offline payload such as an `IPM1` peer message
+from one screen to a phone camera. Each square frame shows four sakura-blossom
+finders, a `天`-shaped field of 256 tiles (light/dark polarity, lane `P`;
+katakana glyph, lane `K`) and three dotted rings (lane `D`). Every lane is one
+whitened GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms,
+and every fourth frame's lane `D` carries the stream beacon, so any readable
+lane of any frame helps and lost frames only cost time. The Kotlin port is
+pure JVM in `core-jvm` and follows the normative Rust crate
+`crates/iroha_petal`; encoding is bit-identical to it.
+
+```kotlin
+// Sender: frame n of the endless stream, drawn natively or in software.
+val encoder = PetalStreamEncoder(payload, kind)
+petalStreamView.setStream(encoder)           // client-android View, 8 fps by default
+petalStreamView.start()
+val list = PetalDrawList.of(encoder.cells(n)) // vector shapes for other canvases
+val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3))
+
+// Receiver: camera luma planes into one session; the payload arrives once.
+val session = PetalScanSession()
+val luma = PetalLumaAdapter.fromYPlane(y.buffer, y.rowStride, y.pixelStride, width, height)
+session.push(luma, SystemClock.elapsedRealtime()).completed?.let { deliver(it.payload) }
+```
+
+`PetalDecoder.decode` locates the finders, tries four rotations and mirrored
+front-camera previews, reads lane `D` first and turns low-confidence cells into
+Reed–Solomon erasures; a lane is only reported when its codeword checks out.
+The tile lanes `P` and `K` are read in two ways: the *level read* judges every
+8×8 tile patch against the light and dark levels measured at the finders, and a
+lane it cannot decode is retried with the *normalised read*, which rescales each
+patch and each template by its own contrast and erases tiles that lost it, so
+over-exposure, veiling light, glare and shadows cancel out (it only runs when a
+tile lane is missing). Scanners should still ask for about 1280×720 analysis
+frames, set exposure compensation to about −1 EV and fall back to 640×480 (lane
+`K` unreadable) only when the device cannot sustain 5 decoded frames per second;
+see `PetalLumaAdapter` and `specs/petal_stream.md` §8.
+`PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
+size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
+deliver a payload only after its CRC-32C matches the beacon. `client-android`
+adds `PetalStreamView`, `PetalCanvasRenderer` and the dependency-free
+`PetalLumaAdapter` (CameraX `ImageAnalysis`, Camera2 `ImageReader` and Camera1
+NV21 previews); they use API 19 or older platform calls.
+
+The tests check every section of `../fixtures/petal/petal_stream_v1.json` and
+decode the golden camera captures of `../fixtures/petal/petal_captures_v1.json`
+with exactly the lanes the reference reads:
+
+```bash
+./gradlew :core-jvm:test --tests '*Petal*' --console=plain
+```
+
 ### Fee quotes and sponsorship
 
 Every transaction payload requires a typed `FeePaymentIntent`. Select the

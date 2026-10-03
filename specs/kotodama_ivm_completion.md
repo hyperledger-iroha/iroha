@@ -103,6 +103,11 @@ active and nested host execution. The protected return stack is now reserved bef
 child-call gas, and call-frame bitmap and vector-slot growth is prepared before
 table-validation gas. Inactive runtime-template copies no longer duplicate spare
 frame capacity. These bounded cuts do not fund all frame and scratch owners.
+Private interval storage in State-owned VMs retains the original active pool;
+growth reserves replacement capacity while the previous allocation remains live,
+template copies partition the existing parent reservation, and warm reset reuses
+interval capacity after a fallible preflight. Retention or a reduced pool limit
+does not refund live interval storage.
 Local diagnostic step/access recorders and the optional initial image now use
 one checked parent-funded plan with child partitions; four new and 20 existing
 recorder tests pass. This does not fund production VM or host allocations.

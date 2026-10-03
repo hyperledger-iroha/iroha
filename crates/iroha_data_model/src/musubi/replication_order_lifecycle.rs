@@ -59,7 +59,12 @@ impl MusubiReplicationOrderArchiveBindingV1 {
                 "Musubi replication-order/archive binding does not match its commitment",
             ));
         }
-        if self.encode().len() > MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1 {
+        let canonical_len = canonical_frame_len(self).map_err(|_| {
+            ParseError::new(
+                "Musubi replication-order/archive binding has no canonical Norito encoding",
+            )
+        })?;
+        if canonical_len > MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1 {
             return Err(ParseError::new(
                 "Musubi replication-order/archive binding exceeds its canonical byte bound",
             ));

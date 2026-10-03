@@ -7,11 +7,15 @@
 
 use std::ops::Range;
 
+use iroha_allocation::AllocationBudget;
+
 use crate::{
     VMError,
-    cache_memory::{OwnedVec, OwnedVecGrowthError},
-    error::ExecutionDeferral,
+    execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
 };
+
+mod storage;
+use storage::Ranges;
 
 #[cfg(test)]
 thread_local! {
@@ -22,7 +26,8 @@ thread_local! {
 /// Sorted, disjoint half-open private ranges with allocation-owned capacity.
 #[derive(Debug, Default)]
 pub(super) struct PrivateMemoryRanges {
-    ranges: OwnedVec<(u64, u64)>,
+    ranges: Ranges,
+    active_budget: Option<AllocationBudget>,
 }
 
 impl PartialEq for PrivateMemoryRanges {
@@ -34,6 +39,13 @@ impl PartialEq for PrivateMemoryRanges {
 impl Eq for PrivateMemoryRanges {}
 
 impl PrivateMemoryRanges {
+    pub(super) fn with_memory_budget(budget: &AllocationBudget) -> Self {
+        Self {
+            ranges: Ranges::Funded(None),
+            active_budget: Some(budget.clone()),
+        }
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }
@@ -42,24 +54,55 @@ impl PrivateMemoryRanges {
         self.ranges.clear();
     }
 
-    pub(super) fn runtime_template_memory_plan(
-        &self,
-    ) -> Result<crate::execution_memory::ExecutionMemoryPlan, VMError> {
-        crate::execution_memory::ExecutionMemoryPlan::array::<(u64, u64)>(self.ranges.len())
+    pub(super) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
+        ExecutionMemoryPlan::array::<(u64, u64)>(self.ranges.len())
             .map_err(VMError::AllocationDeferred)
     }
 
     pub(super) fn try_clone(&self) -> Result<Self, VMError> {
+        let mut lease = self
+            .active_budget
+            .as_ref()
+            .map(|budget| {
+                ExecutionMemoryLease::reserve(budget, self.runtime_template_memory_plan()?)
+                    .map_err(VMError::AllocationDeferred)
+            })
+            .transpose()?;
+        self.try_clone_for_runtime_template(lease.as_mut())
+    }
+
+    /// Copy from the existing snapshot plan without admitting a second pool reservation.
+    pub(super) fn try_clone_for_runtime_template(
+        &self,
+        lease: Option<&mut ExecutionMemoryLease>,
+    ) -> Result<Self, VMError> {
+        match (&self.active_budget, &lease) {
+            (Some(budget), Some(lease)) if lease.belongs_to(budget) => {}
+            (None, None) => {}
+            _ => return Err(storage::unavailable()),
+        }
         #[cfg(test)]
         if !self.ranges.is_empty() && REFUSE_NEXT_COPY.with(|refuse| refuse.replace(false)) {
-            return Err(VMError::ExecutionDeferred(
-                ExecutionDeferral::AllocationUnavailable,
-            ));
+            return Err(storage::unavailable());
         }
-        self.ranges
-            .try_copy_exact()
-            .map(|ranges| Self { ranges })
-            .map_err(Self::allocation_error)
+        Ok(Self {
+            ranges: self.ranges.try_copy(self.ranges.len(), lease)?,
+            active_budget: self.active_budget.clone(),
+        })
+    }
+
+    /// Prepare any missing interval capacity before reset changes guest state.
+    pub(super) fn try_prepare_restore(&mut self, template: &Self) -> Result<(), VMError> {
+        self.try_reserve_capacity(template.ranges.len())
+    }
+
+    /// Restore within the preflighted allocation, without a new copy owner.
+    pub(super) fn restore_prepared(&mut self, template: &Self) {
+        assert!(self.ranges.capacity() >= template.ranges.len());
+        self.ranges.clear();
+        for &range in &template.ranges[..] {
+            self.ranges.insert_reserved(self.ranges.len(), range);
+        }
     }
 
     pub(super) fn try_retain(&self) -> bool {
@@ -70,8 +113,34 @@ impl PrivateMemoryRanges {
         self.ranges.make_active();
     }
 
-    fn allocation_error(_: OwnedVecGrowthError) -> VMError {
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    fn try_reserve_capacity(&mut self, required: usize) -> Result<(), VMError> {
+        if required <= self.ranges.capacity() {
+            return Ok(());
+        }
+        let capacity = self
+            .ranges
+            .capacity()
+            .checked_mul(2)
+            .ok_or(VMError::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow,
+            ))?
+            .max(4)
+            .max(required);
+        let plan = ExecutionMemoryPlan::array::<(u64, u64)>(capacity)
+            .map_err(VMError::AllocationDeferred)?;
+        let mut lease = self
+            .active_budget
+            .as_ref()
+            .map(|budget| {
+                ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)
+            })
+            .transpose()?;
+        let replacement = self.ranges.try_copy(capacity, lease.as_mut())?;
+        // Publish complete replacement storage before old backing release can
+        // synchronously notify the original pool's waiting execution owner.
+        let previous = std::mem::replace(&mut self.ranges, replacement);
+        drop(previous);
+        Ok(())
     }
 
     fn lower_bound(&self, start: u64) -> usize {
@@ -106,13 +175,16 @@ impl PrivateMemoryRanges {
             if self.ranges.len() == self.ranges.capacity()
                 && REFUSE_NEXT_GROWTH.with(|refuse| refuse.replace(false))
             {
-                return Err(VMError::ExecutionDeferred(
-                    ExecutionDeferral::AllocationUnavailable,
-                ));
+                return Err(storage::unavailable());
             }
-            self.ranges
-                .try_reserve_one()
-                .map_err(Self::allocation_error)?;
+            let required = self
+                .ranges
+                .len()
+                .checked_add(1)
+                .ok_or(VMError::AllocationDeferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow,
+                ))?;
+            self.try_reserve_capacity(required)?;
         }
         Ok(())
     }
@@ -255,3 +327,6 @@ impl PrivateMemoryRanges {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -34,7 +34,6 @@ pub struct KagemushaOrdinaryLineageStateProjectionV1 {
 }
 impl KagemushaOrdinaryLineageStateProjectionV1 {
     /// Encode the actual already-admitted Native candidate's public projection, without secrets.
-    #[cfg(unix)]
     pub(crate) fn from_admitted_candidate(
         candidate: &super::KagemushaAuthenticatedOrdinaryCashCandidateV1,
     ) -> Result<Self> {
@@ -178,7 +177,6 @@ impl KagemushaOrdinaryLineageStateOriginalV1 {
     }
 
     /// Copy public data from the genuine already-admitted Native candidate, granting no new loan.
-    #[cfg(unix)]
     pub(crate) fn from_admitted_candidate(
         candidate: &super::KagemushaAuthenticatedOrdinaryCashCandidateV1,
     ) -> Result<Self> {

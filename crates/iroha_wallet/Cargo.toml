@@ -25,6 +25,7 @@ hex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 scrypt = { workspace = true }
+sorafs_manifest = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 toml = { workspace = true }
 url = { workspace = true }

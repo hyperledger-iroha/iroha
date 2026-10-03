@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package org.hyperledger.iroha.sdk.offline
 
+import java.io.OutputStream
 import java.math.BigInteger
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -19,11 +20,20 @@ class KagemushaOrdinaryLineageHttpOriginalV1 private constructor(fields: List<By
     val path = "/v1/kagemusha/enrollment/ordinary/lineage-cas"
     val maximumResponseBytes = KagemushaOrdinaryLineageHttpCodecV1.MAXIMUM_RESPONSE_BYTES
     val requestId = KagemushaOrdinaryLineageHttpCodecV1.requestId(fields[1])
-    private val body = KagemushaOrdinaryLineageHttpCodecV1.requestBody(fields[1], fields[2], fields[3])
+    private val request=fields[1].copyOf()
+    private val signature=fields[2].copyOf()
+    private val proof=fields[3].copyOf()
     fun requireCurrent() = guard()
-    fun body(): ByteArray { requireCurrent(); return body.copyOf().also { requireCurrent() } }
+    fun writeBodyTo(output:OutputStream) {
+        requireCurrent();KagemushaOrdinaryLineageHttpCodecV1.writeRequestBody(request,signature,proof,output);requireCurrent()
+    }
+    internal fun clear(){request.fill(0);signature.fill(0);proof.fill(0)}
     internal companion object {
-        fun selected(fields: List<ByteArray>, guard: () -> Unit) = KagemushaOrdinaryLineageHttpOriginalV1(fields, guard)
+        fun selected(fields: List<ByteArray>, guard: () -> Unit):KagemushaOrdinaryLineageHttpOriginalV1 {
+            KagemushaOrdinaryOutgoingFrameV1.requireResponse(6,fields)
+            check(fields[0].contentEquals(byteArrayOf(0)))
+            return KagemushaOrdinaryLineageHttpOriginalV1(fields,guard)
+        }
     }
 }
 /** Detached exact acknowledged outgoing bytes. This cannot recreate proof, State or money custody. */
@@ -33,18 +43,62 @@ class KagemushaOrdinaryCommittedOutgoingOriginalV1 internal constructor(key: Byt
     fun completeOutgoingOriginal(): ByteArray = bytes.copyOf()
 }
 
-/** One genuine ordinary outgoing operation through W2, proof, Reserve, W1, whole Commit and
- * distinct StateAdvance/FI Ack. Generic OEM WalletV1 remains separate and unavailable without its
- * real hardware provider. Software financial WAL is not represented as hardware-sealed storage.
+internal interface OrdinaryOutgoingApprovalStepV1 { suspend fun approve() }
+internal interface OrdinaryOutgoingWorkflowNativeV1 {
+    suspend fun prepare(kind:Int,business:ByteArray,amount:BigInteger?):OrdinaryOutgoingApprovalStepV1
+    suspend fun terminal(reserveKey:ByteArray):OrdinaryOutgoingApprovalStepV1
+    suspend fun invoke(phase:Int,fields:List<ByteArray> = emptyList()):List<ByteArray>
+    fun requireOpen();fun revoke()
+}
+/** Genuine ordinary Send/Redemption through distinct W2/W1 approvals, released proofs, global CAS,
+ * durable StateAdvance and separate FI Ack. Retain this workflow for same-original HTTP retries.
+ * Pure proof results survive finite account-read expiry; phase16 genuinely renews the same S/W.
  */
-class KagemushaOrdinaryOutgoingCashV1(
-    private val coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-    private val hardware: KagemushaAndroidHardwareAppKeyStoreV1,
-    private val currentControl: KagemushaOrdinaryCurrentControlV1,
-    private val transport: KagemushaOrdinaryLineageOriginalTransportV1,
-    private val requireOriginalOwner: () -> Unit,
+class KagemushaOrdinaryOutgoingCashV1 internal constructor(
+    private val native:OrdinaryOutgoingWorkflowNativeV1,
+    private val financial:suspend(Boolean)->Unit,
+    private val integrity:suspend()->Unit,
+    private val transport:KagemushaOrdinaryLineageOriginalTransportV1,
+    private val requireOriginalOwner:()->Unit,
 ) {
-    private val binding = coordinator.ordinaryOutgoingTransportBinding()
+    constructor(coordinator:KagemushaNativeCoreCoordinatorAdapterV1,hardware:KagemushaAndroidHardwareAppKeyStoreV1,
+        currentControl:KagemushaOrdinaryCurrentControlV1,integrity:KagemushaOrdinaryIntegrityRefreshV1,
+        transport:KagemushaOrdinaryLineageOriginalTransportV1,requireOriginalOwner:()->Unit):this(
+        ActualNative(coordinator,hardware),{fresh->if(fresh)currentControl.refreshCurrentFinancialControl()
+            else currentControl.beginOrResumeCurrentFinancialControl()},
+        {integrity.refreshCurrentIntegrity();Unit},transport,requireOriginalOwner)
+    private class ActualNative(private val coordinator:KagemushaNativeCoreCoordinatorAdapterV1,
+        private val hardware:KagemushaAndroidHardwareAppKeyStoreV1):OrdinaryOutgoingWorkflowNativeV1 {
+        private val binding=coordinator.ordinaryOutgoingTransportBinding()
+        private val io=KagemushaRetainedNativeIoV1()
+        override fun requireOpen()=binding.requireOpen()
+        override fun revoke(){try{binding.revoke()}finally{io.retire()}}
+        override suspend fun invoke(phase:Int,fields:List<ByteArray>):List<ByteArray> = io.call {
+            binding.invoke(KagemushaOrdinaryRuntimeJniV1,phase,fields)
+        }
+        override suspend fun prepare(kind:Int,business:ByteArray,amount:BigInteger?):OrdinaryOutgoingApprovalStepV1=io.call {
+            val held=if(kind==2)coordinator.appIdentityOperations().prepareOrdinarySendApproval(business)
+                else coordinator.appIdentityOperations().prepareOrdinaryRedemptionApproval(checkNotNull(amount))
+            object:OrdinaryOutgoingApprovalStepV1 {override suspend fun approve(){io.call{hardware.approve(held).fill(0)}}}
+        }
+        override suspend fun terminal(reserveKey:ByteArray):OrdinaryOutgoingApprovalStepV1=io.call {
+            val held=binding.selectTerminal(KagemushaOrdinaryRuntimeJniV1,reserveKey)
+            object:OrdinaryOutgoingApprovalStepV1 {override suspend fun approve(){io.call{hardware.approveOrdinaryTerminal(held).fill(0)}}}
+        }
+    }
+    private var financialPending=false
+    private suspend fun refreshDependencies() {
+        effect{invoke(16)}
+        try {
+            integrity();current()
+            val fresh=!financialPending;financialPending=true;financial(fresh);current();financialPending=false
+        }catch(failure:Throwable) {
+            // The actual PI/FI workflow owns its immutable HTTP uncertainty and Native fences.
+            // Retain that workflow and this proof; retry cannot select a replacement nonce.
+            try{current()}catch(revoked:Throwable){freeze(revoked)}
+            throw failure
+        }
+    }
     private val active = AtomicBoolean(false)
     @Volatile private var frozen = false
     private class Dispatch(val phase: Int, val fields: List<ByteArray>) {
@@ -55,11 +109,11 @@ class KagemushaOrdinaryOutgoingCashV1(
     }
     private class Cycle(val kind: Int, val business: ByteArray) {
         var prepareStarted = false
-        var preparation: KagemushaNativePreparedAppApprovalV1? = null
+        var preparation: OrdinaryOutgoingApprovalStepV1? = null
         var w2Captured = false
         var reservationProved = false
         var reserve: Dispatch? = null
-        var terminal: KagemushaNativePreparedOrdinaryTerminalApprovalV1? = null
+        var terminal: OrdinaryOutgoingApprovalStepV1? = null
         var w1Captured = false
         var commitProved = false
         var commit: Dispatch? = null
@@ -93,44 +147,42 @@ class KagemushaOrdinaryOutgoingCashV1(
             if (!original.prepareStarted) {
                 // This genuine Native/current FI workflow creates or recovers Cash from the
                 // same actual published Bootstrap; hardware evidence alone cannot do so.
-                currentControl.beginOrResumeCurrentFinancialControl()
+                financial(false);current()
+                refreshDependencies()
                 original.prepareStarted = true // Own the attempt before Native can fsync W2.
                 original.preparation = effect {
-                    if (kind == 2) coordinator.appIdentityOperations().prepareOrdinarySendApproval(original.business)
-                    else coordinator.appIdentityOperations().prepareOrdinaryRedemptionApproval(checkNotNull(amount))
+                    native.prepare(kind,original.business,amount)
                 }
             }
             if (!original.w2Captured) {
-                effect { hardware.approve(checkNotNull(original.preparation)) }
+                effect { checkNotNull(original.preparation).approve() }
                 original.w2Captured = true // Purpose2 capture is not a terminal/publication grant.
             }
             if (!original.reservationProved) {
                 effect { invoke(5) }; original.reservationProved = true
             }
-            if (original.reserve == null) original.reserve = effect { Dispatch(6, invoke(6)) }
+            if (original.reserve == null) {refreshDependencies();original.reserve = effect { Dispatch(6, invoke(6)) }}
             dispatch(checkNotNull(original.reserve))
             val reserveKey = checkNotNull(original.reserve).fields[4]
             if (original.terminal == null) {
-                effect { invoke(16) } // Fresh genuine four-node clock before selecting W1.
-                currentControl.refreshCurrentFinancialControl()
-                original.terminal = effect { binding.selectTerminal(KagemushaOrdinaryRuntimeJniV1, reserveKey) }
+                refreshDependencies()
+                original.terminal = effect { native.terminal(reserveKey) }
             }
             if (!original.w1Captured) {
-                effect { hardware.approveOrdinaryTerminal(checkNotNull(original.terminal)) }
+                effect { checkNotNull(original.terminal).approve() }
                 original.w1Captured = true
             }
             if (!original.commitProved) { effect { invoke(12) }; original.commitProved = true }
-            if (original.commit == null) original.commit = effect { Dispatch(13, invoke(13)) }
+            if (original.commit == null) {refreshDependencies();original.commit = effect { Dispatch(13, invoke(13)) }}
             dispatch(checkNotNull(original.commit))
             val commitKey = checkNotNull(original.commit).fields[4]
             if (!original.stateAdvanced) {
-                effect { invoke(14, listOf(commitKey)) }; original.stateAdvanced = true
+                refreshDependencies();effect { invoke(14, listOf(commitKey)) }; original.stateAdvanced = true
             }
             if (!original.acknowledged) {
                 // A separately fresh actual FI/current read gates post-State-fsync acknowledgment.
                 // Its HTTP uncertainty retains its own originals. No receipt or callback is invented.
-                effect { invoke(16) }
-                currentControl.refreshCurrentFinancialControl()
+                refreshDependencies()
                 effect { invoke(15, listOf(commitKey)) }; original.acknowledged = true
             }
             val delivery = effect { invoke(17, listOf(commitKey)).single() }
@@ -138,6 +190,18 @@ class KagemushaOrdinaryOutgoingCashV1(
             current(); original.completed = completed
             return completed
         } finally { business.fill(0); active.set(false) }
+    }
+    /** Release only an acknowledged cycle. A pending operation cannot be replaced or cancelled. */
+    fun releaseCompletedCycle() {
+        check(active.compareAndSet(false,true)) { "An ordinary cash operation is already active" }
+        try {
+            current();val original=checkNotNull(cycle);check(original.completed!=null && original.acknowledged)
+            original.business.fill(0)
+            listOfNotNull(original.reserve,original.commit).forEach { held ->
+                held.fields.forEach {it.fill(0)};held.carrier?.clear();held.response?.fill(0)
+            }
+            cycle=null;current()
+        }finally{active.set(false)}
     }
     private suspend fun dispatch(original: Dispatch) {
         if (original.completed) return
@@ -158,24 +222,26 @@ class KagemushaOrdinaryOutgoingCashV1(
                 response.copyOf()
             }
         }
+        refreshDependencies()
         effect {
             current(); check(!original.intakeStarted)
             val originals = KagemushaOrdinaryLineageHttpCodecV1.responseOriginals(checkNotNull(original.response))
             original.intakeStarted = true // Own before any global acknowledgement may be fsynced.
             val key = invoke(7, originals).single()
             check(MessageDigest.isEqual(key, original.fields[4])) { "The acknowledged lineage request differs" }
-            current(); original.completed = true; original.response = null
+            current(); original.completed = true; original.response?.fill(0); original.response = null
+            original.carrier?.clear();original.carrier=null
         }
     }
-    private fun invoke(phase: Int, fields: List<ByteArray> = emptyList()): List<ByteArray> {
-        current(); val response = binding.invoke(KagemushaOrdinaryRuntimeJniV1, phase, fields)
+    private suspend fun invoke(phase: Int, fields: List<ByteArray> = emptyList()): List<ByteArray> {
+        current(); val response = native.invoke(phase,fields)
         current(); return response
     }
-    private fun current() { check(!frozen); requireOriginalOwner(); binding.requireOpen(); requireOriginalOwner() }
-    private fun <T> effect(body: () -> T): T = try { current(); body().also { current() } } catch (failure: Throwable) { freeze(failure) }
+    private fun current() { check(!frozen); requireOriginalOwner(); native.requireOpen(); requireOriginalOwner() }
+    private suspend fun <T> effect(body: suspend () -> T): T = try { current(); body().also { current() } } catch (failure: Throwable) { freeze(failure) }
     private fun freeze(failure: Throwable): Nothing {
         frozen = true
-        try { binding.revoke() } catch (_: Throwable) { }
+        try { native.revoke() } catch (_: Throwable) { }
         throw failure
     }
 }

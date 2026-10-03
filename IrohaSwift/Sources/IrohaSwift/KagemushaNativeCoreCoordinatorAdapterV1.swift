@@ -36,7 +36,8 @@ public protocol KagemushaOutgoingStateProofExportingCoreV1: KagemushaNativeCoreC
 /// software monetary backend. Missing native authority continues to fail closed.
 public final class KagemushaNativeCoreCoordinatorAdapterV1:
   KagemushaOutgoingStateProofExportingCoreV1, KagemushaNativeIncomingCoreCoordinatorV1,
-  KagemushaNativeHardwarePolicyProvidingCoreV1, @unchecked Sendable {
+  KagemushaNativeHardwarePolicyProvidingCoreV1, KagemushaNativeMintFundingCoreCoordinatorV1,
+  @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -44,6 +45,37 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
   /// Open the process-owned native coordinator under its durable storage path.
   public static func open(storagePath: String) throws -> KagemushaNativeCoreCoordinatorAdapterV1 {
     try KagemushaNativeCoreCoordinatorAdapterV1(bridge: .open(storagePath: storagePath))
+  }
+
+  /// Continue Mint or Receive on this same installed ordinary Native owner. Returned
+  /// originals are transport data; Native authenticates the complete retained lifecycle.
+  /// Clock renewal selects only the already installed account, with no caller clock input.
+  public func invokeOrdinaryIncoming(_ phase: KagemushaOrdinaryIncomingPhaseV1,
+    originals: [Data] = []) throws -> [Data] {
+    try bridge.invokeOrdinaryIncoming(phase, originals: originals)
+  }
+
+  /// Native derives purpose2 W from the exact authenticated receiver request.
+  public func prepareOrdinarySendApproval(originalReceiverRequest: Data) throws
+    -> KagemushaNativePreparedAppApprovalV1 {
+    try bridge.prepareOrdinarySendApproval(originalReceiverRequest: originalReceiverRequest)
+  }
+
+  /// Exact positive LE128 amount; Native selects its enrolled beneficiary and original State.
+  public func prepareOrdinaryRedemptionApproval(amountLittleEndian: Data) throws
+    -> KagemushaNativePreparedAppApprovalV1 {
+    try bridge.prepareOrdinaryRedemptionApproval(amountLittleEndian: amountLittleEndian)
+  }
+
+  func ordinaryNativeTransportBinding() throws -> KagemushaOrdinaryNativeBindingV1 {
+    try KagemushaOrdinaryNativeBindingV1(bridge: bridge)
+  }
+
+  /// Continue the dedicated funding phases on this same owner. Returned signatures,
+  /// decisions and finality originals are data; Native independently admits all effects.
+  public func invokeOrdinaryMintFunding(_ phase: KagemushaOrdinaryMintFundingPhaseV1,
+    originals: [Data] = []) throws -> [Data] {
+    try bridge.invokeOrdinaryMintFunding(phase, originals: originals)
   }
 
   /// Obtain the genuine native owner's opaque ordinary app-approval ticket.
@@ -65,6 +97,12 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
   public func currentWalletAccountSelection() throws
     -> KagemushaNativeWalletAccountSelectionOriginalV1 {
     try bridge.currentWalletAccountSelection()
+  }
+
+  /// Read completed app-key metadata from the same actual descriptor and historical WAL.
+  /// This holder grants neither current PI nor financial or signing authority.
+  public func completedAppKeyOriginal() throws -> KagemushaNativeCompletedAppKeyOriginalV1 {
+    try bridge.completedAppKeyOriginal()
   }
 
   /// Read the existing native selector without creating an identity or reservation.

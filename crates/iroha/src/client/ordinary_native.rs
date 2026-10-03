@@ -271,11 +271,28 @@ impl KagemushaNativeAccountCustodyV1 {
         Self::require_native_key(&self.account, &self.current)
     }
 
+    /// Authenticate the immutable retained Native key/S/W/network relationships only.
+    /// The original certified read was admitted at construction. This projection grants
+    /// no current membership, signature, financial control or State effect; those paths
+    /// continue to call `recheck` and require a genuinely refreshed current read.
+    /// # Errors
+    /// Refuses a changed Native key, account, controller capability or network.
+    pub fn recheck_retained_identity(&self) -> Result<()> {
+        Self::require_native_key_identity(&self.account, &self.current)
+    }
+
     fn require_native_key(
         account: &AccountClient,
         current: &VerifiedEnrollmentWalletSignatoryV1,
     ) -> Result<()> {
         current.recheck()?;
+        Self::require_native_key_identity(account, current)
+    }
+
+    fn require_native_key_identity(
+        account: &AccountClient,
+        current: &VerifiedEnrollmentWalletSignatoryV1,
+    ) -> Result<()> {
         ensure!(
             account.authority() == current.wallet()
                 && account.network_id() == current.network_id()
@@ -431,6 +448,372 @@ impl KagemushaNativeAccountCustodyV1 {
         inventory.require_lineage_request(&request)?;
         self.recheck()?;
         Ok(signature)
+    }
+
+    /// Sign the actual Main-retained unsigned Mint request after its durable consent fence.
+    /// The existing account signatory and exact certified W remain unchanged; this is consent,
+    /// not a Core permission, debit decision or finalized funding capability.
+    /// # Errors
+    /// Refuses foreign W/network/release, stale custody or any changed invocation/original.
+    pub fn sign_retained_mint_consent(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintAccountSigningV1<'_>,
+    ) -> Result<[u8; 64]> {
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint consent invocation rejected"))?;
+        let request =
+            iroha_data_model::kagemusha::KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(
+                original
+                    .request_original()
+                    .map_err(|_| eyre!("Native Mint request custody rejected"))?,
+            )
+            .map_err(|_| eyre!("Native Mint request original rejected"))?;
+        let context = &request.authorization.statement.context;
+        inventory.require_mint_request(&request)?;
+        ensure!(
+            context.lineage.owner.account_id == *self.current.wallet()
+                && &context.lineage.owner.runtime.network_id == self.account.network_id(),
+            "Native Mint consent differs from retained W/network"
+        );
+        let message = original
+            .account_signing_message()
+            .map_err(|_| eyre!("Native Mint account subject rejected"))?;
+        ensure!(
+            message
+                == request
+                    .account_signing_message()
+                    .map_err(|_| eyre!("Native Mint account subject codec rejected"))?,
+            "Native Mint account subject changed original"
+        );
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint consent expired before signing"))?;
+        self.recheck()?;
+        let signature = iroha_crypto::Signature::try_new(
+            self.account.context.key_pair.private_key(),
+            &message,
+        )?;
+        request
+            .verify_account_signature(&signature)
+            .map_err(|_| eyre!("Native Mint consent key differs from W"))?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint consent changed after signing"))?;
+        inventory.require_mint_request(&request)?;
+        self.recheck()?;
+        signature
+            .payload()
+            .try_into()
+            .map_err(|_| eyre!("Native Mint consent is not Ed64"))
+    }
+
+    /// Quote and sign the sole actual Main-selected Node funding instruction through the
+    /// existing Ed25519 signatory. A distinct one-member W witness uses the maintained canonical
+    /// HTTP witness grammar; generic direct-account and multi-member quote APIs stay unchanged.
+    /// Main fsyncs both returned canonical SignedTransaction and exact wire before dispatch.
+    /// # Errors
+    /// Refuses another installed purpose/original/W, changed payload, fee substitution,
+    /// expired Core decision/current FI or any failed transport/signing/current custody check.
+    pub fn sign_retained_mint_transaction(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintTransactionSigningV1<'_>,
+    ) -> Result<[Vec<u8>; 2]> {
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint transaction invocation rejected"))?;
+        let submission = original
+            .submission()
+            .map_err(|_| eyre!("Native Mint Node original rejected"))?;
+        inventory.require_mint_submission(&submission)?;
+        let request =
+            iroha_data_model::kagemusha::KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(
+                &submission.topup_request_original,
+            )
+            .map_err(|_| eyre!("Native Mint transaction request rejected"))?;
+        ensure!(
+            request
+                .authorization
+                .statement
+                .context
+                .lineage
+                .owner
+                .account_id
+                == *self.current.wallet(),
+            "Native Mint transaction changed retained W"
+        );
+        let AccountController::Multisig(policy) = self.current.wallet().controller() else {
+            return Err(eyre!("Native Mint requires original one-member W"));
+        };
+        ensure!(
+            policy.threshold() == 1
+                && policy.members().len() == 1
+                && policy.members()[0].weight() == 1
+                && policy.members()[0].public_key() == self.account.context.key_pair.public_key(),
+            "Native Mint HTTP witness changed exact one-member W"
+        );
+        let instruction: InstructionBox =
+            iroha_data_model::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1::new(submission)
+                .map_err(|_| eyre!("Native Mint submission instruction rejected"))?
+                .into();
+        let mut payload = self.account.prepare_transaction(
+            AccountTransactionDraft::new(
+                [instruction],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .with_time_to_live(Duration::from_millis(
+                original
+                    .maximum_ttl_ms()
+                    .map_err(|_| eyre!("Native Mint decision TTL rejected"))?,
+            )),
+        )?;
+        payload.creation_time_ms = original
+            .creation_time_ms()
+            .map_err(|_| eyre!("Native Mint retained signing time rejected"))?;
+        original
+            .validate_payload(&payload)
+            .map_err(|_| eyre!("Native Mint exact payload rejected before quote"))?;
+        self.account.ensure_fee_quote_domain(&payload)?;
+        let client = self.account.client();
+        let url = join_torii_url(
+            &client.torii_url,
+            torii_routes::fees::QUOTE_PATH.trim_start_matches('/'),
+        );
+        let body = norito::json::to_vec(&FeeQuoteWireRequest {
+            payload: payload.clone(),
+        })?;
+        let mut witness = iroha_data_model::soracloud::CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: self.current.wallet().clone(),
+            timestamp_ms: payload.creation_time_ms,
+            nonce: Client::signed_request_nonce()?,
+            canonical_request_hash: canonical_network_request_hash(
+                self.account.network_id(),
+                &HttpMethod::POST,
+                &url,
+                &body,
+            )?,
+            signatures: Vec::new(),
+        };
+        let witness_message = canonical_request_witness_message(&witness)?;
+        witness.signatures.push(
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: self.account.context.key_pair.public_key().clone(),
+                signature: iroha_crypto::Signature::try_new(
+                    self.account.context.key_pair.private_key(),
+                    &witness_message,
+                )?,
+            },
+        );
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint decision expired before fee read"))?;
+        self.recheck()?;
+        let response = client.send_builder(
+            client
+                .request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header(
+                    HEADER_WITNESS,
+                    &canonical_request_witness_header_value(&witness)?,
+                )
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body)
+                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
+        )?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint decision expired after fee read"))?;
+        self.recheck()?;
+        let quote = Client::decode_fee_quote_response(&payload, &response)?;
+        apply_fee_quote_intent(&mut payload, quote.intent)?;
+        original
+            .validate_payload(&payload)
+            .map_err(|_| eyre!("Native Mint exact payload rejected after quote"))?;
+        let transaction = iroha_data_model::transaction::TransactionBuilder::from_payload(payload)?
+            .try_sign_multisig([self.account.context.key_pair.private_key()])?;
+        transaction.verify_signature()?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint decision expired after transaction signature"))?;
+        self.recheck()?;
+        inventory.recheck()?;
+        Ok([
+            norito::encode_canonical(&transaction)?,
+            transaction.encode_wire_v1()?,
+        ])
+    }
+
+    /// Send only the exact durably dispatched transaction lent by Main. This single HTTP
+    /// invocation cannot create another transaction and does not establish finalized funding.
+    /// # Errors
+    /// Refuses foreign transaction/W/network, changed custody or rejected/failed transport.
+    pub fn submit_retained_mint_transaction(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintFundingTransportV1<'_>,
+    ) -> Result<()> {
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint dispatch custody rejected"))?;
+        let raw = original
+            .transaction_original()
+            .map_err(|_| eyre!("Native Mint transaction original rejected"))?;
+        let tx: SignedTransaction =
+            norito::decode_canonical_with_limits(raw, norito::canonical_decode_limits(raw.len()))?;
+        ensure!(
+            norito::encode_canonical(&tx)? == raw
+                && tx.authority() == self.current.wallet()
+                && tx.network_id() == Some(self.account.network_id()),
+            "Native Mint transaction changed W/network/original"
+        );
+        tx.verify_signature()?;
+        let payload = PreparedTransactionPayload::from_transaction(&tx);
+        ensure!(
+            payload.as_bytes()
+                == original
+                    .transaction_wire()
+                    .map_err(|_| eyre!("Native Mint wire custody rejected"))?,
+            "Native Mint wire differs from original"
+        );
+        let client = self.account.client();
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint dispatch expired before HTTP"))?;
+        let response = client.send_builder(client.prepare_transaction_payload_request(&payload))?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint custody changed after HTTP"))?;
+        self.recheck()?;
+        TransactionResponseHandler::handle_for_confirmation(&response, &tx)?;
+        // HTTP admission or unknown disposition never grants Node finality or incoming funds.
+        Ok(())
+    }
+    /// Read immutable Node/Kura finality under current W's exact canonical witness. Pending
+    /// returns None; complete raw data still requires Main's independently anchored admission.
+    /// # Errors
+    /// Refuses foreign selectors/W/network, stale custody, invalid reply or transport failure.
+    pub fn read_retained_mint_finality(
+        &self,
+        inventory: &KagemushaAdmittedOrdinaryNativeInventoryV1,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintFundingTransportV1<'_>,
+    ) -> Result<Option<Vec<u8>>> {
+        use iroha_torii_shared::ordinary_mint_finalized::{
+            ORDINARY_MINT_FINALIZED_ROUTE_V1, OrdinaryMintFinalizedReadV1,
+        };
+        self.recheck()?;
+        inventory.require_account_transport(&self.account)?;
+        let f = original
+            .finality_read_fields()
+            .map_err(|_| eyre!("Native Mint read selectors rejected"))?;
+        ensure!(f.len() == 5, "Native Mint read field count rejected");
+        let request = OrdinaryMintFinalizedReadV1 {
+            version: 1,
+            network_id: norito::decode_canonical_with_limits(
+                &f[0],
+                norito::canonical_decode_limits(f[0].len()),
+            )?,
+            payer: norito::decode_canonical_with_limits(
+                &f[1],
+                norito::canonical_decode_limits(f[1].len()),
+            )?,
+            operation_id: f[2].as_slice().try_into()?,
+            request_original_sha256: f[3].as_slice().try_into()?,
+            issuer_decision_original_sha256: f[4].as_slice().try_into()?,
+        };
+        ensure!(
+            &request.network_id == self.account.network_id()
+                && &request.payer == self.current.wallet(),
+            "Native Mint read changed W/network"
+        );
+        let AccountController::Multisig(policy) = self.current.wallet().controller() else {
+            return Err(eyre!("Native Mint read requires original one-member W"));
+        };
+        ensure!(
+            policy.threshold() == 1
+                && policy.members().len() == 1
+                && policy.members()[0].weight() == 1
+                && policy.members()[0].public_key() == self.account.context.key_pair.public_key(),
+            "Native Mint read changed one-member W"
+        );
+        let body = request.canonical_wire()?;
+        let client = self.account.client();
+        let url = join_torii_url(
+            &client.torii_url,
+            ORDINARY_MINT_FINALIZED_ROUTE_V1.trim_start_matches('/'),
+        );
+        let mut witness = iroha_data_model::soracloud::CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: self.current.wallet().clone(),
+            timestamp_ms: original
+                .http_timestamp_ms()
+                .map_err(|_| eyre!("Native Mint HTTP clock rejected"))?,
+            nonce: Client::signed_request_nonce()?,
+            canonical_request_hash: canonical_network_request_hash(
+                self.account.network_id(),
+                &HttpMethod::POST,
+                &url,
+                &body,
+            )?,
+            signatures: Vec::new(),
+        };
+        let message = canonical_request_witness_message(&witness)?;
+        witness.signatures.push(
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: self.account.context.key_pair.public_key().clone(),
+                signature: iroha_crypto::Signature::try_new(
+                    self.account.context.key_pair.private_key(),
+                    &message,
+                )?,
+            },
+        );
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint read expired before HTTP"))?;
+        let response = client.send_builder(
+            client
+                .request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header(
+                    HEADER_WITNESS,
+                    &canonical_request_witness_header_value(&witness)?,
+                )
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .body(body)
+                .max_response_bytes(
+                    iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1,
+                ),
+        )?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native Mint read expired after HTTP"))?;
+        self.recheck()?;
+        if response.status() == StatusCode::ACCEPTED {
+            ensure!(
+                response.body().is_empty(),
+                "Native Mint pending read carried an unexpected original"
+            );
+            return Ok(None);
+        }
+        ensure!(
+            response.status() == StatusCode::OK
+                && response
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    == Some(APPLICATION_NORITO),
+            "Native Mint finality reply rejected"
+        );
+        Ok(Some(response.into_body()))
     }
 
     /// Sign only the same financial owner's Native-reserved current FI request after its
@@ -872,6 +1255,99 @@ pub struct KagemushaNativeClockTransportV1 {
     nodes: ClockNodes,
 }
 impl KagemushaNativeClockTransportV1 {
+    /// Fetch the exact historical parents needed by Node's public clock carrier.
+    /// Every reply is independently checked against the same retained Clock WAL prefix.
+    /// This does not advance that prefix, select a root or lend historical elapsed time.
+    /// # Errors
+    /// Refuses absent retained decisions, malformed/oversized proofs or the finite budget.
+    pub fn fetch_authenticated_signed_clock_parent_originals(
+        &self,
+        clock: &Mutex<KagemushaOrdinaryNativeClockOwnerV1>,
+        original: &[u8],
+    ) -> Result<Vec<Vec<u8>>> {
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryNativeSignedClockOriginalV1;
+        use iroha_data_model::sumeragi_finality::{
+            SumeragiFinalityAttestation, SumeragiFinalityProof,
+        };
+        let began = NativeContinuousReading::now()?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let (verifier, height) = {
+            let mut held = clock
+                .lock()
+                .map_err(|_| eyre!("Native parent clock lock unavailable"))?;
+            let verified = held
+                .authenticate_received_historical_signed_original(original)
+                .map_err(|_| eyre!("Native parent original is outside the retained prefix"))?;
+            let data =
+                KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(verified.original())
+                    .map_err(|_| eyre!("Native parent original rejected"))?;
+            let raw = &data.signed_observations()[0];
+            let attestation: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
+                raw,
+                norito::canonical_decode_limits(raw.len()),
+            )?;
+            let verifier = held
+                .current_finality_verifier()
+                .map_err(|_| eyre!("Native parent current prefix unavailable"))?;
+            verifier.verify_retained_decision(&attestation.body.finality_proof)?;
+            (verifier, attestation.body.finality_proof.height())
+        };
+        ensure!(height > 0, "Native parent tip absent");
+        let mut parents = Vec::with_capacity(2);
+        for wanted in height.saturating_sub(2).max(1)..height {
+            let wanted =
+                NonZeroU64::new(wanted).ok_or_else(|| eyre!("Native parent height rejected"))?;
+            let mut retained = None;
+            for index in 0..4 {
+                ensure!(
+                    began.elapsed()? < Duration::from_secs(10),
+                    "Native parent budget expired"
+                );
+                if let Ok(proof) = self
+                    .nodes
+                    .at(index)
+                    .with_request_deadline(deadline)
+                    .get_sumeragi_finality_proof(wanted)
+                {
+                    if proof.height() != wanted.get()
+                        || verifier.verify_retained_decision(&proof).is_err()
+                    {
+                        continue;
+                    }
+                    let raw = norito::encode_canonical(&proof)?;
+                    if raw.len() <= 4 * 1024 * 1024 {
+                        retained = Some(raw);
+                        break;
+                    }
+                }
+            }
+            parents
+                .push(retained.ok_or_else(|| eyre!("Native retained clock parent unavailable"))?);
+        }
+        {
+            let mut held = clock
+                .lock()
+                .map_err(|_| eyre!("Native parent clock lock unavailable"))?;
+            held.authenticate_received_historical_signed_original(original)
+                .map_err(|_| eyre!("Native parent original changed"))?;
+            let after = held
+                .current_finality_verifier()
+                .map_err(|_| eyre!("Native parent current prefix expired"))?;
+            for raw in &parents {
+                let proof: SumeragiFinalityProof = norito::decode_canonical_with_limits(
+                    raw,
+                    norito::canonical_decode_limits(raw.len()),
+                )?;
+                after.verify_retained_decision(&proof)?;
+            }
+        }
+        ensure!(
+            began.elapsed()? < Duration::from_secs(10),
+            "Native parent budget expired after verification"
+        );
+        Ok(parents)
+    }
+
     /// Retain four actual configured Native transports for the same independently selected network.
     /// This shape check does not authenticate SDK/runtime inventory or grant a session.
     /// # Errors
@@ -1455,6 +1931,66 @@ mod tests {
                 .sign_current_enrollment_request(prepared, startup_current)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn retained_key_identity_survives_expiry_without_granting_current_signing() {
+        let fixture = NativeCustodyFixture::new();
+        let mut custody = KagemushaNativeAccountCustodyV1::from_current_wallet(
+            context(&fixture),
+            initial_current(&fixture),
+        )
+        .unwrap();
+        custody.recheck().unwrap();
+        custody.recheck_retained_identity().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Mutex::new(fixture.clock(temporary.path())));
+        // Let the real Native continuous reading expire; no offered/test clock renewal.
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        assert!(custody.recheck().is_err());
+        custody.recheck_retained_identity().unwrap();
+        assert_eq!(custody.wallet(), fixture.wallet());
+        assert_eq!(custody.signatory(), fixture.signatory());
+        assert!(
+            custody
+                .prepare_enrollment_request(request_context(), clock.clone())
+                .is_err()
+        );
+        // Only another fully verified same-S/W read restores current signing custody.
+        custody
+            .refresh_current_wallet(initial_current(&fixture))
+            .unwrap();
+        custody.recheck().unwrap();
+        let prepared = custody
+            .prepare_enrollment_request(request_context(), clock)
+            .unwrap();
+        let message = prepared.request().signing_message().unwrap();
+        let current = fixture.current(&prepared.request());
+        let (signature, _) = custody
+            .sign_current_enrollment_request(prepared, current)
+            .unwrap();
+        signature
+            .verify(fixture.key().public_key(), &message)
+            .unwrap();
+        // Data-only identity still refuses a substituted account key/context.
+        let mut changed = custody.account.context.as_ref().clone();
+        changed.key_pair =
+            iroha_crypto::KeyPair::from_seed(vec![99; 32], iroha_crypto::Algorithm::Ed25519);
+        changed.account = AccountId::new_multisig(
+            iroha_data_model::account::MultisigPolicy::new(
+                1,
+                vec![
+                    iroha_data_model::account::MultisigMember::new(
+                        changed.key_pair.public_key().clone(),
+                        1,
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        custody.account = changed.account_client().unwrap();
+        assert!(custody.recheck_retained_identity().is_err());
     }
 
     #[test]

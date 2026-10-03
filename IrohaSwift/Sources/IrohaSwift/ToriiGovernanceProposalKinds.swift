@@ -1145,7 +1145,7 @@ public struct ToriiGovernanceValidationFeePolicy:Decodable,Sendable,Equatable {
         chargingMode=try c.decode(ToriiGovernanceValidationFeeChargingMode.self,forKey:.chargingMode)
         exemptionClasses=try c.decode([String].self,forKey:.exemptionClasses)
         rewardCustody=try c.decode(ToriiGovernanceValidationFeeRewardCustody.self,forKey:.rewardCustody)
-        try governanceFeeRequire(schemaVersion==1 && dsScale==2 && (policyVersion=="1")== (previousPolicyHash==nil) && fee != "0" && (fee.split(separator:".").dropFirst().first?.count ?? 0) <= 2,decoder,"Invalid tariff policy")
+        try governanceFeeRequire(schemaVersion==1 && dsScale==2 && (policyVersion=="1") == (previousPolicyHash==nil) && fee != "0" && (fee.split(separator:".").dropFirst().first?.count ?? 0) <= 2,decoder,"Invalid tariff policy")
         try governanceFeeRequire(effectiveFromMs>=noticePublishedAtMs && effectiveFromMs-noticePublishedAtMs>=30*86_400_000,decoder,"Fee changes require public notice")
         var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(secondsFromGMT:11*3600)!
         let date=Date(timeIntervalSince1970:Double(effectiveFromMs)/1000)

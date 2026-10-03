@@ -69,7 +69,8 @@ pub(crate) fn fixture(
                 crate::validation_fee::tests::policy_registry(&[policy.clone()], &[bound.binding]);
             registry.validate().unwrap();
             crate::validation_fee::tests::install_policy_registry_fixture(&registry, stx);
-            stx.tx_call_hash = Some(Hash::new(b"retail-native-test"));
+            // Keep the component fixture's retained original invocation; a copied hash
+            // cannot replace its producer-owned FASTPQ source entry.
             test(stx, policy);
         },
     );

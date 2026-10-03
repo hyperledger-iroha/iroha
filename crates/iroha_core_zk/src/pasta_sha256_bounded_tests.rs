@@ -461,6 +461,48 @@ fn bounded_sha_capacity_accounts_for_all_snapshots_without_changing_fixed_jobs()
 }
 
 #[test]
+fn fixed_lane_capacity_retains_all_bounded_snapshots_and_rejects_empty_geometry() {
+    fn check<F: BigPrimeField, const LANES: usize>() {
+        let circuit = bounded_circuit::<F>(&[(128, 0)], Mutation::None);
+        let mut repeated = PastaSha256JobsV1::default();
+        repeated.jobs = vec![circuit.jobs.jobs[1].clone(); 50];
+        let expected_rows = 150_usize.div_ceil(LANES) * SHA256_ROWS_PER_BLOCK_V1
+            + 50 * SHA256_ROWS_PER_JOB_V1
+            + 100 * SHA256_ROWS_PER_EXTRA_SNAPSHOT_V1;
+        assert_eq!(
+            repeated.capacity_profile_for_lanes::<LANES>().unwrap(),
+            (50, 150, expected_rows)
+        );
+        let usable = (1_usize << TEST_K) - UNUSABLE_ROWS;
+        assert!(repeated.validate_capacity(usable).is_err());
+        assert!(
+            repeated
+                .validate_capacity_for_lanes::<LANES>(usable)
+                .is_ok()
+        );
+        assert!(
+            repeated
+                .validate_capacity_for_lanes::<LANES>(expected_rows - 1)
+                .is_err()
+        );
+        assert!(
+            repeated
+                .validate_capacity_for_lanes::<LANES>(expected_rows)
+                .is_ok()
+        );
+        assert!(repeated.capacity_profile_for_lanes::<0>().is_err());
+        assert_eq!(
+            repeated.capacity_profile_for_lanes::<LANES>(),
+            repeated.unknown().capacity_profile_for_lanes::<LANES>()
+        );
+    }
+    check::<Fp, 10>();
+    check::<Fq, 10>();
+    check::<Fp, 11>();
+    check::<Fq, 11>();
+}
+
+#[test]
 fn bounded_sha_planning_export_preserves_active_bytes_and_rejects_ordinary_claim() {
     for length in [3, 65] {
         let circuit = bounded_circuit::<Fp>(&[(80, length)], Mutation::None);

@@ -31,11 +31,16 @@ use iroha::{
 };
 use iroha_model_base::topology::DataSpaceId;
 #[cfg(unix)]
-use std::io::Write as _;
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt as _;
+use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::{collections::VecDeque, io::Cursor};
+use std::{fs::OpenOptions, io::Write as _};
 use tempfile::tempdir;
+fn publication_file_snapshot(path: &Path) -> FileSnapshot {
+    RetainedFile::open_private(path)
+        .expect("retain private fixture")
+        .snapshot()
+        .expect("private fixture snapshot")
+}
 fn publication_test_network_id(marker: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([marker; 32]),
@@ -57,12 +62,19 @@ impl PublicationCarSource for BytesSource {
 #[test]
 fn staged_car_source_reopens_only_the_exact_operation_file() {
     let state = tempdir().expect("state root");
-    fs::create_dir(state.path().join(JOURNAL_DIRECTORY)).expect("publication directory");
+    let store = PublicationJournalStore::open(state.path()).expect("private journal store");
     let operation_id = "0101010101010101010101010101010101010101010101010101010101010101"
         .parse()
         .expect("operation id");
     let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
-    fs::write(source.path(), b"car!").expect("stage fixture CAR");
+    store
+        .directory
+        .write_atomic(
+            source.path().file_name().unwrap(),
+            b"car!",
+            PublishMode::CreateNew,
+        )
+        .expect("stage private fixture CAR");
     let mut bytes = Vec::new();
     source
         .open_car()
@@ -84,12 +96,19 @@ fn staged_car_source_reopens_only_the_exact_operation_file() {
 #[test]
 fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
     let state = tempdir().expect("state root");
-    fs::create_dir(state.path().join(JOURNAL_DIRECTORY)).expect("publication directory");
+    let store = PublicationJournalStore::open(state.path()).expect("private journal store");
     let operation_id = "0404040404040404040404040404040404040404040404040404040404040404"
         .parse()
         .expect("operation id");
     let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
-    fs::write(source.path(), b"car!").expect("stage fixture CAR");
+    store
+        .directory
+        .write_atomic(
+            source.path().file_name().unwrap(),
+            b"car!",
+            PublishMode::CreateNew,
+        )
+        .expect("stage private fixture CAR");
     let linked = state.path().join("linked.car");
     fs::hard_link(source.path(), &linked).expect("create hard link");
     assert_eq!(
@@ -116,7 +135,6 @@ fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
         .expect_err("in-place growth rejected");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
-#[cfg(unix)]
 #[test]
 fn staged_car_bytes_are_commitment_checked_and_idempotent() {
     let state = tempdir().expect("state root");
@@ -133,8 +151,8 @@ fn staged_car_bytes_are_commitment_checked_and_idempotent() {
         &bytes,
     )
     .expect("stage committed CAR");
-    let car_before = fs::metadata(source.path()).expect("staged CAR metadata");
-    let plan_before = fs::metadata(source.plan_path()).expect("staged plan metadata");
+    let car_before = publication_file_snapshot(source.path());
+    let plan_before = publication_file_snapshot(source.plan_path());
     PublicationStagedCarSourceV1::stage_bytes(
         state.path(),
         operation_id,
@@ -143,14 +161,8 @@ fn staged_car_bytes_are_commitment_checked_and_idempotent() {
         &bytes,
     )
     .expect("identical retry reuses staged CAR and plan");
-    assert!(same_file_snapshot(
-        &car_before,
-        &fs::metadata(source.path()).expect("reused CAR metadata")
-    ));
-    assert!(same_file_snapshot(
-        &plan_before,
-        &fs::metadata(source.plan_path()).expect("reused plan metadata")
-    ));
+    assert_eq!(car_before, publication_file_snapshot(source.path()));
+    assert_eq!(plan_before, publication_file_snapshot(source.plan_path()));
     assert_eq!(
         source.car_plan(&commitment).expect("reopen exact plan"),
         MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment).expect("wire plan")
@@ -257,7 +269,6 @@ fn detached_begin_persists_the_recovery_anchor_before_sidecar_failure() {
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
 }
-#[cfg(unix)]
 #[test]
 fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
     let state = tempdir().expect("state root");
@@ -273,20 +284,17 @@ fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
     let journal_before = store.load(operation_id).expect("pristine journal");
     assert_eq!(journal_before.phase, PublicationPhaseV1::Validation);
     assert_eq!(journal_before.revision, 1);
-    let car_before = fs::metadata(source.path()).expect("staged CAR metadata");
-    let plan_before = fs::metadata(source.plan_path()).expect("staged plan metadata");
+    let car_before = publication_file_snapshot(source.path());
+    let plan_before = publication_file_snapshot(source.plan_path());
     let (retried_operation_id, retried_source) = engine
         .begin_detached_with_car(request, &plan, &car)
         .expect("idempotently recover pristine detached publication");
     assert_eq!(retried_operation_id, operation_id);
-    assert!(same_file_snapshot(
-        &car_before,
-        &fs::metadata(retried_source.path()).expect("reused CAR metadata")
-    ));
-    assert!(same_file_snapshot(
-        &plan_before,
-        &fs::metadata(retried_source.plan_path()).expect("reused plan metadata")
-    ));
+    assert_eq!(car_before, publication_file_snapshot(retried_source.path()));
+    assert_eq!(
+        plan_before,
+        publication_file_snapshot(retried_source.plan_path())
+    );
     assert_eq!(
         store
             .load(operation_id)
@@ -333,7 +341,6 @@ fn detached_begin_rejects_an_advanced_journal_that_must_resume() {
         plan_before
     );
 }
-#[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars() {
     let state = tempdir().expect("state root");
@@ -351,8 +358,8 @@ fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars
     let source = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("recover exact sidecars");
-    let car_before = fs::metadata(source.path()).expect("recovered CAR metadata");
-    let plan_before = fs::metadata(source.plan_path()).expect("recovered plan metadata");
+    let car_before = publication_file_snapshot(source.path());
+    let plan_before = publication_file_snapshot(source.plan_path());
     assert_eq!(
         store.load(journal.operation_id).expect("unchanged journal"),
         journal
@@ -365,20 +372,13 @@ fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars
     let retried = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("idempotently recover exact sidecars");
-    assert!(same_file_snapshot(
-        &car_before,
-        &fs::metadata(retried.path()).expect("reused CAR metadata")
-    ));
-    assert!(same_file_snapshot(
-        &plan_before,
-        &fs::metadata(retried.plan_path()).expect("reused plan metadata")
-    ));
+    assert_eq!(car_before, publication_file_snapshot(retried.path()));
+    assert_eq!(plan_before, publication_file_snapshot(retried.plan_path()));
     assert_eq!(
         fs::read(journal_path).expect("reread pristine journal"),
         journal_before
     );
 }
-#[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
     let state = tempdir().expect("state root");
@@ -395,22 +395,18 @@ fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
         .expect("install exact CAR-only crash fixture");
     let source =
         PublicationStagedCarSourceV1::new(state.path(), journal.operation_id, commitment.car_size);
-    let car_before = fs::metadata(source.path()).expect("partial CAR metadata");
+    let car_before = publication_file_snapshot(source.path());
     assert!(!source.plan_path().exists());
     let repaired = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("repair missing plan sidecar");
-    assert!(same_file_snapshot(
-        &car_before,
-        &fs::metadata(repaired.path()).expect("reused partial CAR metadata")
-    ));
+    assert_eq!(car_before, publication_file_snapshot(repaired.path()));
     assert!(repaired.plan_path().exists());
     assert_eq!(
         store.load(journal.operation_id).expect("unchanged journal"),
         journal
     );
 }
-#[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
     let state = tempdir().expect("state root");
@@ -433,22 +429,18 @@ fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
         .expect("install exact plan-only crash fixture");
     let source =
         PublicationStagedCarSourceV1::new(state.path(), journal.operation_id, commitment.car_size);
-    let plan_before = fs::metadata(source.plan_path()).expect("partial plan metadata");
+    let plan_before = publication_file_snapshot(source.plan_path());
     assert!(!source.path().exists());
     let repaired = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("repair missing CAR sidecar");
-    assert!(same_file_snapshot(
-        &plan_before,
-        &fs::metadata(repaired.plan_path()).expect("reused partial plan metadata")
-    ));
+    assert_eq!(plan_before, publication_file_snapshot(repaired.plan_path()));
     assert!(repaired.path().exists());
     assert_eq!(
         store.load(journal.operation_id).expect("unchanged journal"),
         journal
     );
 }
-#[cfg(unix)]
 #[test]
 fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_install() {
     let state = tempdir().expect("state root");
@@ -507,7 +499,6 @@ fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_inst
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
 }
-#[cfg(unix)]
 #[test]
 fn validation_requires_the_exact_plan_before_calling_the_backend() {
     let state = tempdir().expect("state root");
@@ -545,7 +536,6 @@ fn validation_requires_the_exact_plan_before_calling_the_backend() {
         journal
     );
 }
-#[cfg(unix)]
 #[test]
 fn staged_plan_missing_corrupt_or_hard_linked_fails_closed() {
     let state = tempdir().expect("state root");
@@ -577,7 +567,6 @@ fn staged_plan_missing_corrupt_or_hard_linked_fails_closed() {
         assert!(source.car_plan(&commitment).is_err());
     }
 }
-#[cfg(unix)]
 #[test]
 fn staged_plan_substitution_fails_commitment_validation() {
     let state = tempdir().expect("state root");
@@ -660,7 +649,6 @@ fn journal_load_rejects_a_fifo_substitution_without_blocking() {
     );
     TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| assert_eq!(remaining.get(), 0));
 }
-#[cfg(unix)]
 #[test]
 fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
     let state = tempdir().expect("state root");
@@ -1182,7 +1170,6 @@ fn release_absence_requires_exact_empty_same_snapshot_retention_evidence() {
         .is_err()
     );
 }
-#[cfg(unix)]
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -1400,7 +1387,6 @@ fn release_attempt_journal_is_append_only_bounded_and_durable() {
             if reason.contains("release-submission attempt bound")
     ));
 }
-#[cfg(unix)]
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -1737,7 +1723,6 @@ fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
     fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
         .expect("restore operation lock permissions");
 }
-#[cfg(unix)]
 #[test]
 fn concurrent_transition_cas_has_exactly_one_winner() {
     use std::sync::{Arc, Barrier};
@@ -1771,4 +1756,149 @@ fn concurrent_transition_cas_has_exactly_one_winner() {
         store.load(operation_id).expect("winning journal").revision,
         2
     );
+}
+
+#[test]
+fn native_journal_reopen_retains_exact_bytes_and_exclusive_lock() {
+    let state = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(state.path()).expect("native journal store");
+    let (request, _) = request();
+    let operation_id = request.operation_id();
+    let original = store.create(request).expect("original journal");
+    let held = store
+        .lock_operation(operation_id)
+        .expect("hold operation lock");
+    let reopened = PublicationJournalStore::open(state.path()).expect("reopen journal store");
+    assert_eq!(
+        reopened.load(operation_id).expect("exact reopened journal"),
+        original
+    );
+    assert!(matches!(
+        reopened.lock_operation(operation_id),
+        Err(PublicationError::ConcurrentJournalUpdate)
+    ));
+    held.finish(Ok(())).expect("release lock");
+    let held = reopened
+        .lock_operation(operation_id)
+        .expect("acquire after release");
+    held.validate().expect("retained private lock identity");
+    held.finish(Ok(())).expect("release reopened lock");
+    let lock_path = state
+        .path()
+        .join(operation_lock_relative_path(operation_id));
+    fs::hard_link(&lock_path, state.path().join("linked-lock")).expect("link lock fixture");
+    assert!(matches!(
+        reopened.lock_operation(operation_id),
+        Err(PublicationError::InvalidJournal(_))
+    ));
+    fs::remove_file(state.path().join("linked-lock")).expect("remove alias");
+    fs::write(lock_path, b"not-empty").expect("nonempty lock fixture");
+    assert!(matches!(
+        reopened.lock_operation(operation_id),
+        Err(PublicationError::InvalidJournal(_))
+    ));
+}
+
+#[test]
+fn native_journal_refuses_linked_oversized_or_misnamed_frames() {
+    for mutation in ["linked", "oversized", "misnamed"] {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("native journal store");
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        store.create(request).expect("original journal");
+        let path = state.path().join(journal_relative_path(operation_id));
+        let load_id = match mutation {
+            "linked" => {
+                fs::hard_link(&path, state.path().join("journal-alias")).expect("hard link");
+                operation_id
+            }
+            "oversized" => {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .expect("fixture journal")
+                    .set_len(MAX_JOURNAL_BYTES + 1)
+                    .expect("oversized extent");
+                operation_id
+            }
+            "misnamed" => {
+                let other = PublicationOperationIdV1([0xFA; 32]);
+                store
+                    .directory
+                    .write_atomic(
+                        format!("{other}.{JOURNAL_EXTENSION}"),
+                        &fs::read(path).expect("canonical bytes"),
+                        PublishMode::CreateNew,
+                    )
+                    .expect("copy exact frame under wrong operation id");
+                other
+            }
+            _ => unreachable!("closed fixture mutations"),
+        };
+        assert!(
+            matches!(
+                store.load(load_id),
+                Err(PublicationError::InvalidJournal(_))
+            ),
+            "must reject {mutation}"
+        );
+    }
+}
+
+#[test]
+fn native_staged_car_rejects_shared_links_and_allocation_before_length_validation() {
+    let state = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(state.path()).expect("native journal store");
+    let operation_id = PublicationOperationIdV1([0xF1; 32]);
+    let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
+    store
+        .directory
+        .write_atomic(
+            source.path().file_name().unwrap(),
+            b"car!",
+            PublishMode::CreateNew,
+        )
+        .expect("private fixture CAR");
+    fs::hard_link(source.path(), state.path().join("car-alias")).expect("link fixture CAR");
+    assert_eq!(
+        source.open_car().err().expect("shared CAR rejected").kind(),
+        io::ErrorKind::InvalidData
+    );
+    for length in [0, MUSUBI_MAX_CAR_BYTES_V1 + 1, u64::MAX] {
+        let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, length);
+        assert_eq!(
+            source
+                .load_car_bytes_for_plan()
+                .expect_err("reject before allocation")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn native_staged_car_retains_non_delete_sharing_ancestors_and_file() {
+    let state = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(state.path()).expect("native journal store");
+    let operation_id = PublicationOperationIdV1([0xF2; 32]);
+    let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
+    store
+        .directory
+        .write_atomic(
+            source.path().file_name().unwrap(),
+            b"car!",
+            PublishMode::CreateNew,
+        )
+        .expect("private fixture CAR");
+    let mut reader = source.open_car().expect("retained CAR reader");
+    assert!(fs::rename(source.path(), state.path().join("moved.car")).is_err());
+    assert!(OpenOptions::new().write(true).open(source.path()).is_err());
+    assert!(fs::rename(store.directory.path(), state.path().join("moved-directory")).is_err());
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .expect("exact retained bytes");
+    assert_eq!(bytes, b"car!");
 }

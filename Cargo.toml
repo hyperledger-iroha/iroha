@@ -44,6 +44,7 @@ iroha_musubi_service = { path = "crates/iroha_musubi_service" }
 
 iroha_telemetry = { path = "crates/iroha_telemetry" }
 iroha_p2p = { path = "crates/iroha_p2p" }
+iroha_petal = { path = "crates/iroha_petal" }
 iroha_primitives = { path = "crates/iroha_primitives", default-features = false }
 iroha_config = { path = "crates/iroha_config" }
 iroha_config_base = { path = "crates/iroha_config_base" }

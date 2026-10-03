@@ -32,7 +32,10 @@ pub(crate) use cash_owner::{
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 pub use cash_owner::{
-    KagemushaNativeOrdinaryCashOwnerV1, KagemushaNativeOrdinaryPreparedCashApprovalV1,
+    KagemushaAuthenticatedOrdinaryMintAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryMintFundingTransportV1,
+    KagemushaAuthenticatedOrdinaryMintTransactionSigningV1, KagemushaNativeOrdinaryCashOwnerV1,
+    KagemushaNativeOrdinaryPreparedCashApprovalV1,
 };
 
 #[path = "authenticated_ordinary_logical_journal.rs"]
@@ -677,10 +680,25 @@ mod tests {
     #[test]
     fn completed_original_floor_does_not_backdate_a_current_integrity_lease() {
         use iroha_crypto::{Algorithm, KeyPair};
-        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let enrollment = fixture.verify(300).unwrap();
         let (challenge, raw_lease) = fixture.integrity_refresh_originals();
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
+        let lease_issuer =
+            iroha_crypto::KeyPair::from_seed(vec![61; 32], iroha_crypto::Algorithm::Ed25519);
+        assert!(matches!(
+            raw_lease
+                .authenticate(
+                    enrollment.app_credential(),
+                    &fixture.release,
+                    &fixture.trust,
+                    &fixture.app_authority,
+                    &challenge,
+                    lease_issuer.public_key(),
+                    1500,
+                ),
+            Err(error) if error == "Integrity preparation Core signature rejected"
+        ));
         let lease = raw_lease
             .authenticate(
                 enrollment.app_credential(),
@@ -688,7 +706,7 @@ mod tests {
                 &fixture.trust,
                 &fixture.app_authority,
                 &challenge,
-                issuer.public_key(),
+                core_issuer.public_key(),
                 1500,
             )
             .unwrap();
@@ -752,3 +770,8 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+pub(crate) use cash_owner::{
+    OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
+};

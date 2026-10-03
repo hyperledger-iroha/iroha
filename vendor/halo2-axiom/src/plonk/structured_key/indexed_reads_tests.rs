@@ -1,10 +1,11 @@
-//! Direct native-basis interval reads against the frozen original dense codec.
+//! Exact sparse-wire intervals compared with original real Processed-key polynomials.
 //!
 //! These tiny plaintext fixtures test parsing, bounded I/O and destination cleanup only.
 //! They do not authenticate the reader, establish an immutable artifact owner, or qualify a
 //! proof consumer, the whole process memory bound, hardware, or production readiness.
 
 use super::super::indexed::reads::IndexedKeyPolynomialV1 as PolynomialId;
+use super::super::indexed_io_test_plan as io_plan;
 use super::*;
 use std::io::{Cursor, Seek, SeekFrom};
 
@@ -130,47 +131,20 @@ fn polynomial_ids<C: SerdeCurveAffine>(key: &ProvingKey<C>) -> Vec<PolynomialId>
         .collect()
 }
 
-/// The original full decoder determines values; metadata only identifies the encoded interval.
-fn encoded_interval<C: SerdeCurveAffine>(
-    key: &IndexedStructuredProvingKeyV1<C>,
-    polynomial: PolynomialId,
-    start: usize,
-    length: usize,
-) -> (u64, usize, usize)
-where
-    C::Scalar: SerdePrimeField + FromUniformBytes<64>,
-{
-    let m = key.metadata();
-    let width = <C::Scalar as PrimeField>::Repr::default().as_ref().len();
-    match polynomial {
-        PolynomialId::MaskCoefficient(mask) => (
-            m.masks[mask].offset + (start * width) as u64,
-            length * width,
-            width,
-        ),
-        PolynomialId::FixedLagrange(column) => {
-            let record = &m.fixed[column];
-            match record.mode {
-                0 => (record.payload.offset, width, width),
-                1 => (
-                    record.payload.offset + (start / 8) as u64,
-                    (start + length).div_ceil(8) - start / 8,
-                    1,
-                ),
-                2 => (
-                    record.payload.offset + (start * width) as u64,
-                    length * width,
-                    width,
-                ),
-                _ => unreachable!(),
-            }
-        }
-        PolynomialId::PermutationLagrange(column) => (
-            m.permutation_targets.offset + ((column * m.rows + start) * 4) as u64,
-            length * 4,
-            4,
-        ),
-    }
+fn assert_io(
+    reader: &CountedReader<'_>,
+    plan: &[io_plan::Operation],
+    chunk: usize,
+    boundary: Option<usize>,
+) {
+    let expected = io_plan::observation(plan, chunk, boundary);
+    assert_eq!(reader.seeks, expected.seeks);
+    assert_eq!(reader.reads, expected.reads);
+    assert_eq!(reader.delivered, expected.delivered);
+    assert_eq!(reader.largest_request, expected.largest);
+    assert_eq!(reader.first_byte, expected.first);
+    assert_eq!(reader.last_byte, expected.last);
+    assert_eq!(reader.inner.position(), expected.position);
 }
 
 fn interval_parity<C: SerdeCurveAffine, const EMPTY: bool>()
@@ -181,7 +155,7 @@ where
         for compressed in [false, true] {
             for arbitrary_masks in [false, true] {
                 let (generated, bytes) = fixture::<C, EMPTY>(k, compressed, arbitrary_masks);
-                let original = old::<C, EMPTY>(&bytes, k, bytes.len() as u64).unwrap();
+                let original = processed::<C, EMPTY>(&generated);
                 assert_eq!(
                     original.to_bytes(SerdeFormat::Processed),
                     generated.to_bytes(SerdeFormat::Processed)
@@ -232,16 +206,12 @@ where
                             if length == 0 {
                                 reader.assert_no_io();
                             } else {
-                                let (at, bytes, unit) =
-                                    encoded_interval(&key, polynomial, start, length);
-                                assert_eq!(reader.seeks, 1);
-                                assert_eq!(reader.delivered, bytes);
-                                assert_eq!(reader.reads, bytes / unit);
-                                assert_eq!(reader.largest_request, unit);
-                                assert_eq!(reader.first_byte, Some(at));
-                                assert_eq!(reader.last_byte, Some(at + bytes as u64));
-                                assert_eq!(reader.inner.position(), at + bytes as u64);
-                                assert!(at + bytes as u64 <= key.frame_bytes());
+                                let plan = io_plan::plan(&bytes, &key, polynomial, start, length);
+                                assert_io(&reader, &plan, usize::MAX, None);
+                                assert!(
+                                    plan.iter()
+                                        .all(|op| op.at + op.bytes as u64 <= key.frame_bytes())
+                                );
                             }
                         }
                     }
@@ -327,8 +297,8 @@ fn fault_boundaries<C: SerdeCurveAffine>()
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
-    let (_, bytes) = fixture::<C, false>(4, true, true);
-    let original = old::<C, false>(&bytes, 4, bytes.len() as u64).unwrap();
+    let (generated, bytes) = fixture::<C, false>(4, true, true);
+    let original = processed::<C, false>(&generated);
     let key = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -338,7 +308,8 @@ where
     .unwrap();
     for polynomial in polynomial_ids(&original) {
         for (start, length) in [(0, key.rows()), (5, 9), (key.rows() - 1, 1)] {
-            let (at, total_bytes, unit) = encoded_interval(&key, polynomial, start, length);
+            let plan = io_plan::plan(&bytes, &key, polynomial, start, length);
+            let total_bytes = io_plan::total(&plan);
             // A one-byte source exercises failures inside each scalar/target and after every
             // already-written output prefix. All byte boundaries before completion must fail.
             for boundary in 0..total_bytes {
@@ -380,14 +351,13 @@ where
                     assert_eq!(guarded[length + 1], marker);
                     assert_eq!(guarded.as_ptr(), address);
                     assert_eq!(guarded.capacity(), capacity);
-                    assert_eq!(reader.seeks, 1);
-                    assert_eq!(reader.reads, boundary + 1);
-                    assert_eq!(reader.delivered, boundary);
-                    assert_eq!(reader.largest_request, unit);
-                    assert_eq!(reader.inner.position(), at + boundary as u64);
+                    assert_io(&reader, &plan, 1, Some(boundary));
                 }
             }
             for fault in [Fault::SeekError, Fault::SeekPanic, Fault::WrongSeekPosition] {
+                if plan.is_empty() {
+                    continue;
+                }
                 let marker = C::Scalar::from(223);
                 let mut guarded = vec![marker; length + 2];
                 let mut reader = CountedReader::new(&bytes, fault, 1);
@@ -431,10 +401,7 @@ where
                     output,
                     original_polynomial(&original, polynomial)[start..start + length]
                 );
-                assert_eq!(reader.delivered, total_bytes);
-                assert_eq!(reader.seeks, 1);
-                assert_eq!(reader.largest_request, unit);
-                assert_eq!(reader.reads, (total_bytes / unit) * unit.div_ceil(chunk));
+                assert_io(&reader, &plan, chunk, None);
             }
         }
     }
@@ -450,8 +417,8 @@ fn source_mutations<C: SerdeCurveAffine>()
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
-    let (_, bytes) = fixture::<C, false>(4, true, true);
-    let original = old::<C, false>(&bytes, 4, bytes.len() as u64).unwrap();
+    let (generated, bytes) = fixture::<C, false>(4, true, true);
+    let original = processed::<C, false>(&generated);
     let key = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -492,13 +459,21 @@ where
             _ => unreachable!(),
         }
     }
-    for column in 0..m.permutation_columns {
-        for row in [0, 1, n - 1] {
-            cases.push((
-                PolynomialId::PermutationLagrange(column),
-                m.permutation_targets.offset as usize + (column * n + row) * 4,
-                4,
-            ));
+    for (column, record) in m.permutations.iter().enumerate() {
+        let (stride, prefix) = if record.mode == Mode::Sparse {
+            (8, 4)
+        } else {
+            (4, 0)
+        };
+        let count = record.targets.length as usize / stride;
+        if count > 0 {
+            for target in [0, count / 2, count - 1] {
+                cases.push((
+                    PolynomialId::PermutationLagrange(column),
+                    record.targets.offset as usize + target * stride + prefix,
+                    4,
+                ));
+            }
         }
     }
     for (polynomial, at, encoded_width) in cases {
@@ -530,7 +505,7 @@ where
         );
         assert_eq!(guarded[0], marker);
         assert_eq!(guarded[n + 1], marker);
-        assert_eq!(reader.seeks, 1);
+        assert!(reader.seeks >= 1);
         assert_eq!(reader.inner.position(), (at + encoded_width) as u64);
         assert_eq!(reader.last_byte, Some((at + encoded_width) as u64));
     }
@@ -562,7 +537,6 @@ fn both_pasta_indexed_native_noncanonical_scalars_and_invalid_targets_clear_with
     source_mutations::<EpAffine>();
 }
 
-// Append-only test fragment for indexed_reads_tests.rs; not installed or executed.
 // The original fixture links rows 0..7, leaving each last row as an identity target.
 // Consequently its intervals never contain adjacent targets n-1,n inside one column.
 
@@ -570,7 +544,7 @@ fn cross_coset_boundaries<C: SerdeCurveAffine>()
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
-    let (_, mut bytes) = fixture::<C, false>(4, true, true);
+    let (mut generated, mut bytes) = fixture::<C, false>(4, true, true);
     let initial = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -582,12 +556,12 @@ where
     let columns = initial.metadata().permutation_columns;
     assert!(columns >= 2);
     let cells = n * columns;
-    let range = initial.metadata().permutation_targets;
-    let encoded_start = usize::try_from(range.offset).unwrap();
-    let encoded_end = encoded_start + usize::try_from(range.length).unwrap();
-    let mut targets = bytes[encoded_start..encoded_end]
-        .chunks_exact(4)
-        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+    let inverse = InverseIndex::new(n, columns, generated.vk.domain.get_omega()).unwrap();
+    let mut targets = generated
+        .permutation
+        .permutations
+        .iter()
+        .flat_map(|column| column.iter().map(|value| inverse.target(*value).unwrap()))
         .collect::<Vec<_>>();
     assert_eq!(targets.len(), cells);
 
@@ -609,16 +583,28 @@ where
         sorted,
         (0..u32::try_from(cells).unwrap()).collect::<Vec<_>>()
     );
-    for (encoded, target) in bytes[encoded_start..encoded_end]
-        .chunks_exact_mut(4)
-        .zip(&targets)
-    {
-        encoded.copy_from_slice(&target.to_le_bytes());
+    let omega = generated.vk.domain.get_omega();
+    for (column, chunk) in targets.chunks(n).enumerate() {
+        for (value, target) in generated.permutation.permutations[column]
+            .values
+            .iter_mut()
+            .zip(chunk)
+        {
+            *value = C::Scalar::DELTA.pow_vartime([(*target as usize / n) as u64])
+                * omega.pow_vartime([(*target as usize % n) as u64]);
+        }
+        generated.permutation.polys[column] = coefficients(
+            &generated.vk.domain,
+            &generated.permutation.permutations[column],
+        )
+        .unwrap();
     }
+    bytes.clear();
+    generated.write_structured_v1(&mut bytes).unwrap();
 
-    // A complete original-codec decode and fresh index scan both accept this structurally
+    // Real Processed PK and fresh index scan preserve this exact structurally
     // canonical frame. This tests parser arithmetic, not a valid proof or artifact authority.
-    let original = old::<C, false>(&bytes, 4, bytes.len() as u64).unwrap();
+    let original = processed::<C, false>(&generated);
     let mut canonical = Vec::new();
     let key = index::<C, false, _, _>(&mut bytes.as_slice(), 4, bytes.len() as u64, &mut canonical)
         .unwrap();
@@ -635,7 +621,14 @@ where
         for chunk in [1, 3, usize::MAX] {
             let marker = C::Scalar::from(233);
             let mut guarded = vec![marker; length + 2];
-            let total_bytes = length * 4;
+            let plan = io_plan::plan(
+                &bytes,
+                &key,
+                PolynomialId::PermutationLagrange(0),
+                begin,
+                length,
+            );
+            let total_bytes = io_plan::total(&plan);
             let mut reader = CountedReader::new(&bytes, Fault::ReadPanic(total_bytes), chunk);
             key.copy_native_interval(
                 &mut reader,
@@ -647,15 +640,7 @@ where
             assert_eq!(&guarded[1..length + 1], &expected[begin..begin + length]);
             assert_eq!(guarded[0], marker);
             assert_eq!(guarded[length + 1], marker);
-            assert_eq!(reader.seeks, 1);
-            assert_eq!(reader.delivered, total_bytes);
-            assert_eq!(reader.largest_request, 4);
-            assert_eq!(reader.reads, length * 4_usize.div_ceil(chunk));
-            assert_eq!(reader.first_byte, Some(range.offset + (begin * 4) as u64));
-            assert_eq!(
-                reader.last_byte,
-                Some(range.offset + ((begin + length) * 4) as u64)
-            );
+            assert_io(&reader, &plan, chunk, None);
         }
     }
 }
@@ -673,8 +658,8 @@ where
     for k in [4, 5] {
         for compressed in [false, true] {
             for arbitrary_masks in [false, true] {
-                let (_, bytes) = fixture::<C, EMPTY>(k, compressed, arbitrary_masks);
-                let original = old::<C, EMPTY>(&bytes, k, bytes.len() as u64).unwrap();
+                let (generated, bytes) = fixture::<C, EMPTY>(k, compressed, arbitrary_masks);
+                let original = processed::<C, EMPTY>(&generated);
                 let key = index::<C, EMPTY, _, _>(
                     &mut bytes.as_slice(),
                     k,
@@ -694,7 +679,8 @@ where
                         }
                     };
                     let n = key.rows();
-                    let (at, encoded, unit) = encoded_interval(&key, polynomial, 0, n);
+                    let plan = io_plan::plan(&bytes, &key, polynomial, 0, n);
+                    let encoded = io_plan::total(&plan);
                     for chunk in [1, 3, usize::MAX] {
                         let marker = C::Scalar::from(229);
                         let mut output = vec![marker; n + 2];
@@ -709,11 +695,7 @@ where
                         assert_eq!(output[n + 1], marker);
                         assert_eq!(output.as_ptr(), pointer);
                         assert_eq!(output.capacity(), capacity);
-                        assert_eq!(reader.seeks, 1);
-                        assert_eq!(reader.delivered, encoded);
-                        assert_eq!(reader.largest_request, unit);
-                        assert_eq!(reader.first_byte, Some(at));
-                        assert_eq!(reader.last_byte, Some(at + encoded as u64));
+                        assert_io(&reader, &plan, chunk, None);
                     }
                 }
             }
@@ -760,7 +742,11 @@ where
             assert_eq!(output[length + 1], marker);
             reader.assert_no_io();
         }
-        let (_, encoded, _) = encoded_interval(&key, polynomial, 0, n);
+        let plan = io_plan::plan(&bytes, &key, polynomial, 0, n);
+        let encoded = io_plan::total(&plan);
+        if encoded == 0 {
+            continue;
+        }
         for at in [0, encoded / 2, encoded - 1] {
             for fault in [
                 Fault::ReadError(at),
@@ -828,7 +814,7 @@ where
         CoefficientTransformBoundaryPanic, with_coefficient_transform_panic,
     };
 
-    let (_, mut bytes) = fixture::<C, false>(4, true, true);
+    let (mut generated, mut bytes) = fixture::<C, false>(4, true, true);
     let initial = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -856,7 +842,16 @@ where
             bytes[at..at + width].copy_from_slice(nonzero_constant.as_ref());
         }
     }
-    let original = old::<C, false>(&bytes, 4, bytes.len() as u64).unwrap();
+    for (column, record) in initial.metadata().fixed.iter().enumerate() {
+        if record.mode == CONSTANT {
+            generated.fixed_values[column]
+                .values
+                .fill(C::Scalar::from(41));
+            generated.fixed_polys[column] =
+                coefficients(&generated.vk.domain, &generated.fixed_values[column]).unwrap();
+        }
+    }
+    let original = processed::<C, false>(&generated);
     let mut canonical = Vec::new();
     let key = index::<C, false, _, _>(&mut bytes.as_slice(), 4, bytes.len() as u64, &mut canonical)
         .unwrap();
@@ -877,7 +872,8 @@ where
             PolynomialId::PermutationLagrange(column) => &original.permutation.polys[column],
             PolynomialId::MaskCoefficient(_) => unreachable!(),
         };
-        let (at, encoded, unit) = encoded_interval(&key, polynomial, 0, n);
+        let plan = io_plan::plan(&bytes, &key, polynomial, 0, n);
+        let encoded = io_plan::total(&plan);
         with_coefficient_transform_panic(|| {
             // Masks already contain coefficients and must neither invoke nor consume the hook.
             let mut mask = vec![C::Scalar::ZERO; n];
@@ -914,13 +910,7 @@ where
             assert_eq!(output[n + 1], marker);
             assert_eq!(output.as_ptr(), pointer);
             assert_eq!(output.capacity(), capacity);
-            assert_eq!(reader.seeks, 1);
-            assert_eq!(reader.delivered, encoded);
-            assert_eq!(reader.reads, (encoded / unit) * unit.div_ceil(3));
-            assert_eq!(reader.largest_request, unit);
-            assert_eq!(reader.first_byte, Some(at));
-            assert_eq!(reader.last_byte, Some(at + encoded as u64));
-            assert_eq!(reader.inner.position(), at + encoded as u64);
+            assert_io(&reader, &plan, 3, None);
 
             // The one-shot flag resets before the panic, even while the arming scope is alive.
             // A new parser call on the same key succeeds; no persistent authority poisoning
@@ -933,10 +923,7 @@ where
             assert_eq!(output[n + 1], marker);
             assert_eq!(output.as_ptr(), pointer);
             assert_eq!(output.capacity(), capacity);
-            assert_eq!(followup.seeks, 1);
-            assert_eq!(followup.delivered, encoded);
-            assert_eq!(followup.reads, (encoded / unit) * unit.div_ceil(3));
-            assert_eq!(followup.inner.position(), at + encoded as u64);
+            assert_io(&followup, &plan, 3, None);
         });
     }
 

@@ -145,8 +145,10 @@ fn assert_borrowed_attestation_error(
         .musubi_archive_locations()
         .get(&key)
         .expect("location source");
-    let error = load_location_provider_attestations(archive, location, &view)
-        .expect_err("no partial borrowed evidence may escape a failed complete-set check");
+    let error = observe_musubi_helper_without_heap(|| {
+        load_location_provider_attestations(archive, location, &view)
+            .expect_err("no partial borrowed evidence may escape a failed complete-set check")
+    });
     assert!(error.reason().contains(expected), "{error}");
     let rendered = invariant(error.reason());
     assert!(rendered.to_string().contains(expected), "{rendered}");
@@ -159,7 +161,10 @@ fn borrowed_attestations_return_original_records_in_order_with_fixed_local_stora
         let view = world.view();
         let archive = view.musubi_archives().get(&key.archive_id).unwrap();
         let location = view.musubi_archive_locations().get(&key).unwrap();
-        let evidence = load_location_provider_attestations(archive, location, &view).unwrap();
+        let evidence = observe_musubi_helper_without_heap(|| {
+            load_location_provider_attestations(archive, location, &view)
+        })
+        .unwrap();
         assert_eq!(evidence.len(), count);
         assert_eq!(evidence.iter().count(), count);
         assert!(
@@ -442,4 +447,36 @@ fn borrowed_attestation_rejection_keeps_model_reason_until_instruction_boundary(
         panic!("instruction adapter must preserve the original error variant")
     };
     assert_eq!(message.as_ref(), model.reason());
+}
+
+// Keep ready source/fixture construction and public error rendering outside the
+// measured boundary. The real complete helper includes every nested model,
+// canonical hash, signature and lifecycle check, not only its result container.
+fn observe_musubi_helper_without_heap<T>(operation: impl FnOnce() -> T) -> T {
+    let mut result = None;
+    let allocations = crate::test_allocations::allocations_during(|| {
+        result = Some(operation());
+    });
+    assert_eq!(
+        allocations, 0,
+        "nested Musubi source helper allocated outside its owner"
+    );
+    result.unwrap()
+}
+
+#[test]
+fn borrowed_attestation_complete_helper_has_no_cold_thread_heap_storage() {
+    let (world, key) = borrowed_attestation_fixture(2);
+    std::thread::spawn(move || {
+        let view = world.view();
+        let archive = view.musubi_archives().get(&key.archive_id).unwrap();
+        let location = view.musubi_archive_locations().get(&key).unwrap();
+        let result = observe_musubi_helper_without_heap(|| {
+            load_location_provider_attestations(archive, location, &view)
+        })
+        .unwrap();
+        assert_eq!(result.len(), 2);
+    })
+    .join()
+    .unwrap();
 }

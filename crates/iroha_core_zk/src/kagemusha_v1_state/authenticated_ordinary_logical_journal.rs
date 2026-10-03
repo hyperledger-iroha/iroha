@@ -624,6 +624,10 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         self.wal.check_owned().map_err(storage)
     }
 
+    pub(crate) fn recheck_owned_refresh_prefix(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.wal.check_owned().map_err(storage)?;
+        self.wal.recovery_prefix().map_err(storage).map(|_| ())
+    }
     pub(crate) fn retained_enrollment(
         &self,
     ) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
@@ -1920,7 +1924,7 @@ mod tests {
                 .refresh_before_ms
         );
         let (challenge, raw_lease) = fixture.integrity_refresh_originals();
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
         let lease = Arc::new(
             raw_lease
                 .authenticate(
@@ -1929,7 +1933,7 @@ mod tests {
                     &fixture.trust,
                     &fixture.app_authority,
                     &challenge,
-                    issuer.public_key(),
+                    core_issuer.public_key(),
                     1500,
                 )
                 .unwrap(),

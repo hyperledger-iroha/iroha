@@ -403,6 +403,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./nft",
     "./norito",
     "./normalizers",
+    "./petal",
     "./privacy-capabilities",
     "./race",
     "./smart-contract-deployment",

@@ -1801,6 +1801,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
@@ -4812,6 +4813,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",
+ "iroha_petal",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",
@@ -5075,6 +5077,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_panic_hook",
  "iroha_primitives",
@@ -5094,6 +5097,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "url",
  "zeroize",
 ]
 
@@ -5650,6 +5654,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_petal"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "flate2",
+ "hex",
+ "norito",
+]
+
+[[package]]
 name = "iroha_primitives"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -6103,6 +6116,7 @@ dependencies = [
  "reqwest",
  "scrypt",
  "sha2",
+ "sorafs_manifest",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "url",

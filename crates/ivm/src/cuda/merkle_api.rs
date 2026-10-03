@@ -33,12 +33,12 @@ static PAIRS: PtxArtifact = PtxArtifact::new(
 );
 
 fn completed(
-    result: Option<Result<HostOutput<[u8; 32]>, CudaFailure>>,
-) -> Option<HostOutput<[u8; 32]>> {
-    match result? {
+    result: Result<HostOutput<[u8; 32]>, CudaFailure>,
+) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
+    match result {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if !matches!(
@@ -47,12 +47,12 @@ fn completed(
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
 
-fn leaf_stage(blocks: &[[u8; 64]]) -> Option<HostOutput<[u8; 32]>> {
+fn leaf_stage(blocks: &[[u8; 64]]) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
     completed(crate::cuda_dispatch::with_selected(
         Kernel::ShaLeaves,
         LEAVES,
@@ -62,7 +62,7 @@ fn leaf_stage(blocks: &[[u8; 64]]) -> Option<HostOutput<[u8; 32]>> {
         },
     ))
 }
-fn pair_stage(digests: &[[u8; 32]]) -> Option<HostOutput<[u8; 32]>> {
+fn pair_stage(digests: &[[u8; 32]]) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
     completed(crate::cuda_dispatch::with_selected(
         Kernel::ShaPairs,
         PAIRS,
@@ -82,7 +82,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
     crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         use sha2::{Digest as _, Sha256};
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         match kernel {
             Kernel::ShaLeaves => {
@@ -96,7 +96,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
                 });
                 let expected: [[u8; 32]; 2] =
                     messages.map(|message| Sha256::digest(message).into());
-                leaf_stage(&blocks).is_some_and(|output| output.as_slice() == expected)
+                leaf_stage(&blocks).map(|output| output.as_slice() == expected)
             }
             Kernel::ShaPairs => {
                 let input = [[0; 32], [0xff; 32], [0xa5; 32]];
@@ -107,9 +107,9 @@ pub(super) fn admit(kernel: Kernel) -> bool {
                     hash.finalize().into()
                 };
                 let expected = pair(pair(input[0], input[1]), input[2]);
-                pair_stage(&input).is_some_and(|output| output.as_slice() == [expected])
+                pair_stage(&input).map(|output| output.as_slice() == [expected])
             }
-            _ => false,
+            _ => Ok(false),
         }
     })
 }
@@ -125,7 +125,7 @@ pub(crate) fn sha256_leaves_cuda_attempt(blocks: &[[u8; 64]]) -> Option<HostOutp
         if !super::imp::ensure_cuda_kernel(Kernel::ShaLeaves) {
             return None;
         }
-        leaf_stage(blocks)
+        leaf_stage(blocks).ok()
     })
 }
 
@@ -172,6 +172,7 @@ pub(crate) fn sha256_leaf_chunks_cuda_attempt(
                 }
             },
         ))
+        .ok()
     })
 }
 
@@ -207,7 +208,7 @@ pub fn sha256_pairs_reduce_cuda(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
         if !super::imp::ensure_cuda_kernel(Kernel::ShaPairs) {
             return None;
         }
-        let output = pair_stage(digests)?;
+        let output = pair_stage(digests).ok()?;
         (output.len() == 1).then(|| output.as_slice()[0])
     })
 }
@@ -252,7 +253,8 @@ pub(crate) fn sha256_merkle_root_cuda(data: &[u8], chunk: usize) -> Option<[u8; 
                 }
                 result
             },
-        ))?;
+        ))
+        .ok()?;
         (output.len() == 1).then(|| output.as_slice()[0])
     })
 }

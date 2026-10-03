@@ -39,8 +39,9 @@ pub(crate) use incoming_admission::{
 pub use incoming_admission::{
     KAGEMUSHA_ORDINARY_INCOMING_COMMIT_BUNDLE_MAX_BYTES_V1,
     KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1,
-    KagemushaOrdinaryIncomingCommitProofBundleV1,
-    KagemushaOrdinaryIncomingReservationProofBundleV1,
+    KagemushaOrdinaryIncomingCommitProofBundleV1, KagemushaOrdinaryIncomingMintOriginalsV1,
+    KagemushaOrdinaryIncomingReceiveOriginalsV1, KagemushaOrdinaryIncomingReservationProofBundleV1,
+    KagemushaOrdinaryIncomingServiceSourceV1, KagemushaOrdinaryIncomingSourceOriginalsV1,
     KagemushaVerifiedOrdinaryIncomingCommitProofV1,
     KagemushaVerifiedOrdinaryIncomingReservationProofV1,
     ordinary_incoming_commit_carrier_max_bytes_v1, verify_ordinary_incoming_commit_v1,
@@ -51,6 +52,7 @@ pub use incoming_admission::{
 mod bundle_admission;
 pub(super) use bundle_admission::terminal_public;
 pub use bundle_admission::{
+    KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1,
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
     KagemushaOrdinaryLineageOutgoingOriginalsV1, KagemushaOrdinaryLineageStateProofBundleV1,
     KagemushaOrdinaryLineageStatementOriginalV1, KagemushaVerifiedOrdinaryLineageAnchorProofV1,
@@ -374,6 +376,7 @@ fn require_state_metadata(
         || p.integer(s::OPERATION)?
             != u128::from(match incoming {
                 Some(_) if n.operation == KagemushaOperationV1::MintFold => 1,
+                Some(_) if n.operation == KagemushaOperationV1::ReceiveFold => 3,
                 Some(_) => return reject(),
                 None => operation_tag(n.operation)?,
             })
@@ -430,7 +433,10 @@ fn require_state_metadata(
             s::MINT_PROOF_BINDING_LO,
             incoming.map_or([0; 32], |v| v.proof_binding),
         ),
-        (s::RECEIVE_CREDIT_BINDING_LO, [0; 32]),
+        (
+            s::RECEIVE_CREDIT_BINDING_LO,
+            n.receive_credit_binding_digest,
+        ),
         (s::LIFECYCLE_LO, n.lifecycle_binding_digest),
         (
             s::PREPARED_TRANSITION_LO,

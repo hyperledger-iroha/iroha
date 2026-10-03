@@ -16,6 +16,9 @@ pub(super) enum TableMaterializer {
         id: &'static str,
         capture: fn(&State, LeafLimits) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError>,
     },
+    /// One of three static semantic selectors sharing one original State cut.
+    /// The borrowed selector is immutable and needs no allocation.
+    MusubiSemantic(&'static MusubiSemanticTable),
     /// One acquisition returns current, rollback, frontier and original identity.
     TransactionMembership,
 }
@@ -24,6 +27,7 @@ impl TableMaterializer {
     pub(super) fn table_ids(self) -> impl Iterator<Item = &'static str> {
         match self {
             Self::Single { id, .. } => [Some(id), None],
+            Self::MusubiSemantic(table) => [Some(table.id()), None],
             Self::TransactionMembership => [Some(CURRENT), Some(ROLLBACK)],
         }
         .into_iter()

@@ -590,13 +590,11 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 // installation failures require process restart; there is no reset/close ABI.
 // The contract writes [1, 1048576] and returns 2; capacity is in uint32_t words.
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_NATIVE_STARTUP_MAX_BYTES_V1 1048576
-#if !defined(_WIN32)
 int32_t connect_norito_kagemusha_testnet_native_startup_contract_v1(
     uint32_t* output, size_t capacity);
 // Zero means active, -312 means no native context, and -311 means rejected.
 int32_t connect_norito_kagemusha_testnet_native_startup_activate_v1(
     const uint8_t* signed_bootstrap, size_t signed_bootstrap_length);
-#endif
 
 // Testnet-only paired State proof observation. A release-authenticated native
 // verifier and operator-pinned network/release must be installed from Rust.
@@ -627,7 +625,6 @@ int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
 // false and grants no payment, redemption, or production wallet capability.
 // A missing durable owner or reservation fails closed. output_length is aligned
 // and disjoint from all input/output spans; full output capacity is mandatory.
-#if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 150995968
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 32
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 512
@@ -666,7 +663,6 @@ int32_t connect_norito_kagemusha_testnet_value_admit_v1(
 int32_t connect_norito_kagemusha_testnet_value_credit_v1(
     const uint8_t* operation_id, size_t operation_id_length,
     uint8_t* output_credit, size_t output_capacity, size_t* output_length);
-#endif
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
 // returns the number of uint32_t words written (12) on success. It is an ABI
@@ -741,6 +737,57 @@ int32_t connect_norito_kagemusha_ordinary_current_control_v1(
  * proofs, durable StateAdvance and distinct fresh-FI acknowledgement are mandatory.
  * Output is bridge-owned and released with connect_norito_free. */
 int32_t connect_norito_kagemusha_ordinary_outgoing_v1(
+    const uint8_t *input, size_t input_len,
+    uint8_t **output, size_t *output_len);
+
+/* Distinct ordinary Play Integrity lifecycle on the exact opened Native descriptor.
+ * Phase 1 prepares actual PI refresh; 2 admits its full signed challenge; 3 fences the
+ * enrolled app-key invocation; 4 retains raw P-256 DER; 5 retains independently acquired
+ * Play Integrity token; 6 admits the signed lease; 7 abandons the retained pending attempt;
+ * 8 recovers exact original fields; 9 attempts Bootstrap activation under current bounds;
+ * 10 reads completed app-key custody metadata for Android or Apple without generation,
+ * signing, current FI/PI or monetary authority.
+ * Phases 1/3/7/8/9/10 have empty original input. Other phases accept only their bounded
+ * complete original (at most 64KiB). A replay never renews expiry or creates a grant.
+ * Output is canonical KagemushaOrdinaryNativeIntegrityRefreshResponseV1, data only;
+ * release it with connect_norito_free. Output pointers are cleared before refusal. */
+int32_t connect_norito_kagemusha_ordinary_integrity_refresh_v1(
+    uint8_t phase, uint64_t core_handle,
+    const uint8_t *original_ptr, size_t original_len,
+    uint8_t **output_ptr, size_t *output_len);
+
+/* Complete ordinary Mint/Receive incoming lifecycle on the same opened Native Cash owner.
+ * The request is the sole canonical Norito KagemushaOrdinaryNativeIncomingRequestV1;
+ * it contains version 1, the exact phase, the retained Core handle and that phase's
+ * full original archives. Phases 1..16 implement Mint/shared reservation and commit;
+ * Phase 17 selects the genuine retained Receive source before the same shared phases.
+ * Phase 18 reads the separately retained platform counter for one exact W operation
+ * and signed purpose; Android has no counter and Apple retains its actual UInt32 floor.
+ * Phase 16 renews the genuine installed four-node clock and same account observation.
+ * No frame installs an owner, supplies keys/authority or admits a decoded financial cap.
+ * Successful output is canonical KagemushaOrdinaryNativeIncomingResponseV1 and must
+ * be released with connect_norito_free. Output pointers are cleared before refusal. */
+int32_t connect_norito_kagemusha_ordinary_incoming_v1(
+    const uint8_t *input, size_t input_len,
+    uint8_t **output, size_t *output_len);
+
+/* Dedicated ordinary Mint funding on the actual retained Main/AccountClient owner.
+ * Sole canonical KagemushaOrdinaryNativeMintFundingRequestV1: version 1, same Core
+ * handle, phase and exact originals. 1 prepares a positive LE128 amount; 2 fences
+ * the app-key call; 3 retains the raw original; 4 proves/fsyncs the real Mint113
+ * request; 5 signs Native account consent; 6 retains the exclusive pre-debit intent;
+ * 7 fences Core HTTP; 8 retains all five Core decision/clock/control/DATA/Node
+ * originals; 9 quotes/signs/fsyncs the actual transaction; 10 submits only that same
+ * transaction; 11 reads and independently admits complete Node finality (pending
+ * grants no funds); 12 reads retained platform recovery; 13 renews the genuine clock
+ * and same S/W; 14 reads the exact original Core recovery request; 15 reads the actual
+ * platform counter floor; 16 acknowledges already retained raw within its unchanged
+ * original window; 17 reads the exact retained operation and funding WAL stage, without
+ * invoking a key or transport. Proof/history reads grant no current signing or monetary authority.
+ * Finalized funding still requires the separate incoming proof/global CAS/StateAdvance.
+ * Output is canonical KagemushaOrdinaryNativeMintFundingResponseV1, data only; release
+ * with connect_norito_free. Output pointers are cleared before refusal. */
+int32_t connect_norito_kagemusha_ordinary_mint_funding_v1(
     const uint8_t *input, size_t input_len,
     uint8_t **output, size_t *output_len);
 

@@ -269,6 +269,38 @@ fn visit_ports(
 }
 
 impl QuantityWritePlan<QuantityWriteKey, Quantity> {
+    /// Preserve account unregistration's existing supply-before-removal write order.
+    /// This consumes no new allocation or permit: only a fresh exact two-port
+    /// complete-balance burn prepared by the original supply owner may be ordered.
+    pub(super) fn order_supply_before_complete_removal(
+        &mut self,
+        id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), QuantityWritePlanError> {
+        let writes = self.writes.as_slice();
+        if self.failed || self.consumed != 0 {
+            self.failed = true;
+            return Err(QuantityWritePlanError::Exhausted);
+        }
+        if writes.len() != 2
+            || self.key_order.as_slice() != [0, 1]
+            || !matches!(&writes[0].key, QuantityWriteKey::Balance(value) if value == id)
+            || &writes[0].before != amount
+            || !writes[0].after.is_zero()
+            || !matches!(&writes[1].key, QuantityWriteKey::Supply(value) if value == id.definition())
+        {
+            self.failed = true;
+            return Err(QuantityWritePlanError::Mismatch);
+        }
+        self.writes.as_mut_slice().swap(0, 1);
+        // Preserve canonical-key projection order after changing physical order.
+        self.key_order.as_mut_slice().swap(0, 1);
+        if let Some(lifecycles) = self.lifecycles.as_mut() {
+            lifecycles.as_mut_slice().swap(0, 1);
+        }
+        Ok(())
+    }
+
     /// Reserve all port backing, ledger backing and exact nested clone layouts atomically
     /// from this transaction's original execution pool, before making any port clone.
     pub(super) fn from_effects(
@@ -578,5 +610,135 @@ mod tests {
         plan.consume(&2, &0, &1).unwrap().applied();
         plan.consume(&1, &9, &14).unwrap().applied();
         assert_eq!(plan.finish(), Ok(()));
+    }
+
+    fn removal_plan(amount: u32) -> (QuantityWritePlan<QuantityWriteKey, Quantity>, AssetId) {
+        let domain =
+            iroha_model_base::domain::DomainId::try_new("quantity-ports", "universal").unwrap();
+        let definition =
+            AssetDefinitionId::derive_from_components(domain, "units".parse().unwrap());
+        let id = AssetId::of(definition.clone(), iroha_test_samples::BOB_ID.clone());
+        let plan = QuantityWritePlan::new(
+            vec![
+                ExpectedQuantityWrite {
+                    key: QuantityWriteKey::Balance(id.clone()),
+                    before: Quantity::from(amount),
+                    after: Quantity::zero(),
+                },
+                ExpectedQuantityWrite {
+                    key: QuantityWriteKey::Supply(definition),
+                    before: Quantity::from(10 + amount),
+                    after: Quantity::from(10_u32),
+                },
+            ],
+            2,
+        )
+        .unwrap();
+        (plan, id)
+    }
+
+    #[test]
+    fn account_removal_orders_exact_supply_first_without_changing_canonical_projections() {
+        for amount in [0_u32, 3] {
+            let (mut plan, id) = removal_plan(amount);
+            let before = plan
+                .ordered_projections()
+                .map(|(key, before, after)| (key.clone(), before.clone(), after.clone()))
+                .collect::<Vec<_>>();
+            plan.order_supply_before_complete_removal(&id, &Quantity::from(amount))
+                .unwrap();
+            let after = plan
+                .ordered_projections()
+                .map(|(key, before, after)| (key.clone(), before.clone(), after.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(before, after);
+            plan.consume_supply(
+                id.definition(),
+                &Quantity::from(10 + amount),
+                &Quantity::from(10_u32),
+            )
+            .unwrap()
+            .applied();
+            plan.consume_balance(&id, &Quantity::from(amount), &Quantity::zero())
+                .unwrap()
+                .applied();
+            assert_eq!(plan.finish(), Ok(()));
+        }
+    }
+
+    #[test]
+    fn account_removal_ordering_refuses_wrong_key_partial_balance_and_reuse() {
+        for mutation in 0..5 {
+            let (mut plan, id) = removal_plan(3);
+            match mutation {
+                0 => plan.writes.as_mut_slice()[0].before = Quantity::from(4_u32),
+                1 => plan.writes.as_mut_slice()[0].after = Quantity::from(1_u32),
+                2 => {
+                    plan.writes.as_mut_slice()[0].key = QuantityWriteKey::Balance(AssetId::of(
+                        id.definition().clone(),
+                        iroha_test_samples::ALICE_ID.clone(),
+                    ))
+                }
+                3 => plan
+                    .order_supply_before_complete_removal(&id, &Quantity::from(3_u32))
+                    .unwrap(),
+                4 => plan
+                    .consume_balance(&id, &Quantity::from(3_u32), &Quantity::zero())
+                    .unwrap()
+                    .applied(),
+                _ => unreachable!(),
+            }
+            assert!(
+                plan.order_supply_before_complete_removal(&id, &Quantity::from(3_u32))
+                    .is_err()
+            );
+            assert!(
+                plan.order_supply_before_complete_removal(&id, &Quantity::from(3_u32))
+                    .is_err()
+            );
+            assert_eq!(plan.finish(), Err(QuantityWritePlanError::Mismatch));
+        }
+    }
+
+    #[test]
+    fn account_removal_missing_reordered_stale_and_extra_ports_cannot_seal() {
+        for mutation in 0..4 {
+            let (mut plan, id) = removal_plan(3);
+            plan.order_supply_before_complete_removal(&id, &Quantity::from(3_u32))
+                .unwrap();
+            if mutation == 0 {
+                assert!(
+                    plan.consume_balance(&id, &Quantity::from(3_u32), &Quantity::zero())
+                        .is_err()
+                );
+            } else if mutation == 1 {
+                assert!(
+                    plan.consume_supply(
+                        id.definition(),
+                        &Quantity::from(12_u32),
+                        &Quantity::from(10_u32)
+                    )
+                    .is_err()
+                );
+            } else {
+                plan.consume_supply(
+                    id.definition(),
+                    &Quantity::from(13_u32),
+                    &Quantity::from(10_u32),
+                )
+                .unwrap()
+                .applied();
+                if mutation == 3 {
+                    plan.consume_balance(&id, &Quantity::from(3_u32), &Quantity::zero())
+                        .unwrap()
+                        .applied();
+                    assert!(
+                        plan.consume_balance(&id, &Quantity::from(3_u32), &Quantity::zero())
+                            .is_err()
+                    );
+                }
+            }
+            assert!(plan.finish().is_err());
+        }
     }
 }

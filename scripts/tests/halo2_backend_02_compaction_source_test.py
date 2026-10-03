@@ -3,8 +3,9 @@
 
 The guard authenticates the indexed opening blob, records the current
 constrained-pow5 inventory, and pins every current code token plus the shared
-proof builders and their caller partition. The reviewed current fixture adds
-the required ff::Field import for Scalar::ZERO; assertions are unchanged.
+proof builders and their caller partition. Halo2 and Pasta IPA are mandatory;
+the guard rejects their retired backend feature gates. Every proof and
+rejection assertion is retained.
 Comments and formatting are excluded from the current code fingerprint.
 """
 
@@ -16,7 +17,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from zk_source_tokens import token_hash
+from zk_source_tokens import rust_tokens, token_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +26,7 @@ SOURCE_PATH = ROOT / "crates/iroha_core_zk/src/halo2_backend_02_tests.rs"
 PREIMAGE_BLOB = "24d6dcc6c3d5aa718563bc05f872e5034f9108a9"
 PREIMAGE_SHA256 = "2038f9e73c032bf40e6de658ed934946c515f1fd15484c382bc7174614c47c99"
 PREIMAGE_LINES = 1_616
-CURRENT_CODE_SHA256 = "30229ddda4275d965c3f530da87c81f2b19b6ed56aa3131b8094889d6791d54c"
+CURRENT_CODE_SHA256 = "4b2dcea1dd4f7991ebba15e0eb6573b743213c319d83809ffc02ccd8a0308b80"
 
 PREIMAGE_TESTS = (
     "halo2_poseidon_commit_open_chip_ipa",
@@ -394,6 +395,16 @@ def validate_source(source: str, preimage: str) -> None:
     audited = _without_direct_functions(source)
     _require(not FORBIDDEN.search(audited), "forbidden callback, DSL, macro, or relocation")
 
+    tokens = rust_tokens(source)
+    for feature in ('"zk-halo2"', '"zk-halo2-ipa"'):
+        _require(
+            not any(
+                tokens[index : index + 3] == ("feature", "=", feature)
+                for index in range(len(tokens) - 2)
+            ),
+            "retired Halo2 backend feature gate",
+        )
+
     _require(token_hash(source) == CURRENT_CODE_SHA256, "current code/assertion contract changed")
 
 
@@ -432,6 +443,25 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
         comment = "// Constrained Pow5 test circuits (IPA): commit-open and merkle2."
         changed = _replace_once(self.source, comment, "// " + "x" * 20_000)
         validate_source(changed, self.preimage)
+
+    def test_retired_backend_feature_gates_fail_closed(self) -> None:
+        for feature in ("zk-halo2", "zk-halo2-ipa"):
+            for gate in (
+                f'#[cfg(feature = "{feature}")]\n',
+                f'#[cfg(all(feature = "halo2-dev-tests", feature = "{feature}"))]\n',
+            ):
+                with self.subTest(feature=feature, gate=gate):
+                    changed = _replace_once(
+                        self.source,
+                        "#[test]\nfn halo2_constrained_commit_open_ipa(",
+                        gate + "#[test]\nfn halo2_constrained_commit_open_ipa(",
+                    )
+                    with self.assertRaisesRegex(GuardError, "retired Halo2 backend"):
+                        validate_source(changed, self.preimage)
+            validate_source(
+                f'// #[cfg(feature = "{feature}")]\n' + self.source,
+                self.preimage,
+            )
 
     def test_mutations_fail_closed(self) -> None:
         comment = "// Constrained Pow5 test circuits (IPA): commit-open and merkle2."

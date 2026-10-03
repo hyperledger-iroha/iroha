@@ -829,3 +829,14 @@ def test_suspend_inclusive_network_time_has_original_deterministic_kill_controls
     assert not rule.scenarios
     assert gate.has_switch("HC53", core=True)
     assert not gate.has_switch("HC53")
+
+
+def test_beacon_generation_binding_has_genuine_dkg_kill_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC54"]
+    assert rule.tests == (
+        'state::validator_committee::tests::generation::committee_bootstrap_rejects_genuine_dkg_from_another_generation',
+        'state::validator_committee::tests::generation::committee_restore_rejects_genuine_dkg_from_another_generation',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC54", core=True)
+    assert not gate.has_switch("HC54")

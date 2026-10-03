@@ -233,7 +233,7 @@ impl ColumnStateV1 {
         let serial_gate = context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::SerialSource);
 
         let query_gate = if lookup.node {
-            serial_gate.add(key_output_query_gate_v1(&row, &fixed))
+            serial_gate.add(output_source_node_query_gate_v1(&row, &fixed))
         } else {
             row[BASE_SERIAL_BYTE_QUERY_ACTIVE]
         };

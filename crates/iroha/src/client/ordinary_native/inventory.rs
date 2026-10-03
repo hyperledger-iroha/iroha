@@ -16,10 +16,10 @@ use iroha_data_model::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{File, OpenOptions},
-    os::unix::fs::{FileExt as _, MetadataExt as _, OpenOptionsExt as _},
     path::{Path, PathBuf},
 };
+
+use iroha_fs::{FileSnapshot, ReaderDirectory, RetainedFile};
 
 const DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-native-installed-inventory\0";
 const MAGIC: &[u8; 8] = b"KGMINV01";
@@ -166,37 +166,11 @@ impl KagemushaNativeInstalledRuntimeAuthorityV1 {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Identity {
-    dev: u64,
-    ino: u64,
-    uid: u32,
-    gid: u32,
-    mode: u32,
-    links: u64,
-    size: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-impl Identity {
-    fn of(value: &std::fs::Metadata) -> Self {
-        Self {
-            dev: value.dev(),
-            ino: value.ino(),
-            uid: value.uid(),
-            gid: value.gid(),
-            mode: value.mode(),
-            links: value.nlink(),
-            size: value.len(),
-            modified: (value.mtime(), value.mtime_nsec()),
-            changed: (value.ctime(), value.ctime_nsec()),
-        }
-    }
-}
 struct HeldFile {
     path: PathBuf,
-    file: File,
-    identity: Identity,
+    file: RetainedFile,
+    identity: FileSnapshot,
+    length: u64,
     sha256: [u8; 32],
     process: u32,
 }
@@ -207,25 +181,18 @@ impl HeldFile {
             "Native original bound rejected"
         );
         require_path(&path)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-            )
-            .open(&path)?;
-        let meta = file.metadata()?;
+        let file = RetainedFile::open_regular(&path)?;
+        let meta = file.file().metadata()?;
         ensure!(
-            meta.is_file()
-                && meta.nlink() == 1
-                && meta.len() == length
-                && meta.mode() & 0o022 == 0
-                && (meta.uid() == rustix::process::geteuid().as_raw() || meta.uid() == 0),
+            meta.is_file() && meta.len() == length,
             "Native original custody rejected"
         );
+        let identity = file.snapshot()?;
         let this = Self {
             path,
             file,
-            identity: Identity::of(&meta),
+            identity,
+            length,
             sha256,
             process: std::process::id(),
         };
@@ -238,14 +205,9 @@ impl HeldFile {
             "Native original process changed"
         );
         require_path(&self.path)?;
-        let held = self.file.metadata()?;
-        let named = std::fs::symlink_metadata(&self.path)?;
+        self.file.revalidate()?;
         ensure!(
-            held.is_file()
-                && named.is_file()
-                && !named.file_type().is_symlink()
-                && Identity::of(&held) == self.identity
-                && Identity::of(&named) == self.identity,
+            self.file.snapshot()? == self.identity,
             "Native original identity changed"
         );
         Ok(())
@@ -255,10 +217,9 @@ impl HeldFile {
         let mut offset = 0_u64;
         let mut hash = sha2::Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
-        while offset < self.identity.size {
-            let remaining =
-                usize::try_from((self.identity.size - offset).min(buffer.len() as u64))?;
-            let count = self.file.read_at(&mut buffer[..remaining], offset)?;
+        while offset < self.length {
+            let remaining = usize::try_from((self.length - offset).min(buffer.len() as u64))?;
+            let count = iroha_fs::read_at(self.file.file(), &mut buffer[..remaining], offset)?;
             ensure!(count != 0, "Native original truncated");
             hash.update(&buffer[..count]);
             offset = offset
@@ -274,11 +235,11 @@ impl HeldFile {
     fn bytes(&self, maximum: usize) -> Result<Vec<u8>> {
         self.metadata_stable()?;
         ensure!(
-            self.identity.size <= maximum as u64,
+            self.length <= maximum as u64,
             "Native original size rejected"
         );
-        let mut bytes = vec![0; usize::try_from(self.identity.size)?];
-        self.file.read_exact_at(&mut bytes, 0)?;
+        let mut bytes = vec![0; usize::try_from(self.length)?];
+        iroha_fs::read_exact_at(self.file.file(), &mut bytes, 0)?;
         ensure!(
             <[u8; 32]>::from(sha2::Sha256::digest(&bytes)) == self.sha256,
             "Native original digest changed"
@@ -289,17 +250,27 @@ impl HeldFile {
 }
 fn require_path(path: &Path) -> Result<()> {
     ensure!(
-        path.is_absolute() && path.canonicalize()? == path,
+        path.is_absolute(),
         "Native original canonical path rejected"
     );
-    let mut prefix = PathBuf::new();
-    for component in path.components() {
-        prefix.push(component.as_os_str());
+    #[cfg(unix)]
+    {
         ensure!(
-            !std::fs::symlink_metadata(&prefix)?.file_type().is_symlink(),
-            "Native original symbolic path rejected"
+            path.canonicalize()? == path,
+            "Native original canonical path rejected"
         );
+        let mut prefix = PathBuf::new();
+        for component in path.components() {
+            prefix.push(component.as_os_str());
+            ensure!(
+                !std::fs::symlink_metadata(&prefix)?.file_type().is_symlink(),
+                "Native original symbolic path rejected"
+            );
+        }
     }
+    // Every supported native open below independently retains and rechecks all ancestors.
+    // Windows drive spelling is not a Unix canonical path: NTFS/reparse/DACL checks remain
+    // the genuine lower owner, including normal and verbatim drive prefixes.
     Ok(())
 }
 fn relative_path(value: &str) -> Result<()> {
@@ -325,8 +296,8 @@ pub struct KagemushaAdmittedOrdinaryNativeInventoryV1 {
     authority: Arc<KagemushaNativeInstalledRuntimeAuthorityV1>,
     package: HeldFile,
     root: PathBuf,
-    root_file: File,
-    root_identity: Identity,
+    root_file: ReaderDirectory,
+    root_identity: FileSnapshot,
     body: KagemushaOrdinaryNativeInventoryV1,
     files: BTreeMap<String, HeldFile>,
     release: Arc<KagemushaAuthenticatedReleaseV1>,
@@ -349,17 +320,8 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
     ) -> Result<Self> {
         authority.recheck()?;
         require_path(root)?;
-        let root_file = OpenOptions::new()
-            .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-            )
-            .open(root)?;
-        let root_meta = root_file.metadata()?;
-        ensure!(
-            root_meta.is_dir() && root_meta.mode() & 0o022 == 0,
-            "Native inventory root custody rejected"
-        );
+        let root_file = ReaderDirectory::open(root)?;
+        let root_identity = root_file.snapshot()?;
         let length = std::fs::symlink_metadata(package_path)?.len();
         let package = HeldFile::open_exact(
             package_path.to_owned(),
@@ -388,7 +350,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             package,
             root: root.to_owned(),
             root_file,
-            root_identity: Identity::of(&root_meta),
+            root_identity,
             body,
             files,
             release,
@@ -407,13 +369,9 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         self.authority.recheck()?;
         self.package.stream_check()?;
         require_path(&self.root)?;
-        let held = self.root_file.metadata()?;
-        let named = std::fs::symlink_metadata(&self.root)?;
+        self.root_file.revalidate()?;
         ensure!(
-            held.is_dir()
-                && named.is_dir()
-                && Identity::of(&held) == self.root_identity
-                && Identity::of(&named) == self.root_identity,
+            self.root_file.snapshot()? == self.root_identity,
             "Native inventory root changed"
         );
         for (name, file) in &self.files {
@@ -633,6 +591,69 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         );
         Ok(())
     }
+    /// Bind an existing platform-storage Ed25519 signatory to this independently authenticated
+    /// transport inventory. This performs no account registration, wallet creation or current
+    /// membership admission. The startup's full certified S/W read remains mandatory.
+    /// # Errors
+    /// Rejects another key, noncanonical S, changed inventory or non-first-release W relation.
+    pub fn account_client_for_existing_signatory(
+        &self,
+        signatory: &AccountId,
+        key_pair: iroha_crypto::KeyPair,
+        discriminant: u16,
+    ) -> Result<AccountClient> {
+        self.recheck()?;
+        ensure!(
+            discriminant != 0
+                && key_pair.public_key().algorithm() == iroha_crypto::Algorithm::Ed25519
+                && signatory.try_signatory() == Some(key_pair.public_key()),
+            "existing Native signatory/key mismatch"
+        );
+        let wallet = AccountId::new_multisig(iroha_data_model::account::MultisigPolicy::new(
+            1,
+            vec![iroha_data_model::account::MultisigMember::new(
+                key_pair.public_key().clone(),
+                1,
+            )?],
+        )?);
+        iroha_torii_shared::ordinary_wallet_current::require_ordinary_wallet_relation_v1(
+            signatory, &wallet,
+        )?;
+        use iroha_service_model::sorafs::*;
+        let seconds = std::time::Duration::from_secs;
+        let client = Client::builder(crate::config::Config {
+            chain: self.checkpoint.chain_id().parse()?,
+            network_id: self.issuer.runtime.network_id,
+            account: wallet,
+            account_chain_discriminant: discriminant,
+            key_pair,
+            basic_auth: None,
+            api_token: None,
+            torii_api_url: Url::parse(&self.body.nodes[0].endpoint)?,
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            transaction_ttl: crate::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+            transaction_status_timeout: crate::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+            transaction_add_nonce: crate::config::DEFAULT_TRANSACTION_NONCE,
+            sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy::new(
+                seconds(DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+                seconds(DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+                seconds(DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+                seconds(DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+                seconds(DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+                seconds(DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+                seconds(DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+                seconds(DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
+            ),
+            sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
+            sorafs_rollout_phase: RolloutPhase::Canary,
+        })
+        .build()?;
+        let account = client.account_client()?;
+        self.require_account_transport(&account)?;
+        self.recheck()?;
+        Ok(account)
+    }
+
     /// Construct four actual shared HTTP contexts from the held account context and installed targets.
     /// No caller transport callback or copied mobile node pins enter this path.
     /// # Errors
@@ -697,6 +718,77 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             .map(|entry| self.files[&entry.path].bytes(MAX_ORIGINAL))
             .transpose()
     }
+    // Public data selected by a closed Main borrower must retain the exact independently
+    // installed original release/runtime. These checks supply no Node World permission/debit.
+    pub(super) fn require_mint_request(
+        &self,
+        request: &KagemushaOrdinaryTopUpRequestV1,
+    ) -> Result<()> {
+        self.recheck()?;
+        request
+            .canonical_bytes()
+            .map_err(|_| eyre!("Native Mint request data rejected"))?;
+        let c = &request.authorization.statement.context;
+        ensure!(
+            c.lineage.owner.runtime == self.issuer.runtime
+                && c.release_id == self.release.release_id()
+                && c.suite_id
+                    == self
+                        .release
+                        .enabled_profile(self.body.profile_id)
+                        .ok_or_else(|| eyre!("Native Mint enabled profile absent"))?
+                        .suite_id
+                && c.vk_digest == self.release.vk_set_digest()
+                && c.artifact_manifest_digest == self.release.manifest_digest()
+                && c.app_credential_profile_id == self.body.profile_id,
+            "Native Mint request differs from installed release/runtime/profile"
+        );
+        self.recheck()
+    }
+    pub(super) fn require_mint_submission(
+        &self,
+        submission: &KagemushaOrdinaryNodeMintSubmissionV1,
+    ) -> Result<()> {
+        self.recheck()?;
+        submission
+            .validate_shape()
+            .map_err(|_| eyre!("Native Node Mint submission data rejected"))?;
+        ensure!(
+            submission.identity_policy_original
+                == self.files["originals/ordinary-identity-policy.norito"].bytes(MAX_ORIGINAL)?
+                && submission.core_enrollment_issuer_policy_original
+                    == self.files["originals/ordinary-core-issuer-policy.norito"]
+                        .bytes(MAX_ORIGINAL)?
+                && submission.clock_selection_original == self.clock_selection_original()?,
+            "Native Node Mint changed installed identity/issuer/clock originals"
+        );
+        self.require_mint_request(
+            &KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(
+                &submission.topup_request_original,
+            )
+            .map_err(|_| eyre!("Native Node Mint full request rejected"))?,
+        )
+    }
+    /// Retain the exact FI HTTPS origin and external path prefix from this genuine signed
+    /// inventory. The existing canonical directory parser supplies the grammar; no caller
+    /// URL, response origin, alias or independent normalization selects this routing DATA.
+    /// Reading it admits neither a token/session nor current KYC or a financial capability.
+    /// # Errors
+    /// Refuses changed installed originals or an invalid canonical signed HTTPS directory.
+    pub fn fi_http_endpoint_originals(&self) -> Result<(String, String)> {
+        self.recheck()?;
+        let endpoint = super::endpoint::require_https_directory_base(
+            &self.body.fi_current_control_endpoint,
+        )?;
+        let origin = endpoint.origin().ascii_serialization();
+        let prefix = endpoint.path().strip_suffix('/')
+            .ok_or_else(|| eyre!("Native signed FI directory rejected"))?
+            .to_owned();
+        ensure!(format!("{origin}{prefix}/") == self.body.fi_current_control_endpoint,
+            "Native FI routing differs from signed original");
+        self.recheck()?;
+        Ok((origin, prefix))
+    }
     /// Exact current-control endpoint pin; reading it neither asserts live KYC nor non-revocation.
     #[must_use]
     pub fn fi_current_control_endpoint(&self) -> &str {
@@ -723,7 +815,7 @@ impl KagemushaArtifactByteResolverV1 for KagemushaOrdinaryNativeArtifactResolver
                 .get(&format!("artifacts/{}", hex::encode(binding.sha256)))
                 .ok_or_else(|| eyre!("Native artifact absent"))?;
             ensure!(
-                file.sha256 == binding.sha256 && file.identity.size == binding.byte_len,
+                file.sha256 == binding.sha256 && file.length == binding.byte_len,
                 "Native artifact binding changed"
             );
             Ok(file.bytes(usize::try_from(binding.byte_len)?)?.into())
@@ -930,11 +1022,7 @@ fn admit_files(
             public_original || artifact,
             "Native inventory private or unknown original rejected"
         );
-        let mode = std::fs::symlink_metadata(root.join(&descriptor.path))?.mode() & 0o777;
-        ensure!(
-            mode == 0o644 || mode == 0o444,
-            "Native inventory public-original permissions rejected"
-        );
+        RetainedFile::open_public_original(root.join(&descriptor.path))?.revalidate()?;
         ensure!(
             names.insert(descriptor.path.clone()),
             "Native inventory duplicate original"
@@ -1040,7 +1128,7 @@ fn admit_files(
             .get(&path)
             .ok_or_else(|| eyre!("Native release artifact descriptor absent"))?;
         ensure!(
-            file.sha256 == binding.sha256 && file.identity.size == binding.byte_len,
+            file.sha256 == binding.sha256 && file.length == binding.byte_len,
             "Native release artifact original changed"
         );
     }
@@ -1150,15 +1238,19 @@ mod codec_tests {
 
     #[test]
     fn held_original_keeps_u64_budget_without_address_sized_narrowing() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         // Public-file custody only: no inventory, release or runtime authority is created.
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let path = root.join("public-original.bin");
         let original = b"data-only public original";
-        std::fs::write(&path, original).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let owner = iroha_fs::OwnerDirectory::open(&root).unwrap();
+        owner
+            .write_atomic(
+                "public-original.bin",
+                original,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
         let digest = <[u8; 32]>::from(sha2::Sha256::digest(original));
 
         assert_eq!(MAX_TOTAL, 16_u64 * 1024 * 1024 * 1024);
@@ -1176,8 +1268,6 @@ mod codec_tests {
 
     #[test]
     fn held_original_u64_budget_rejects_over_bound_and_named_replacement() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         // A real tiny file exercises bounds and descriptor identity without fake authority.
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
@@ -1186,8 +1276,14 @@ mod codec_tests {
         let original = b"data-only public original";
         let length = u64::try_from(original.len()).unwrap();
         let digest = <[u8; 32]>::from(sha2::Sha256::digest(original));
-        std::fs::write(&path, original).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let owner = iroha_fs::OwnerDirectory::open(&root).unwrap();
+        owner
+            .write_atomic(
+                "public-original.bin",
+                original,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
 
         let rejection = HeldFile::open_exact(path.clone(), digest, length, length - 1)
             .err()
@@ -1195,11 +1291,25 @@ mod codec_tests {
         assert_eq!(rejection.to_string(), "Native original bound rejected");
         let held = HeldFile::open_exact(path.clone(), digest, length, MAX_TOTAL).unwrap();
         assert!(held.bytes(original.len() - 1).is_err());
-        std::fs::write(&replacement, original).unwrap();
-        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::rename(&replacement, &path).unwrap();
-        assert!(held.stream_check().is_err());
-        assert!(held.bytes(original.len()).is_err());
+        owner
+            .write_atomic(
+                "replacement.bin",
+                original,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        match std::fs::rename(&replacement, &path) {
+            Ok(()) => {
+                assert!(held.stream_check().is_err());
+                assert!(held.bytes(original.len()).is_err());
+            }
+            Err(error) => {
+                // Windows denies deletion/replacement of the genuine retained original.
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert!(replacement.exists());
+                assert_eq!(held.bytes(original.len()).unwrap(), original);
+            }
+        }
     }
 
     fn assert_exact_frame<T>(value: &T, nominal_name: &str)

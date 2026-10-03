@@ -222,6 +222,9 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
       events.append("open"); openedPaths.append(storagePath)
       openCalls += 1; return returnedHandle
     }
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws {
       closeCalls += 1; XCTAssertEqual(handle, returnedHandle)
       if failClose { throw KagemushaCoreCoordinatorErrorV1.unavailable }

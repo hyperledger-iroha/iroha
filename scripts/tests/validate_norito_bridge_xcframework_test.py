@@ -408,6 +408,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def test_rejects_manifest_missing_iphone_coordinator_or_state_observer(self) -> None:
         for missing in (
             "connect_norito_kagemusha_core_coordinator_close_v1",
+            "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+            "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",

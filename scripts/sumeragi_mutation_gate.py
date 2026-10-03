@@ -573,6 +573,8 @@ CORE_MUTATIONS = [
 
     m("HC52", "checkpoint reader: turn original binary decoder refusal into completed invalidity",
       ['sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source']),
+    m("HC54", "beacon custody: accept a genuine same-roster DKG from another authority generation",
+      ['state::validator_committee::tests::generation::committee_bootstrap_rejects_genuine_dkg_from_another_generation', 'state::validator_committee::tests::generation::committee_restore_rejects_genuine_dkg_from_another_generation']),
 
 
 ]

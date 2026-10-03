@@ -26,22 +26,26 @@ fn failure_quarantines(error: CudaFailure) -> bool {
     }
 }
 
-fn stage(kernel: Kernel, left: &[[u64; 4]], right: &[[u64; 4]]) -> Option<HostOutput<[u64; 4]>> {
+fn stage(
+    kernel: Kernel,
+    left: &[[u64; 4]],
+    right: &[[u64; 4]],
+) -> Result<HostOutput<[u64; 4]>, CudaFailure> {
     let result = crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
         // SAFETY: this adapter fixes the embedded qualified artifact and the
         // launch module fixes its exact typed BN254 symbols and geometry.
         unsafe { launch::output(device, ARTIFACT, kernel, left, right) }
-    })?;
+    });
     match result {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if failure_quarantines(error) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -101,13 +105,13 @@ fn golden_output(
 pub(super) fn admit(kernel: Kernel) -> bool {
     crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         let (left, right) = golden_operands();
         let Some(expected) = golden_output(kernel, &left, &right) else {
-            return false;
+            return Ok(false);
         };
-        stage(kernel, &left, &right).is_some_and(|output| output.as_slice() == expected)
+        stage(kernel, &left, &right).map(|output| output.as_slice() == expected)
     })
 }
 
@@ -140,7 +144,7 @@ fn into(
         if !super::imp::ensure_cuda_kernel(kernel) {
             return false;
         }
-        let Some(output) = stage(kernel, left, right) else {
+        let Ok(output) = stage(kernel, left, right) else {
             return false;
         };
         // HostOutput retains the original reservation until publication finishes.

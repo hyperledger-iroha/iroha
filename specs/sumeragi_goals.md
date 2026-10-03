@@ -5,7 +5,7 @@ first-release Sumeragi core, node integration and application consumers.
 Implementation completion and network/release qualification are separate gates.
 Regression and fault diagnostics do not authorize or block deployment; on-chain governance
 owns deployment policy for testnet and production (§13.5).
-Required working directory: `/Users/takemiyamakoto/dev/iroha`. Required branch:
+Required working directory: `/Users/takemiyamakoto/soramitsudev/iroha`. Required branch:
 `optimizations`.
 
 Protocol contract: [specs/sumeragi.md](sumeragi.md). Implementation:

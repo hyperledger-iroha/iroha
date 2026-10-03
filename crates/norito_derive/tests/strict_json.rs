@@ -30,6 +30,22 @@ struct RequiredOptional {
     #[norito(required)]
     optional: Option<u32>,
 }
+macro_rules! required_record {
+    ($name:ident, $derive:path, $ty:ty) => {
+        #[derive(Debug, PartialEq, Eq, $derive)]
+        struct $name {
+            #[norito(required)]
+            required: $ty,
+            optional: $ty,
+        }
+    };
+}
+required_record!(MacroRequiredOptional, JsonDeserialize, Option<u32>);
+required_record!(
+    FastMacroRequiredOptional,
+    norito_derive::FastJson,
+    ::core::option::Option<u32>
+);
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct FlattenedFields {
     label: String,
@@ -215,6 +231,48 @@ fn derived_missing_fields_remain_structured_on_every_object_decode_path() {
         decode_fast::<FastRequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
             .expect_err("fast enum omission must reject"),
         "optional",
+    );
+}
+#[test]
+fn macro_forwarded_option_types_preserve_required_keys_and_explicit_null() {
+    for (input, required) in [
+        (r#"{"required":null}"#, None),
+        (r#"{"required":7}"#, Some(7)),
+    ] {
+        let expected = MacroRequiredOptional {
+            required,
+            optional: None,
+        };
+        assert_eq!(
+            json::from_str::<MacroRequiredOptional>(input).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json::from_json_fast::<MacroRequiredOptional>(input).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_fast::<FastMacroRequiredOptional>(input).unwrap(),
+            FastMacroRequiredOptional {
+                required,
+                optional: None,
+            }
+        );
+    }
+    assert_structured_missing_field(
+        json::from_str::<MacroRequiredOptional>(r#"{}"#)
+            .expect_err("macro-forwarded required key cannot be omitted"),
+        "required",
+    );
+    assert_missing_field(
+        json::from_json_fast::<MacroRequiredOptional>(r#"{}"#)
+            .expect_err("fallback macro-forwarded required key cannot be omitted"),
+        "required",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastMacroRequiredOptional>(r#"{}"#)
+            .expect_err("fast macro-forwarded required key cannot be omitted"),
+        "required",
     );
 }
 #[test]

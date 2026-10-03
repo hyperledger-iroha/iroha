@@ -11,6 +11,7 @@
 // projection capture. Fixed local containers do not fund cryptographic work.
 
 use super::*;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_model_base::error::ParseError;
 
@@ -41,7 +42,7 @@ impl<'world> LocationProviderAttestations<'world> {
 pub(super) fn load_location_provider_attestations<'world>(
     archive: &MusubiArchiveRecordV1,
     location: &MusubiArchiveLocationV1,
-    world: &'world impl WorldReadOnly,
+    world: &'world impl MusubiSourceReadOnly,
 ) -> Result<LocationProviderAttestations<'world>, ParseError> {
     archive.validate()?;
     location.validate()?;
@@ -69,7 +70,7 @@ pub(super) fn load_location_provider_attestations<'world>(
             provider_id: *provider,
         };
         let record = world
-            .musubi_provider_bundle_attestations()
+            .source_musubi_provider_bundle_attestations()
             .get(&key)
             .ok_or_else(|| {
                 ParseError::new("Musubi archive location provider attestation record was not found")

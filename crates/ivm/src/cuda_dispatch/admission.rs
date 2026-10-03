@@ -1,6 +1,6 @@
 //! Exact-artifact kernel qualification; physical health stays in iroha_accel.
 
-use iroha_accel::PtxArtifact;
+use iroha_accel::{PtxArtifact, cuda::CudaFailure};
 use std::sync::{
     Mutex, OnceLock, TryLockError,
     atomic::{AtomicU8, Ordering},
@@ -19,7 +19,11 @@ pub(super) struct KernelAdmission {
 }
 
 impl KernelAdmission {
-    pub(super) fn admit(&self, artifact: PtxArtifact, validate: impl FnOnce() -> bool) -> bool {
+    pub(super) fn admit(
+        &self,
+        artifact: PtxArtifact,
+        validate: impl FnOnce() -> Result<bool, CudaFailure>,
+    ) -> bool {
         if self.artifact.get().is_some_and(|bound| *bound != artifact) {
             return false;
         }
@@ -55,14 +59,26 @@ impl KernelAdmission {
                     }
                 }
                 let mut completed = ValidationGuard(&self.state, false);
-                let passed = validate();
+                let outcome = validate();
+                let next = match outcome {
+                    Ok(true) => ADMITTED,
+                    // No kernel result was obtained. A later caller may repeat the
+                    // same artifact's public self-test when local capacity returns.
+                    Err(CudaFailure::Capacity | CudaFailure::Busy | CudaFailure::Unavailable) => {
+                        UNTESTED
+                    }
+                    Ok(false)
+                    | Err(
+                        CudaFailure::Quarantined
+                        | CudaFailure::InvalidRequest
+                        | CudaFailure::Driver(_)
+                        | CudaFailure::Timeout,
+                    ) => QUARANTINED,
+                };
+                // A concurrent or in-validation quarantine is never cleared by
+                // either successful completion or a retryable local refusal.
                 self.state
-                    .compare_exchange(
-                        UNTESTED,
-                        if passed { ADMITTED } else { QUARANTINED },
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
+                    .compare_exchange(UNTESTED, next, Ordering::AcqRel, Ordering::Acquire)
                     .ok();
                 completed.1 = true;
                 self.state.load(Ordering::Acquire) == ADMITTED

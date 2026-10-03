@@ -340,6 +340,50 @@ participation ledger checked against its roster; SHA-256 is
 These are model fixtures with synthetic artifacts, not proof-generation,
 four-validator, hardware or release-qualification evidence.
 
+## Petal Stream optical transport
+
+`Hyperledger.Iroha.Petal` is the managed port of the Rust reference
+`crates/iroha_petal`: an animated, camera-readable frame sequence ("streaming QR"
+in the Sakura-storm look) that moves a payload such as a KAGEMUSHA `IPM1` peer
+message from a screen to a phone. Each frame carries three independent
+Reed–Solomon lanes of fountain-coded atoms — tile polarity (`P`), katakana
+glyphs (`K`) and ring dots (`D`, which carries the stream beacon every fourth
+frame) — so any readable lane of any frame adds progress. A payload is released
+only after its CRC-32C matches the beacon.
+
+```csharp
+// Sender: draw frames at 8 fps through an IPetalCanvas adapter over the
+// platform canvas (SkiaSharp, MAUI ICanvas, WPF DrawingContext, ...).
+var player = new PetalFramePlayer(new PetalStreamEncoder(payload, kind: 2));
+player.Draw(canvasAdapter, clock.Elapsed, side: viewSizeInPixels);
+
+// Receiver: feed each camera Y plane (CameraX plane 0, CVPixelBuffer luma).
+var analyzer = new PetalCameraAnalyzer();
+analyzer.PayloadCompleted += (_, done) => Handle(done.Meta.Kind, done.ToArray());
+analyzer.AnalyzeYPlane(yPlane, width, height, rowStride, pixelStride, timestampMs);
+```
+
+`PetalDecoder.Decode` reports `UnsupportedImage`, `NoFinders` or
+`NoOrientation` through `PetalDecodeResult` and never throws on image content.
+Lanes `P` and `K` are first read against the light and dark levels measured at
+the finders; a lane that does not decode is retried from a normalised read that
+rescales every tile patch and glyph template by its own contrast, which cancels
+most over-exposure, veiling light, glare and shadow instead of losing the turbo
+lane.
+`PetalScanSession`, `PetalStreamAssembler` and `PetalRenderer`/`PetalDrawList`
+expose the lower layers, and `PetalPng` writes inspection images. Memory and
+work are bounded by `PetalDecodeOptions.MaxPixels` (12 MP) and
+`PetalAssemblerLimits` (64 KiB payloads, 128 pending atoms). Encoder output is
+bit-identical to Rust, and the decoder repeats the reference's IEEE double
+operations in the same order. The shared fixtures
+`fixtures/petal/petal_stream_v1.json` and `petal_captures_v1.json` pin both. Run
+the Petal tests with the xUnit v3 filter (the VSTest `--filter` switch is ignored
+under Microsoft.Testing.Platform):
+
+```bash
+dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -- --filter-class "*Petal*"
+```
+
 ## Local confidential wallet proofs
 
 `Hyperledger.Iroha.Privacy.ConfidentialProver` owns a clearing native spend key,

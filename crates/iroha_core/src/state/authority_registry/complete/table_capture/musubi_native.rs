@@ -2,10 +2,9 @@
 //!
 //! These capture typed rows only; they do not establish finalized governance,
 //! alias validity or coherent cross-table ownership. The availability, resolver
-//! and public-directory semantic readers remain absent from the catalog.
-//! TODO: give their live/universal validators caller-owned, fallibly admitted
-//! scratch, including provider-attestation preimages and package accumulators,
-//! before projecting all three tables from the same borrowed World cut.
+//! and public-directory semantic readers separately share one validated native
+//! World borrow under explicit source-work limits and the original memory pool.
+//! Complete State publication and finality remain independent gates.
 
 use super::*;
 

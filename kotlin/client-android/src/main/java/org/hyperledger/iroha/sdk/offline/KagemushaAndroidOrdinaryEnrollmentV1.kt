@@ -205,6 +205,17 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
         }
     }
 
+    internal suspend fun incomingTransportBinding(coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
+        endpoint:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1):
+        KagemushaOrdinaryIncomingTransportBindingV1 = mutex.withLock {
+        requireWorkflowOwner()
+        check(bootstrapRetiredForCash && publishedInitialState != null) {
+            "Complete authentic publication and retire Bootstrap before incoming cash"
+        }
+        coordinator.ordinaryIncomingTransportBinding(endpoint, ::requireWorkflowOwner)
+            .also { requireWorkflowOwner() }
+    }
+
     private fun requireWorkflowOwner() {
         requireOriginalOwner()
         nativeWalletSelection?.let(native::requireCurrentWalletAccountSelection)

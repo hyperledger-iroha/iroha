@@ -54,7 +54,7 @@ fn private_chain() -> CertifiedTestChain {
     let mut config = TestChainConfig::new(world, 1_000);
     config.genesis_parameters.push(Parameter::Custom(
         PrivateRootFeePolicy {
-            asset_definition_id: asset,
+            asset_definition_id: asset.clone(),
             base_fee: 1_u32.into(),
             per_byte_fee: 0_u32.into(),
             per_instruction_fee: 1_u32.into(),
@@ -70,6 +70,8 @@ fn private_chain() -> CertifiedTestChain {
         dataspace_id: ds,
     };
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    // The signed private genesis policy also seeds SNS pricing in this same fee asset.
+    nexus.fees.fee_asset_id = asset.to_string();
     nexus.lane_catalog = LaneCatalog::new(
         NonZeroU32::new(1).unwrap(),
         vec![LaneConfig {

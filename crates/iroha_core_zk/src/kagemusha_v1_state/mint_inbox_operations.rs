@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
-#[cfg(any(test, unix))]
 use iroha_data_model::kagemusha::KagemushaMintAuthorizationV1;
 
-#[cfg(any(test, unix))]
 const MINT_CAPACITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-inbox-capacity";
 
 #[cfg(test)]
@@ -175,7 +173,6 @@ fn required_pending_fold_prefix(
         .collect()
 }
 
-#[cfg(any(test, unix))]
 /// Durable result of mint delivery; every retry retains the original certificate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MintCreditStageOutcomeV1 {
@@ -329,7 +326,6 @@ where
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Preview the pre-debit allocation and sealed local recipient binding.
     ///
     /// The resulting statement is not authorization to expose the mint authorization. The
@@ -364,7 +360,6 @@ where
         })
     }
 
-    #[cfg(any(test, unix))]
     /// Install one hardware-certified allocation before its authorization can debit online funds.
     ///
     /// Exact retries are idempotent. No monetary sequence or balance is modified. A failed
@@ -420,7 +415,6 @@ where
         Ok(())
     }
 
-    #[cfg(any(test, unix))]
     /// Preview staging an authenticated finalized mint into its existing durable allocation.
     ///
     /// The proof capability alone does not establish local ownership: it must match the exact
@@ -483,7 +477,6 @@ where
         })
     }
 
-    #[cfg(any(test, unix))]
     /// Stage exact finalized bytes, or recover their original durable receipt without refolding.
     ///
     /// A first delivery requires both the concrete native proof-verification capability and a
@@ -557,7 +550,6 @@ where
         Ok(MintCreditStageOutcomeV1::Staged(certificate.clone()))
     }
 
-    #[cfg(any(test, unix))]
     fn validate_new_mint_reservation(
         &self,
         reservation: &MintInboxReservationV1,
@@ -609,7 +601,6 @@ where
         Ok(())
     }
 
-    #[cfg(any(test, unix))]
     /// Select the exact authenticated pending record used by `MintFold`.
     ///
     /// A detached decoded credit never supplies private witness authority. Recovery may permit

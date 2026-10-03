@@ -9,6 +9,9 @@ protocol KagemushaCoreCoordinatorEndpointV1: AnyObject {
   func install(storagePath: Data) throws
   func open(storagePath: Data) throws -> UInt64
   func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data
+  func invokeIncoming(request: Data) throws -> Data
+  func invokeMintFunding(request: Data) throws -> Data
+  func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data
   func close(handle: UInt64) throws
 }
 
@@ -120,6 +123,66 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     }
   }
 
+  /// Dispatch the closed ordinary incoming lifecycle on this exact retained descriptor.
+  /// Native owns Mint/Receive admission, clock renewal, proofs and durable replay. Invalid
+  /// requests never dispatch; uncertain dispatch or response corruption permanently closes.
+  public func invokeOrdinaryIncoming(_ phase: KagemushaOrdinaryIncomingPhaseV1,
+    originals: [Data] = []) throws -> [Data] {
+    lock.lock()
+    defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    let request = try KagemushaOrdinaryIncomingFrameV1.encodeRequest(phase,
+      handle: handle, originals: originals)
+    do {
+      let response = try endpoint.invokeIncoming(request: request)
+      return try KagemushaOrdinaryIncomingFrameV1.decodeResponse(phase,
+        handle: handle, response: response)
+    } catch {
+      let closing = handle
+      handle = 0
+      try? endpoint.close(handle: closing)
+      throw error
+    }
+  }
+
+  /// Continue dedicated Mint funding on this exact retained Native owner. Full originals
+  /// remain data: Native owns approval, consent, debit, finality and durable recovery.
+  /// Invalid requests do not dispatch; every post-dispatch failure revokes this handle.
+  public func invokeOrdinaryMintFunding(_ phase: KagemushaOrdinaryMintFundingPhaseV1,
+    originals: [Data] = []) throws -> [Data] {
+    lock.lock()
+    defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    let request = try KagemushaOrdinaryMintFundingFrameV1.encodeRequest(phase,
+      handle: handle, originals: originals)
+    do {
+      let response = try endpoint.invokeMintFunding(request: request)
+      return try KagemushaOrdinaryMintFundingFrameV1.decodeResponse(phase,
+        handle: handle, response: response)
+    } catch {
+      let closing = handle
+      handle = 0
+      try? endpoint.close(handle: closing)
+      throw error
+    }
+  }
+
+  // Same owned descriptor, input-free phase10 only. Full PI mutation remains Native-owned.
+  func completedAppKeyFields() throws -> [Data] {
+    lock.lock()
+    defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    do {
+      let response = try endpoint.invokeIntegrity(phase: 10, handle: handle, original: Data())
+      return try KagemushaCompletedAppKeyFrameV1.decodeResponse(handle: handle, response: response)
+    } catch {
+      let closing = handle
+      handle = 0
+      try? endpoint.close(handle: closing)
+      throw error
+    }
+  }
+
   /// Begin possession recovery from the installed native owner's retained enrollment.
   /// The response must be correlated against independently held app selection before signing.
   public func beginEnrolledRecovery() throws -> KagemushaEnrolledRecoveryAttemptV1 {
@@ -156,6 +219,27 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     return KagemushaAppAttestCoreCommitAcknowledgmentV1(response)
   }
 
+  /// Internal exact-symbol transports share this same descriptor monitor and close policy.
+  /// No public handle, endpoint callback or authority object is introduced.
+  func withOrdinaryDescriptor<T>(_ action: (UInt64) throws -> T) throws -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    do { return try action(handle) }
+    catch {
+      let closing = handle
+      handle = 0
+      try? endpoint.close(handle: closing)
+      throw error
+    }
+  }
+
+  func requireOrdinaryDescriptorOpen() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+  }
+
   /// Revoke locally before delegated teardown; repeated close is harmless.
   public func close() throws {
     lock.lock()
@@ -183,6 +267,14 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       UInt64, UInt8, UnsafePointer<UInt8>?, Int,
       UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<Int>?
     ) -> Int32
+    private typealias IncomingFn = @convention(c) (
+      UnsafePointer<UInt8>?, Int,
+      UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<Int>?
+    ) -> Int32
+    private typealias IntegrityFn = @convention(c) (
+      UInt8, UInt64, UnsafePointer<UInt8>?, Int,
+      UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<Int>?
+    ) -> Int32
     private typealias CloseFn = @convention(c) (UInt64) -> Int32
     private typealias FreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
@@ -190,14 +282,20 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     private let installFunction: InstallFn
     private let openFunction: OpenFn
     private let invokeFunction: InvokeFn
+    private let incomingFunction: IncomingFn
+    private let mintFundingFunction: IncomingFn
+    private let integrityFunction: IntegrityFn
     private let closeFunction: CloseFn
     private let freeFunction: FreeFn
 
-    private init(contract: @escaping ContractFn, install: @escaping InstallFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, close: @escaping CloseFn, free: @escaping FreeFn) {
+    private init(contract: @escaping ContractFn, install: @escaping InstallFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, incoming: @escaping IncomingFn, mintFunding: @escaping IncomingFn, integrity: @escaping IntegrityFn, close: @escaping CloseFn, free: @escaping FreeFn) {
       contractFunction = contract
       installFunction = install
       openFunction = open
       invokeFunction = invoke
+      incomingFunction = incoming
+      mintFundingFunction = mintFunding
+      integrityFunction = integrity
       closeFunction = close
       freeFunction = free
     }
@@ -209,13 +307,19 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
         let install = dlsym(image, "connect_norito_kagemusha_core_coordinator_install_v1"),
         let open = dlsym(image, "connect_norito_kagemusha_core_coordinator_open_v1"),
         let invoke = dlsym(image, "connect_norito_kagemusha_core_coordinator_invoke_v1"),
+        let incoming = dlsym(image, "connect_norito_kagemusha_ordinary_incoming_v1"),
+        let mintFunding = dlsym(image, "connect_norito_kagemusha_ordinary_mint_funding_v1"),
+        let integrity = dlsym(image, "connect_norito_kagemusha_ordinary_integrity_refresh_v1"),
         let close = dlsym(image, "connect_norito_kagemusha_core_coordinator_close_v1"),
         let free = dlsym(image, "connect_norito_free")
       else { return nil }
       return NativeEndpoint(
         contract: unsafeBitCast(contract, to: ContractFn.self), install: unsafeBitCast(install, to: InstallFn.self),
         open: unsafeBitCast(open, to: OpenFn.self),
-        invoke: unsafeBitCast(invoke, to: InvokeFn.self), close: unsafeBitCast(close, to: CloseFn.self),
+        invoke: unsafeBitCast(invoke, to: InvokeFn.self),
+        incoming: unsafeBitCast(incoming, to: IncomingFn.self),
+        mintFunding: unsafeBitCast(mintFunding, to: IncomingFn.self),
+        integrity: unsafeBitCast(integrity, to: IntegrityFn.self), close: unsafeBitCast(close, to: CloseFn.self),
         free: unsafeBitCast(free, to: FreeFn.self))
     }
 
@@ -257,6 +361,46 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       return Data(bytes: pointer, count: length)
     }
 
+    func invokeIncoming(request: Data) throws -> Data {
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let status = request.withUnsafeBytes {
+        incomingFunction($0.bindMemory(to: UInt8.self).baseAddress, $0.count, &pointer, &length)
+      }
+      defer { if let pointer { freeFunction(UnsafeMutableRawPointer(pointer)) } }
+      try requireSuccess(status)
+      guard let pointer, (1...KagemushaOrdinaryIncomingFrameV1.frameMaximum).contains(length)
+      else { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid ordinary incoming Native buffer") }
+      return Data(bytes: pointer, count: length)
+    }
+
+    func invokeMintFunding(request: Data) throws -> Data {
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let status = request.withUnsafeBytes {
+        mintFundingFunction($0.bindMemory(to: UInt8.self).baseAddress, $0.count, &pointer, &length)
+      }
+      defer { if let pointer { freeFunction(UnsafeMutableRawPointer(pointer)) } }
+      try requireSuccess(status)
+      guard let pointer, (1...KagemushaOrdinaryMintFundingFrameV1.frameMaximum).contains(length)
+      else { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid ordinary Mint funding Native buffer") }
+      return Data(bytes: pointer, count: length)
+    }
+
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data {
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let status = original.withUnsafeBytes {
+        integrityFunction(phase, handle, $0.bindMemory(to: UInt8.self).baseAddress,
+          $0.count, &pointer, &length)
+      }
+      defer { if let pointer { freeFunction(UnsafeMutableRawPointer(pointer)) } }
+      try requireSuccess(status)
+      guard let pointer, (1...KagemushaCompletedAppKeyFrameV1.frameMaximum).contains(length)
+      else { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid completed-key Native buffer") }
+      return Data(bytes: pointer, count: length)
+    }
+
     func close(handle: UInt64) throws {
       try requireSuccess(closeFunction(handle))
     }
@@ -271,6 +415,9 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     func install(storagePath: Data) throws { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func open(storagePath: Data) throws -> UInt64 { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     #endif
   }

@@ -167,6 +167,54 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
         selected.recheck_at_trusted_time(financial.trusted_time_ms().map_err(material)?)?;
         Ok(selected)
     }
+    /// Borrow only static retained Financial/clock custody for a separately fresh PI ceremony.
+    /// Expired prior PI cannot block this workflow and this loan grants no financial effect.
+    /// # Errors
+    /// Refuses changed actual journal, release/enrollment owner or incomplete publication.
+    pub fn with_integrity_refresh_custody<T>(
+        &mut self,
+        consume: impl FnOnce(
+            &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        ) -> Result<T, KagemushaStateErrorV1>,
+    ) -> Result<T, KagemushaStateErrorV1> {
+        if let Some(publication) = &self.publication {
+            publication.recheck_historical_cash_custody()?;
+            let financial = publication.cash_financial();
+            financial
+                .recheck_integrity_refresh_custody()
+                .map_err(material)?;
+            let result = consume(financial)?;
+            financial
+                .recheck_integrity_refresh_custody()
+                .map_err(material)?;
+            publication.recheck_historical_cash_custody()?;
+            return Ok(result);
+        }
+        let financial = self
+            .financial
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let approvals = self
+            .approvals
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if !Arc::ptr_eq(financial.enrollment(), approvals.retained_enrollment()) {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        financial
+            .recheck_historical_release(approvals.retained_release())
+            .map_err(material)?;
+        approvals.recheck_owned_refresh_prefix()?;
+        financial
+            .recheck_integrity_refresh_custody()
+            .map_err(material)?;
+        let result = consume(financial)?;
+        financial
+            .recheck_integrity_refresh_custody()
+            .map_err(material)?;
+        approvals.recheck_owned_refresh_prefix()?;
+        Ok(result)
+    }
     /// Retain a genuinely admitted current Integrity original before initial publication.
     /// This can recover an expired prior lease without renewing the captured bootstrap W.
     /// The actual financial owner supplies time; the journal fsyncs the exact typed lease
@@ -175,7 +223,11 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
         &mut self,
         lease: Arc<iroha_data_model::kagemusha::KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if self.publication_attempted || self.publication.is_some() {
+        if let Some(publication) = &mut self.publication {
+            publication.accept_integrity_lease(lease)?;
+            return publication.recheck();
+        }
+        if self.publication_attempted {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         let financial = self

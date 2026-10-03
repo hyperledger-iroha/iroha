@@ -17,10 +17,15 @@ use their actual owners directly.
 Core's execution-pool getter remains `pub(crate)`. Its unit regression checks
 that cloned handles preserve the original pool and reservations. External lane
 fixtures use the Sumeragi test-chain accessor; no additional State testing API
-is retained. Normal Core uses a crate-local ZK owner alias. One explicitly
-non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
-`integration_tests/tests/sumeragi_npos_committee_transition.rs` consumer. Its
-source TODO records the remaining direct-owner migration.
+is retained. Core uses a crate-local ZK owner alias for every feature selection.
+The committee-test owner migrated its protected import directly to
+`iroha_core_zk`, and Core's temporary public test adapter is removed. The new
+development-only fee-evidence test imports `kotodama_lang::compiler::Compiler`
+directly; fresh focused compilation and runtime validation remain in progress.
+The signed-clock type path is corrected. The latest focused build stops before
+the fee target in Core ZK's HTTP-proof module on an undeclared `url` dependency;
+the current manifest now declares it. A fresh compile and runtime result are
+still required after the concurrent merge closes.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
 moved compiler/model and all six Norito grouped harnesses. Twelve
@@ -30,7 +35,7 @@ source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. Current target-inventory validation admits 105 declared binaries and 23
+graphs. Current target-inventory validation admits 106 declared binaries and 23
 defaults, including the installed-context developer tool. Certificate, attestation,
 preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
@@ -43,10 +48,11 @@ establish a current frontend result or build speedup. Current owner-boundary che
 admit the exact CoreZK/Halo2 profiles and SDK paths for default/TLS selections and
 the fixed Musubi, SCCP wallet and storage-client consumers, retaining their runtime,
 P2P, compiler and test-feature denials. Feature hygiene, the ownership-guard suite
-and all 21 configured dependency boundaries pass. Current source budgets also
-pass with the updated developer-tool manifest fingerprint; dependency ceilings
-remain unchanged and include mandatory custody and proving costs without
-speculative growth headroom. The normal production-feature
+and all 21 configured dependency boundaries have recorded passes. The last stable
+source-budget pass admits only the two actual filesystem-lock dependency edges,
+with their eight measured edge-count costs and no speculative growth headroom.
+Subsequent workspace and manifest changes require a new source-budget check.
+The normal production-feature
 Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
 tests pass for the one first-release boxed-challenge layout, including canonical
@@ -64,25 +70,31 @@ reference helpers now compile only for tests, preserving their assertion bodies
 and the production private-product/local-AIR path. Primary-owner Privacy library
 strict lint passes with defaults, `privacy-release-evidence` and
 `privacy-release-evidence,test-utils` in an unchanged source/Git interval.
-The current joint MAIN/CA and proof-instance candidate has a fresh debug-profile
+The recorded joint MAIN/CA and proof-instance candidate has a fresh debug-profile
 Privacy libtest build. Its registry contains 2,479 tests, including 61 ignored
 cases. All 22 selected controls pass; independent framing of all 29 native profile
-fields matches the current source pin. The retained artifact has 475 source,
+fields matches the recorded source pin. The retained artifact has 475 source,
 literal, manifest and build-control inputs, including 417 actual dep-info inputs,
-unchanged across the build and selected runtime intervals. Current descriptors
+unchanged across the build and selected runtime intervals. Recorded descriptors
 include 192 endpoint, 17 key/digest, 20 SHA-union and 108 CA-link alpha phases and
-the 39-relation RFC inventory. Genuine IO, Projection and CA proof checks, the
-optimized constructor, full ordinary suite, upstream strict lint and merged-source
-qualification remain open. Maximum-proof external time/RSS evidence and enforced
+the 39-relation RFC inventory. Genuine IO, Projection and CA component proof checks
+pass once each in a sequential run at the closed merged revision, with the original
+475 inputs unchanged through all runtime endpoints. The CA check binds a synthetic
+paired MAIN record. The optimized constructor, full ordinary suite, upstream strict
+lint and merged-source qualification remain open. Maximum-proof external time/RSS evidence and enforced
 address-space limits remain separate cryptographic release gates.
+Later Privacy source additions require fresh source, dep-info and registry
+discovery; the retained input and test counts do not admit those additions.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
 Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
 fails with concurrent source changes and library rebuilds. The last recorded workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-The separate repair chat also owns concurrent merge completion and the remaining
-protocol integration repairs; final validation requires a stable merged source interval. Workspace validation,
+The preceding signed merge is complete; a new concurrent merge remains open.
+The separate repair chat retains the remaining protocol integration repairs. Broader Core/SDK
+and Privacy sources continue to change, so final
+validation requires a stable current source interval. Workspace validation,
 metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.

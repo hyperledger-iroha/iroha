@@ -79,6 +79,33 @@ fn key_output_fixed_schedule_covers_exact_five_channels_and_all65_offsets() {
                     &fixed[FIX_EXPECTED + 6..FIX_EXPECTED + 10],
                     &[F::ONE, F(optional), F(document), F(coefficient)]
                 );
+            } else if let Some(slot) = spki_output_slot_v1(shape, entry.channel) {
+                let (optional, document, coefficient) = SPKI_OUTPUT_SOURCES_V1[slot];
+                assert_eq!(
+                    &fixed[FIX_EXPECTED + 6..FIX_EXPECTED + 10],
+                    &[F::ONE, F(optional), F(document), F(coefficient)]
+                );
+                assert_eq!(fixed[FIX_OUTPUT_SOURCE_SPKI], F::ONE);
+            } else if let Some((slot, _)) = variable_output::slot(shape, entry.channel) {
+                // Independent public map: key gate, optional slot, document base,
+                // and private-depth coefficient for all nine data/length pairs.
+                let expected: [[u64; 4]; 9] = [
+                    [0, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 1, 0, 2],
+                    [0, 0, 2, 1],
+                    [0, 0, 2, 1],
+                    [0, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 1, 0, 2],
+                    [0, 0, 2, 1],
+                ];
+                assert_eq!(
+                    &fixed[FIX_EXPECTED + 6..FIX_EXPECTED + 10],
+                    &expected[slot].map(F)
+                );
+                assert_eq!(fixed[variable_output::FIX_VARIABLE], F::ONE);
+                assert_eq!(fixed[FIX_OUTPUT_SOURCE_SPKI], F::ZERO);
             } else {
                 assert_eq!(&fixed[FIX_EXPECTED + 6..FIX_EXPECTED + 10], &[F::ZERO; 4]);
             }
@@ -97,17 +124,17 @@ fn key_output_local_relation_covers_both_depths_all_slots_and_fp4_lift() {
             for offset in 0..65 {
                 let (row, fixed) = key_row_fixture_v1(slot, cert2, offset);
                 assert_eq!(
-                    key_output_residues_v1(&row, &fixed),
-                    [F::ZERO; KEY_OUTPUT_RESIDUES_V1]
+                    output_source_residues_v1(&row, &fixed),
+                    [F::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
                 );
                 assert_eq!(
-                    key_output_residues_v1(&row.map(E::from_base), &fixed.map(E::from_base)),
-                    [E::ZERO; KEY_OUTPUT_RESIDUES_V1]
+                    output_source_residues_v1(&row.map(E::from_base), &fixed.map(E::from_base)),
+                    [E::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
                 );
                 assert_eq!(output_metadata_residues_v1(&row, &fixed), [F::ZERO; 6]);
                 assert_eq!(row[BASE_SERIAL_BYTE_QUERY_ACTIVE], row[BASE_D]);
                 assert_eq!(row[BASE_SERIAL_BYTE_QUERY_VALUE], row[BASE_VALUE]);
-                assert_eq!(key_output_query_gate_v1(&row, &fixed), row[BASE_D]);
+                assert_eq!(output_source_query_gate_v1(&row, &fixed), row[BASE_D]);
                 live += usize::from(row[BASE_D] == F::ONE);
                 let aux = neutral_aux_v1();
                 let all = evaluate_zk_x509_rfc5280_stark_residues_v1(
@@ -127,10 +154,10 @@ fn key_output_local_relation_covers_both_depths_all_slots_and_fp4_lift() {
                     .sum::<usize>()
                     + 6;
                 assert_eq!(
-                    &all[begin..begin + KEY_OUTPUT_RESIDUES_V1],
-                    &[F::ZERO; KEY_OUTPUT_RESIDUES_V1]
+                    &all[begin..begin + OUTPUT_SOURCE_RESIDUES_V1],
+                    &[F::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
                 );
-                assert_eq!(all.len(), 1_654);
+                assert_eq!(all.len(), 1_894);
             }
         }
         assert_eq!(live, if cert2 == 0 { 260 } else { 325 });
@@ -220,7 +247,7 @@ fn key_output_mutations_cannot_change_authenticated_byte_node_or_offset() {
         let mut changed = row;
         changed[column] = changed[column].add(F::ONE);
         assert!(
-            key_output_residues_v1(&changed, &fixed)
+            output_source_residues_v1(&changed, &fixed)
                 .iter()
                 .any(|r| *r != F::ZERO),
             "local field {column}"
@@ -228,21 +255,21 @@ fn key_output_mutations_cannot_change_authenticated_byte_node_or_offset() {
     }
     let mut wrong_offset = fixed;
     wrong_offset[FIX_EXPECTED + 4] = F(65);
-    assert_ne!(key_output_residues_v1(&row, &wrong_offset)[9], F::ZERO);
+    assert_ne!(output_source_residues_v1(&row, &wrong_offset)[9], F::ZERO);
 }
 
 #[test]
 fn key_output_optional_padding_and_nonkey_queries_are_canonical() {
     let (row, fixed) = key_row_fixture_v1(2, 0, 64);
     assert_eq!(row[BASE_D], F::ZERO);
-    for column in KEY_OUTPUT_PROVENANCE_COLUMNS_V1
+    for column in OUTPUT_SOURCE_PROVENANCE_COLUMNS_V1
         .into_iter()
         .chain([BASE_D, BASE_VALUE])
     {
         let mut changed = row;
         changed[column] = F::ONE;
         assert!(
-            key_output_residues_v1(&changed, &fixed)
+            output_source_residues_v1(&changed, &fixed)
                 .iter()
                 .any(|r| *r != F::ZERO)
         );
@@ -250,16 +277,19 @@ fn key_output_optional_padding_and_nonkey_queries_are_canonical() {
     let mut nonkey = fixed;
     nonkey[FIX_EXPECTED + 6..FIX_EXPECTED + 10].fill(F::ZERO);
     assert_eq!(
-        key_output_residues_v1(&row, &nonkey),
-        [F::ZERO; KEY_OUTPUT_RESIDUES_V1]
+        output_source_residues_v1(&row, &nonkey),
+        [F::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
     );
     let mut changed = row;
     changed[BASE_D] = F::ONE;
-    assert_ne!(key_output_residues_v1(&changed, &nonkey)[0], F::ZERO);
+    assert_ne!(output_source_residues_v1(&changed, &nonkey)[0], F::ZERO);
     let mut padding = [F::ZERO; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
     padding[ZkX509Rfc5280StarkFamilyV1::Padding as usize] = F::ONE;
     let zero = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
-    for column in KEY_OUTPUT_PROVENANCE_COLUMNS_V1.into_iter().chain([BASE_D]) {
+    for column in OUTPUT_SOURCE_PROVENANCE_COLUMNS_V1
+        .into_iter()
+        .chain([BASE_D])
+    {
         let mut changed = zero;
         changed[column] = F::ONE;
         assert!(
@@ -277,27 +307,34 @@ fn key_output_arbitrary_selectors_and_complete_degree_inventory_are_polynomial()
     let fixed = core::array::from_fn(|i| E::canonical([i as u64 + 11, 13, 17, 19]).unwrap());
     let producer = fixed[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize];
     assert_eq!(
-        key_output_query_gate_v1(&current, &fixed),
+        output_source_query_gate_v1(&current, &fixed),
         producer.mul(current[BASE_D])
     );
-    let residues = key_output_residues_v1(&current, &fixed);
+    let residues = output_source_residues_v1(&current, &fixed);
     assert_eq!(
         residues[0],
-        producer.mul(
-            current[BASE_D].sub(
-                fixed[FIX_EXPECTED + 6].mul(
-                    E::ONE
-                        .sub(fixed[FIX_EXPECTED + 7])
-                        .add(fixed[FIX_EXPECTED + 7].mul(current[BASE_CERT2_ACTIVE]))
+        producer
+            .sub(fixed[variable_output::FIX_VARIABLE])
+            .sub(fixed[projection_serial::FIX_SERIAL])
+            .sub(fixed[projection_disclosure::FIX_DISCLOSURE])
+            .mul(
+                current[BASE_D].sub(
+                    fixed[FIX_EXPECTED + 6].mul(
+                        E::ONE
+                            .sub(fixed[FIX_EXPECTED + 7])
+                            .add(fixed[FIX_EXPECTED + 7].mul(current[BASE_CERT2_ACTIVE]))
+                    )
                 )
             )
-        )
     );
     let mut suppressed = fixed;
     suppressed[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize] = E::ZERO;
+    suppressed[variable_output::FIX_VARIABLE] = E::ZERO;
+    suppressed[projection_serial::FIX_SERIAL] = E::ZERO;
+    suppressed[projection_disclosure::FIX_DISCLOSURE] = E::ZERO;
     assert_eq!(
-        key_output_residues_v1(&current, &suppressed),
-        [E::ZERO; KEY_OUTPUT_RESIDUES_V1]
+        output_source_residues_v1(&current, &suppressed),
+        [E::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
     );
     assert_eq!(
         node_query_factor_v1(&current, &suppressed, 0, challenges_v1()),
@@ -307,13 +344,13 @@ fn key_output_arbitrary_selectors_and_complete_degree_inventory_are_polynomial()
         .map(|point| {
             let row = core::array::from_fn(|i| affine_value_v1(7, 1, i, point));
             let fixed = core::array::from_fn(|i| affine_value_v1(7, 5, i, point));
-            key_output_residues_v1(&row, &fixed)
+            output_source_residues_v1(&row, &fixed)
         })
         .collect::<Vec<_>>();
-    for i in 0..KEY_OUTPUT_RESIDUES_V1 {
+    for i in 0..OUTPUT_SOURCE_RESIDUES_V1 {
         assert_eq!(
             finite_difference_degree_v1(samples.iter().map(|r| r[i]).collect()),
-            if i < 2 { 4 } else { 3 }
+            if i < 2 || i == 9 || i == 23 { 4 } else { 3 }
         );
     }
     assert_eq!(
@@ -324,7 +361,7 @@ fn key_output_arbitrary_selectors_and_complete_degree_inventory_are_polynomial()
             ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1,
             ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1
         ),
-        (285, 280, 102, 1654, 4)
+        (285, 280, 146, 1894, 4)
     );
 }
 
@@ -371,19 +408,24 @@ fn key_output_constructor_borrows_exact_source_and_rejects_bad_lengths_offsets_a
                     .value;
                 let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
                 row[BASE_VALUE] = value;
-                populate_key_output_row_v1(&mut row, &trace, Some(node), offset).unwrap();
-                assert!(KEY_OUTPUT_PROVENANCE_COLUMNS_V1.iter().all(|i| *i < 66));
+                populate_der_output_row_v1(&mut row, &trace, Some(node), offset, false).unwrap();
+                assert!(OUTPUT_SOURCE_PROVENANCE_COLUMNS_V1.iter().all(|i| *i < 66));
                 let before = row;
-                assert!(populate_key_output_row_v1(&mut row, &trace, Some(node), 65).is_err());
+                assert!(
+                    populate_der_output_row_v1(&mut row, &trace, Some(node), 65, false).is_err()
+                );
                 assert_eq!(row, before);
                 row[BASE_VALUE] = value.add(F::ONE);
-                assert!(populate_key_output_row_v1(&mut row, &trace, Some(node), offset).is_err());
+                assert!(
+                    populate_der_output_row_v1(&mut row, &trace, Some(node), offset, false)
+                        .is_err()
+                );
             }
         }
         let mut absent = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
-        populate_key_output_row_v1(&mut absent, &trace, None, 64).unwrap();
+        populate_der_output_row_v1(&mut absent, &trace, None, 64, false).unwrap();
         absent[BASE_VALUE] = F::ONE;
-        assert!(populate_key_output_row_v1(&mut absent, &trace, None, 64).is_err());
+        assert!(populate_der_output_row_v1(&mut absent, &trace, None, 64, false).is_err());
     }
     let key_index = trace.semantic_provenance[0]
         .nodes
@@ -499,13 +541,19 @@ fn key_output_complete_source_multiplicity_and_auxiliary_replay_closes() {
                     &fixed,
                     ZkX509Rfc5280StarkFamilyV1::SerialSource,
                 ))
-                .add(key_output_query_gate_v1(&row, &fixed));
+                .add(output_source_node_query_gate_v1(&row, &fixed));
             if fixed[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize] == F::ONE {
                 assert_eq!(
-                    key_output_residues_v1(&row, &fixed),
-                    [F::ZERO; KEY_OUTPUT_RESIDUES_V1]
+                    output_source_residues_v1(&row, &fixed),
+                    [F::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
                 );
-                key_rows += usize::from(row[BASE_D] == F::ONE);
+                key_rows += usize::from(
+                    row[BASE_D] == F::ONE
+                        && fixed[FIX_OUTPUT_SOURCE_SPKI] == F::ZERO
+                        && fixed[variable_output::FIX_VARIABLE] == F::ZERO
+                        && fixed[projection_serial::FIX_SERIAL] == F::ZERO
+                        && fixed[projection_disclosure::FIX_DISCLOSURE] == F::ZERO,
+                );
             }
         }
     }

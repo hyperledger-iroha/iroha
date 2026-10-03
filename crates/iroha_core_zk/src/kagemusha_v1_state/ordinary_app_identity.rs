@@ -18,6 +18,12 @@ pub use journal::KagemushaOrdinaryAppEnrollmentAttemptV1;
 #[path = "ordinary_app_identity/possession_journal.rs"]
 mod possession_journal;
 pub use possession_journal::KagemushaOrdinaryAppPossessionAttemptV1;
+#[path = "ordinary_app_identity/http_proof.rs"]
+mod http_proof;
+pub use http_proof::{
+    KagemushaOrdinaryFiHttpProofKeyLoanV1, KagemushaOrdinaryFiHttpProofPurposeV1,
+    KagemushaOrdinaryFiHttpRequestDataV1, KagemushaPreparedOrdinaryFiHttpProofV1,
+};
 #[path = "ordinary_app_identity/retail_enrollment_journal.rs"]
 mod retail_enrollment_journal;
 pub use retail_enrollment_journal::KagemushaOrdinaryRetailEnrollmentAttemptV1;
@@ -33,6 +39,7 @@ pub use preparation_reservation::{
     KagemushaOrdinaryIntegrityRefreshOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
     KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
     KagemushaOrdinaryReceivedLineageCommitOriginalV1,
+    KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1,
 };
 pub(crate) use preparation_reservation::{
     KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,

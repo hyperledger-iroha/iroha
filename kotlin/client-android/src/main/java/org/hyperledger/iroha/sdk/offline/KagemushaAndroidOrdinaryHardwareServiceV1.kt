@@ -35,6 +35,12 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
         workflow.value.prepareCurrentFinancialControlHandoff()
         requireOriginalOwner()
     }
+    /** Same enrolled key and coordinator after genuine Bootstrap publication/handoff. */
+    suspend fun incomingTransportBinding(coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
+        endpoint:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1): KagemushaOrdinaryIncomingTransportBindingV1 {
+        requireOriginalOwner()
+        return workflow.value.incomingTransportBinding(coordinator,endpoint).also { requireOriginalOwner() }
+    }
     internal companion object {
         fun open(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
             activatedSignatoryAccountId: String, transport: KagemushaOrdinaryIdentityOriginalTransportV1,
@@ -55,8 +61,8 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
             }
             return KagemushaAndroidOrdinaryHardwareServiceV1(workflow, ::current)
         }
-        /** Bind activated online S to actual Native S, then correlate the reservation with W.
-         * The retained selection is finite session data, never an account-custody constructor.
+        /** Bind activated online S to actual Native S, while retaining the actual distinct Native W.
+         * The retained selection is retirement-bound account identity data, never an account-custody constructor.
          * Missing actual Native custody refuses before hardware collection or managed signing.
          */
         fun requireOriginalNativeAccount(coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
@@ -72,11 +78,9 @@ class KagemushaAndroidOrdinaryHardwareServiceV1 private constructor(
                 "The installed ordinary Native owner controls another activated signatory"
             }
             requireOriginalOwner()
-            val reserved = native.reserveOriginalIdentity()
-            requireOriginalOwner()
-            check(selected.walletAccountId() == reserved.accountId()) {
-                "The original reservation differs from the installed Native wallet W"
-            }
+            // This read-only factory must also open completed custody after the baseline PI
+            // expired. Initial enrollment separately reserves C21 and joins its W in beginOrResume;
+            // no fresh financial reservation is created just to reach PI recovery.
             selected.requireCurrent()
             requireOriginalOwner()
             return selected

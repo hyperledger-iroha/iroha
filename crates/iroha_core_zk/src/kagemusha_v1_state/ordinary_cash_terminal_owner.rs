@@ -1782,6 +1782,17 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         let (challenge, _, _, _) = self.outgoing_terminal_platform_state()?;
         Ok(Some(challenge))
     }
+    /// Return the held W1 preparation's original App Attest floor, including after capture.
+    /// This is signing DATA; the selected terminal and current custody are rechecked here.
+    pub fn outgoing_terminal_app_attest_counter_floor(
+        &self,
+    ) -> Result<Option<u32>, KagemushaStateErrorV1> {
+        self.outgoing_terminal_platform_state()?;
+        let floor = self.terminal_pending()?.originals.counter_floor;
+        self.outgoing_terminal_platform_state()?;
+        Ok(floor)
+    }
+
     pub(super) fn outgoing_terminal_platform_state(
         &self,
     ) -> Result<

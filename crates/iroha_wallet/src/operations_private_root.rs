@@ -126,6 +126,15 @@ impl BoundedTerms {
         }
         Ok(())
     }
+
+    pub(super) fn matches_options(&self, options: &BoundedTransactionOptions) -> Result<bool> {
+        self.validate()?;
+        options.fee_payment.validate()?;
+        Ok(self.max_total_fees.len() == options.max_total_fees.len()
+            && self.max_total_fees.iter().zip(&options.max_total_fees).all(|(saved, (asset, maximum))| {
+                &saved.asset_definition_id == asset && &saved.max_amount == maximum
+            }))
+    }
 }
 
 impl AccountService {
@@ -304,14 +313,7 @@ impl BoundedOperationExpectation<'_> {
             .ok_or_else(|| eyre!("saved journal does not retain explicit operation bounds"))?;
         terms.validate()?;
         if record.requested_fee != options.fee_payment
-            || terms.max_total_fees.len() != options.max_total_fees.len()
-            || terms
-                .max_total_fees
-                .iter()
-                .zip(&options.max_total_fees)
-                .any(|(saved, (asset, maximum))| {
-                    &saved.asset_definition_id != asset || &saved.max_amount != maximum
-                })
+            || !terms.matches_options(options)?
             || record.deadline_ms > terms.deadline_ms
         {
             eyre::bail!("saved bounded fee authorization differs from the exact retained limits");

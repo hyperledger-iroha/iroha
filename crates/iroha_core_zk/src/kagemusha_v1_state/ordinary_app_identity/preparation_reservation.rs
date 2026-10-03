@@ -19,7 +19,9 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 #[path = "preparation_reservation/integrity_refresh.rs"]
 mod integrity_refresh;
-pub use integrity_refresh::KagemushaOrdinaryIntegrityRefreshOwnerV1;
+pub use integrity_refresh::{
+    KagemushaOrdinaryIntegrityRefreshOwnerV1, KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1,
+};
 
 #[path = "preparation_reservation/current_control.rs"]
 mod current_control;
@@ -47,6 +49,8 @@ pub(crate) use lineage_cas::{
 
 #[path = "preparation_reservation/finalized_mint_source.rs"]
 mod finalized_mint_source;
+#[path = "preparation_reservation/mint_funding_source.rs"]
+mod mint_funding_source;
 pub use finalized_mint_source::KagemushaAuthenticatedOrdinaryFinalizedMintSourceV1;
 
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
@@ -1123,6 +1127,33 @@ impl KagemushaOrdinaryPreparationReservationV1 {
         }
         Ok(this)
     }
+    /// Recover only the exact already completed financial record for PI recovery. No new
+    /// enrollment completion is written and no live Financial/money borrower is returned.
+    /// The wrapper independently replays acknowledged PI originals and permits a separately
+    /// fresh refresh before actual Bootstrap composition.
+    /// # Errors
+    /// Returns original custody on missing completion, different C/FI/possession, altered WAL
+    /// or unsafe recovery storage; raw certificates and pending records cannot create this holder.
+    pub fn recover_completed_integrity_custody_or_retain(
+        self,
+        enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+        root: &Path,
+    ) -> std::result::Result<
+        KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1,
+        (Self, KagemushaOrdinaryIdentityErrorV1),
+    > {
+        let financial = KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+            reservation: self,
+            enrollment,
+            integrity_lease: None,
+        };
+        match KagemushaOrdinaryRetainedFinancialIntegrityRecoveryV1::from_completed_financial(
+            root, financial,
+        ) {
+            Ok(recovered) => Ok(recovered),
+            Err((financial, error)) => Err((financial.reservation, error)),
+        }
+    }
     fn require_enrollment(
         &self,
         enrollment: &KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
@@ -1156,6 +1187,17 @@ pub struct KagemushaOrdinaryEnrolledFinancialOwnerV1 {
     integrity_lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
 }
 impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+    /// Borrow the same independently installed FI issuer policy under historical financial
+    /// proof custody. This data loan admits no offered key, current FI decision or effect.
+    pub(crate) fn retained_proof_issuer_policy(
+        &self,
+    ) -> Result<&KagemushaRetailEnrollmentIssuerPolicyV1> {
+        self.recheck_historical_proof_custody()?;
+        let policy = &self.reservation.selected.issuer;
+        self.recheck_historical_proof_custody()?;
+        Ok(policy)
+    }
+
     /// Borrow the actual verified complete FI enrollment.
     pub fn enrollment(&self) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
         &self.enrollment
@@ -1218,6 +1260,112 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
                 None => self.enrollment.recheck_at_trusted_time(now),
             })
             .map_err(|_| Custody)
+    }
+    /// Original completed enrollment coordinates for data-only completion retry.
+    /// # Errors
+    /// Refuses changed completed Native custody; these fields grant no current authority.
+    pub fn retained_enrollment_completion_fields(&self) -> Result<Vec<Vec<u8>>> {
+        self.recheck_historical_proof_custody()?;
+        let scope = self.reservation.retained_prepared_owner()?.native_scope;
+        Ok(vec![
+            self.enrollment.certificate().subject.enrollment_id.to_vec(),
+            scope.to_vec(),
+        ])
+    }
+    /// Exact completed FI/account-signature originals for read-only enrollment retry.
+    /// Retained completion times authenticate this projection; no current PI or financial
+    /// permission is lent and incomplete/raw/pending records cannot reach this method.
+    /// # Errors
+    /// Refuses changed completed financial/certificate/possession/private WAL bytes.
+    pub fn retained_enrollment_recovery_fields(&self) -> Result<Vec<Vec<u8>>> {
+        self.recheck_historical_proof_custody()?;
+        let original = self.enrollment.possession().original();
+        let proof: KagemushaOrdinaryRetailEnrollmentPossessionProofV1 =
+            norito::decode_canonical_with_limits(
+                original,
+                norito::canonical_decode_limits(original.len()),
+            )
+            .map_err(|_| Custody)?;
+        if norito::encode_canonical(&proof).map_err(|_| Custody)? != original
+            || proof.account_signature.payload().len() != 64
+        {
+            return Err(Custody);
+        }
+        let fields = vec![
+            vec![3],
+            proof.account_signature.payload().to_vec(),
+            self.enrollment
+                .certificate()
+                .canonical_bytes()
+                .map_err(|_| Custody)?,
+        ];
+        self.recheck_historical_proof_custody()?;
+        Ok(fields)
+    }
+    /// Completed app-key metadata from the same exact Native C/possession/FI WAL originals.
+    /// Android aliases and App Attest key IDs use their sole maintained canonical relation.
+    /// No current PI, generation, signing, counter advance, clock or monetary grant is lent.
+    /// The last field is the actual model-owned enrolled credential digest, never a guessed SHA.
+    /// # Errors
+    /// Refuses incomplete/replaced custody, a software key or any different original key/scope.
+    pub fn retained_completed_app_key_fields(&self) -> Result<Vec<Vec<u8>>> {
+        self.recheck_historical_proof_custody()?;
+        let credential = self.enrollment.app_credential();
+        let subject = credential.subject();
+        let preparation = &self
+            .reservation
+            .preparation
+            .as_ref()
+            .ok_or(Custody)?
+            .0
+            .challenge;
+        let mask = super::allowed_mask(self.reservation.selected.governed.trust())?;
+        let alias = match (subject.platform_class, subject.security_level) {
+            (
+                KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+                KagemushaAppKeySecurityLevelV1::TrustedExecutionEnvironment,
+            ) if mask & 1 != 0 => {
+                kagemusha_ordinary_android_app_key_alias_v1(preparation).map_err(|_| Custody)?
+            }
+            (
+                KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+                KagemushaAppKeySecurityLevelV1::StrongBox,
+            ) if mask & 2 != 0 => {
+                kagemusha_ordinary_android_app_key_alias_v1(preparation).map_err(|_| Custody)?
+            }
+            (
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                KagemushaAppKeySecurityLevelV1::AppleAppAttest,
+            ) if mask == 0 => {
+                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                STANDARD.encode(subject.attested_key_id)
+            }
+            _ => return Err(Custody),
+        };
+        super::validate_original_alias(preparation, subject.attested_key_id, &alias)?;
+        let Record::EnrollmentComplete {
+            ref certificate_original,
+            ..
+        } = decode(self.reservation.completed.as_ref().ok_or(Custody)?)?
+        else {
+            return Err(Custody);
+        };
+        let fields = vec![
+            self.enrollment.certificate().subject.enrollment_id.to_vec(),
+            alias.into_bytes(),
+            preparation
+                .attestation_challenge()
+                .map_err(|_| Custody)?
+                .to_vec(),
+            subject.app_public_key.as_sec1_bytes().to_vec(),
+            subject.attested_key_id.to_vec(),
+            vec![mask],
+            credential.original().to_vec(),
+            certificate_original.clone(),
+            credential.digest().to_vec(),
+        ];
+        self.recheck_historical_proof_custody()?;
+        Ok(fields)
     }
     /// Private immutable proving custody from the completed original Native reservation.
     /// No current clock or FI grant is lent; all live effects must separately call `recheck`.
@@ -1890,6 +2038,49 @@ mod tests {
         assert_eq!(
             completed.bootstrap_state_nonce_commitment().unwrap(),
             state_nonce
+        );
+        let metadata = completed.retained_completed_app_key_fields().unwrap();
+        assert_eq!(metadata.len(), 9);
+        assert_eq!(
+            metadata[0],
+            completed.enrollment().certificate().subject.enrollment_id
+        );
+        assert_eq!(
+            metadata[2],
+            completed
+                .enrollment()
+                .possession()
+                .challenge()
+                .preparation
+                .challenge
+                .attestation_challenge()
+                .unwrap()
+        );
+        assert_eq!(
+            metadata[3],
+            completed
+                .enrollment()
+                .app_credential()
+                .subject()
+                .app_public_key
+                .as_sec1_bytes()
+        );
+        assert_eq!(
+            metadata[6],
+            completed.enrollment().app_credential().original()
+        );
+        assert_eq!(metadata[7], certificate_original);
+        assert_eq!(
+            metadata[8],
+            completed.enrollment().app_credential().digest()
+        );
+        assert!(
+            completed.reservation.prepared_owner().is_err(),
+            "completed metadata admitted key generation"
+        );
+        assert_eq!(
+            Zeroizing::new(std::fs::read(&wal_path).unwrap()).as_slice(),
+            completed_wal.as_slice()
         );
         drop(completed);
         let foreign = Arc::new(Fixture::new(false).verify(300).unwrap());

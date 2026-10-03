@@ -87,19 +87,27 @@ use thiserror::Error;
 mod binding;
 #[path = "rfc5280_calendar.rs"]
 mod calendar;
+#[path = "rfc5280_name_policy.rs"]
+mod name_policy;
 #[path = "rfc5280_numeric.rs"]
 mod numeric;
+#[path = "rfc5280_projection_disclosure.rs"]
+mod projection_disclosure;
+#[path = "rfc5280_projection_serial.rs"]
+mod projection_serial;
 #[path = "rfc5280_temporal.rs"]
 mod temporal;
+#[path = "rfc5280_variable_output.rs"]
+mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed102:constraints1650:degree4:output-metadata-six-verifier-fixed-equations:five-key-outputs-der-node-byte-lookups-length66-offset1:max-private-active-rows238481:fixed-public-nonpadding-rows284014:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed146:constraints1890:degree4:output-metadata-six-verifier-fixed-equations:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-uniqueness-nonempty-bounded-rdns-and-value-policy-pending:max-private-active-rows238481:fixed-public-nonpadding-rows284014:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x38, 0xa0, 0x9c, 0x78, 0x8d, 0xb1, 0x81, 0x5c, 0x7d, 0xcc, 0x0d, 0xee, 0x7f, 0xd7, 0xe9, 0xde,
-    0x10, 0x22, 0x3c, 0x1d, 0x1e, 0x3c, 0xd1, 0xb1, 0x26, 0x52, 0x79, 0xf7, 0x51, 0x26, 0x86, 0x13,
+    0x98, 0xdd, 0xa8, 0xf2, 0x5c, 0x41, 0xb6, 0x51, 0xa1, 0x0e, 0x8b, 0x28, 0x07, 0x01, 0x76, 0xee,
+    0x4b, 0x71, 0x43, 0xa1, 0xc5, 0x32, 0x86, 0x56, 0xc7, 0xef, 0x59, 0x1f, 0xf2, 0xe9, 0xb3, 0x24,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub(crate) const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -113,7 +121,7 @@ pub(crate) const ZK_X509_RFC5280_STARK_BASE_WIDTH_V1: usize = 285;
 /// shared by serial, semantic and fixed public-key output queries.
 pub(crate) const ZK_X509_RFC5280_STARK_AUX_WIDTH_V1: usize = 280;
 /// Verifier-preprocessed family, boundary, address, and output-role columns.
-pub(crate) const ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1: usize = 102;
+pub(crate) const ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1: usize = 146;
 /// Exact opened-row residue inventory.
 pub(crate) const ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1: usize = {
     let mut total = 51;
@@ -132,7 +140,10 @@ const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
     ("source-families", 7),
     ("source-node-grammar", 74),
     ("grammar-ordinal-local", 34),
-    ("fixed-equal-decimal", 57),
+    (
+        "fixed-equal-decimal-and-name-uniqueness",
+        57 + name_policy::RESIDUES,
+    ),
     (
         "calendar",
         11 + calendar::RESIDUES_V1 + binding::RESIDUES_V1,
@@ -143,7 +154,11 @@ const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
     ("range-profile", 12),
     (
         "output-metadata-and-private-geometry",
-        11 + KEY_OUTPUT_RESIDUES_V1 + ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
+        11 + OUTPUT_SOURCE_RESIDUES_V1
+            + variable_output::RESIDUES
+            + projection_serial::RESIDUES
+            + projection_disclosure::RESIDUES
+            + ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
     ),
     ("der-products-and-private-sha-bridge-constancy", 40),
     (
@@ -2755,27 +2770,37 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
     {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
-    for row in role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::NameAttributeOid) {
-        let source = source_slice_v1(trace, row, true)?;
-        let actual = private_bytes_v1(source.iter().map(|cell| cell.value))?;
-        let expected = NAME_OIDS_V1
-            .iter()
-            .copied()
-            .find(|oid| *oid == actual.as_slice())
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-        let variant = NAME_OIDS_V1
-            .iter()
-            .position(|oid| *oid == expected)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-        push_fixed_slice_v1(
-            &mut witness.fixed_bytes,
-            row,
-            &source,
-            expected,
-            9,
-            row.role_instance,
-            u16::try_from(variant).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        )?;
+    // A fixed public document/Name/OID traversal emits the complete original
+    // census in key order without a witness-dependent sorting algorithm or an
+    // additional secret-bearing allocation. Matching and original source
+    // traversal still require a separate whole-prover side-channel review.
+    for document in 0..ZK_X509_DER_AIR_MAX_DOCUMENTS_V1 {
+        for name in 0..2 {
+            for (variant, expected) in NAME_OIDS_V1.into_iter().enumerate() {
+                for row in role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::NameAttributeOid) {
+                    if usize::from(row.document) != document || row.role_instance / 1024 != name {
+                        continue;
+                    }
+                    let source = source_slice_v1(trace, row, true)?;
+                    let actual = private_bytes_v1(source.iter().map(|cell| cell.value))?;
+                    if !NAME_OIDS_V1.contains(&actual.as_slice()) {
+                        return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
+                    }
+                    if actual.as_slice() != expected {
+                        continue;
+                    }
+                    push_fixed_slice_v1(
+                        &mut witness.fixed_bytes,
+                        row,
+                        &source,
+                        expected,
+                        9,
+                        row.role_instance,
+                        u16::try_from(variant).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
+                    )?;
+                }
+            }
+        }
     }
     for (index, certificate) in trace.certificates.iter().enumerate() {
         let key_usage_root =
@@ -3482,7 +3507,19 @@ fn key_output_slot_v1(shape: ZkX509Rfc5280StarkShapeV1, channel: u32) -> Option<
 const KEY_OUTPUT_SOURCES_V1: [(u64, u64, u64); 5] =
     [(0, 1, 0), (0, 1, 1), (1, 2, 0), (0, 1, 0), (0, 0, 0)];
 const KEY_OUTPUT_CONTENT_BYTES_V1: u64 = 1 + ZK_X509_UNCOMPRESSED_P256_BYTES_V1 as u64;
-const KEY_OUTPUT_PROVENANCE_COLUMNS_V1: [usize; 12] = [
+const SPKI_OUTPUT_BYTES_V1: usize = 91;
+const SPKI_OUTPUT_CONTENT_BYTES_V1: u64 = 89;
+// Projection leaf/issuer/optional-root, issuer hash, and governed trust anchor.
+const SPKI_OUTPUT_SOURCES_V1: [(u64, u64, u64); 5] =
+    [(0, 0, 0), (0, 1, 0), (1, 2, 0), (0, 1, 0), (0, 1, 1)];
+fn spki_output_slot_v1(shape: ZkX509Rfc5280StarkShapeV1, channel: u32) -> Option<usize> {
+    let shift = u32::from(shape.disclosed_attribute_count) * 2;
+    [0, 1, 2, 29 + shift, 30 + shift]
+        .into_iter()
+        .position(|candidate| candidate == channel)
+}
+
+const OUTPUT_SOURCE_PROVENANCE_COLUMNS_V1: [usize; 12] = [
     BASE_A,
     BASE_G,
     BASE_H,
@@ -3496,11 +3533,13 @@ const KEY_OUTPUT_PROVENANCE_COLUMNS_V1: [usize; 12] = [
     BASE_CONSTRUCTED,
     BASE_TAG_NUMBER,
 ];
-const KEY_OUTPUT_RESIDUES_V1: usize = 23;
+const OUTPUT_SOURCE_RESIDUES_V1: usize = 24;
 // Existing serial-node queries plus every new fixed key query fit the u16
 // multiplicity owner; the byte table's usize total remains far below N.
-const _: () =
-    assert!(MAX_SERIAL_SOURCE_ROWS_V1 + 5 * ZK_X509_UNCOMPRESSED_P256_BYTES_V1 < u16::MAX as usize);
+const _: () = assert!(
+    MAX_SERIAL_SOURCE_ROWS_V1 + 5 * ZK_X509_UNCOMPRESSED_P256_BYTES_V1 + 5 * SPKI_OUTPUT_BYTES_V1
+        < u16::MAX as usize
+);
 
 fn compile_output_topology_v1(
     shape: ZkX509Rfc5280StarkShapeV1,
@@ -3841,6 +3880,9 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             // A depth-two chain has only documents 0, 1, and 2.
             fixed[FIX_CERT2_SLOT_FIRST] = F(u64::from(document == 3 && address == 0));
         }
+        if family == ZkX509Rfc5280StarkFamilyV1::FixedByte {
+            fixed[FIX_EXPECTED] = F(u64::from(ordinal == 0));
+        }
         if family == ZkX509Rfc5280StarkFamilyV1::SourceNode {
             let document = ordinal / 2_048;
             let node = ordinal % 2_048;
@@ -3930,7 +3972,34 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
                 fixed[FIX_EXPECTED + 7] = F(optional);
                 fixed[FIX_EXPECTED + 8] = F(document);
                 fixed[FIX_EXPECTED + 9] = F(coefficient);
+            } else if !consumer && let Some(slot) = spki_output_slot_v1(self.shape, entry.channel) {
+                let (optional, document, coefficient) = SPKI_OUTPUT_SOURCES_V1[slot];
+                fixed[FIX_EXPECTED + 6] = F::ONE;
+                fixed[FIX_EXPECTED + 7] = F(optional);
+                fixed[FIX_EXPECTED + 8] = F(document);
+                fixed[FIX_EXPECTED + 9] = F(coefficient);
+                fixed[FIX_OUTPUT_SOURCE_SPKI] = F::ONE;
             }
+            variable_output::populate_fixed(
+                &mut fixed,
+                self.shape,
+                entry.channel,
+                entry.offset as usize,
+                consumer,
+            );
+            projection_serial::populate_fixed(
+                &mut fixed,
+                entry.channel,
+                entry.offset as usize,
+                consumer,
+            );
+            projection_disclosure::populate_fixed(
+                &mut fixed,
+                self.shape,
+                entry.channel,
+                entry.offset as usize,
+                consumer,
+            );
             fixed[FIX_REQUIRED_ACTIVE] = F::ONE;
             fixed[output_role_fixed_selector_column_v1(
                 output_role_index_v1(entry.role),
@@ -4348,7 +4417,8 @@ const FIX_RELATION_CONTINUE: usize = FIX_TEMPORAL_CONTINUE + 1;
 const FIX_RANGE_CONTINUE: usize = FIX_RELATION_CONTINUE + 1;
 const FIX_RANGE_LEADING_ZERO: usize = FIX_RANGE_CONTINUE + 1;
 const FIX_RANGE_HIGH_BITS_ZERO: usize = FIX_RANGE_LEADING_ZERO + 1;
-const _: () = assert!(FIX_RANGE_HIGH_BITS_ZERO + 1 == ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1);
+const FIX_OUTPUT_SOURCE_SPKI: usize = FIX_RANGE_HIGH_BITS_ZERO + 1;
+const _: () = assert!(projection_disclosure::FIX_END == ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1);
 const AUX_NUMERIC_INVERSE: usize = 264;
 const AUX_NUMERIC_ZERO: usize = 268;
 const AUX_NUMERIC_SUM: usize = 272;
@@ -4980,9 +5050,11 @@ fn assert_residue_section_v1(
 }
 /// Bind both output families to their verifier-owned channel schedule.
 ///
-/// This authenticates event metadata. The five key producers are separately
-/// bound to DER below. TODO: bind all other output values and downstream owners
-/// before claiming complete byte binding.
+/// This authenticates event metadata. The five key and five SPKI producers and
+/// nine variable TBS/CRL/signature byte-and-length pairs are separately bound to
+/// DER below, as are the canonical leaf serial magnitude and selected original
+/// Subject/OID/value bytes. TODO: complete Name OID uniqueness and string-policy
+/// constraints before claiming full parser equivalence.
 /// The family selectors and activity remain field-valued at OOD points, so the
 /// full expression has degree three including fixed-column polynomials.
 fn output_metadata_residues_v1<A: PolynomialAirFieldV1>(
@@ -5007,19 +5079,24 @@ fn output_metadata_residues_v1<A: PolynomialAirFieldV1>(
         output.mul(current[columns[index]].sub(fixed[FIX_EXPECTED + index]))
     })
 }
-/// Authenticate each fixed key output to its DER byte/node lookup query.
-/// BASE_D is committed before challenges; it prevents optional selection from
-/// increasing the lookup recurrence degree. All selectors remain polynomials.
-fn key_output_residues_v1<A: PolynomialAirFieldV1>(
+/// Authenticate fixed key and complete SPKI outputs to DER byte/node queries.
+/// The verifier-fixed source kind selects a 65-byte key or exact 91-byte DER SPKI.
+/// BASE_D is committed before challenges; optional selection does not increase
+/// the lookup recurrence degree. All selectors remain polynomials.
+fn output_source_residues_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
-) -> [A; KEY_OUTPUT_RESIDUES_V1] {
-    let producer = family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::OutputProducer);
+) -> [A; OUTPUT_SOURCE_RESIDUES_V1] {
+    let producer = family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::OutputProducer)
+        .sub(fixed[variable_output::FIX_VARIABLE])
+        .sub(fixed[projection_serial::FIX_SERIAL])
+        .sub(fixed[projection_disclosure::FIX_DISCLOSURE]);
     let key = fixed[FIX_EXPECTED + 6];
     let optional = fixed[FIX_EXPECTED + 7];
+    let spki = fixed[FIX_OUTPUT_SOURCE_SPKI];
     let live = current[BASE_D];
     let query = producer.mul(live);
-    let mut residues = [A::ZERO; KEY_OUTPUT_RESIDUES_V1];
+    let mut residues = [A::ZERO; OUTPUT_SOURCE_RESIDUES_V1];
     residues[0] = producer.mul(
         live.sub(
             key.mul(
@@ -5033,20 +5110,27 @@ fn key_output_residues_v1<A: PolynomialAirFieldV1>(
         current[BASE_DOCUMENT].sub(
             fixed[FIX_EXPECTED + 8].add(fixed[FIX_EXPECTED + 9].mul(current[BASE_CERT2_ACTIVE])),
         ),
-        current[BASE_G].sub(A::from_base(F(
-            ZkX509Rfc5280GrammarRoleV1::CertificatePublicKey as u64,
-        ))),
+        current[BASE_G].sub(
+            A::from_base(F(ZkX509Rfc5280GrammarRoleV1::CertificatePublicKey as u64))
+                .sub(spki.mul(A::from_base(F(2)))),
+        ),
         current[BASE_H].sub(current[BASE_DOCUMENT]),
         current[BASE_TAG_CLASS],
-        current[BASE_CONSTRUCTED],
-        current[BASE_TAG_NUMBER].sub(A::from_base(F(3))),
-        current[BASE_A].sub(A::from_base(F(KEY_OUTPUT_CONTENT_BYTES_V1))),
+        current[BASE_CONSTRUCTED].sub(spki),
+        current[BASE_TAG_NUMBER].sub(A::from_base(F(3)).add(spki.mul(A::from_base(F(13))))),
+        current[BASE_A].sub(A::from_base(F(KEY_OUTPUT_CONTENT_BYTES_V1)).add(spki.mul(
+            A::from_base(F(SPKI_OUTPUT_CONTENT_BYTES_V1 - KEY_OUTPUT_CONTENT_BYTES_V1)),
+        ))),
         current[BASE_CONTENT_END]
             .sub(current[BASE_CONTENT_START])
             .sub(current[BASE_A]),
         current[BASE_ADDRESS]
-            .sub(current[BASE_CONTENT_START])
-            .sub(A::ONE)
+            .sub(
+                A::ONE
+                    .sub(spki)
+                    .mul(current[BASE_CONTENT_START].add(A::ONE)),
+            )
+            .sub(spki.mul(current[BASE_START]))
             .sub(fixed[FIX_EXPECTED + 4]),
     ]
     .into_iter()
@@ -5054,18 +5138,33 @@ fn key_output_residues_v1<A: PolynomialAirFieldV1>(
     {
         residues[1 + index] = query.mul(difference);
     }
-    // The absent optional key and all non-key producers have no provenance.
-    for (index, column) in KEY_OUTPUT_PROVENANCE_COLUMNS_V1.into_iter().enumerate() {
+    // Absent optional sources and other producer families have no source claim.
+    for (index, column) in OUTPUT_SOURCE_PROVENANCE_COLUMNS_V1.into_iter().enumerate() {
         residues[10 + index] = producer.mul(A::ONE.sub(live)).mul(current[column]);
     }
     residues[22] = producer.mul(key.sub(live)).mul(current[BASE_VALUE]);
+    residues[23] = query.mul(spki).mul(
+        current[BASE_CONTENT_END]
+            .sub(current[BASE_START])
+            .sub(A::from_base(F(SPKI_OUTPUT_BYTES_V1 as u64))),
+    );
     residues
 }
-fn key_output_query_gate_v1<A: PolynomialAirFieldV1>(
+fn output_source_query_gate_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
 ) -> A {
     family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::OutputProducer).mul(current[BASE_D])
+}
+
+fn output_source_node_query_gate_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
+) -> A {
+    output_source_query_gate_v1(current, fixed)
+        .add(fixed[projection_serial::FIX_LENGTH_LAST])
+        .add(fixed[projection_disclosure::FIX_LENGTH_FIRST])
+        .add(fixed[projection_disclosure::FIX_VALUE_FIRST])
 }
 
 fn private_geometry_residues_v1<A: PolynomialAirFieldV1>(
@@ -5303,7 +5402,7 @@ fn profile_topology_source_factor_v1<A: PolynomialAirFieldV1>(
             current[BASE_START],
             current[BASE_CONTENT_START],
             current[BASE_CONTENT_END],
-            A::ZERO,
+            current[BASE_INSTANCE],
             A::ZERO,
             A::ZERO,
             A::ZERO,
@@ -5326,7 +5425,7 @@ fn profile_topology_query_factor_v1<A: PolynomialAirFieldV1>(
             current[BASE_CONTENT_START],
             current[BASE_DEPTH],
             current[BASE_TAG_NUMBER],
-            A::ZERO,
+            current[BASE_H],
             A::ZERO,
             A::ZERO,
             A::ZERO,
@@ -5811,6 +5910,54 @@ fn output_base_row_v1(
     row[BASE_IS_WRITE] = F(u64::from(is_write));
     Ok(row)
 }
+/// Borrow all five exact whole-SPKI source nodes without copying private bytes.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn spki_output_nodes_v1(
+    trace: &ZkX509Rfc5280TraceV1,
+) -> Result<[Option<&ZkX509Rfc5280NodeProvenanceV1>; 5], ZkX509Rfc5280StarkErrorV1> {
+    if !(2..=3).contains(&trace.certificates.len()) {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    let cert2 = u64::from(trace.certificates.len() == 3);
+    let mut result = [None; 5];
+    for (slot, (optional, document, coefficient)) in SPKI_OUTPUT_SOURCES_V1.into_iter().enumerate()
+    {
+        if optional == 1 && cert2 == 0 {
+            continue;
+        }
+        let document = usize::try_from(document + coefficient * cert2)
+            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+        let provenance = trace
+            .semantic_provenance
+            .get(document)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
+        let mut nodes = provenance.nodes.iter().filter(|node| {
+            node.role == ZkX509Rfc5280GrammarRoleV1::CertificateSpki
+                && usize::from(node.role_instance) == document
+        });
+        let node = nodes.next().ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
+        if nodes.next().is_some()
+            || usize::from(node.document) != document
+            || node.content_end.checked_sub(node.start) != Some(SPKI_OUTPUT_BYTES_V1 as u16)
+            || node.content_end.checked_sub(node.content_start)
+                != Some(SPKI_OUTPUT_CONTENT_BYTES_V1 as u16)
+            || node.tag_class != 0
+            || !node.constructed
+            || node.tag_number != 16
+            || usize::from(node.content_end)
+                > trace
+                    .documents
+                    .get(document)
+                    .ok_or(ZkX509Rfc5280StarkErrorV1::Source)?
+                    .bytes
+                    .len()
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::Source);
+        }
+        result[slot] = Some(node);
+    }
+    Ok(result)
+}
 /// Borrow the unique exact key nodes; no copied byte/node allocation is added.
 /// These are construction operands only. The opened-row constraints independently
 /// authenticate the same node identity, length and byte address.
@@ -5860,13 +6007,19 @@ fn key_output_nodes_v1(
     Ok(result)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn populate_key_output_row_v1(
+fn populate_der_output_row_v1(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     trace: &ZkX509Rfc5280TraceV1,
     node: Option<&ZkX509Rfc5280NodeProvenanceV1>,
     offset: usize,
+    whole_spki: bool,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    if offset >= ZK_X509_UNCOMPRESSED_P256_BYTES_V1 {
+    let width = if whole_spki {
+        SPKI_OUTPUT_BYTES_V1
+    } else {
+        ZK_X509_UNCOMPRESSED_P256_BYTES_V1
+    };
+    if offset >= width {
         return Err(ZkX509Rfc5280StarkErrorV1::Output);
     }
     let Some(node) = node else {
@@ -5876,9 +6029,13 @@ fn populate_key_output_row_v1(
             Err(ZkX509Rfc5280StarkErrorV1::Output)
         };
     };
-    let address = usize::from(node.content_start)
-        .checked_add(1)
-        .and_then(|start| start.checked_add(offset))
+    let start = if whole_spki {
+        usize::from(node.start)
+    } else {
+        usize::from(node.content_start) + 1
+    };
+    let address = start
+        .checked_add(offset)
         .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
     let byte = trace
         .documents
@@ -5889,7 +6046,11 @@ fn populate_key_output_row_v1(
         return Err(ZkX509Rfc5280StarkErrorV1::Output);
     }
     row[BASE_D] = F::ONE;
-    row[BASE_A] = F(KEY_OUTPUT_CONTENT_BYTES_V1);
+    row[BASE_A] = F(if whole_spki {
+        SPKI_OUTPUT_CONTENT_BYTES_V1
+    } else {
+        KEY_OUTPUT_CONTENT_BYTES_V1
+    });
     row[BASE_G] = F(node.role as u64);
     row[BASE_H] = F(u64::from(node.role_instance));
     row[BASE_DOCUMENT] = F(u64::from(node.document));
@@ -5922,6 +6083,10 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         zk_x509_rfc5280_serial_lookup_multiplicities_v1(&semantic.serial_sources)?;
     let semantic_multiplicities = zk_x509_rfc5280_semantic_source_multiplicities_v1(&semantic)?;
     let key_nodes = key_output_nodes_v1(trace)?;
+    let spki_nodes = spki_output_nodes_v1(trace)?;
+    let variable_nodes = variable_output::nodes(trace)?;
+    let projection_serial_source = projection_serial::source(trace)?;
+    let projection_disclosure_sources = projection_disclosure::sources(trace)?;
     let byte_lookup_count = serial_byte_multiplicities
         .iter()
         .chain(semantic_multiplicities.iter())
@@ -5998,7 +6163,27 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                             && address > usize::from(node.content_start)
                             && address < usize::from(node.content_end)
                     })
-                    .count(),
+                    .count()
+                + spki_nodes
+                    .iter()
+                    .flatten()
+                    .filter(|node| {
+                        usize::from(node.document) == document
+                            && address >= usize::from(node.start)
+                            && address < usize::from(node.content_end)
+                    })
+                    .count()
+                + variable_output::byte_multiplicity(&variable_nodes, document, address)
+                + projection_serial::byte_multiplicity(
+                    &projection_serial_source,
+                    document,
+                    address,
+                )
+                + projection_disclosure::byte_multiplicity(
+                    &projection_disclosure_sources,
+                    document,
+                    address,
+                ),
         )
         .expect("bounded RFC lookup multiplicity fits u64")
     };
@@ -6017,6 +6202,21 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                 })
                 .count()
                 * ZK_X509_UNCOMPRESSED_P256_BYTES_V1) as u16
+            + (spki_nodes
+                .iter()
+                .flatten()
+                .filter(|entry| {
+                    usize::from(entry.document) == document && usize::from(entry.node) == node
+                })
+                .count()
+                * SPKI_OUTPUT_BYTES_V1) as u16
+            + variable_output::node_multiplicity(&variable_nodes, document, node)
+            + projection_serial::node_multiplicity(&projection_serial_source, document, node)
+            + projection_disclosure::node_multiplicity(
+                &projection_disclosure_sources,
+                document,
+                node,
+            )
     };
     let source_byte_family = ZkX509Rfc5280StarkFamilyV1::SourceByte as usize;
     for (document, source) in trace.documents.iter().enumerate() {
@@ -6173,6 +6373,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             write_u16_bits_v1(&mut row, GRAMMAR_CHILD_ORDINAL_BITS, node.child_ordinal);
             write_u16_bits_v1(&mut row, GRAMMAR_CHILD_COUNT_BITS, child_count);
             binding::populate_node_classification_v1(&mut row);
+            name_policy::populate_source_node(&mut row)?;
             family_rows[source_node_family][ordinal] = row;
         }
     }
@@ -6280,6 +6481,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         push_family_row_v1(&mut family_rows[embedded_family], row)?;
     }
     let fixed_family = ZkX509Rfc5280StarkFamilyV1::FixedByte as usize;
+    let mut previous_name_key = 0;
     for source in &semantic.fixed_bytes {
         let mut row = byte_row_v1(
             u64::from(source.source.document),
@@ -6288,6 +6490,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         );
         row[BASE_A] = F(u64::from(source.expected));
         row[BASE_B] = F(u64::from(source.length));
+        row[BASE_H] = F(u64::from(source.source_node.role_instance));
         row[BASE_NODE] = F(u64::from(source.source_node.node));
         row[BASE_PARENT] = F(source.source_node.role as u64);
         row[BASE_CHILD] = F(u64::from(matches!(
@@ -6331,6 +6534,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                 .inv()
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?
         };
+        name_policy::populate_fixed_byte(&mut row, &mut previous_name_key)?;
         push_family_row_v1(&mut family_rows[fixed_family], row)?;
     }
     let equal_family = ZkX509Rfc5280StarkFamilyV1::EqualByte as usize;
@@ -6458,8 +6662,41 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                 value,
                 true,
             )?;
-            if let Some(slot) = key_slot {
-                populate_key_output_row_v1(&mut row, trace, key_nodes[slot], offset)?;
+            if let Some(length) = projection_serial::slot(witness.declaration.channel) {
+                projection_serial::populate_row(
+                    &mut row,
+                    &projection_serial_source,
+                    length,
+                    offset,
+                )?;
+            } else if let Some((slot, length)) =
+                projection_disclosure::slot(schedule.shape, witness.declaration.channel)
+            {
+                projection_disclosure::populate_row(
+                    &mut row,
+                    projection_disclosure_sources[slot]
+                        .as_ref()
+                        .ok_or(ZkX509Rfc5280StarkErrorV1::Source)?,
+                    length,
+                    offset,
+                )?;
+            } else if let Some(slot) = key_slot {
+                populate_der_output_row_v1(&mut row, trace, key_nodes[slot], offset, false)?;
+            } else if let Some(slot) =
+                spki_output_slot_v1(schedule.shape, witness.declaration.channel)
+            {
+                populate_der_output_row_v1(&mut row, trace, spki_nodes[slot], offset, true)?;
+            } else if let Some((slot, length)) =
+                variable_output::slot(schedule.shape, witness.declaration.channel)
+            {
+                variable_output::populate_row(
+                    &mut row,
+                    trace,
+                    variable_nodes[slot],
+                    slot,
+                    length,
+                    offset,
+                )?;
             }
             push_family_row_v1(&mut family_rows[output_producer_family], row)?;
         }
@@ -6568,7 +6805,7 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
     .into_iter()
     .fold(A::ZERO, |sum, candidate| sum.add(family(candidate)))
     .mul(active);
-    let key_query = key_output_query_gate_v1(row, fixed);
+    let key_query = output_source_query_gate_v1(row, fixed);
     row[BASE_SERIAL_BYTE_QUERY_ACTIVE] = key_query.add(serial_query).add(direct_query).add(
         family(ZkX509Rfc5280StarkFamilyV1::Decimal)
             .mul(active)
@@ -6576,6 +6813,8 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
     );
     row[BASE_SERIAL_BYTE_QUERY_VALUE] = key_query
         .mul(row[BASE_VALUE])
+        .add(fixed[projection_disclosure::FIX_OID_VALUE])
+        .sub(fixed[projection_disclosure::FIX_OID_QUERY].mul(row[BASE_VALUE]))
         .add(serial_query.mul(row[SERIAL_SOURCE_QUERY_VALUE]))
         .add(
             family(ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy)
@@ -7813,6 +8052,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     residues.push(fixed_byte_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(A::ONE)));
     residues
         .push(fixed_byte_continue.mul(next[BASE_ADDRESS].sub(current[BASE_ADDRESS]).sub(A::ONE)));
+    residues.extend(name_policy::residues(current, next, fixed));
     let equal_byte = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::EqualByte);
     residues.push(equal_byte.mul(current[BASE_A].sub(current[BASE_B])));
     let decimal = current[BASE_DECIMAL_DIGIT_ACTIVE];
@@ -8271,7 +8511,10 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
         RFC5280_RESIDUE_SECTIONS_V1[10],
     );
     residues.extend(output_metadata_residues_v1(current, fixed));
-    residues.extend(key_output_residues_v1(current, fixed));
+    residues.extend(output_source_residues_v1(current, fixed));
+    residues.extend(variable_output::residues(current, next, fixed));
+    residues.extend(projection_serial::residues(current, next, fixed));
+    residues.extend(projection_disclosure::residues(current, next, fixed));
     // Every private family is a canonical active prefix of its fixed
     // registration segment. Top-level byte/node slots reset the prefix at
     // their fixed 4 KiB/2,048-node boundaries.
@@ -8620,7 +8863,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
                 AUX_SERIAL_NODE_TABLE_ZERO + lane,
                 AUX_SERIAL_NODE_QUERY_ZERO + lane,
                 source_node,
-                serial_source.add(key_output_query_gate_v1(current, fixed)),
+                serial_source.add(output_source_node_query_gate_v1(current, fixed)),
                 serial_node_lookup_factor_v1(current, lane, challenges),
                 node_query_factor_v1(current, fixed, lane, challenges),
                 current[SERIAL_NODE_TABLE_MULTIPLICITY],
@@ -8845,6 +9088,11 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     include!("rfc5280_stark_preflight_tests.rs");
     include!("rfc5280_key_output_tests.rs");
+    include!("rfc5280_spki_output_tests.rs");
+    include!("rfc5280_variable_output_tests.rs");
+    include!("rfc5280_projection_serial_tests.rs");
+    include!("rfc5280_projection_disclosure_tests.rs");
+    include!("rfc5280_name_policy_tests.rs");
     include!("rfc5280_private_output_tests.rs");
     fn challenges_v1() -> ZkX509Rfc5280StarkChallengesV1 {
         ZkX509Rfc5280StarkChallengesV1 {
@@ -11595,7 +11843,7 @@ mod tests {
                 3
             );
         }
-        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 1_654);
+        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 1_894);
         assert_eq!(
             (
                 ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
@@ -11604,7 +11852,7 @@ mod tests {
                 ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
                 ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1
             ),
-            (285, 280, 102, 19, 4)
+            (285, 280, 146, 19, 4)
         );
     }
     #[test]
@@ -11638,6 +11886,7 @@ mod tests {
             );
         }
     }
+    include!("rfc5280_nonkey_provenance_tests.rs");
     include!("rfc5280_sha_union_tests.rs");
     include!("rfc5280_aux_batch_tests.rs");
 }

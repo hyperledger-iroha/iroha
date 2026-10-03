@@ -1612,10 +1612,13 @@ fn derive_fast_json_struct_flatten(
 }
 
 fn type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
-    let syn::Type::Path(path) = ty else {
-        return None;
-    };
-    path.path.segments.last().map(|segment| &segment.ident)
+    match ty {
+        // Macro-forwarded type fragments and parentheses preserve the inner type.
+        syn::Type::Group(group) => type_ident(&group.elem),
+        syn::Type::Paren(paren) => type_ident(&paren.elem),
+        syn::Type::Path(path) => path.path.segments.last().map(|segment| &segment.ident),
+        _ => None,
+    }
 }
 
 fn single_type_argument(path: &syn::TypePath) -> Option<&syn::Type> {
@@ -1909,7 +1912,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                 }
                             });
                             // Required vs optional: for Option<T> fields, absence should map to None
-                            let is_option = matches!(&f.ty, syn::Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "Option").unwrap_or(false));
+                            let is_option = is_option_type(&f.ty);
                             if attrs.default {
                                 finals
                                     .push(quote! { #name: #name.unwrap_or_else(|| #default_expr) });

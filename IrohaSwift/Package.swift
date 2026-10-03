@@ -299,6 +299,12 @@ let package = Package(
             dependencies: mobileTransportTestDependencies,
             path: "Tests/IrohaSwiftMobileTransportsTests",
             swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "IrohaSwiftTransferUITests",
+            dependencies: testDependencies + ["IrohaSwiftTransferUI"],
+            path: "Tests/IrohaSwiftTransferUITests",
+            swiftSettings: swiftSettings
         )
     ]
 )

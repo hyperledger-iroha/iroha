@@ -24,7 +24,9 @@ use super::super::{
     ordinary_issuer_equation::constrain_ordinary_issuer_original_v1,
     ordinary_platform_union::constrain_ordinary_signed_message_union_v1,
 };
-use super::{KagemushaOrdinaryMintEpCircuitV1, KagemushaOrdinaryMintEqCircuitV1};
+use super::{
+    KagemushaOrdinaryMintEpCircuitV1, KagemushaOrdinaryMintEqCircuitV1, ORDINARY_MINT_SHA_LANES_V1,
+};
 use crate::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128},
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
@@ -477,11 +479,13 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     }));
     builder.assigned_instances = vec![public];
     super::super::base_packing::finalize_base_params_v1(&mut builder, 9)?;
-    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)
+    jobs.validate_capacity_for_lanes::<ORDINARY_MINT_SHA_LANES_V1>(
+        (1_usize << KAGEMUSHA_HALO2_K_V1) - 9,
+    )
         .map_err(|reason| {
             // Public circuit shape only; original financial/platform witnesses are not logged.
             format!(
-                "{reason}; ordinary Mint Base layout: {:?}",
+                "{reason}; ordinary Mint Base layout with {ORDINARY_MINT_SHA_LANES_V1} fixed SHA lanes: {:?}",
                 builder.config_params
             )
         })?;

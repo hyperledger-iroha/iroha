@@ -14,6 +14,7 @@
 		3F1C3AAE2C7F11B500C1C001 /* ConnectViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AAD2C7F11B500C1C001 /* ConnectViewModelTests.swift */; };
 		3F1C3AC52C7F4F7A00C1C001 /* AccelerationConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AC42C7F4F7A00C1C001 /* AccelerationConfig.swift */; };
 		3F1C3AC72C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */; };
+		BF0250000000000000000002 /* NativePrivacyPhysicalDeviceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0250000000000000000001 /* NativePrivacyPhysicalDeviceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +28,7 @@
 		3F1C3AB02C7F11B500C1C001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		3F1C3AC42C7F4F7A00C1C001 /* AccelerationConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccelerationConfig.swift; sourceTree = "<group>"; };
 		3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccelerationConfigLoaderTests.swift; sourceTree = "<group>"; };
+		BF0250000000000000000001 /* NativePrivacyPhysicalDeviceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePrivacyPhysicalDeviceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +56,7 @@
 		3F1C3AB12C7F11B500C1C001 /* NoritoDemoXcodeTests */ = {isa = PBXGroup; children = (
 			3F1C3AAD2C7F11B500C1C001 /* ConnectViewModelTests.swift */,
 			3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */,
+			BF0250000000000000000001 /* NativePrivacyPhysicalDeviceTests.swift */,
 			3F1C3AB02C7F11B500C1C001 /* Info.plist */,
 		); path = NoritoDemoXcodeTests; sourceTree = "<group>"; };
 /* End PBXGroup section */
@@ -95,6 +98,7 @@
 		3F1C3AB22C7F11B500C1C001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
 			3F1C3AAE2C7F11B500C1C001 /* ConnectViewModelTests.swift in Sources */,
 			3F1C3AC72C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift in Sources */,
+			BF0250000000000000000002 /* NativePrivacyPhysicalDeviceTests.swift in Sources */,
 		); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
@@ -127,7 +131,7 @@
 			SDKROOT = iphoneos;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 			SWIFT_EMIT_LOC_STRINGS = NO;
-			SWIFT_VERSION = 5.9;
+			SWIFT_VERSION = 5;
 			TARGETED_DEVICE_FAMILY = "1";
 		}; name = Debug; };
 		3F1C3A8A2C7EFFD900C1C001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
@@ -149,7 +153,7 @@
 			SDKROOT = iphoneos;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 			SWIFT_EMIT_LOC_STRINGS = NO;
-			SWIFT_VERSION = 5.9;
+			SWIFT_VERSION = 5;
 			TARGETED_DEVICE_FAMILY = "1";
 		}; name = Release; };
 		3F1C3A912C7EFFD900C1C001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
@@ -208,7 +212,7 @@
 			PRODUCT_NAME = "$(TARGET_NAME)";
 			SDKROOT = iphoneos;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-			SWIFT_VERSION = 5.9;
+			SWIFT_VERSION = 5;
 			TARGETED_DEVICE_FAMILY = "1";
 			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
 		}; name = Debug; };
@@ -227,7 +231,7 @@
 			PRODUCT_NAME = "$(TARGET_NAME)";
 			SDKROOT = iphoneos;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-			SWIFT_VERSION = 5.9;
+			SWIFT_VERSION = 5;
 			TARGETED_DEVICE_FAMILY = "1";
 			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
 		}; name = Release; };

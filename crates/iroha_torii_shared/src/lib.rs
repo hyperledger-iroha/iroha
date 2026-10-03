@@ -41,6 +41,8 @@ pub mod kagemusha_state;
 pub mod mcp;
 /// Original multisig execution records at a certified native World cut.
 pub mod multisig_execution_evidence;
+/// Exact payer-authenticated original ordinary debit finality read.
+pub mod ordinary_mint_finalized;
 /// Exact signed issuer-scoped original World grant for ordinary Mint.
 pub mod ordinary_mint_issuer_purpose;
 /// Actual signed account-scoped ordinary current-wallet original wire.

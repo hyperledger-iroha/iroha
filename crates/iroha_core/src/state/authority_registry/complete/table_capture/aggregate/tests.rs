@@ -3,6 +3,7 @@
 use super::*;
 fn policy(tables: LeafLimits) -> TableCaptureLimits {
     TableCaptureLimits {
+        musubi: crate::state::authority_registry::complete::table_capture::musubi_test_limits(),
         tables,
         membership: MembershipWorkLimits {
             max_row_visits: 64,

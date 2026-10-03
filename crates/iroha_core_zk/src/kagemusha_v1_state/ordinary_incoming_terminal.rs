@@ -1191,6 +1191,18 @@ mod incoming_terminal_clock_tests {
 }
 
 impl KagemushaNativeOrdinaryCashOwnerV1 {
+    // Retained selected counter data only, rechecked against the same actual platform owner.
+    pub(super) fn incoming_terminal_platform_counter_floor(
+        &self,
+    ) -> Result<Option<u32>, KagemushaStateErrorV1> {
+        self.incoming_terminal_platform_state()?;
+        let floor = self.incoming_terminal_pending()?.selected.previous_counter;
+        self.incoming_terminal_platform_state()?;
+        Ok(floor)
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
     // Private data projection from exact purpose1 incoming terminal owner; no offered subjects.
     pub(super) fn incoming_terminal_platform_state(
         &self,

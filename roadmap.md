@@ -95,6 +95,7 @@ See the [JVM inventory](specs/jvm_consolidation_inventory.md),
 | S8 | Durable money | Hardware/native/reserves | Provision authority/enrollment/selection; exact-next successor, trusted time and crash recovery; pooled top-ups/redemptions, reserve/nullifier concurrency and bank approval without software fallback. |
 | S9 | Mobile/Nearby/NFC | SDKs/device providers | Current JNI and operations 1–22 on governed profiles including Pixel 6, modern iPhones and HarmonyOS; cross-device, RF/power-loss, replay/restore/rollover, memory/thermal and conservation. |
 | S10 | Private-file/ZK-ACE SDK | JS/privacy/native | Governed two-pass intent signing, nonserializable private witnesses/erasure; Windows secure storage and authenticated native packages. |
+| S11 | Petal Stream devices | Petal/SDKs/device providers | [Device protocol](specs/petal_stream.md#8-qualification): 20 timed runs per device and distance on governed profiles including a low-end 480p–720p Android phone, a modern iPhone and a webcam; `ScanStats` lane rates filed per device with exposure compensation at 0, −1 and −2 EV, and the Swift/Kotlin/JS/Python/C# readers re-run against the same recorded camera captures. Field results decide the three-finger fallback and pose tracking. |
 
 ## Cryptography and VM
 

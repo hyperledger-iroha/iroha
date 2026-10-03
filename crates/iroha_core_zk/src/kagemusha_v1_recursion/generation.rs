@@ -94,7 +94,6 @@ pub(crate) mod ordinary_guard_generation;
 #[path = "ordinary_mint_generation.rs"]
 pub(crate) mod ordinary_mint_generation;
 
-#[cfg(unix)]
 #[path = "ordinary_cash_terminal_generation.rs"]
 pub(super) mod ordinary_cash_terminal_generation;
 
@@ -5292,6 +5291,15 @@ where
 }
 
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[path = "ordinary_state_layout.rs"]
+mod ordinary_state_layout;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+pub use ordinary_state_layout::{
+    KagemushaOrdinaryRecursiveStateLayoutV1, discover_kagemusha_ordinary_recursive_state_layout_v1,
+    generate_kagemusha_ordinary_recursive_state_artifacts_v1,
+};
+
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Generate the paired Pasta recursive-state proving and verification artifacts.
 ///
 /// The required secret seed makes the real measurement proofs reproducible without an implicit
@@ -5320,6 +5328,47 @@ fn generate_kagemusha_recursive_state_artifacts_v1_with_construction(
     let eq_parameters = canonical_kagemusha_eq_parameters_v1();
     let ep_parameters = canonical_kagemusha_ep_parameters_v1();
     let template = witness;
+    // Ordinary State fixes the outer *descriptor* too. Discover both actual layouts before
+    // allocating PKs; the caller's SHA witness must already use these exact selected descriptors.
+    let ordinary_layout = if template.ordinary_selection.is_some() {
+        let layout = ordinary_state_layout::discover_ordinary_state_layout_with_construction_v1(
+            &template,
+            construction,
+        )
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        let outer = template
+            .ordinary_selection
+            .as_ref()
+            .and_then(|s| s.outer_parent)
+            .ok_or_else(|| {
+                KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                    "ordinary State keygen lacks the selected outer descriptor".into(),
+                )
+            })?;
+        if !recursive_state_parent_structure_matches_v1(
+            template.eq_parent_protocol,
+            &layout.inner_eq,
+            KagemushaPastaParityV1::Eq,
+        )? || !recursive_state_parent_structure_matches_v1(
+            template.ep_parent_protocol,
+            &layout.inner_ep,
+            KagemushaPastaParityV1::Ep,
+        )? || !recursive_state_parent_structure_matches_v1(
+            outer.eq_protocol,
+            &layout.outer_eq,
+            KagemushaPastaParityV1::Eq,
+        )? || !recursive_state_parent_structure_matches_v1(
+            outer.ep_protocol,
+            &layout.outer_ep,
+            KagemushaPastaParityV1::Ep,
+        )? {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "ordinary State requires joint inner/outer layout planning and an exact complete SHA replan before PK generation".into()));
+        }
+        Some(layout)
+    } else {
+        None
+    };
     let mut eq_seed_protocol = template.eq_parent_protocol.clone();
     let mut ep_seed_protocol = template.ep_parent_protocol.clone();
     let mut candidate_keys = None;
@@ -5641,6 +5690,30 @@ fn generate_kagemusha_recursive_state_artifacts_v1_with_construction(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![recursive_public_instance_count()]),
     );
+    if let Some(layout) = ordinary_layout.as_ref() {
+        if !recursive_state_parent_structure_matches_v1(
+            &inner_eq_protocol,
+            &layout.inner_eq,
+            KagemushaPastaParityV1::Eq,
+        )? || !recursive_state_parent_structure_matches_v1(
+            &inner_ep_protocol,
+            &layout.inner_ep,
+            KagemushaPastaParityV1::Ep,
+        )? || !recursive_state_parent_structure_matches_v1(
+            &eq_protocol,
+            &layout.outer_eq,
+            KagemushaPastaParityV1::Eq,
+        )? || !recursive_state_parent_structure_matches_v1(
+            &ep_protocol,
+            &layout.outer_ep,
+            KagemushaPastaParityV1::Ep,
+        )? {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "final genuine ordinary State keys changed a selected inner/outer descriptor"
+                    .into(),
+            ));
+        }
+    }
     validate_transport_protocol_profile(
         KagemushaPastaParityV1::Eq,
         "compact aggregate-state transport decider",
@@ -5836,6 +5909,25 @@ pub fn prove_kagemusha_recursive_state_v1(
     witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedRecursiveStateProofV1, KagemushaArtifactGenerationErrorV1> {
+    prove_kagemusha_recursive_state_v1_with_construction(
+        eq,
+        ep,
+        witness,
+        recovery_seed,
+        super::composite::RecursiveStateConstructionV1::Production,
+    )
+}
+
+// Private dispatch only. Closed cfg(test) construction variants share this exact producer,
+// complete typed SHA, real inner/outer PKs and every native accumulator decision below.
+// The public entry point always selects Production; no Native owner invokes a test variant.
+fn prove_kagemusha_recursive_state_v1_with_construction(
+    eq: &KagemushaLoadedEqRecursiveStateArtifactsV1,
+    ep: &KagemushaLoadedEpRecursiveStateArtifactsV1,
+    witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    recovery_seed: &KagemushaRecoverySeedV1,
+    construction: super::composite::RecursiveStateConstructionV1,
+) -> Result<KagemushaGeneratedRecursiveStateProofV1, KagemushaArtifactGenerationErrorV1> {
     if eq.release_id != ep.release_id
         || eq.suite_id != ep.suite_id
         || eq.vk_digest != ep.vk_digest
@@ -5906,7 +5998,7 @@ pub fn prove_kagemusha_recursive_state_v1(
     }
 
     let private = prove_private_recursive_carrier_v1(
-        super::composite::RecursiveStateConstructionV1::Production,
+        construction,
         &eq.parameters,
         &ep.parameters,
         &eq.inner_proving_key,
@@ -10979,3 +11071,42 @@ mod ordinary_zero_bootstrap_qualification_tests;
 #[cfg(test)]
 #[path = "ordinary_mint_genuine_qualification_tests.rs"]
 mod ordinary_mint_genuine_qualification_tests;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_active_state_bootstrap.rs"]
+mod ordinary_active_state_bootstrap;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_cash_family_qualification.rs"]
+mod ordinary_cash_family_qualification;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_active_send_state_tests.rs"]
+mod ordinary_active_send_state;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_active_send_terminal_tests.rs"]
+mod ordinary_active_send_terminal;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_active_receive_state_tests.rs"]
+mod ordinary_active_receive_state;
+
+#[cfg(test)]
+pub(super) fn ordinary_qualification_wallet_account_v1(
+    seed: u8,
+) -> iroha_data_model::account::AccountId {
+    use iroha_data_model::account::{AccountId, MultisigMember, MultisigPolicy};
+    let key = iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+    AccountId::new_multisig(
+        MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(key.public_key().clone(), 1).unwrap()],
+        )
+        .unwrap(),
+    )
+}
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_full_money_cycle_tests.rs"]
+mod ordinary_full_money_cycle;

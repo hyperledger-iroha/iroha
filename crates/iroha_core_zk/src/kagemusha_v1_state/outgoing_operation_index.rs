@@ -24,7 +24,6 @@ use super::{
     KagemushaLaneIdV1, KagemushaStateContextV1, KagemushaStateV1, PreparedOutgoingCandidateV1,
     PreparedOutgoingRecoveryViewV1,
 };
-#[cfg(any(test, unix))]
 use super::{
     DurableOutgoingEnvelopeV1,
     candidate_lifecycle::{CommittedOutgoingCandidateV1, PersistedOutgoingCandidateV1},
@@ -686,7 +685,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok(Some(existing))
     }
 
-    #[cfg(any(test, unix))]
     /// Bind one caller ID to public inputs derived from the actual preparation.
     ///
     /// This builds a clone-before-install successor. The journal/capacity owner
@@ -786,7 +784,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok((next, KagemushaOutgoingOperationPrepareOutcomeV1::Inserted))
     }
 
-    #[cfg(any(test, unix))]
     /// Advance the indexed preparation after Core persists its verified candidate.
     pub(super) fn candidate_successor(
         &self,
@@ -814,7 +811,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Advance the indexed candidate after qualified hardware commits it.
     pub(super) fn commit_successor(
         &self,
@@ -844,7 +840,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(any(test, unix))]
     /// Advance the indexed commit after Core durably installs its final envelope.
     pub(super) fn install_successor(
         &self,
@@ -1005,7 +1000,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         self.validate_internal(Some(current))
     }
 
-    #[cfg(any(test, unix))]
     fn progress_successor(
         &self,
         preparation_id: DigestV1,
@@ -1111,7 +1105,6 @@ fn terminal_record_allocation(
         .ok_or(KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
 }
 
-#[cfg(any(test, unix))]
 fn next_revision(revision: u128) -> KagemushaOutgoingOperationIndexResultV1<u128> {
     revision
         .checked_add(1)

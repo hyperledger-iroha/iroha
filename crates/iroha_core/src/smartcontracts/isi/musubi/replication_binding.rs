@@ -6,17 +6,18 @@
 //! its completed invariant failure.
 
 use super::*;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_model_base::error::ParseError;
 
 /// Check the complete binding before borrowing its existing lifecycle.
 pub(super) fn validate_replication_order_archive_binding<'world>(
     archive: &MusubiArchiveRecordV1,
     replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
-    world: &'world impl WorldReadOnly,
+    world: &'world impl MusubiSourceReadOnly,
 ) -> Result<&'world MusubiReplicationOrderLocationLifecycleV1, ParseError> {
     archive.validate()?;
     let reference = world
-        .musubi_locations_by_replication_order()
+        .source_musubi_locations_by_replication_order()
         .get(replication_order)
         .ok_or_else(|| {
             ParseError::new("Musubi replication order has no consensus archive binding")

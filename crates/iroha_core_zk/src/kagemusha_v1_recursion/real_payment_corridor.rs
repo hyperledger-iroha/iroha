@@ -3528,3 +3528,78 @@ pub(in crate::kagemusha_v1_recursion) fn ordinary_zero_bootstrap_hash_keys_for_t
         &canonical_kagemusha_ep_parameters_v1(),
     )
 }
+
+/// Whole mathematical neutral MintAuthority source derived from a genuinely proved ordinary
+/// Mint113 authorization. This carries actual Bootstrap/finalized proofs and full histories;
+/// it admits no real Node debit, FI certificate, Native owner or governed release.
+#[cfg(test)]
+pub(in crate::kagemusha_v1_recursion) struct OrdinaryProvenMintSourceForTestingV1 {
+    pub(in crate::kagemusha_v1_recursion) credit:
+        iroha_data_model::kagemusha::KagemushaMintCreditV1,
+    pub(in crate::kagemusha_v1_recursion) eq_protocol: PlonkProtocol<EqAffine>,
+    pub(in crate::kagemusha_v1_recursion) ep_protocol: PlonkProtocol<EpAffine>,
+    pub(in crate::kagemusha_v1_recursion) eq_instances: Vec<Fp>,
+    pub(in crate::kagemusha_v1_recursion) ep_instances: Vec<Fq>,
+    pub(in crate::kagemusha_v1_recursion) eq_history: KagemushaEqAccumulatorV1,
+    pub(in crate::kagemusha_v1_recursion) ep_history: KagemushaEpAccumulatorV1,
+    pub(in crate::kagemusha_v1_recursion) hash_eq: KagemushaLoadedEqMintHashArtifactsV1,
+    pub(in crate::kagemusha_v1_recursion) hash_ep: KagemushaLoadedEpMintHashArtifactsV1,
+}
+
+/// Use the existing quorum certificate, consuming resource checks, key convergence, complete
+/// SHA generation and terminal decisions. The seed protocols are parser operands for the
+/// disabled MintAuthority Bootstrap parent only, replaced by its actual converged protocol.
+#[cfg(test)]
+pub(in crate::kagemusha_v1_recursion) fn prove_ordinary_neutral_mint_source_for_testing_v1(
+    authorization: &iroha_data_model::kagemusha::KagemushaOrdinaryMintAuthorizationV1,
+    encrypted_credit: &[u8],
+    hash_eq: KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: KagemushaLoadedEpMintHashArtifactsV1,
+    eq_seed: PlonkProtocol<EqAffine>,
+    ep_seed: PlonkProtocol<EpAffine>,
+) -> OrdinaryProvenMintSourceForTestingV1 {
+    authorization
+        .validate_shape()
+        .expect("complete genuine ordinary Mint113 frame");
+    assert_eq!(
+        authorization.statement.ciphertext_digest,
+        iroha_data_model::kagemusha::kagemusha_ciphertext_digest_v1(encrypted_credit)
+    );
+    let statement = authorization.finalized_credit_statement(1020).unwrap();
+    let funding = FundingCertificate::from_statement(statement.clone());
+    let eq = canonical_kagemusha_eq_parameters_v1();
+    let ep = canonical_kagemusha_ep_parameters_v1();
+    let keys = MintKeys::generate(&eq, &ep, eq_seed, ep_seed, hash_eq, hash_ep, &funding);
+    let proven = keys.prove_funding(&funding);
+    keys.decide(&proven.proof, &proven.eq_history, &proven.ep_history);
+    let credit = iroha_data_model::kagemusha::KagemushaMintCreditV1 {
+        version: 1,
+        statement,
+        proof: proven.proof.proof.clone(),
+        finality_certificate_binding: proven.proof.certificate_binding,
+        finality_authority_head: proven.proof.authority_head,
+        finality_genesis_authorization_id: proven.proof.genesis_authorization_id,
+        finality_proof_binding_digest: proven.proof.proof_binding_digest,
+        encrypted_credit: encrypted_credit.to_vec(),
+        artifact_manifest_digest: authorization.statement.context.artifact_manifest_digest,
+    };
+    credit
+        .validate_shape()
+        .expect("whole genuine neutral credit original");
+    assert_eq!(
+        credit.statement,
+        authorization.finalized_credit_statement(1020).unwrap()
+    );
+    let (protocols, hash_eq, hash_ep) = keys.into_protocols();
+    OrdinaryProvenMintSourceForTestingV1 {
+        credit,
+        eq_protocol: protocols.eq_protocol,
+        ep_protocol: protocols.ep_protocol,
+        eq_instances: proven.proof.eq_public_instances,
+        ep_instances: proven.proof.ep_public_instances,
+        eq_history: proven.eq_history,
+        ep_history: proven.ep_history,
+        hash_eq,
+        hash_ep,
+    }
+}

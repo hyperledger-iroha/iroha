@@ -130,6 +130,27 @@ pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
     is_identity
 }
 
+/// Keep the canonical-coordinate and nonidentity-y invariants of a derived point.
+///
+/// This private helper does not establish a curve equation for arbitrary input.
+/// Its callers derive the point only from previously checked points through the
+/// exact complete group-law equations below. Initial and public final points
+/// still undergo the full curve check.
+fn assert_p256_derived_point_invariants<F: BigPrimeField>(
+    chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    point: &EcPoint<F, ProperCrtUint<F>>,
+) {
+    let _ = chip.enforce_less_than(ctx, point.x.clone());
+    let _ = chip.enforce_less_than(ctx, point.y.clone());
+    let x_zero = chip.is_zero(ctx, &point.x);
+    let y_zero = chip.is_zero(ctx, &point.y);
+    let is_identity = chip.gate().and(ctx, x_zero, y_zero);
+    let not_identity = chip.gate().not(ctx, is_identity);
+    let invalid_y = chip.gate().and(ctx, not_identity, y_zero);
+    chip.gate().assert_is_const(ctx, &invalid_y, &F::ZERO);
+}
+
 /// Add two P-256 points, including identity, inverse and equal-point cases.
 ///
 /// This uses the actual P-256 `a = -3` doubling numerator. Denominators are
@@ -144,15 +165,24 @@ pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
 ) -> EcPoint<F, ProperCrtUint<F>> {
     let _ = assert_p256_affine_or_identity(chip, ctx, p);
     let _ = assert_p256_affine_or_identity(chip, ctx, q);
-    add_p256_affine_complete_validated(chip, ctx, p, q)
+    let output = add_p256_affine_complete_validated(chip, ctx, p, q);
+    let _ = assert_p256_affine_or_identity(chip, ctx, &output);
+    output
 }
 
 /// Complete addition for points that the caller has already proven valid.
 ///
-/// The checked entry validates both inputs before calling here. The joint
-/// ladder validates its initial points once, its table selection is Boolean,
-/// and every result is validated below before the next round. This avoids
-/// re-proving two entire curve equations at every 256-bit ladder step.
+/// The checked entry and joint ladder validate their initial points in full.
+/// For unequal x, exact slope division and reduced output equations are the
+/// affine addition law; substituting them into y^2=x^3-3x+b proves closure. Equal
+/// nonidentity inputs use the exact tangent slope (3x^2-3)/(2y), whose denominator
+/// is nonzero because the input invariant excludes y=0. Equal x and unequal y
+/// explicitly constrain y_p+y_q=0 and select identity. Identity branches copy a
+/// previously valid input. All selectors are Boolean and all coordinates remain
+/// canonical; the derived-point check keeps the explicit nonidentity-y bound.
+/// Thus each output retains the input curve invariant by induction, without
+/// repeating a curve equation implied by the group law. Public outputs retain
+/// the full curve check, as do the joint ladder's initial and final points.
 fn add_p256_affine_complete_validated<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -216,6 +246,62 @@ fn add_p256_affine_complete_validated<F: BigPrimeField>(
     let selected = select_p256_point(chip, ctx, arithmetic, identity, active);
     let selected = select_p256_point(chip, ctx, p.clone(), selected, q_identity);
     let output = select_p256_point(chip, ctx, q.clone(), selected, p_identity);
+    assert_p256_derived_point_invariants(chip, ctx, &output);
+    output
+}
+
+/// Double a point that is already proven canonical and on-curve or the identity.
+///
+/// The input invariant explicitly excludes nonidentity y=0, so the a=-3 affine
+/// denominator 2*y is invertible in the odd P-256 field. Identity selects zero
+/// numerator and unit denominator before division. Exact tangent and output
+/// equations preserve the curve invariant by substitution; canonical reduction
+/// and the explicit nonidentity-y check remain at every output. Unlike general
+/// addition, identical operands need no generic/inverse/equal branch equations.
+fn double_p256_affine_complete_validated<F: BigPrimeField>(
+    chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    point: &EcPoint<F, ProperCrtUint<F>>,
+) -> EcPoint<F, ProperCrtUint<F>> {
+    let x_zero = chip.is_soft_zero(ctx, point.x.clone());
+    let y_zero = chip.is_soft_zero(ctx, point.y.clone());
+    let is_identity = chip.gate().and(ctx, x_zero, y_zero);
+    let active = chip.gate().not(ctx, is_identity);
+    let zero = chip.load_constant(ctx, P256Base::ZERO);
+    let one = chip.load_constant(ctx, P256Base::ONE);
+    let x2 = chip.mul(ctx, &point.x, &point.x);
+    let three_x2 = chip.scalar_mul_no_carry(ctx, x2, 3);
+    let numerator_nc = chip.add_constant_no_carry(ctx, three_x2, -P256Base::from(3_u64));
+    let denominator_nc = chip.scalar_mul_no_carry(ctx, &point.y, 2);
+    let numerator = chip.carry_mod(ctx, numerator_nc);
+    let denominator = chip.carry_mod(ctx, denominator_nc);
+    let numerator = chip.select(ctx, numerator, zero.clone(), active);
+    let denominator = chip.select(ctx, denominator, one, active);
+    let slope = chip.divide(ctx, numerator, denominator);
+    let slope2 = chip.mul_no_carry(ctx, &slope, &slope);
+    let twice_x = chip.scalar_mul_no_carry(ctx, &point.x, 2);
+    let x_out_nc = chip.sub_no_carry(ctx, slope2, twice_x);
+    let x_out = chip.carry_mod(ctx, x_out_nc);
+    let x_difference = chip.sub_no_carry(ctx, &point.x, &x_out);
+    let slope_term = chip.mul_no_carry(ctx, &slope, x_difference);
+    let y_out_nc = chip.sub_no_carry(ctx, slope_term, &point.y);
+    let y_out = chip.carry_mod(ctx, y_out_nc);
+    let arithmetic = EcPoint::new(x_out, y_out);
+    let identity = EcPoint::new(zero.clone(), zero);
+    let output = select_p256_point(chip, ctx, arithmetic, identity, active);
+    assert_p256_derived_point_invariants(chip, ctx, &output);
+    output
+}
+
+/// Checked complete doubling, including the internal identity and malformed inputs.
+#[cfg(test)]
+fn double_p256_affine_complete<F: BigPrimeField>(
+    chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    point: &EcPoint<F, ProperCrtUint<F>>,
+) -> EcPoint<F, ProperCrtUint<F>> {
+    let _ = assert_p256_affine_or_identity(chip, ctx, point);
+    let output = double_p256_affine_complete_validated(chip, ctx, point);
     let _ = assert_p256_affine_or_identity(chip, ctx, &output);
     output
 }
@@ -234,16 +320,18 @@ fn select_p256_point<F: BigPrimeField>(
     )
 }
 
-/// Constrain `left_scalar * left + right_scalar * right` with one joint ladder.
+/// Constrain `left_scalar * left + right_scalar * right` with a joint two-bit window.
 ///
-/// Both bit arrays are MSB-first and Boolean-constrained. Each round doubles
-/// the accumulator and adds exactly one of `0`, `left`, `right`, or
-/// `left + right`. Precomputing the fourth choice also handles inverse points:
-/// the table entry is then the constrained identity. Compared with two
-/// independent ladders this removes one doubling and one addition per bit,
-/// without changing the public or private scalar range.
-/// The caller must bind a 256-bit instance to canonical scalar residues; this
-/// bounded group primitive alone does not prove that representation.
+/// All N MSB-first scalar bits remain explicitly Boolean-constrained. A complete
+/// 16-entry table contains i*left+j*right for i,j in 0..4, including identity,
+/// equal and inverse-point results. Each window doubles once per consumed bit
+/// with the dedicated complete doubling relation, then adds exactly one selected
+/// table point. An odd leading window consumes one bit with fixed zero high bits;
+/// no scalar bit is padded, omitted or replaced by a host-selected table index.
+/// Initial and final points retain the full curve checks. Table entries and
+/// intermediate outputs retain canonical/carry/nonidentity-y constraints and
+/// the curve invariant by the private complete group-law induction above.
+/// The caller must still bind full-width scalars to their canonical residues.
 pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -255,19 +343,59 @@ pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
     assert!(N > 0 && N <= 256, "P-256 joint scalar bit bound");
     let _ = assert_p256_affine_or_identity(chip, ctx, left);
     let _ = assert_p256_affine_or_identity(chip, ctx, right);
-    let sum = add_p256_affine_complete_validated(chip, ctx, left, right);
+    for bit in left_bits_msb_first.iter().chain(right_bits_msb_first) {
+        chip.gate().assert_bit(ctx, *bit);
+    }
     let zero = chip.load_constant(ctx, P256Base::ZERO);
     let identity = EcPoint::new(zero.clone(), zero);
-    let mut accumulator = identity.clone();
-    for (&left_bit, &right_bit) in left_bits_msb_first.iter().zip(right_bits_msb_first.iter()) {
-        chip.gate().assert_bit(ctx, left_bit);
-        chip.gate().assert_bit(ctx, right_bit);
-        accumulator = add_p256_affine_complete_validated(chip, ctx, &accumulator, &accumulator);
-        let if_left = select_p256_point(chip, ctx, sum.clone(), left.clone(), right_bit);
-        let if_not_left = select_p256_point(chip, ctx, right.clone(), identity.clone(), right_bit);
-        let summand = select_p256_point(chip, ctx, if_left, if_not_left, left_bit);
-        accumulator = add_p256_affine_complete_validated(chip, ctx, &accumulator, &summand);
+    let left_two = double_p256_affine_complete_validated(chip, ctx, left);
+    let left_three = add_p256_affine_complete_validated(chip, ctx, &left_two, left);
+    let right_two = double_p256_affine_complete_validated(chip, ctx, right);
+    let right_three = add_p256_affine_complete_validated(chip, ctx, &right_two, right);
+    let left_multiples = [identity.clone(), left.clone(), left_two, left_three];
+    let right_multiples = [identity.clone(), right.clone(), right_two, right_three];
+    let table: [EcPoint<F, ProperCrtUint<F>>; 16] = core::array::from_fn(|index| {
+        let i = index / 4;
+        let j = index % 4;
+        if i == 0 {
+            right_multiples[j].clone()
+        } else if j == 0 {
+            left_multiples[i].clone()
+        } else {
+            add_p256_affine_complete_validated(chip, ctx, &left_multiples[i], &right_multiples[j])
+        }
+    });
+    let zero_bit = ctx.load_constant(F::ZERO);
+    let mut accumulator = identity;
+    let mut offset = 0;
+    while offset < N {
+        let width = if offset == 0 && N % 2 == 1 { 1 } else { 2 };
+        for _ in 0..width {
+            accumulator = double_p256_affine_complete_validated(chip, ctx, &accumulator);
+        }
+        let left_high = if width == 1 {
+            zero_bit
+        } else {
+            left_bits_msb_first[offset]
+        };
+        let right_high = if width == 1 {
+            zero_bit
+        } else {
+            right_bits_msb_first[offset]
+        };
+        let left_low = left_bits_msb_first[offset + width - 1];
+        let right_low = right_bits_msb_first[offset + width - 1];
+        let mut choices = table.to_vec();
+        for bit in [right_low, right_high, left_low, left_high] {
+            choices = choices
+                .chunks_exact(2)
+                .map(|pair| select_p256_point(chip, ctx, pair[1].clone(), pair[0].clone(), bit))
+                .collect();
+        }
+        accumulator = add_p256_affine_complete_validated(chip, ctx, &accumulator, &choices[0]);
+        offset += width;
     }
+    let _ = assert_p256_affine_or_identity(chip, ctx, &accumulator);
     accumulator
 }
 
@@ -1019,15 +1147,53 @@ mod tests {
         check_all_add_cases::<Fq>();
     }
 
-    fn check_joint_two_bit_scalars<F: BigPrimeField>(
+    // Both identity controls use 838 gate cells and196 lookup cells in each field;
+    // fixed k10/lookup9 retains the whole new invariant graph.
+    fn check_derived_point_invariants<F: BigPrimeField>(nonidentity_zero_y: bool) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(10)
+            .use_lookup_bits(9)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let ctx = builder.main(0);
+        let point = EcPoint::new(
+            chip.load_private(
+                ctx,
+                if nonidentity_zero_y {
+                    P256Base::ONE
+                } else {
+                    P256Base::ZERO
+                },
+            ),
+            chip.load_private(ctx, P256Base::ZERO),
+        );
+        assert_p256_derived_point_invariants(&chip, ctx, &point);
+        builder.assigned_instances = vec![Vec::new()];
+        builder.calculate_params(Some(9));
+        MockProver::run(10, &builder, vec![Vec::new()])
+            .expect("P-256 derived-point invariant circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn derived_point_invariants_allow_identity_and_reject_nonidentity_zero_y_in_both_fields() {
+        assert!(check_derived_point_invariants::<Fp>(false));
+        assert!(check_derived_point_invariants::<Fq>(false));
+        assert!(!check_derived_point_invariants::<Fp>(true));
+        assert!(!check_derived_point_invariants::<Fq>(true));
+    }
+
+    fn check_joint_scalar_window<F: BigPrimeField, const N: usize, const K: u32>(
         left_scalar: u8,
         right_scalar: u8,
         inverse_right: bool,
         corrupt_result: bool,
     ) -> bool {
         let mut builder = BaseCircuitBuilder::<F>::new(false)
-            .use_k(18)
-            .use_lookup_bits(17)
+            .use_k(K as usize)
+            .use_lookup_bits((K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
         let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
@@ -1051,11 +1217,11 @@ mod tests {
         let ctx = builder.main(0);
         let left = load_affine(&chip, ctx, generator);
         let right = load_affine(&chip, ctx, right_host);
-        let left_bits: [AssignedValue<F>; 2] = std::array::from_fn(|bit| {
-            ctx.load_witness(F::from(u64::from((left_scalar >> (1 - bit)) & 1)))
+        let left_bits: [AssignedValue<F>; N] = std::array::from_fn(|bit| {
+            ctx.load_witness(F::from(u64::from((left_scalar >> (N - 1 - bit)) & 1)))
         });
-        let right_bits: [AssignedValue<F>; 2] = std::array::from_fn(|bit| {
-            ctx.load_witness(F::from(u64::from((right_scalar >> (1 - bit)) & 1)))
+        let right_bits: [AssignedValue<F>; N] = std::array::from_fn(|bit| {
+            ctx.load_witness(F::from(u64::from((right_scalar >> (N - 1 - bit)) & 1)))
         });
         let actual =
             joint_multiply_p256_affine_bits(&chip, ctx, &left, &right, &left_bits, &right_bits);
@@ -1064,7 +1230,7 @@ mod tests {
         chip.assert_equal(ctx, actual.y, expected.y);
         builder.assigned_instances = vec![Vec::new()];
         builder.calculate_params(Some(9));
-        MockProver::run(18, &builder, vec![Vec::new()])
+        MockProver::run(K, &builder, vec![Vec::new()])
             .expect("P-256 joint scalar circuit synthesizes")
             .verify()
             .is_ok()
@@ -1080,21 +1246,147 @@ mod tests {
             (2, 3, false),
             (1, 1, true),
         ] {
-            assert!(check_joint_two_bit_scalars::<Fp>(
+            assert!(check_joint_scalar_window::<Fp, 2, 18>(
                 left,
                 right,
                 inverse_right,
                 false
             ));
-            assert!(check_joint_two_bit_scalars::<Fq>(
+            assert!(check_joint_scalar_window::<Fq, 2, 18>(
                 left,
                 right,
                 inverse_right,
                 false
             ));
         }
-        assert!(!check_joint_two_bit_scalars::<Fp>(2, 3, false, true));
-        assert!(!check_joint_two_bit_scalars::<Fq>(2, 3, false, true));
+        assert!(!check_joint_scalar_window::<Fp, 2, 18>(2, 3, false, true));
+        assert!(!check_joint_scalar_window::<Fq, 2, 18>(2, 3, false, true));
+    }
+
+    fn check_complete_double<F: BigPrimeField>(
+        point: Secp256r1Affine,
+        corrupt_input: bool,
+        corrupt_output: bool,
+    ) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let ctx = builder.main(0);
+        let assigned = if corrupt_input {
+            let (x, y) = point.into_coordinates();
+            EcPoint::new(
+                chip.load_private(ctx, x),
+                chip.load_private(ctx, y + P256Base::ONE),
+            )
+        } else {
+            load_affine(&chip, ctx, point)
+        };
+        let actual = double_p256_affine_complete(&chip, ctx, &assigned);
+        let mut expected = point.to_curve() + point.to_curve();
+        if corrupt_output {
+            expected += Secp256r1Affine::generator().to_curve();
+        }
+        let expected = load_affine(&chip, ctx, expected.to_affine());
+        chip.assert_equal(ctx, actual.x, expected.x);
+        chip.assert_equal(ctx, actual.y, expected.y);
+        builder.assigned_instances = vec![Vec::new()];
+        builder.calculate_params(Some(9));
+        MockProver::run(TEST_K, &builder, vec![Vec::new()])
+            .expect("P-256 complete-double circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn complete_doubling_retains_identity_curve_and_output_checks_in_both_pasta_fields() {
+        let g = Secp256r1Affine::generator();
+        for point in [Secp256r1Affine::identity(), g, (-g.to_curve()).to_affine()] {
+            assert!(check_complete_double::<Fp>(point, false, false));
+            assert!(check_complete_double::<Fq>(point, false, false));
+        }
+        assert!(!check_complete_double::<Fp>(g, true, false));
+        assert!(!check_complete_double::<Fq>(g, true, false));
+        assert!(!check_complete_double::<Fp>(g, false, true));
+        assert!(!check_complete_double::<Fq>(g, false, true));
+    }
+
+    // Complete expected-output construction uses at most 84210 gate cells and
+    // 14805 lookup cells in both fields. These new cases use measured k16/lookup15;
+    // original N2 assertions retain their separate original k18/lookup17 layout.
+    #[test]
+    fn joint_windows_keep_odd_width_high_bits_and_inverse_table_entries_in_both_fields() {
+        for (left, right, inverse) in [(0, 0, false), (7, 1, true), (5, 7, false)] {
+            assert!(check_joint_scalar_window::<Fp, 3, 16>(
+                left, right, inverse, false
+            ));
+            assert!(check_joint_scalar_window::<Fq, 3, 16>(
+                left, right, inverse, false
+            ));
+        }
+        for (left, right, inverse) in [(8, 15, false), (15, 15, true)] {
+            assert!(check_joint_scalar_window::<Fp, 4, 16>(
+                left, right, inverse, false
+            ));
+            assert!(check_joint_scalar_window::<Fq, 4, 16>(
+                left, right, inverse, false
+            ));
+        }
+        assert!(!check_joint_scalar_window::<Fp, 3, 16>(7, 1, true, true));
+        assert!(!check_joint_scalar_window::<Fq, 3, 16>(7, 1, true, true));
+        assert!(!check_joint_scalar_window::<Fp, 4, 16>(8, 15, false, true));
+        assert!(!check_joint_scalar_window::<Fq, 4, 16>(8, 15, false, true));
+    }
+
+    fn check_identity_window_bits<F: BigPrimeField>(bad_left: bool, bad_right: bool) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let ctx = builder.main(0);
+        let identity = load_affine(&chip, ctx, Secp256r1Affine::identity());
+        let left = core::array::from_fn::<_, 3, _>(|index| {
+            ctx.load_witness(if bad_left && index == 0 {
+                F::from(2)
+            } else {
+                F::ZERO
+            })
+        });
+        let right = core::array::from_fn::<_, 3, _>(|index| {
+            ctx.load_witness(if bad_right && index == 2 {
+                F::from(2)
+            } else {
+                F::ZERO
+            })
+        });
+        let actual =
+            joint_multiply_p256_affine_bits(&chip, ctx, &identity, &identity, &left, &right);
+        chip.assert_equal(ctx, actual.x, identity.x);
+        chip.assert_equal(ctx, actual.y, identity.y);
+        builder.assigned_instances = vec![Vec::new()];
+        builder.calculate_params(Some(9));
+        MockProver::run(TEST_K, &builder, vec![Vec::new()])
+            .expect("P-256 identity-window circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn joint_window_rejects_nonboolean_bits_even_when_all_table_points_are_identity() {
+        for (bad_left, bad_right) in [(false, false), (true, false), (false, true)] {
+            assert_eq!(
+                check_identity_window_bits::<Fp>(bad_left, bad_right),
+                !bad_left && !bad_right
+            );
+            assert_eq!(
+                check_identity_window_bits::<Fq>(bad_left, bad_right),
+                !bad_left && !bad_right
+            );
+        }
     }
 
     fn check_ecdsa_small_scalar_slice<F: BigPrimeField>(
@@ -1321,6 +1613,9 @@ mod apple_assertion_tests {
     use sha2::{Digest as _, Sha256};
 
     const TEST_K: u32 = 18;
+    // Canonical325-byte approval queues9 SHA blocks (4800 rows); its measured
+    // complete Base graph uses9689 gate cells in two k13 columns/lookup12.
+    const WRAPPER_TEST_K: u32 = 13;
     const UNUSABLE_ROWS: usize = 9;
     const DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-transition-selection\0";
     const BODY_LEN: usize = 16;
@@ -1388,7 +1683,7 @@ mod apple_assertion_tests {
                 &config.sha,
                 &mut layouter,
                 &self.builder.core().copy_manager,
-                (1_usize << TEST_K) - UNUSABLE_ROWS,
+                (1_usize << self.builder.config_params.k) - UNUSABLE_ROWS,
             )
         }
     }
@@ -1568,8 +1863,8 @@ mod apple_assertion_tests {
             wire[offset] ^= 1;
         }
         let mut builder = BaseCircuitBuilder::<F>::new(false)
-            .use_k(TEST_K as usize)
-            .use_lookup_bits((TEST_K - 1) as usize);
+            .use_k(WRAPPER_TEST_K as usize)
+            .use_lookup_bits((WRAPPER_TEST_K - 1) as usize);
         let range = builder.range_chip();
         let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let mut jobs = PastaSha256JobsV1::default();
@@ -1592,7 +1887,7 @@ mod apple_assertion_tests {
         }
         builder.calculate_params(Some(UNUSABLE_ROWS));
         let circuit = AppleCircuit { builder, jobs };
-        MockProver::run(TEST_K, &circuit, vec![])
+        MockProver::run(WRAPPER_TEST_K, &circuit, vec![])
             .unwrap()
             .verify()
             .is_ok()

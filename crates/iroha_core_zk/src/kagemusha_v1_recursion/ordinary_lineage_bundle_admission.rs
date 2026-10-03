@@ -17,6 +17,7 @@ use iroha_data_model::kagemusha::{
 mod commit_admission;
 pub(in crate::kagemusha_v1_recursion) use commit_admission::terminal_public;
 pub use commit_admission::{
+    KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1,
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
     KagemushaVerifiedOrdinaryLineageCommitProofV1,
     KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1, verify_ordinary_lineage_commit_v1,
@@ -52,7 +53,7 @@ pub enum KagemushaOrdinaryLineageOutgoingOriginalsV1 {
         request: Box<KagemushaOrdinaryPaymentRequestV1>,
         /// Actual pre-candidate output.
         output: KagemushaOrdinaryPaymentOutputV1,
-        /// Complete canonical ciphertext envelope;384 bytes remains the transport capacity.
+        /// Complete canonical ciphertext envelope within the 384-byte transport capacity.
         encrypted_credit: Vec<u8>,
         /// Original preparation interval; signed observations are authenticated by the service owner.
         preparation_clock: KagemushaOrdinaryCashClockContextV1,
@@ -659,6 +660,10 @@ pub(crate) fn require_ordinary_incoming_predecessor_v1(
     append_history(&mut ep, &before.proof.ep_history)?;
     verify_state_histories(&material, &before.proof, &eq, &ep)
 }
+
+#[cfg(test)]
+#[path = "ordinary_lineage_bundle_admission_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod canonical_ciphertext_tests {

@@ -1752,7 +1752,10 @@ impl IVM {
             cache_reservation: crate::cache_memory::MemoryReservation::active_unmeasured(0),
             registers,
             memory: mem,
-            private_memory_bytes: PrivateMemoryRanges::default(),
+            private_memory_bytes: memory_budget.map_or_else(
+                PrivateMemoryRanges::default,
+                PrivateMemoryRanges::with_memory_budget,
+            ),
             pc: 0,
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
@@ -3039,7 +3042,9 @@ impl IVM {
             .memory
             .try_clone_for_runtime_template(allocation_lease.as_mut())?;
         let registers = self.registers.try_clone_for_runtime_template()?;
-        let private_memory_bytes = self.private_memory_bytes.try_clone()?;
+        let private_memory_bytes = self
+            .private_memory_bytes
+            .try_clone_for_runtime_template(allocation_lease.as_mut())?;
         Ok(RuntimeTemplate::new(
             RuntimeTemplateData {
                 memory,
@@ -3071,7 +3076,7 @@ impl IVM {
     ///
     /// Returns [`RuntimeTemplateResetError`] when the VM and template refer to
     /// different programs or memory baselines, their memory geometries differ,
-    /// or a bounded private-range copy cannot be reserved. The VM is
+    /// or missing private-range capacity cannot be reserved. The VM is
     /// left unchanged so a runtime pool can discard it without a full reload.
     pub fn reset_from_runtime_template(
         &mut self,
@@ -3098,9 +3103,8 @@ impl IVM {
         if !self.memory.shares_baseline_lineage(&template.memory) {
             return Err(RuntimeTemplateResetError::from_memory_baseline_identity());
         }
-        let private_memory_bytes = template
-            .private_memory_bytes
-            .try_clone()
+        self.private_memory_bytes
+            .try_prepare_restore(&template.private_memory_bytes)
             .map_err(RuntimeTemplateResetError::from_allocation_unavailable)?;
         // The template restores dirty memory chunks, so stale tags must not
         // cause reset() to scrub bytes restored from that baseline.
@@ -3121,7 +3125,8 @@ impl IVM {
         self.reset_execution_state();
         self.zk_mode = template.zk_mode;
         self.registers.restore_from_template(&template.registers);
-        self.private_memory_bytes = private_memory_bytes;
+        self.private_memory_bytes
+            .restore_prepared(&template.private_memory_bytes);
         self.pc = template.pc;
         self.last_diagnostic = None;
         Ok(())

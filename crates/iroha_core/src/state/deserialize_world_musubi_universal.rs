@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 #[path = "deserialize_world_musubi_universal/accumulator.rs"]
@@ -25,19 +26,19 @@ fn invalid(
 /// This is read-only so both finalized restore and World publication can use the
 /// same predicate. A failed check cannot mutate the candidate or its predecessor.
 pub(in crate::state) fn validate_musubi_universal_projection_cut(
-    world: &impl WorldReadOnly,
+    world: &impl MusubiSourceReadOnly,
     cut: ProjectionCut,
     execution_budget: &AllocationBudget,
 ) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
     const RESOLVER: ProjectionTable = ProjectionTable::ResolverIndex;
     const DIRECTORY: ProjectionTable = ProjectionTable::PublicDirectory;
-    let packages = world.musubi_packages();
-    let releases = world.musubi_releases();
-    let archives = world.musubi_archives();
-    let availability = world.musubi_archive_availability();
-    let resolver = world.musubi_resolver_index();
-    let directory = world.musubi_public_directory();
-    let current_revision = world.musubi_resolver_index_revision();
+    let packages = world.source_musubi_packages();
+    let releases = world.source_musubi_releases();
+    let archives = world.source_musubi_archives();
+    let availability = world.source_musubi_archive_availability();
+    let resolver = world.source_musubi_resolver_index();
+    let directory = world.source_musubi_public_directory();
+    let current_revision = world.source_musubi_resolver_index_revision();
     for (package_id, package) in packages.iter() {
         package
             .validate()
