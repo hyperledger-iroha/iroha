@@ -465,7 +465,7 @@ mod tests {
             version: 1,
             lineage: context.lineage.clone(),
             operation_id: context.operation_id,
-            predecessor: context.predecessor.clone(),
+            predecessor: context.predecessor,
             source: KagemushaOrdinaryIncomingSourceSelectionV1::Mint {
                 topup_request_original_sha256: Sha256::digest(f.request.canonical_bytes().unwrap())
                     .into(),

@@ -96,7 +96,8 @@ impl RetailFeeScheduleV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid rates, missing or excess tiers, or ambiguous tier ordering.
+    /// Returns an error for zero payment allowances or rates, missing or excessive
+    /// tiers, a nonzero first threshold, or invalid tier ordering.
     pub fn validate(&self) -> Result<(), String> {
         if self.included_payments == 0
             || self.overage_minor == 0
@@ -125,7 +126,7 @@ impl RetailFeeScheduleV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the schedule is invalid or no maintenance tier applies.
+    /// Returns an error for an invalid schedule or a missing applicable maintenance tier.
     pub fn monthly_fee(&self, balance_time_minor_ms: u128, active_ms: u64) -> Result<u64, String> {
         self.validate()?;
         if active_ms == 0 {
@@ -146,7 +147,7 @@ impl RetailFeeScheduleV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if payment-count or fee arithmetic overflows.
+    /// Returns an error if the payment counter or computed charge overflows.
     pub fn payment_fee(&self, used: u64, count: u64) -> Result<u64, String> {
         let after = used.checked_add(count).ok_or("payment count overflow")?;
         let included = u64::from(self.included_payments);
@@ -313,7 +314,8 @@ pub struct RetailFeeAssessmentV1 {
 ///
 /// # Errors
 ///
-/// Returns an error if the timestamp or either month boundary is outside the supported calendar or unsigned epoch.
+/// Returns an error if the timestamp or either month boundary is outside the
+/// supported calendar or unsigned epoch.
 pub fn honiara_month_bounds(timestamp_ms: u64) -> Result<(u64, u64), String> {
     let utc = OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp_ms) * 1_000_000)
         .map_err(|_| "ledger timestamp outside calendar domain")?;
@@ -346,7 +348,8 @@ pub fn honiara_month_bounds(timestamp_ms: u64) -> Result<(u64, u64), String> {
 ///
 /// # Errors
 ///
-/// Returns an error if notice overflows, is too short, or activation is not a supported month boundary.
+/// Returns an error for insufficient notice, timestamp overflow, or activation
+/// outside an exact Honiara month boundary.
 pub fn validate_retail_activation(notice_ms: u64, effective_ms: u64) -> Result<(), String> {
     if notice_ms
         .checked_add(RETAIL_FEE_NOTICE_MS)
@@ -362,7 +365,7 @@ impl RetailFeeAccountStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the enrollment timestamp has no supported month interval.
+    /// Returns an error if the enrollment timestamp is outside the supported calendar range.
     pub fn enroll(account_id: AccountId, now_ms: u64, balance_minor: u64) -> Result<Self, String> {
         let (start, end) = honiara_month_bounds(now_ms)?;
         Ok(Self {
@@ -386,7 +389,8 @@ impl RetailFeeAccountStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for a backwards clock, excessive catch-up, calendar or accrual overflow, or a policy callback failure.
+    /// Returns an error for backward time, excessive catch-up, calendar or arithmetic
+    /// overflow, or a policy callback or maintenance assessment failure.
     pub fn settle_until(
         &mut self,
         now_ms: u64,
@@ -464,7 +468,8 @@ impl RetailFeeAccountStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the schedule is invalid or the prorated maintenance amount overflows.
+    /// Returns an error for an invalid fee schedule, missing maintenance tier, or
+    /// charge arithmetic overflow.
     pub fn assess_maintenance(
         &self,
         at_ms: u64,
@@ -496,7 +501,8 @@ impl RetailFeeAccountStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if reopening precedes prior accrual, the closing month is unsettled, or the calendar is unsupported.
+    /// Returns an error for backward time, an unsettled closing month, or a timestamp
+    /// outside the supported calendar range.
     pub fn reopen(&mut self, now_ms: u64, balance_minor: u64) -> Result<(), String> {
         if self.closed_at_ms.is_none() {
             return Ok(());
@@ -528,7 +534,7 @@ impl RetailFeeAccountStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the canonical account-state preimage cannot be encoded.
+    /// Returns an error if the quote context cannot be canonically encoded.
     pub fn state_commitment(
         &self,
         policy_hash: [u8; 32],
@@ -557,7 +563,7 @@ impl RetailFeeQuoteRequestV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the canonical payment intent cannot be encoded.
+    /// Returns an error if the payment intent cannot be canonically encoded.
     pub fn intent_hash(&self) -> Result<[u8; 32], String> {
         Ok(domain_hash(
             b"iroha.retail_fee.payment_intent.v1",
@@ -607,8 +613,11 @@ mod tests {
             (5_000_000, 1000),
         ] {
             assert_eq!(
-                s.monthly_fee(u128::from(balance as u64) * 100, 100)
-                    .unwrap(),
+                s.monthly_fee(
+                    u128::from(u64::try_from(balance).expect("nonnegative test balance")) * 100,
+                    100
+                )
+                .unwrap(),
                 fee
             );
         }

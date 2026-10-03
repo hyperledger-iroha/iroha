@@ -495,7 +495,7 @@ fn evaluate_policy_with_catalog_and_world_resolves_static_alias_without_ledger_t
     );
 }
 #[test]
-fn evaluate_policy_with_catalog_and_world_at_rejects_dynamic_sns_without_canonical_lane() {
+fn evaluate_policy_with_catalog_and_world_at_rejects_dynamic_sns_outside_catalog() {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     let catalog = dataspace_catalog(&[]);
     let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
@@ -510,9 +510,10 @@ fn evaluate_policy_with_catalog_and_world_at_rejects_dynamic_sns_without_canonic
     let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
     let view = world.view();
     let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
+    // An active SNS alias resolves identity without admitting physical dataspace authority.
     assert_eq!(
         evaluate_policy_with_catalog_and_world_at(&policy, &lane_catalog, &catalog, &tx, &view, 9,),
-        Err(RoutingResolveError::NoLaneForDataspace {
+        Err(RoutingResolveError::UnknownDataspace {
             dataspace_id: expected,
         })
     );
@@ -535,7 +536,7 @@ fn evaluate_policy_with_catalog_and_world_at_rejects_dynamic_sns_without_canonic
     );
 }
 #[test]
-fn evaluate_policy_plan_with_catalog_and_world_at_rejects_dynamic_sns_without_canonical_lane() {
+fn evaluate_policy_plan_with_catalog_and_world_at_rejects_dynamic_sns_outside_catalog() {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     let catalog = dataspace_catalog(&[]);
     let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
@@ -550,6 +551,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_rejects_dynamic_sns_without_ca
     let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
     let view = world.view();
     let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
+    // An active SNS alias resolves identity without admitting physical dataspace authority.
     assert_eq!(
         evaluate_policy_plan_with_catalog_and_world_at(
             &policy,
@@ -559,7 +561,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_rejects_dynamic_sns_without_ca
             &view,
             9,
         ),
-        Err(RoutingResolveError::NoLaneForDataspace {
+        Err(RoutingResolveError::UnknownDataspace {
             dataspace_id: expected,
         })
     );

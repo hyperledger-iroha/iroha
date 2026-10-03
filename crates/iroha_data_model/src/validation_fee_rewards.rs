@@ -53,7 +53,8 @@ pub struct ValidationFeeRewardsState {
 ///
 /// # Errors
 ///
-/// Returns an error if the derived protected custody state path cannot be represented.
+/// Returns an error if custody coordinates cannot be canonically encoded or their
+/// state path cannot be represented.
 pub fn validation_fee_reward_state_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     leaf: &str,
@@ -245,7 +246,8 @@ pub struct ValidationFeeConversionAttempt {
 ///
 /// # Errors
 ///
-/// Returns an error for an invalid payout binding, unsupported scale, zero input, or overflowing conversion arithmetic.
+/// Returns an error for an invalid payout binding, unsupported scale, zero input,
+/// or overflowing conversion arithmetic.
 pub fn reference_minimum(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     records: &[ValidationFeeReferenceObservation],
@@ -324,7 +326,8 @@ pub fn reference_minimum(
 ///
 /// # Errors
 ///
-/// Returns an error for zero total service weight or overflowing reward allocation or rounding arithmetic.
+/// Returns an error for zero total service weight or overflowing reward allocation
+/// or rounding arithmetic.
 pub fn allocate(
     amount: u128,
     weights: &BTreeMap<AccountId, u64>,
@@ -415,7 +418,8 @@ pub struct ValidationFeeRewardBeneficiaryRevision {
 ///
 /// # Errors
 ///
-/// Returns an error if the derived beneficiary-alias state path cannot be represented.
+/// Returns an error if the custody key cannot be derived or the beneficiary state
+/// path cannot be represented.
 pub fn validation_fee_beneficiary_alias_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     account: &AccountId,
@@ -432,7 +436,8 @@ pub fn validation_fee_beneficiary_alias_key(
 ///
 /// # Errors
 ///
-/// Returns an error if the derived beneficiary-revision state path cannot be represented.
+/// Returns an error if the custody key cannot be derived or the revision state path
+/// cannot be represented.
 pub fn validation_fee_beneficiary_revision_key(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     beneficiary: &AccountId,

@@ -140,7 +140,8 @@ impl ValidationFeePayoutPolicyRegistryV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty registry, invalid authority, inconsistent revisions, changed custody, or duplicate proposals.
+    /// Returns an error for an empty registry, invalid authority, noncontiguous
+    /// revisions, changed custody, decreasing enactment heights, or duplicate proposals.
     pub fn validate(&self) -> Result<(), String> {
         let first = self
             .entries

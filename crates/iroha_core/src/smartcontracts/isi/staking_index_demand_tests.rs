@@ -66,9 +66,11 @@ fn stake_index_demand_counts_canonical_groups_and_fixed_layouts() {
     assert_eq!(
         std::mem::size_of::<PublicLaneStakeShareKey>()
             + std::mem::size_of::<IndexedValidatorStake>()
-            + 3 * (33 + std::mem::size_of::<AllocationCharge>()),
+            + 3 * (33 + std::mem::size_of::<AllocationCharge>())
+            + 4 * std::mem::size_of::<AllocationCharge>()
+            + 3 * std::mem::size_of::<usize>(),
         iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES,
-        "configured minimum must cover one share, group and three Ed25519 clones"
+        "configured minimum must cover fixed owners, every key and exact quantity magnitudes"
     );
     let first = stake_index_demand_account(0x11);
     let second = stake_index_demand_account(0x22);
@@ -87,12 +89,16 @@ fn stake_index_demand_counts_canonical_groups_and_fixed_layouts() {
     assert_eq!(demand.account_clone_charges, 8);
     assert_eq!(demand.account_clone_bytes, 8 * 33);
     let (_, _, charges, retained_bytes) = demand.checked_retained_layouts().unwrap();
-    assert_eq!(charges, Layout::array::<AllocationCharge>(8).unwrap());
+    assert_eq!(demand.quantity_charges, 8);
+    assert_eq!(demand.quantity_bytes, 6 * std::mem::size_of::<usize>());
+    assert_eq!(charges, Layout::array::<AllocationCharge>(16).unwrap());
     assert_eq!(
         retained_bytes,
         3 * std::mem::size_of::<PublicLaneStakeShareKey>()
             + 2 * std::mem::size_of::<IndexedValidatorStake>()
             + 8 * (33 + std::mem::size_of::<AllocationCharge>())
+            + 8 * std::mem::size_of::<AllocationCharge>()
+            + 6 * std::mem::size_of::<usize>()
     );
     assert_eq!(
         demand.checked_fixed_layouts().expect("fixed layouts"),
@@ -274,6 +280,8 @@ fn stake_index_demand_zero_and_overflow_layouts() {
             validator_groups: 0,
             account_clone_bytes: 0,
             account_clone_charges: 0,
+            quantity_bytes: 0,
+            quantity_charges: 0,
         }
         .checked_fixed_layouts()
         .is_err()
@@ -284,6 +292,8 @@ fn stake_index_demand_zero_and_overflow_layouts() {
             validator_groups: usize::MAX,
             account_clone_bytes: 0,
             account_clone_charges: 0,
+            quantity_bytes: 0,
+            quantity_charges: 0,
         }
         .checked_fixed_layouts()
         .is_err()
@@ -320,6 +330,8 @@ fn stake_index_demand_rejects_materialization_count_drift() {
         validator_groups: 0,
         account_clone_bytes: 0,
         account_clone_charges: 0,
+        quantity_bytes: 0,
+        quantity_charges: 0,
     }
     .validate_materialized(&materialized, &[])
     .expect_err("materialized extra group must refuse");
@@ -332,6 +344,8 @@ fn stake_index_demand_rejects_materialization_count_drift() {
         validator_groups: 1,
         account_clone_bytes: 0,
         account_clone_charges: 0,
+        quantity_bytes: 0,
+        quantity_charges: 0,
     };
     let error = one_row
         .validate_materialized(&materialized, &[])
@@ -360,6 +374,8 @@ fn stake_index_demand_rejects_nonpartitioning_or_wrong_group_ranges() {
         validator_groups: 1,
         account_clone_bytes: 0,
         account_clone_charges: 0,
+        quantity_bytes: 0,
+        quantity_charges: 0,
     };
     let error = demand
         .validate_materialized(&materialized, &[key.clone(), key.clone()])
@@ -372,6 +388,8 @@ fn stake_index_demand_rejects_nonpartitioning_or_wrong_group_ranges() {
         validator_groups: 1,
         account_clone_bytes: 0,
         account_clone_charges: 0,
+        quantity_bytes: 0,
+        quantity_charges: 0,
     }
     .validate_materialized(&materialized, &[wrong])
     .expect_err("range must match its indexed validator identity");
@@ -403,6 +421,8 @@ fn stake_index_demand_rejects_reordered_or_duplicate_flat_groups() {
         validator_groups: 2,
         account_clone_bytes: 0,
         account_clone_charges: 0,
+        quantity_bytes: 0,
+        quantity_charges: 0,
     };
     demand
         .validate_materialized(&groups, &keys)
@@ -466,5 +486,230 @@ fn stake_index_partial_second_backing_refusal_refunds_original_pool() {
     drop(refused_group);
     drop(share_backing);
     drop(reservation);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+/// Build canonical original stake custody independently of its ephemeral index.
+fn stake_index_quantity_state(
+    validator: &AccountId,
+    bonded: Quantity,
+    pending: Quantity,
+) -> (State, PublicLaneStakeShareKey, PublicLaneStakeShare) {
+    use iroha_data_model::IntoKeyValue as _;
+    let state = setup_state();
+    let (key, mut share) = stake_index_demand_row(LaneId::SINGLE, validator, validator);
+    share.bonded = bonded.clone();
+    let request = Hash::new(b"original index pending custody");
+    share.pending_unbonds.insert(
+        request,
+        PublicLaneUnbonding {
+            request_id: request,
+            amount: pending,
+            release_at_ms: 1,
+            slashable_through_height: 1,
+            liability_release_height: 2,
+        },
+    );
+    {
+        let mut accounts = state.world.accounts.block();
+        let account = Account::new(validator.clone()).build(validator);
+        let (id, account) = account.into_key_value();
+        accounts.insert(id, account);
+        accounts.commit();
+        let mut validators = state.world.public_lane_validators.block();
+        validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: validator_peer_id(validator),
+                stake_account: validator.clone(),
+                total_stake: bonded.clone(),
+                self_stake: bonded,
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_height: 1,
+                election_exit_height: None,
+                deactivation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        validators.commit();
+        let mut shares = state.world.public_lane_stake_shares.block();
+        shares.insert(key.clone(), share.clone());
+        shares.commit();
+    }
+    (state, key, share)
+}
+
+#[test]
+fn stake_index_quantities_prepaid_and_borrowed_from_original_pool() {
+    let validator = stake_index_demand_account(0x9a);
+    let (state, key, share) =
+        stake_index_quantity_state(&validator, Quantity::from(7_u64), Quantity::from(5_u64));
+    let view = state.view();
+    let demand =
+        PublicLaneStakeIndexDemand::from_rows(view.world().public_lane_stake_shares().iter(), 1, 1)
+            .unwrap();
+    assert_eq!(demand.quantity_charges, 4);
+    assert_eq!(demand.quantity_bytes, 4 * std::mem::size_of::<usize>());
+    let (_, _, _, expected_bytes) = demand.checked_retained_layouts().unwrap();
+    let original_pool = AllocationBudget::new(expected_bytes);
+    let held = original_pool.try_reserve_bytes(1).unwrap();
+    let error = match PublicLaneStakeIndex::from_world(view.world(), 1, 1, &original_pool) {
+        Ok(_) => panic!("one byte short cannot admit any retained index"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(error.downcast_ref::<EvidencePreparationError>(), Some(EvidencePreparationError::Admission(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })) if *requested_bytes == expected_bytes)
+    );
+    assert_eq!(original_pool.reserved_bytes(), 1);
+    assert_eq!(
+        view.world().public_lane_stake_shares().get(&key),
+        Some(&share)
+    );
+    drop(held);
+    let index = PublicLaneStakeIndex::from_world(view.world(), 1, 1, &original_pool).unwrap();
+    assert_eq!(original_pool.reserved_bytes(), expected_bytes);
+    assert_eq!(
+        index.total_exposure(LaneId::SINGLE, &validator).unwrap(),
+        &Quantity::from(12_u64)
+    );
+    let original = std::ptr::from_ref(index.total_exposure(LaneId::SINGLE, &validator).unwrap());
+    for _ in 0..16 {
+        assert_eq!(
+            std::ptr::from_ref(index.total_exposure(LaneId::SINGLE, &validator).unwrap()),
+            original
+        );
+        assert_eq!(original_pool.reserved_bytes(), expected_bytes);
+    }
+    let moved = index;
+    assert_eq!(
+        std::ptr::from_ref(moved.total_exposure(LaneId::SINGLE, &validator).unwrap()),
+        original
+    );
+    assert_eq!(original_pool.reserved_bytes(), expected_bytes);
+    drop(moved);
+    assert_eq!(original_pool.reserved_bytes(), 0);
+    assert_eq!(
+        view.world().public_lane_stake_shares().get(&key),
+        Some(&share)
+    );
+}
+
+#[test]
+fn stake_index_exposure_preserves_bonded_and_complete_pending_grouping() {
+    use iroha_primitives::bigint::BigInt;
+    let validator = stake_index_demand_account(0x9b);
+    let delegator = stake_index_demand_account(0x9c);
+    let max = Quantity::try_from_numeric(Numeric::new(
+        BigInt::from_twos_bytes(&[vec![0xff; 63], vec![0x7f]].concat()).unwrap(),
+        0,
+    ))
+    .unwrap();
+    let bonded = max.checked_sub(&Quantity::one()).unwrap();
+    let mut first = stake_index_demand_row(LaneId::SINGLE, &validator, &validator);
+    first.1.bonded = bonded;
+    let mut second = stake_index_demand_row(LaneId::SINGLE, &validator, &delegator);
+    second.1.bonded = Quantity::zero();
+    for (ordinal, row) in [&mut first, &mut second].into_iter().enumerate() {
+        let request = Hash::new(ordinal.to_le_bytes());
+        row.1.pending_unbonds.insert(
+            request,
+            PublicLaneUnbonding {
+                request_id: request,
+                amount: "0.5".parse().unwrap(),
+                release_at_ms: 1,
+                slashable_through_height: 1,
+                liability_release_height: 2,
+            },
+        );
+    }
+    let mut rows = [first, second];
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    let demand =
+        PublicLaneStakeIndexDemand::from_rows(rows.iter().map(|(key, share)| (key, share)), 2, 1)
+            .unwrap();
+    assert_eq!(demand.quantity_charges, 4);
+    let mut sums = [QuantityAccumulator::zero(); 3];
+    for (key, share) in &rows {
+        aggregate_index_share(&mut sums, key, share).unwrap();
+    }
+    assert_eq!(
+        aggregate_index_exposure(&sums)
+            .unwrap()
+            .try_into_quantity()
+            .unwrap(),
+        max
+    );
+    assert!(
+        max.checked_sub(&Quantity::one())
+            .unwrap()
+            .checked_add(&"0.5".parse().unwrap())
+            .is_err(),
+        "interleaving the final exposure would introduce a false rejection"
+    );
+}
+
+#[test]
+fn stake_index_quantity_demand_rejects_layout_count_and_bytes_overflow() {
+    for demand in [
+        PublicLaneStakeIndexDemand {
+            share_rows: 0,
+            validator_groups: 0,
+            account_clone_bytes: 0,
+            account_clone_charges: usize::MAX,
+            quantity_bytes: 0,
+            quantity_charges: 1,
+        },
+        PublicLaneStakeIndexDemand {
+            share_rows: 1,
+            validator_groups: 1,
+            account_clone_bytes: 0,
+            account_clone_charges: 0,
+            quantity_bytes: usize::MAX,
+            quantity_charges: 4,
+        },
+    ] {
+        assert!(demand.checked_retained_layouts().is_err());
+    }
+}
+
+#[test]
+fn stake_index_exposure_overflow_preserves_canonical_index_and_read_refusal() {
+    use iroha_primitives::bigint::BigInt;
+    let validator = stake_index_demand_account(0x9d);
+    let max = Quantity::try_from_numeric(Numeric::new(
+        BigInt::from_twos_bytes(&[vec![0xff; 63], vec![0x7f]].concat()).unwrap(),
+        0,
+    ))
+    .unwrap();
+    assert!(max.checked_add(&Quantity::one()).is_err());
+    let (state, key, share) = stake_index_quantity_state(&validator, max, Quantity::one());
+    let view = state.view();
+    let demand =
+        PublicLaneStakeIndexDemand::from_rows(view.world().public_lane_stake_shares().iter(), 1, 1)
+            .expect("individually canonical aggregates still form a valid index");
+    assert_eq!(demand.quantity_charges, 4);
+    assert_eq!(demand.quantity_bytes, 2 * 64 + std::mem::size_of::<usize>());
+    let (_, _, _, bytes) = demand.checked_retained_layouts().unwrap();
+    let budget = AllocationBudget::new(bytes);
+    let index = PublicLaneStakeIndex::from_world(view.world(), 1, 1, &budget).unwrap();
+    assert_eq!(budget.reserved_bytes(), bytes);
+    assert_eq!(index.share_keys(LaneId::SINGLE, &validator), std::slice::from_ref(&key));
+    assert!(matches!(
+        index.total_exposure(LaneId::SINGLE, &validator),
+        Err(Error::Math(MathError::Overflow))
+    ));
+    let absent = stake_index_demand_account(0x9e);
+    assert_eq!(
+        index.total_exposure(LaneId::SINGLE, &absent).unwrap(),
+        &Quantity::zero()
+    );
+    assert_eq!(
+        view.world().public_lane_stake_shares().get(&key),
+        Some(&share)
+    );
+    drop(index);
     assert_eq!(budget.reserved_bytes(), 0);
 }

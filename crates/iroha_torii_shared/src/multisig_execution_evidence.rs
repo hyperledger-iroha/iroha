@@ -44,9 +44,9 @@ pub struct MultisigExecutionEvidenceV1 {
     pub instructions_hash: HashOf<Vec<InstructionBox>>,
     /// Complete canonical World hash preimages at the certified cut.
     pub world_snapshot: WorldStateSnapshotV1,
-    /// Original stored Vec bytes of MultisigApprovalOutcomeV1, not a projection.
+    /// Original stored Vec bytes of `MultisigApprovalOutcomeV1`, not a projection.
     pub approval_outcome: Vec<u8>,
-    /// Original stored Vec bytes of MultisigProposalTerminalExecutionStateV1.
+    /// Original stored Vec bytes of `MultisigProposalTerminalExecutionStateV1`.
     pub terminal_execution: Vec<u8>,
 }
 /// Exact bounded decoding. No authority follows from successful decoding.
@@ -83,7 +83,8 @@ pub struct MultisigExecutionEvidenceRefV1<'a> {
     height: FieldRef<'a, u64>,
     context_id: FieldRef<'a, Hash>,
     multisig_account_id: FieldRef<'a, AccountId>,
-    entrypoint_hash: FieldRef<'a, [u8; 32]>,
+    // Keep the literal array type so Norito derives the sole raw-byte field layout.
+    entrypoint_hash: [u8; 32],
     instructions_hash: FieldRef<'a, HashOf<Vec<InstructionBox>>>,
     world_snapshot: FieldRef<'a, WorldStateSnapshotV1>,
     approval_outcome: FieldRef<'a, Vec<u8>>,
@@ -92,6 +93,10 @@ pub struct MultisigExecutionEvidenceRefV1<'a> {
 impl<'a> MultisigExecutionEvidenceRefV1<'a> {
     /// Borrow exact admitted originals for bounded serialization; no authority is granted.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "borrows all eight fields of the sole certified evidence layout without cloning or regrouping originals"
+    )]
     pub fn new(
         height: &'a u64,
         context_id: &'a Hash,
@@ -106,7 +111,7 @@ impl<'a> MultisigExecutionEvidenceRefV1<'a> {
             height: FieldRef(height),
             context_id: FieldRef(context_id),
             multisig_account_id: FieldRef(multisig_account_id),
-            entrypoint_hash: FieldRef(entrypoint_hash),
+            entrypoint_hash: *entrypoint_hash,
             instructions_hash: FieldRef(instructions_hash),
             world_snapshot: FieldRef(world_snapshot),
             approval_outcome: FieldRef(approval_outcome),
@@ -198,6 +203,37 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(decode_unverified_multisig_execution_evidence_v1(&trailing).is_err());
+    }
+    #[test]
+    fn borrowed_entrypoint_preserves_the_canonical_raw_array_at_byte_boundaries() {
+        for entrypoint_hash in [
+            [0; 32],
+            [u8::MAX; 32],
+            core::array::from_fn(|i| i.to_le_bytes()[0]),
+        ] {
+            let mut data = unverified_data();
+            data.entrypoint_hash = entrypoint_hash;
+            let borrowed = MultisigExecutionEvidenceRefV1::new(
+                &data.height,
+                &data.context_id,
+                &data.multisig_account_id,
+                &data.entrypoint_hash,
+                &data.instructions_hash,
+                &data.world_snapshot,
+                &data.approval_outcome,
+                &data.terminal_execution,
+            );
+            let bytes = norito::encode_canonical(&borrowed).unwrap();
+            assert_eq!(bytes, norito::encode_canonical(&data).unwrap());
+            assert_eq!(
+                decode_unverified_multisig_execution_evidence_v1(&bytes).unwrap(),
+                data
+            );
+            assert_eq!(
+                norito::json::to_json(&borrowed).unwrap(),
+                norito::json::to_json(&data).unwrap()
+            );
+        }
     }
     #[test]
     fn native_reader_refuses_empty_genesis_and_oversized_original_records() {

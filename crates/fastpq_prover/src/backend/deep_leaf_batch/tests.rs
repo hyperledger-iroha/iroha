@@ -46,7 +46,11 @@ fn bounded_leaf_batches_match_canonical_hashes_for_every_oracle_and_worker_count
                             assert_eq!(
                                 *actual,
                                 binding
-                                    .hash_leaf(oracle, i as u32, bytes)
+                                    .hash_leaf(
+                                        oracle,
+                                        u32::try_from(i).expect("bounded leaf index"),
+                                        bytes
+                                    )
                                     .unwrap()
                                     .into_bytes()
                             );
@@ -177,7 +181,11 @@ fn actual_metal_leaf_batches_match_canonical_sha3_for_every_oracle() {
                 assert_eq!(
                     *actual,
                     binding
-                        .hash_leaf(oracle, index as u32, body)
+                        .hash_leaf(
+                            oracle,
+                            u32::try_from(index).expect("bounded leaf index"),
+                            body
+                        )
                         .unwrap()
                         .into_bytes()
                 );
@@ -192,7 +200,11 @@ fn overcapacity_leaf_and_prepared_batches_refuse_without_changing_outputs() {
     let frames = (0..=CAPACITY)
         .map(|index| {
             binding
-                .prepare_leaf(Oracle::QuotientAndMask, index as u32, &[0; 96])
+                .prepare_leaf(
+                    Oracle::QuotientAndMask,
+                    u32::try_from(index).expect("bounded leaf index"),
+                    &[0; 96],
+                )
                 .unwrap()
         })
         .collect::<Vec<_>>();

@@ -945,8 +945,10 @@ fn merged_projection_preserves_signatures_merge_authority_and_all_original_input
 fn parent_service_original_changes_complete_proposal_commitment() {
     let mut left = plain_signed_block();
     let mut right = left.clone();
-    let mut effects = crate::consensus::NposConsensusEffects::default();
-    effects.parent_service_commit_qc = Some(vec![0x21, 0x32]);
+    let mut effects = crate::consensus::NposConsensusEffects {
+        parent_service_commit_qc: Some(vec![0x21, 0x32]),
+        ..Default::default()
+    };
     left.set_npos_consensus_effects(Some(effects.clone()));
     effects.parent_service_commit_qc = Some(vec![0x21, 0x33]);
     right.set_npos_consensus_effects(Some(effects));

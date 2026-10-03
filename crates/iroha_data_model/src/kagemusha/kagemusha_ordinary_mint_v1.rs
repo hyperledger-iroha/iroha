@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(aad.amount, opening.amount);
         assert_eq!(aad.context_digest, context.binding_digest().unwrap());
         for field in 0..4 {
-            let mut changed = opening.clone();
+            let mut changed = opening;
             match field {
                 0 => changed.credit_commitment_opening[0] ^= 1,
                 1 => changed.recipient_binding_opening[0] ^= 1,

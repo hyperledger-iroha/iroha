@@ -66,7 +66,7 @@ fn historical(
 }
 
 fn signed(
-    subject: KagemushaOrdinaryCurrentIssuerStateSubjectV1,
+    subject: &KagemushaOrdinaryCurrentIssuerStateSubjectV1,
     seed: u8,
 ) -> KagemushaSignedOrdinaryCurrentIssuerStateV1 {
     let core = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -76,7 +76,7 @@ fn signed(
             &subject.canonical_signing_bytes().unwrap(),
         )
         .unwrap(),
-        subject,
+        subject: *subject,
     }
 }
 
@@ -141,7 +141,7 @@ fn current_state_all_public_types_roundtrip_and_lifecycle_never_grants_native_au
             let subject = current_subject(&f, &history, state);
             roundtrip(&state);
             roundtrip(&subject);
-            let reply = signed(subject, 63);
+            let reply = signed(&subject, 63);
             roundtrip(&reply);
             let original = reply.canonical_bytes().unwrap();
             let decoded =
@@ -211,7 +211,7 @@ fn current_state_genuine_core_signatures_cannot_substitute_original_nonce_epoch_
         let history = historical(&f);
         let policy = f.ordinary_policy.identity_policy();
         let subject = current_subject(&f, &history, KagemushaOrdinaryEnrollmentStateV1::Active);
-        let original = signed(subject, 63);
+        let original = signed(&subject, 63);
         original
             .authenticate(
                 policy,
@@ -243,7 +243,7 @@ fn current_state_genuine_core_signatures_cannot_substitute_original_nonce_epoch_
                 14 => changed.app_key_reference[0] ^= 1,
                 _ => changed.financial_authority_commitment[0] ^= 1,
             }
-            let changed = signed(changed, 63);
+            let changed = signed(&changed, 63);
             changed
                 .signature
                 .verify(
@@ -283,7 +283,7 @@ fn current_state_genuine_core_signatures_cannot_substitute_original_nonce_epoch_
             "current issuer state native nonce/epoch/original join differs"
         );
         assert_eq!(
-            signed(subject, 64)
+            signed(&subject, 64)
                 .authenticate(
                     policy,
                     f.ordinary_policy.issuer_policy(),
@@ -306,7 +306,7 @@ fn current_state_exact_archive_bounds_original_interval_and_successor_rules_surv
     let history = historical(&f);
     let policy = f.ordinary_policy.identity_policy();
     let subject = current_subject(&f, &history, KagemushaOrdinaryEnrollmentStateV1::Active);
-    let reply = signed(subject, 63);
+    let reply = signed(&subject, 63);
     let original = reply.canonical_bytes().unwrap();
     let mut tail = original.clone();
     tail.push(0);
@@ -404,7 +404,7 @@ fn current_state_signed_issuer_cap_1000_is_inclusive_and_1001_never_admits() {
             .is_err()
         );
 
-        let exact_reply = signed(exact, 63);
+        let exact_reply = signed(&exact, 63);
         let mut checked = exact_reply
             .authenticate(
                 policy,
@@ -445,7 +445,7 @@ fn current_state_signed_issuer_cap_1000_is_inclusive_and_1001_never_admits() {
         // All exact original joins are retained; only the otherwise valid expiry changes.
         let mut over = exact;
         over.expires_at_ms = 1301;
-        let over_reply = signed(over, 63);
+        let over_reply = signed(&over, 63);
         over_reply
             .signature
             .verify(
@@ -494,7 +494,7 @@ fn current_state_requires_the_same_complete_issuer_namespace_and_live_time_floor
         let policy = f.ordinary_policy.identity_policy();
         let issuer = f.ordinary_policy.issuer_policy();
         let subject = current_subject(&f, &history, KagemushaOrdinaryEnrollmentStateV1::Active);
-        let reply = signed(subject, 63);
+        let reply = signed(&subject, 63);
         let checked = reply
             .authenticate(
                 policy,
@@ -661,7 +661,7 @@ fn archived_current_cap_uses_signed_original_time_without_returning_a_live_owner
             1300,
         )
         .unwrap();
-        let original = signed(subject, 63).canonical_bytes().unwrap();
+        let original = signed(&subject, 63).canonical_bytes().unwrap();
         let archived = policy
             .authenticate_archived_enrollment_original_data(
                 history.preparation_original(),
@@ -707,7 +707,7 @@ fn archived_current_cap_uses_signed_original_time_without_returning_a_live_owner
         );
         let mut over = subject;
         over.expires_at_ms = 1301;
-        let over_original = signed(over, 63).canonical_bytes().unwrap();
+        let over_original = signed(&over, 63).canonical_bytes().unwrap();
         assert!(
             archived
                 .authenticate_current_reply_original_data(
@@ -748,7 +748,7 @@ fn archived_current_cap_uses_signed_original_time_without_returning_a_live_owner
                 .authenticate_current_reply_original_data(
                     &later,
                     INSTALLED_NAMESPACE,
-                    &signed(subject, 64).canonical_bytes().unwrap(),
+                    &signed(&subject, 64).canonical_bytes().unwrap(),
                     &[90; 32],
                     7,
                 )

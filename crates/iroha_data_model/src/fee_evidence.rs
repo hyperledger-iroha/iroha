@@ -242,7 +242,8 @@ impl FeeEvidenceSnapshotV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for zero height, excess records, invalid record contents, or duplicate or unordered keys.
+    /// Returns an error for a zero height, excessive count, invalid records, or
+    /// records not uniquely ordered at that height.
     pub fn from_records(height: u64, records: &[FeeEvidenceRecordV1]) -> Result<Self, String> {
         let count = u32::try_from(records.len()).map_err(|_| "fee record count overflow")?;
         if height == 0
@@ -333,7 +334,8 @@ impl FeeEvidenceWitnessProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid or noncanonical encoding or an incoherent snapshot commitment.
+    /// Returns an error if the snapshot cannot be canonically decoded or its
+    /// fields are incoherent.
     pub fn commitment(&self) -> Result<FeeEvidenceSnapshotV1, String> {
         let commitment: FeeEvidenceSnapshotV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -534,7 +536,9 @@ impl FeeEvidenceWindowProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for unsupported version, invalid finality, incomplete evidence, policy mismatch, or failed conservation checks.
+    /// Returns an error for an unsupported version, incomplete or invalid finality,
+    /// mismatched roots or policy provenance, altered immutable records, invalid
+    /// reward evidence, or accounting that does not conserve funds.
     pub fn verify(&self, anchor: &FeeEvidenceTrustAnchorV1) -> Result<(), String> {
         use crate::validation_fee::ValidationFeePolicySnapshotCommitmentV1;
         if self.version != 1 {
@@ -1026,7 +1030,8 @@ mod tests {
             norito::json::from_str::<FeeEvidenceRecordV1>(&json).unwrap(),
             record
         );
-        let snapshot = FeeEvidenceSnapshotV1::from_records(19, &[record.clone()]).unwrap();
+        let snapshot =
+            FeeEvidenceSnapshotV1::from_records(19, std::slice::from_ref(&record)).unwrap();
         assert_eq!(
             norito::decode_canonical::<FeeEvidenceSnapshotV1>(
                 &norito::to_bytes(&snapshot).unwrap()
@@ -1092,9 +1097,9 @@ mod tests {
             reference_feed_config_version: 1,
             reference_provider_accounts: (10..15).map(account).collect(),
             max_sbd_per_attempt_minor: 1000,
-            max_sbd_per_day_minor: 100000,
+            max_sbd_per_day_minor: 100_000,
             min_interval_ms: 60000,
-            max_source_age_ms: 300000,
+            max_source_age_ms: 300_000,
             max_slippage_bps: 100,
             validator_lane_id: LaneId::new(0),
             min_reward_claim_xor_minor: 1,
@@ -1122,7 +1127,7 @@ mod tests {
             reserved_xor: 1,
             ..Default::default()
         };
-        let opening_records = vec![receipt(1, "a"), custody_record(1, opening.clone())];
+        let opening_records = vec![receipt(1, "a"), custody_record(1, opening)];
         let period = 1_790_773_200_000;
         let now = crate::validation_fee::honiara_month_bounds(period)
             .unwrap()
@@ -1150,11 +1155,7 @@ mod tests {
         };
         // An unsuccessful attempt changes only its rate clock. The waived 70 cents
         // and the opening checkpoint's receipt never become new reward credit.
-        let failed = vec![
-            receipt(2, "b"),
-            attempt(2, now),
-            custody_record(2, opening.clone()),
-        ];
+        let failed = vec![receipt(2, "b"), attempt(2, now), custody_record(2, opening)];
         let at = now + 60_000;
         let allocation = FeeEvidenceRecordV1 {
             key: crate::validation_fee_rewards::validation_fee_reward_state_key(
@@ -1186,11 +1187,7 @@ mod tests {
         opening.last_conversion_ms = Some(at);
         opening.conversion_day = (at + 39_600_000) / 86_400_000;
         opening.converted_today_sbd = 50;
-        let converted = vec![
-            attempt(3, at),
-            allocation,
-            custody_record(3, opening.clone()),
-        ];
+        let converted = vec![attempt(3, at), allocation, custody_record(3, opening)];
         opening.reserved_xor = 1;
         opening.next_claim = 1;
         let claim = FeeEvidenceRecordV1 {

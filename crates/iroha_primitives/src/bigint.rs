@@ -170,6 +170,86 @@ impl BigInt {
             inner: InnerBigInt::from_biguint(self.inner.sign(), magnitude),
         })
     }
+    /// Exact backing for a nonnegative borrowed magnitude, with no allocation.
+    pub(crate) fn unsigned_words_admission_layout(
+        words: &[u64],
+    ) -> Result<Layout, BigIntAdmissionCloneError> {
+        let used = words
+            .iter()
+            .rposition(|word| *word != 0)
+            .map_or(0, |index| index + 1);
+        let bits = if used == 0 {
+            0
+        } else {
+            (used - 1)
+                .checked_mul(64)
+                .and_then(|bits| bits.checked_add(64 - words[used - 1].leading_zeros() as usize))
+                .ok_or(BigIntAdmissionCloneError::LayoutOverflow)?
+        };
+        if bits >= MAX_BITS {
+            return Err(BigIntAdmissionCloneError::SourceShapeChanged);
+        }
+        Layout::array::<NativeBigDigit>(bits.div_ceil(NativeBigDigit::BITS as usize))
+            .map_err(|_| BigIntAdmissionCloneError::LayoutOverflow)
+    }
+
+    /// Adopt exactly one fallible native allocation after the caller admits its layout.
+    #[allow(unsafe_code)]
+    pub(crate) fn try_from_unsigned_words_for_admission(
+        words: &[u64],
+    ) -> Result<Self, BigIntAdmissionCloneError> {
+        // SAFETY: the global allocator supplies the exact requested allocation or null.
+        unsafe { Self::try_from_unsigned_words_with(words, |layout| std::alloc::alloc(layout)) }
+    }
+
+    /// A non-null allocator result must be globally owned and match the exact layout.
+    #[allow(unsafe_code)]
+    unsafe fn try_from_unsigned_words_with(
+        words: &[u64],
+        allocate: impl FnOnce(Layout) -> *mut u8,
+    ) -> Result<Self, BigIntAdmissionCloneError> {
+        let layout = Self::unsigned_words_admission_layout(words)?;
+        if layout.size() == 0 {
+            return Ok(Self::zero());
+        }
+        let pointer = allocate(layout);
+        if pointer.is_null() {
+            return Err(BigIntAdmissionCloneError::Allocator {
+                requested_bytes: layout.size(),
+            });
+        }
+        let capacity = layout.size() / core::mem::size_of::<NativeBigDigit>();
+        // SAFETY: allocation owns exactly `capacity` native digits with length initially zero.
+        let digit_pointer = core::ptr::NonNull::new(pointer)
+            .expect("the allocation pointer was checked non-null")
+            .cast::<NativeBigDigit>()
+            .as_ptr();
+        let mut digits = unsafe { Vec::from_raw_parts(digit_pointer, 0, capacity) };
+        #[cfg(target_pointer_width = "64")]
+        for digit in words.iter().take(capacity) {
+            digits.push(*digit);
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        for digit in words
+            .iter()
+            .flat_map(|word| {
+                [
+                    u32::try_from(word & u64::from(u32::MAX))
+                        .expect("masked native digit fits u32"),
+                    u32::try_from(word >> 32).expect("upper native digit fits u32"),
+                ]
+            })
+            .take(capacity)
+        {
+            digits.push(digit);
+        }
+        Ok(Self {
+            inner: InnerBigInt::from_biguint(
+                num_bigint::Sign::Plus,
+                InnerBigUint::from_native_digits(digits),
+            ),
+        })
+    }
     /// Compute `10^exp` with signed-domain checking.
     pub fn pow10(exp: u32) -> Option<Self> {
         let val = InnerBigInt::from(10u8).pow(exp);
@@ -544,6 +624,74 @@ mod tests {
                 })
             );
         }
+    }
+    #[test]
+    #[allow(unsafe_code)]
+    fn admitted_unsigned_words_have_exact_backing_and_refuse_before_allocation() {
+        for words in [vec![], vec![0], vec![0, 0]] {
+            assert_eq!(
+                BigInt::unsigned_words_admission_layout(&words)
+                    .unwrap()
+                    .size(),
+                0
+            );
+            // SAFETY: a zero magnitude must return before calling the allocator.
+            assert_eq!(
+                unsafe {
+                    BigInt::try_from_unsigned_words_with(&words, |_| panic!("zero allocated"))
+                }
+                .unwrap(),
+                BigInt::zero()
+            );
+        }
+        for words in [
+            vec![1],
+            vec![1 << 32],
+            vec![u64::MAX, 1],
+            vec![7, 0, 4],
+            vec![1, 0, 0],
+        ] {
+            let expected = words
+                .iter()
+                .rev()
+                .fold(InnerBigInt::zero(), |value, word| (value << 64) + word);
+            let layout = BigInt::unsigned_words_admission_layout(&words).unwrap();
+            let mut calls = 0;
+            // SAFETY: the closure returns a matching globally owned allocation.
+            let actual = unsafe {
+                BigInt::try_from_unsigned_words_with(&words, |requested| {
+                    assert_eq!(requested, layout);
+                    calls += 1;
+                    std::alloc::alloc(requested)
+                })
+            }
+            .unwrap();
+            assert_eq!(calls, 1);
+            assert_eq!(actual.inner(), &expected);
+            assert_eq!(actual.admission_clone_layout().unwrap(), layout);
+            assert_eq!(
+                BigInt::try_from_unsigned_words_for_admission(&words).unwrap(),
+                actual
+            );
+            // SAFETY: null is a supported physical allocation refusal.
+            assert_eq!(
+                unsafe { BigInt::try_from_unsigned_words_with(&words, |_| core::ptr::null_mut()) },
+                Err(BigIntAdmissionCloneError::Allocator {
+                    requested_bytes: layout.size()
+                })
+            );
+        }
+        let mut too_wide = [0_u64; MAX_BITS / 64];
+        too_wide[MAX_BITS / 64 - 1] = 1 << 63;
+        // SAFETY: invalid width must be refused before calling the allocator.
+        assert_eq!(
+            unsafe {
+                BigInt::try_from_unsigned_words_with(&too_wide, |_| {
+                    panic!("invalid magnitude allocated")
+                })
+            },
+            Err(BigIntAdmissionCloneError::SourceShapeChanged)
+        );
     }
     #[test]
     fn streamed_norito_bigint_matches_signed_reference_at_every_width() {

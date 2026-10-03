@@ -39825,6 +39825,7 @@ mod tiered_snapshot_diff_tests {
             .expect("high-water zero inventory digest must fail");
         assert!(error.to_string().contains("musubi_pin_outbox_high_waters"));
     }
+    #[test]
     fn isolated_zk_prevalidation_install_preserves_process_gas_schedule() {
         let _gas_guard = crate::gas::lock_confidential_gas_for_tests();
         let mut state = State::new_with_chain(

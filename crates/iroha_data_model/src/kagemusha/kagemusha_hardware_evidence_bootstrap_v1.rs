@@ -824,8 +824,8 @@ mod tests {
             google_cloud_project_number: 1,
             play_integrity_policy: KagemushaPlayIntegrityPolicyV1 {
                 policy_digest: [10; 32],
-                maximum_evidence_age_ms: 120000,
-                maximum_refresh_interval_ms: 120000,
+                maximum_evidence_age_ms: 120_000,
+                maximum_refresh_interval_ms: 120_000,
                 require_play_recognized: true,
                 require_licensed: true,
                 minimum_device_integrity: 1,
@@ -840,8 +840,8 @@ mod tests {
             }),
             policy_epoch: 1,
             not_before_ms: 1,
-            expires_at_ms: 1000000,
-            maximum_attempt_lifetime_ms: 120000,
+            expires_at_ms: 1_000_000,
+            maximum_attempt_lifetime_ms: 120_000,
         };
         let message = m.signing_bytes().unwrap();
         let mut approvals = vec![
@@ -915,7 +915,7 @@ mod tests {
                 4 => n.manifest.google_oauth_client_id = "other-audience".into(),
                 5 => n.manifest.core_origin = "https://other.example".into(),
                 _ => n.manifest.network_id = [24; 32],
-            };
+            }
             assert!(n.authenticate(&p).is_err());
         }
     }
@@ -953,7 +953,7 @@ mod tests {
             client_nonce: [3; 32],
             alias: a,
             issued_at_ms: 1,
-            deadline_ms: 120001,
+            deadline_ms: 120_001,
         };
         r.validate().unwrap();
         r.client_nonce = [4; 32];
