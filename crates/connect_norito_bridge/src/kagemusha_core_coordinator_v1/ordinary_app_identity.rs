@@ -1076,6 +1076,7 @@ impl OrdinaryBackend {
             return Err(Error::Rejected);
         }
         if phase == 15 {
+            use sha2::{Digest as _, Sha256};
             let ticket =
                 u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
             let index =

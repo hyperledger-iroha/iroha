@@ -2913,6 +2913,14 @@ impl Iroha {
                 "KAGEMUSHA V1 runtime could not load finalized authority after Kura replay: {error}"
             ))
         })?;
+        // Actual ordinary credit publication begins only after signed replay and independent
+        // runtime installation. Emergency Fast has no monetary sidecar writer or producer.
+        if !emergency_fast {
+            let child = iroha_core::smartcontracts::isi::kagemusha::start_ordinary_mint_credit_publication_v1(
+                Arc::clone(&state), supervisor.shutdown_signal(),
+            ).map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+            supervisor.monitor(child);
+        }
         // Key admission and rotation read canonical WSV parameters. Local configuration must
         // match that authority rather than overwriting it without a block.
         state

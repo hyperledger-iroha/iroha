@@ -12,13 +12,20 @@ enum KagemushaAppPlatformFrameV1 {
         throw invalid("invalid original app operation identity")
       }
     case 15:
-      guard method == .appOperationApproval, f.count == 3, f[1].count == 4 else {
-        throw invalid("invalid ordinary business preparation")
-      }
-      switch KagemushaAppPlatformPreparedProjectionV1.u32(f[1]) {
-      case 2: guard (1...4096).contains(f[2].count) else { throw invalid("invalid receiver request original") }
-      case 4: guard f[2].count == 16, KagemushaAppPlatformPreparedProjectionV1.nonzero(f[2]) else { throw invalid("invalid positive u128 amount") }
-      default: throw invalid("unknown ordinary business operation")
+      if method == .appEnrollmentPossession {
+        guard f.count == 3, ticket(f[1]), f[2].count == 4,
+          KagemushaAppPlatformPreparedProjectionV1.u32(f[2]) < 4 else {
+          throw invalid("invalid complete financial Start chunk request")
+        }
+      } else {
+        guard f.count == 3, f[1].count == 4 else {
+          throw invalid("invalid ordinary business preparation")
+        }
+        switch KagemushaAppPlatformPreparedProjectionV1.u32(f[1]) {
+        case 2: guard (1...4096).contains(f[2].count) else { throw invalid("invalid receiver request original") }
+        case 4: guard f[2].count == 16, KagemushaAppPlatformPreparedProjectionV1.nonzero(f[2]) else { throw invalid("invalid positive u128 amount") }
+        default: throw invalid("unknown ordinary business operation")
+        }
       }
     case 2, 4, 5, 6, 7:
       guard f.count == 2, ticket(f[1]) else { throw invalid("invalid app platform ticket") }
@@ -72,8 +79,21 @@ enum KagemushaAppPlatformFrameV1 {
           approvalID: nil, enrollmentChallengeHash: request[1])
       }
     case 15:
-      guard f.count == 1, KagemushaAppPlatformPreparedProjectionV1.digest(f[0]) else {
-        throw invalid("invalid Native reserved ordinary operation identity")
+      if method == .appEnrollmentPossession {
+        guard f.count == 6, f[0] == request[2], f[3].count == 4,
+          [f[2], f[4], f[5]].allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
+          throw invalid("invalid complete financial Start chunk metadata")
+        }
+        let total = Int(KagemushaAppPlatformPreparedProjectionV1.u32(f[3]))
+        let offset = Int(KagemushaAppPlatformPreparedProjectionV1.u32(request[2])) * 65536
+        guard (1...262144).contains(total), offset < total,
+          f[1].count == min(65536, total - offset) else {
+          throw invalid("invalid complete financial Start chunk length")
+        }
+      } else {
+        guard f.count == 1, KagemushaAppPlatformPreparedProjectionV1.digest(f[0]) else {
+          throw invalid("invalid Native reserved ordinary operation identity")
+        }
       }
     case 2, 5:
       guard f.count == 3, f[0].count == 1 else { throw invalid("invalid original recovery state") }

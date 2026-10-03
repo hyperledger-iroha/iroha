@@ -94,6 +94,13 @@ pub(crate) mod ordinary_guard_generation;
 #[path = "ordinary_mint_generation.rs"]
 pub(crate) mod ordinary_mint_generation;
 
+#[path = "ordinary_finalized_mint_generation.rs"]
+mod ordinary_finalized_mint_generation;
+pub use ordinary_finalized_mint_generation::{
+    KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+    prove_ordinary_finalized_mint_from_checkpoint_v1, verify_ordinary_finalized_mint_credit_v1,
+};
+
 #[path = "ordinary_cash_terminal_generation.rs"]
 pub(super) mod ordinary_cash_terminal_generation;
 

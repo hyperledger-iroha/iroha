@@ -3,11 +3,20 @@
 mod authority;
 mod execution_availability;
 pub(crate) mod kagemusha_v1_reserve;
+mod ordinary_mint_checkpoint;
 mod ordinary_mint_clock;
+mod ordinary_mint_credit_runtime;
+mod ordinary_mint_credit_worker;
+pub use ordinary_mint_credit_worker::{
+    ordinary_mint_credit_publication_working_set_bytes_v1, read_published_ordinary_mint_credit_v1,
+    start_ordinary_mint_credit_publication_v1,
+};
 /// Separate current World issuer decision for ordinary Mint funding.
 pub mod ordinary_mint_debit_admission;
 /// Independently World-admitted ordinary pre-debit issuer purpose, separate from OEM proof admission.
 pub mod ordinary_mint_permission;
+/// Genuine archived ordinary Mint source and governed checkpoint publication.
+pub mod ordinary_mint_publication;
 mod ordinary_mint_runtime;
 mod ordinary_mint_submission;
 #[cfg(test)]
@@ -298,6 +307,28 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
     /// authentication, then terminally reverified before persistence; it is deliberately absent
     /// from the profile digest so the release identity cannot depend on a proof that embeds that
     /// same release identity.
+    /// Prove the exact ordinary committed source under separately retained governed authority.
+    /// The source is created only by real archived native execution, never offered data.
+    fn prove_finalized_ordinary_top_up(
+        &self,
+        _source: &ordinary_mint_publication::KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'_>,
+        _checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<
+        crate::zk::kagemusha_v1_recursion::KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+        String,
+    > {
+        Err("genuine ordinary finalized Mint producer unavailable".into())
+    }
+    /// Verify retained full ordinary credit without producing replacement proof bytes.
+    fn verify_finalized_ordinary_top_up(
+        &self,
+        _source: &ordinary_mint_publication::KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'_>,
+        _credit: &KagemushaMintCreditV1,
+        _checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(), String> {
+        Err("genuine ordinary finalized Mint readback verifier unavailable".into())
+    }
+
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],
@@ -1483,6 +1514,29 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .artifacts
             .verify_redemption_request(&runtime.verifier, request)
             .map_err(|error| error.to_string())
+    }
+
+    fn prove_finalized_ordinary_top_up(
+        &self,
+        source: &ordinary_mint_publication::KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<
+            '_,
+        >,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<
+        crate::zk::kagemusha_v1_recursion::KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+        String,
+    > {
+        ordinary_mint_credit_runtime::prove(self, source, checkpoint)
+    }
+    fn verify_finalized_ordinary_top_up(
+        &self,
+        source: &ordinary_mint_publication::KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<
+            '_,
+        >,
+        credit: &KagemushaMintCreditV1,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(), String> {
+        ordinary_mint_credit_runtime::verify(self, source, credit, checkpoint)
     }
 
     fn prove_mint_authority_bootstrap(

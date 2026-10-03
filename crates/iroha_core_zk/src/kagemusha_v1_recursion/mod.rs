@@ -282,6 +282,10 @@ pub use generation::{
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_platform_credential_hash_claim_v1,
 };
+pub use generation::{
+    KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+    prove_ordinary_finalized_mint_from_checkpoint_v1, verify_ordinary_finalized_mint_credit_v1,
+};
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::{
     KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaLoadedEpRecursiveStateArtifactsV1,

@@ -324,7 +324,7 @@ mod android {
         composition.require_current()?;
         context.require_jni_owner(env, class)?;
         let clock_disposition =
-            super::super::ordinary_app_identity::native_existing_account_journal_disposition(
+            crate::kagemusha_core_coordinator_v1::ordinary_app_identity::native_existing_account_journal_disposition(
                 &storage.join("native-clock/ordinary-native-clock.norito.wal"),
             )?;
         let startup =

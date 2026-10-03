@@ -14,7 +14,7 @@ use super::{
     KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1, KagemushaEncryptedCreditAadV1,
     KagemushaEncryptedCreditEnvelopeV1, KagemushaEncryptedCreditPurposeV1,
     KagemushaHardwarePlatformClassV1, KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1,
-    KagemushaOperationKindV1, KagemushaOrdinaryCashClockContextV1,
+    KagemushaMintCreditV1, KagemushaOperationKindV1, KagemushaOrdinaryCashClockContextV1,
     KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryFinancialLineageV1,
     KagemushaVerifiedOrdinaryAppCredentialV1, kagemusha_ciphertext_digest_v1,
     kagemusha_liability_pool_id_v1, kagemusha_mint_credit_opening_commitment_v1,
@@ -748,6 +748,38 @@ impl KagemushaOrdinaryTopUpRequestV1 {
             .validate_encrypted_credit(&self.encrypted_credit)?;
         bounded(self)
     }
+    /// Check the complete neutral finalized credit against this exact ordinary request and the
+    /// independently admitted original receipt time. This validates data only: both Mint113 and
+    /// MintAuthority proofs, the actual receipt finality, current FI and one-use incoming State
+    /// consumption remain separate mandatory admissions. It never reconstructs an OEM request.
+    /// # Errors
+    /// Refuses a changed complete authorization, ciphertext, receipt time, recipient, amount,
+    /// lifecycle, manifest or neutral paired-proof frame.
+    pub fn validate_finalized_credit(
+        &self,
+        credit: &KagemushaMintCreditV1,
+        actual_committed_at_ms: u64,
+    ) -> Result<(), String> {
+        self.canonical_bytes()?;
+        credit.validate_shape().map_err(|e| e.to_string())?;
+        let expected = self
+            .authorization
+            .finalized_credit_statement(actual_committed_at_ms)?;
+        if credit.statement != expected
+            || credit.encrypted_credit != self.encrypted_credit
+            || credit.artifact_manifest_digest
+                != self
+                    .authorization
+                    .statement
+                    .context
+                    .artifact_manifest_digest
+        {
+            return Err(
+                "ordinary finalized credit differs from the complete request or receipt".into(),
+            );
+        }
+        Ok(())
+    }
     /// Exact account-consent message for this complete top-up, distinct from read-only FI/cash CAS.
     /// # Errors
     /// Refuses malformed original request or bounded canonical encoding.
@@ -1207,6 +1239,116 @@ mod tests {
         );
         assert_eq!(finalized.minted_at_ms, 1400);
         assert!(original.finalized_credit_statement(0).is_err());
+    }
+    // These complete frames are deliberately inert proof/AEAD data. Shape/identity checks below
+    // create no verified Mint113, MintAuthority, ledger finality, Native owner or funds grant.
+    fn neutral_credit_data_fixture() -> (KagemushaOrdinaryTopUpRequestV1, KagemushaMintCreditV1) {
+        let (_, context, _) = make_context(false);
+        let (statement, encrypted_credit) = make_statement(context);
+        let request = KagemushaOrdinaryTopUpRequestV1 {
+            version: 1,
+            authorization: authorization(statement),
+            encrypted_credit,
+        };
+        let statement = request
+            .authorization
+            .finalized_credit_statement(1400)
+            .unwrap();
+        let credit = KagemushaMintCreditV1 {
+            version: 1,
+            proof: super::super::KagemushaPairedProofV1 {
+                version: 1,
+                eq_protocol_digest: [71; 32],
+                ep_protocol_digest: [72; 32],
+                semantic_digest: statement.canonical_digest().unwrap(),
+                guard_eq_credential_audit: [73; 32],
+                guard_ep_credential_audit: [74; 32],
+                eq_deferred_audit: [75; 32],
+                ep_deferred_audit: [76; 32],
+                eq_proof: vec![77],
+                ep_proof: vec![78],
+                eq_history: vec![79; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                ep_history: vec![80; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+            },
+            statement,
+            finality_certificate_binding: [73; 32],
+            finality_authority_head: [74; 32],
+            finality_genesis_authorization_id: [81; 32],
+            finality_proof_binding_digest: [82; 32],
+            encrypted_credit: request.encrypted_credit.clone(),
+            artifact_manifest_digest: request
+                .authorization
+                .statement
+                .context
+                .artifact_manifest_digest,
+        };
+        (request, credit)
+    }
+    #[test]
+    fn ordinary_finalized_credit_data_roundtrips_and_binds_full_neutral_statement() {
+        let (request, credit) = neutral_credit_data_fixture();
+        request.validate_finalized_credit(&credit, 1400).unwrap();
+        let raw = norito::encode_canonical(&credit).unwrap();
+        let restored = KagemushaMintCreditV1::decode_canonical_shape_exact(&raw).unwrap();
+        assert_eq!(restored, credit);
+        request.validate_finalized_credit(&restored, 1400).unwrap();
+        assert!(request.validate_finalized_credit(&credit, 1401).is_err());
+        assert!(request.validate_finalized_credit(&credit, 0).is_err());
+        for role in 0..5 {
+            let mut changed = credit.clone();
+            match role {
+                0 => changed.statement.recipient_credential_commitment[0] ^= 1,
+                1 => changed.statement.lifecycle.hardware_profile_id[0] ^= 1,
+                2 => changed.statement.authorization_context_digest[0] ^= 1,
+                3 => changed.artifact_manifest_digest[0] ^= 1,
+                _ => changed.encrypted_credit[0] ^= 1,
+            }
+            assert!(request.validate_finalized_credit(&changed, 1400).is_err());
+        }
+    }
+    #[test]
+    fn ordinary_finalized_credit_requires_exact_predebit_proof_original_even_with_same_credit_id() {
+        let (request, credit) = neutral_credit_data_fixture();
+        let mut other_request = request.clone();
+        other_request.authorization.proof.eq_proof[0] ^= 1;
+        other_request.canonical_bytes().unwrap();
+        assert_eq!(
+            other_request.authorization.statement.credit_id,
+            request.authorization.statement.credit_id
+        );
+        assert_eq!(other_request.encrypted_credit, request.encrypted_credit);
+        assert_ne!(
+            other_request.authorization.binding_digest().unwrap(),
+            request.authorization.binding_digest().unwrap()
+        );
+        assert!(
+            other_request
+                .validate_finalized_credit(&credit, 1400)
+                .is_err()
+        );
+    }
+    #[test]
+    fn ordinary_finalized_credit_originals_remain_distinct_without_claiming_proof_admission() {
+        let (request, credit) = neutral_credit_data_fixture();
+        let mut other_credit = credit.clone();
+        other_credit.proof.eq_proof[0] ^= 1;
+        // This helper is explicitly shape/semantic data validation, not proof verification.
+        request
+            .validate_finalized_credit(&other_credit, 1400)
+            .unwrap();
+        assert_eq!(other_credit.statement, credit.statement);
+        assert_ne!(
+            <[u8; 32]>::from(Sha256::digest(norito::encode_canonical(&credit).unwrap())),
+            <[u8; 32]>::from(Sha256::digest(
+                norito::encode_canonical(&other_credit).unwrap()
+            ))
+        );
+        other_credit.proof.eq_history.pop();
+        assert!(
+            request
+                .validate_finalized_credit(&other_credit, 1400)
+                .is_err()
+        );
     }
     #[test]
     fn ordinary_topup_complete_canonical_original_refuses_trailing_and_cipher_substitution() {

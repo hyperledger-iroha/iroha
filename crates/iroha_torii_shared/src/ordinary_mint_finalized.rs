@@ -5,6 +5,10 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 /// Sole canonical signed-body target; no ordinary operation is decoded by the OEM status route.
 pub const ORDINARY_MINT_FINALIZED_ROUTE_V1: &str = "/v1/kagemusha/ordinary/top-up/finality";
+/// Distinct read of the immutable background-published full credit and complete finalized
+/// source original. The same sole selector codec is signed under this different exact target;
+/// it is not an alias for the source-only finality route and never performs proof generation.
+pub const ORDINARY_MINT_CREDIT_ROUTE_V1: &str = "/v1/kagemusha/ordinary/top-up/credit";
 /// Finite signed read selector; complete proof and request travel in the response.
 pub const ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1: usize = 16 * 1024;
 

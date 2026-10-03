@@ -196,19 +196,30 @@ endpoints. The CA check binds a synthetic paired MAIN record. The optimized
 constructor, full ordinary suite, upstream strict lint and merged-source qualification
 remain open. Maximum-proof external time/RSS evidence and enforced address-space
 limits remain separate cryptographic release gates. The non-test real-proof frontend
-remains under qualification. Later Privacy source additions require a fresh
-source/dep-info closure and test registry before current-candidate validation.
+remains under qualification. Later Privacy source additions have a separate
+development libtest build and registry discovery (2,541 tests, 65 ignored,
+433 dep-info inputs). After the shared Norito derive correction, the current
+debug-profile libtest compiles with all 8,374 captured source, literal and control
+inputs unchanged at the closed merged revision. Its actual registry preserves
+all 61 original ignores; the 2,476 ordinary cases are running serially after a
+current resource review. The derive library, strict JSON and UI regressions pass;
+full runtime validation remains open and retains its artifact's source epoch
+across the separate test-fixture repair.
 SDK Native custody and genuine production proving are mandatory even with SDK
 defaults disabled; assembly tools remain explicit
 `dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
 CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
-The last stable source-budget pass admits the two actual filesystem-lock edges
-and their measured edge-count costs. Subsequent workspace and manifest changes
-require a new check; current native frontend and proof qualification remain open.
-The signed-clock type path is corrected. The latest focused development
-fee-evidence build stops in Core ZK's HTTP-proof module on an undeclared `url`
-dependency, now declared in the current manifest. Its tests have not executed;
-a fresh compile and runtime result require the concurrent merge to close.
+Source budgets include the exact filesystem-lock, Petal, URL, wallet-manifest
+and IVM test-owner costs without growth headroom or relaxed ownership denials;
+current native frontend and proof qualification remain open.
+The signed-clock type path, Core ZK URL dependency and shared request-codec
+derive are corrected. The normal Core ZK library frontend passes with its default
+features and an unchanged source/Git interval. The repair chat installed the
+ordinary-mint submission-limit import and checkpoint genesis-error conversion
+that blocked the fee-target build; a fresh build and fee runtime remain pending.
+The current metadata sequence stops at its first build on three wallet custody
+types missing required canonical Norito schema names. Its source/Git interval
+is unchanged; the second build and strict freshness comparison have not run.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit
