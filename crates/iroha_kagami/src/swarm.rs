@@ -165,7 +165,7 @@ struct PreparedRuntimePeer {
 const GENESIS_EXPECTED_HASH_RUNTIME_TARGET: &str = "/run/secrets/iroha_genesis_expected_hash";
 const MAX_PEER_OVERRIDE_BYTES_V1: u64 = 64 * 1024;
 #[cfg(unix)]
-const CONTAINER_PROJECTION_FILE_MODE: u16 = 0o444;
+const CONTAINER_PROJECTION_FILE_MODE: rustix::fs::RawMode = 0o444;
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
