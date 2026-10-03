@@ -163,6 +163,12 @@ impl NativeResolverV1 {
         .map_err(|_| rejected)?;
         let finalized_now = view
             .latest_block()
+            .map_err(|error| match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    ProviderIngestCompletionSignerErrorV1::Unavailable
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => rejected,
+            })?
             .ok_or(rejected)?
             .header()
             .creation_time()
@@ -202,6 +208,12 @@ impl NativeResolverV1 {
         .map_err(|_| rejected)?;
         let finalized_now = view
             .latest_block()
+            .map_err(|error| match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    ProviderIngestCompletionSignerErrorV1::Unavailable
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => rejected,
+            })?
             .ok_or(rejected)?
             .header()
             .creation_time()

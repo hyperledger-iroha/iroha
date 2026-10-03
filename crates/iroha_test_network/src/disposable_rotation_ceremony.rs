@@ -247,8 +247,7 @@ fn verify_input(
                 .iter()
                 .zip(&roster)
                 .all(|(seat, peer)| seat.id() == *peer)
-            && roster.len() >= 4
-            && (roster.len() - 1) % 3 == 0,
+            && iroha_data_model::block::consensus::is_valid_committee_size(roster.len()),
         "rotation processes must match every exact frozen 3f+1 seat in order"
     );
     let observed = selected.observed_height();
@@ -1978,7 +1977,8 @@ where
     ]);
     run_genesis_public_command(&binary, &assemble_args).await?;
 
-    let quorum = 2 * ((authorizing_seats.len() - 1) / 3) + 1;
+    let faults = (authorizing_seats.len() - 1) / 3;
+    let quorum = authorizing_seats.len() - faults;
     let mut signatures = Vec::with_capacity(quorum);
     for (index, seat) in authorizing_seats.iter().take(quorum).enumerate() {
         let signature = controller

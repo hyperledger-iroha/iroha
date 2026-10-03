@@ -290,7 +290,13 @@ pub trait AnchorView {
     /// Hash of the global block at `height`, if this node has applied it.
     fn applied_hash(&self, height: u64) -> Option<HashOf<iroha_data_model::block::BlockHeader>>;
     /// Creation time (ms since the Unix epoch) of the applied global block at `height`.
-    fn creation_time_ms(&self, height: u64) -> Option<u64>;
+    ///
+    /// # Errors
+    /// Retains original local history refusal separately from completed read failures.
+    fn creation_time_ms(
+        &self,
+        height: u64,
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>>;
 }
 
 /// Blocks of the lane chain that admission deduplicates against at most (§3.2 step 5).
@@ -346,6 +352,9 @@ pub enum AdmissionAttemptError {
     /// The original authenticated payload must be retried locally.
     #[error("lane decode attempt deferred: {0:?}")]
     Deferred(norito::core::DecodeResourceError),
+    /// The original global-anchor history read must be retried with its allocation owner.
+    #[error("lane anchor read deferred: {0}")]
+    AnchorDeferred(crate::execution_attempt::ExecutionDeferred),
 }
 
 /// Why a lane block is not admissible (`Invalid`).
@@ -359,6 +368,14 @@ pub enum AdmissionError {
     AnchorMismatch {
         /// Anchor height.
         height: u64,
+    },
+    /// The applied global anchor body could not be read coherently.
+    #[error("anchor {height} history: {reason}")]
+    AnchorRead {
+        /// Anchor height.
+        height: u64,
+        /// Completed read failure.
+        reason: String,
     },
     /// The anchor height regressed below the previous lane block's.
     #[error("anchor {height} is below the previous anchor {previous}")]
@@ -434,12 +451,30 @@ pub fn admit(
     if !record.admits_anchor(batch.anchor_height) {
         return Err(AdmissionError::Inactive(batch.anchor_height).into());
     }
-    let anchor_time_ms =
-        anchors
-            .creation_time_ms(batch.anchor_height)
-            .ok_or(AdmissionError::AnchorMismatch {
-                height: batch.anchor_height,
-            })?;
+    let anchor_time_ms = anchors
+        .creation_time_ms(batch.anchor_height)
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                if cfg!(all(test, sumeragi_core_mutation = "HC61")) {
+                    AdmissionError::AnchorMismatch {
+                        height: batch.anchor_height,
+                    }
+                    .into()
+                } else {
+                    AdmissionAttemptError::AnchorDeferred(reason)
+                }
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                AdmissionError::AnchorRead {
+                    height: batch.anchor_height,
+                    reason: error.to_string(),
+                }
+                .into()
+            }
+        })?
+        .ok_or(AdmissionError::AnchorMismatch {
+            height: batch.anchor_height,
+        })?;
     let mut seen = BTreeSet::new();
     let mut tx_hashes = Vec::with_capacity(batch.transactions.len());
     for (index, tx) in batch.transactions.iter().enumerate() {
@@ -492,8 +527,12 @@ mod tests {
         ) -> Option<HashOf<iroha_data_model::block::BlockHeader>> {
             self.0.get(&height).map(|(hash, _)| *hash)
         }
-        fn creation_time_ms(&self, height: u64) -> Option<u64> {
-            self.0.get(&height).map(|(_, time)| *time)
+        fn creation_time_ms(
+            &self,
+            height: u64,
+        ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>>
+        {
+            Ok(self.0.get(&height).map(|(_, time)| *time))
         }
     }
 

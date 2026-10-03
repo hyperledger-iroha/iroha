@@ -54,6 +54,9 @@ impl MusubiPublicationFinalizedSeedReadCapabilityV1 {
             .reader
             .read_current_archive(query)
             .map_err(|error| match error {
+                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(
+                    error,
+                ) => MusubiSeedStagingErrorV1::Deferred(error),
                 super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
                     MusubiSeedStagingErrorV1::LocallyAhead
                 }

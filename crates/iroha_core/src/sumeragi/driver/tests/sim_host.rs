@@ -10,7 +10,7 @@ use std::{cell::Cell, collections::BTreeSet, sync::Arc};
 
 use iroha_sumeragi::{
     Core,
-    api::{Action, ConfigError, Event},
+    api::{Action, Event},
     message::{TrafficClass, WireMessage},
     sim::{
         crypto::SimCrypto,
@@ -144,9 +144,16 @@ impl DriverHost {
             Op::Exec(ExecOp::DriveApplicationControl(_)) => self.complete_kernel(Completion::Exec(
                 ExecDone::ApplicationControlDriven(Ok(None)),
             )),
-            Op::Exec(ExecOp::ReceiveApplicationControl { .. }) => self.complete_kernel(
-                Completion::Exec(ExecDone::ApplicationControlReceived(Ok(()))),
-            ),
+            Op::Exec(ExecOp::ReceiveApplicationControl {
+                occurrence,
+                from,
+                message,
+            }) => self.complete_kernel(Completion::Exec(ExecDone::ApplicationControlReceived {
+                occurrence,
+                from,
+                message,
+                result: Ok(()),
+            })),
             Op::Exec(ExecOp::Build {
                 req,
                 max_bytes,
@@ -176,7 +183,7 @@ impl DriverHost {
 }
 
 impl Host for DriverHost {
-    fn start(&mut self, start: Start) -> Result<Vec<Action>, ConfigError> {
+    fn start(&mut self, start: Start) -> Result<Vec<Action>, Box<dyn std::error::Error>> {
         STARTS.with(|s| s.set(s.get() + 1));
         self.now = start.now;
         let (kernel, actions) = Kernel::start(KernelStart {

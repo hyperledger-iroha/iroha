@@ -212,9 +212,10 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
             Account::new(ALICE_ID.clone()).build(&ALICE_ID),
             Account::new(validator.clone()).build(&validator),
         ],
-        [AssetDefinition::numeric(
+        [AssetDefinition::new(
             definition,
             "Staked XOR",
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -406,7 +407,13 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
         .clone();
     let custody_before = stx.world.public_lane_stake_custody.get(&key).cloned();
     let reserve_before = stx.world.public_lane_stake_reserves.get(&asset).cloned();
-    let funding = stx.world.assets.remove(asset.clone()).unwrap();
+    let funding = stx.world.assets.get(&asset).unwrap().clone();
+    let nexus = stx.nexus.clone();
+    stx.apply();
+    state_block.drain_transfer_transcripts();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(b"rejected-custody-slash"));
+    stx.nexus = nexus.clone();
+    stx.world.assets.remove(asset.clone());
     let instruction = SlashPublicLaneValidator {
         monetary_plan: fixture_slash_plan(&stx, lane, &(validator), 1, Quantity::from(100_u64)),
         lane_id: lane,
@@ -422,6 +429,11 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
         .execute(&ALICE_ID, &mut stx)
         .unwrap_err();
     assert!(matches!(error, Error::Find(FindError::Asset(_))), "{error}");
+    drop(stx);
+    assert!(state_block.drain_transfer_transcripts().is_empty());
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(b"retried-custody-slash"));
+    stx.nexus = nexus;
+    assert_eq!(stx.world.assets.get(&asset), Some(&funding));
     assert_eq!(
         stx.world.public_lane_stake_custody.get(&key).cloned(),
         custody_before
@@ -438,7 +450,6 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
         stx.world.public_lane_stake_shares.get(&share_key),
         Some(&share_before)
     );
-    stx.world.assets.insert(asset.clone(), funding);
     instruction.execute(&ALICE_ID, &mut stx).unwrap();
     assert_eq!(
         stx.world.public_lane_stake_custody.get(&key),
@@ -497,7 +508,7 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx =
             state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
-        stx.nexus = nexus;
+        stx.nexus = nexus.clone();
         let key = (lane, validator.clone());
         let share_key = stake_key(lane, &validator, &validator);
         let share_before = stx
@@ -521,6 +532,12 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
             .execute(&validator, &mut stx)
             .unwrap_err();
         assert!(matches!(error, Error::Find(FindError::Asset(_))), "{error}");
+        drop(stx);
+        assert!(state_block.drain_transfer_transcripts().is_empty());
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::new(b"retried-custody-unbond"));
+        stx.nexus = nexus;
+        assert_eq!(stx.world.assets.get(&asset), Some(&funding));
         assert_eq!(
             stx.world.public_lane_stake_custody.get(&key).cloned(),
             custody_before
@@ -533,7 +550,6 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
             stx.world.public_lane_stake_shares.get(&share_key),
             Some(&share_before)
         );
-        stx.world.assets.insert(asset.clone(), funding);
         instruction.execute(&validator, &mut stx).unwrap();
         let remaining = Quantity::from(1_000_u64 - withdrawal);
         if remaining.is_zero() {

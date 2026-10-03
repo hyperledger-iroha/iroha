@@ -7,7 +7,7 @@ use std::{
     mem::MaybeUninit,
 };
 /// Fixed-shape failures from bounded JSON serialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BoundedJsonError {
     /// The serializer has no checked writer implementation.
     #[error("bounded JSON serialization is unsupported")]
@@ -21,10 +21,37 @@ pub enum BoundedJsonError {
     /// Original caller-budget or physical destination-allocation refusal.
     #[error(transparent)]
     DecodeResource(crate::core::DecodeResourceError),
+    /// Original refusal with its private canonical admission scope identity.
+    #[error(transparent)]
+    ScopedDecodeResource(crate::core::ScopedDecodeResourceError),
     /// The serializer emitted a different length on its checked second pass.
     #[error("bounded JSON serializer length changed between passes")]
     LengthMismatch,
 }
+impl BoundedJsonError {
+    /// Preserve the actual resource owner when a checked serializer joins binary decoding.
+    #[doc(hidden)]
+    pub fn from_decode_resource(error: crate::core::Error) -> Self {
+        match error {
+            crate::core::Error::ScopedDecodeResource(origin) => Self::ScopedDecodeResource(origin),
+            error => error
+                .decode_resource_error()
+                .map_or(Self::Unsupported, Self::DecodeResource),
+        }
+    }
+
+    /// Return the original binary resource error without reconstructing its scope identity.
+    #[doc(hidden)]
+    pub fn into_core_error(self) -> crate::core::Error {
+        match self {
+            Self::ScopedDecodeResource(origin) => crate::core::Error::ScopedDecodeResource(origin),
+            Self::DecodeResource(error) => error.into(),
+            Self::AllocationFailed => crate::core::Error::AllocationFailed { bytes: 0 },
+            error => crate::core::Error::Message(error.to_string()),
+        }
+    }
+}
+
 /// A JSON output sink which checks every append before accepting it.
 ///
 /// Implementations used by [`to_json_bounded`] never expose their destination
@@ -273,12 +300,8 @@ where
     let mut counter = CountingJsonSink::new(max_bytes);
     value.json_serialize_to(&mut counter)?;
     let expected = counter.length;
-    crate::core::reserve_decode_allocation(expected).map_err(|error| {
-        error.decode_resource_error().map_or(
-            BoundedJsonError::Unsupported,
-            BoundedJsonError::DecodeResource,
-        )
-    })?;
+    crate::core::reserve_decode_allocation(expected)
+        .map_err(BoundedJsonError::from_decode_resource)?;
     record_destination_allocation_attempt();
     let mut output = allocate_destination(expected)?;
     if output.len() != expected {
@@ -289,7 +312,9 @@ where
         value
             .json_serialize_to(&mut sink)
             .map_err(|error| match error {
-                BoundedJsonError::DecodeResource(_) | BoundedJsonError::AllocationFailed => error,
+                BoundedJsonError::DecodeResource(_)
+                | BoundedJsonError::ScopedDecodeResource(_)
+                | BoundedJsonError::AllocationFailed => error,
                 _ => BoundedJsonError::LengthMismatch,
             })?;
         sink.length
@@ -1409,9 +1434,8 @@ mod tests {
                 let pass = self.0.get();
                 self.0.set(pass + 1);
                 if pass == 1 {
-                    crate::core::reserve_decode_allocation(1).map_err(|error| {
-                        BoundedJsonError::DecodeResource(error.decode_resource_error().unwrap())
-                    })?;
+                    crate::core::reserve_decode_allocation(1)
+                        .map_err(BoundedJsonError::from_decode_resource)?;
                 }
                 output.push('0')
             }

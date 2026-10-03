@@ -17,7 +17,7 @@ mod authority_registry;
 #[path = "set_detachment.rs"]
 mod detachment;
 pub(crate) use acquisition::SetBlockAcquisition;
-pub(crate) use authority_registry::AUTHORITY_FIELDS;
+pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
@@ -2013,18 +2013,66 @@ impl Set {
     }
     /// Create point in time view of the [`Set`]
     pub fn view(&self) -> SetView<'_> {
-        SetView {
-            data_triggers: self.data_triggers.view(),
-            pipeline_triggers: self.pipeline_triggers.view(),
-            time_triggers: self.time_triggers.view(),
-            by_call_triggers: self.by_call_triggers.view(),
-            ids: self.ids.view(),
-            active_data_trigger_ids: self.active_data_trigger_ids.view(),
-            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.view(),
-            active_time_trigger_ids: self.active_time_trigger_ids.view(),
-            active_by_call_trigger_ids: self.active_by_call_trigger_ids.view(),
-            contracts: self.contracts.view(),
+        let mut releases = authority_registry::SetReadReleases::new(self);
+        loop {
+            match self.try_view_retaining(&mut releases) {
+                Ok(view) => return view,
+                Err(crate::state::StateViewError::Busy(_)) => std::thread::yield_now(),
+                Err(error) => panic!("original trigger reader refused: {error}"),
+            }
         }
+    }
+    /// Pin every original trigger store without blocking or releasing callbacks early.
+    pub(crate) fn try_view_retaining(
+        &self,
+        releases: &mut authority_registry::SetReadReleases,
+    ) -> Result<SetView<'_>, crate::state::StateViewError> {
+        Ok(SetView {
+            data_triggers: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.data_triggers,
+                &mut releases.data_triggers,
+            )?,
+            pipeline_triggers: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.pipeline_triggers,
+                &mut releases.pipeline_triggers,
+            )?,
+            time_triggers: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.time_triggers,
+                &mut releases.time_triggers,
+            )?,
+            by_call_triggers: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.by_call_triggers,
+                &mut releases.by_call_triggers,
+            )?,
+            ids: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.ids,
+                &mut releases.ids,
+            )?,
+            active_data_trigger_ids:
+                crate::state::view_acquisition::StateFieldReader::try_read_field(
+                    &self.active_data_trigger_ids,
+                    &mut releases.active_data_trigger_ids,
+                )?,
+            active_pipeline_trigger_ids:
+                crate::state::view_acquisition::StateFieldReader::try_read_field(
+                    &self.active_pipeline_trigger_ids,
+                    &mut releases.active_pipeline_trigger_ids,
+                )?,
+            active_time_trigger_ids:
+                crate::state::view_acquisition::StateFieldReader::try_read_field(
+                    &self.active_time_trigger_ids,
+                    &mut releases.active_time_trigger_ids,
+                )?,
+            active_by_call_trigger_ids:
+                crate::state::view_acquisition::StateFieldReader::try_read_field(
+                    &self.active_by_call_trigger_ids,
+                    &mut releases.active_by_call_trigger_ids,
+                )?,
+            contracts: crate::state::view_acquisition::StateFieldReader::try_read_field(
+                &self.contracts,
+                &mut releases.contracts,
+            )?,
+        })
     }
     /// Test-only helper to drop a trigger bytecode entry and commit the change.
     #[cfg(test)]

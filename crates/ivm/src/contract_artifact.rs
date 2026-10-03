@@ -10,6 +10,7 @@ use crate::{
 };
 pub use ivm_artifact_admission::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+    verify_contract_artifact_with_memory_budget,
 };
 use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
@@ -18,6 +19,21 @@ use std::sync::Arc;
 /// and execution structures after that shared policy has accepted the immutable artifact bytes.
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
+}
+/// Prepare immutable instructions, runtime indexes and artifact bytes in the original State pool.
+///
+/// Funded operations stay outside process-global caches. The prepared shell,
+/// entrypoint index and traversal scratch use that same pool; nested metadata
+/// and analysis storage remain separate allocation obligations.
+///
+/// # Errors
+/// Returns canonical admission errors or the original local allocation refusal.
+pub fn prepare_contract_with_memory_budget(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<PreparedContract, ContractArtifactError> {
+    let verified = verify_contract_artifact_with_memory_budget(artifact, budget)?;
+    PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
 }
 /// A prepared compiler-produced Kotodama test-suite artifact.
 ///
@@ -57,7 +73,7 @@ impl PreparedContract {
     /// Admit through the shared production verifier, then build native runtime indexes.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
         let verified = ivm_artifact_admission::verify_contract_artifact(artifact.as_ref())?;
-        Self::prepare_shared_verified(artifact, verified)
+        Self::prepare_shared_verified(artifact.as_ref(), verified, None)
     }
     fn prepare_koto_test_harness(
         artifact: Arc<[u8]>,
@@ -67,11 +83,12 @@ impl PreparedContract {
             artifact.as_ref(),
             contract_interface,
         )?;
-        Self::prepare_shared_verified(artifact, verified)
+        Self::prepare_shared_verified(artifact.as_ref(), verified, None)
     }
     fn prepare_shared_verified(
-        artifact: Arc<[u8]>,
+        artifact: &[u8],
         verified: VerifiedContractArtifact,
+        budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<Self, ContractArtifactError> {
         // Reparse only to recover native preparation ranges. Consensus policy
         // and all artifact-derived outputs above came from the shared verifier.
@@ -79,7 +96,7 @@ impl PreparedContract {
             ContractArtifactError::preparation("metadata reparse after shared admission", error)
         })?;
         ensure_shared_offsets_match(&parsed, &verified)?;
-        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed)?;
+        let decoded = decode_instruction_stream(artifact, &parsed, budget)?;
         let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
@@ -88,6 +105,7 @@ impl PreparedContract {
             parsed.header_len,
             parsed.literal_section,
             SyscallPolicy::AbiV1,
+            budget,
         )
         .map_err(|error| {
             ContractArtifactError::preparation(
@@ -111,16 +129,30 @@ impl PreparedContract {
             decoded.as_ref(),
             instruction_entry_pc,
             literal_table.entries(),
+            budget,
         )
         .map_err(|error| ContractArtifactError::preparation("instruction preparation", error))?;
         let control_flow =
-            PreparedControlFlow::from_decoded(decoded.as_ref()).map_err(|error| {
+            PreparedControlFlow::from_decoded(decoded.as_ref(), budget).map_err(|error| {
                 ContractArtifactError::preparation("control-flow preparation", error)
             })?;
         PreparedContract::from_parts(PreparedContractParts {
             // Take our own byte allocation; an input Arc may have unrelated owners
             // whose lifetimes cannot be governed by this preparation reservation.
-            artifact: crate::cache_memory::SharedAllocation::from(artifact.as_ref().to_vec()),
+            artifact: match budget {
+                Some(budget) => {
+                    crate::cache_memory::SharedAllocation::try_copy_from_slice_with_memory_budget(
+                        artifact, budget,
+                    )
+                    .map_err(|error| {
+                        ContractArtifactError::preparation("artifact backing", error)
+                    })?
+                }
+                None => crate::cache_memory::SharedAllocation::try_from_iter(
+                    artifact.iter().copied().map(Ok::<_, crate::VMError>),
+                )
+                .map_err(|error| ContractArtifactError::preparation("artifact backing", error))?,
+            },
             metadata: verified.metadata,
             manifest: verified.manifest,
             header_len: verified.header_len,
@@ -138,7 +170,7 @@ impl PreparedContract {
             decoded,
             prepared_program,
             control_flow,
-        })
+        }, budget)
         .map_err(|error| ContractArtifactError::preparation("contract indexing", error))
     }
 }
@@ -156,11 +188,18 @@ fn ensure_shared_offsets_match(
 fn decode_instruction_stream(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
+    budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<crate::ivm_cache::DecodedStream, ContractArtifactError> {
     let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
     })?;
-    global_get(instruction_region).map_err(|error| {
+    let decoded = match budget {
+        Some(budget) => {
+            crate::ivm_cache::IvmCache::decode_stream_with_memory_budget(instruction_region, budget)
+        }
+        None => global_get(instruction_region),
+    };
+    decoded.map_err(|error| {
         ContractArtifactError::preparation("instruction decode after shared admission", error)
     })
 }
@@ -205,7 +244,16 @@ mod preparation_deferral_tests {
 
     #[test]
     fn preparation_keeps_exact_pool_release_observation_through_error_conversion() {
-        let budget = iroha_allocation::AllocationBudget::new(8);
+        use iroha_allocation::release::ReleaseRegistration;
+        let registration_bytes = ReleaseRegistration::allocation_layout().size();
+        let budget = iroha_allocation::AllocationBudget::new(8 + registration_bytes);
+        let mut registration = ReleaseRegistration::from_reservation(
+            &mut budget
+                .try_reserve(ReleaseRegistration::allocation_layout())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(registration.belongs_to(&budget));
         let occupied = budget.try_reserve_bytes(8).unwrap();
         let original = budget.try_reserve_bytes(1).unwrap_err();
         let deferred = VMError::Metered {
@@ -227,7 +275,7 @@ mod preparation_deferral_tests {
         else {
             panic!("preparation must preserve the capacity owner's observation");
         };
-        let mut wait = release.wait_for_release();
+        let mut wait = release.wait_for_release(&mut registration);
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         // A refund from another pool cannot make this failed attempt ready.
@@ -236,7 +284,11 @@ mod preparation_deferral_tests {
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         drop(occupied);
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
+        drop(wait);
+        assert_eq!(budget.reserved_bytes(), registration_bytes);
         assert!(budget.try_reserve_bytes(8).is_ok());
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }
 

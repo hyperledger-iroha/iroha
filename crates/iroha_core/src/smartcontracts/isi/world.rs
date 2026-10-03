@@ -2567,8 +2567,22 @@ pub mod isi {
         )?;
         Ok(provenance)
     }
+    fn artifact_admission_instruction_error(
+        world: &WorldTransaction<'_, '_>,
+        error: ivm::ContractArtifactError,
+    ) -> InstructionExecutionError {
+        if let Some(error) = error.local_vm_error()
+            && let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+        {
+            return world.attempt_error_to_instruction_error(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+            );
+        }
+        invalid_smart_contract_parameter(error.to_string())
+    }
     fn verify_registered_contract_artifact_for_manifest(
         world: &WorldTransaction<'_, '_>,
+        execution_budget: &iroha_allocation::AllocationBudget,
         artifact_id: &ContractArtifactId,
         manifest: &ContractManifest,
     ) -> Result<Vec<u8>, InstructionExecutionError> {
@@ -2581,11 +2595,9 @@ pub mod isi {
                     "contract bytecode for manifest.code_hash not found".into(),
                 ))
             })?;
-        let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        let verified =
+            ivm::verify_contract_artifact_with_memory_budget(&code_bytes, execution_budget)
+                .map_err(|error| artifact_admission_instruction_error(world, error))?;
         if verified.code_hash != artifact_id.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "stored contract bytecode hash does not match manifest.code_hash".into(),
@@ -3659,6 +3671,15 @@ pub mod isi {
                 ),
             ));
         }
+        crate::state::validate_network_xor_asset(
+            &state_transaction.world,
+            &policy.reward_custody.xor_asset_id,
+        )
+        .map_err(|error| {
+            state_transaction
+                .world
+                .attempt_error_to_instruction_error(error)
+        })?;
         if policy.ds_asset_id == state_transaction.gov.voting_asset_id {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -3936,15 +3957,11 @@ pub mod isi {
                     ),
                 ));
             }
-            let xor_definition = state_transaction
-                .world
-                .asset_definition(&self.payout_binding.xor_asset_id)
-                .map_err(Error::from)?;
-            if xor_definition.spec().scale().is_none() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validator reward asset must have an exact minor-unit scale".into(),
-                ));
-            }
+            crate::state::validate_network_xor_asset(
+                &state_transaction.world,
+                &self.payout_binding.xor_asset_id,
+            )
+            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             for account_id in [
                 &self.payout_binding.treasury_account_id,
                 &self.payout_binding.pool_vault_account_id,
@@ -5599,11 +5616,11 @@ pub mod isi {
                         .into(),
                 ))
             })?;
-        let verified = ivm::verify_contract_artifact(code_bytes).map_err(|error| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("stored governance contract bytecode is invalid: {error}").into(),
-            ))
-        })?;
+        let verified = ivm::verify_contract_artifact_with_memory_budget(
+            code_bytes,
+            &state_transaction.execution_budget(),
+        )
+        .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
         crate::smartcontracts::ivm::validate_cycle_ceiling(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
@@ -5874,6 +5891,7 @@ pub mod isi {
             })?;
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
+            &state_transaction.execution_budget(),
             &ContractArtifactId::for_address(&contract_address, key)
                 .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
@@ -6697,6 +6715,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         require_derived_permissions: bool,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
+        crate::state::validate_network_xor_asset(&state_transaction.world, &binding.xor_asset_id)?;
         let record = fetch_bound_contract_record(state_transaction, &binding.contract_address)
             .map_err(|error| {
                 error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
@@ -6935,6 +6954,7 @@ pub mod isi {
         };
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
+            &state_transaction.execution_budget(),
             &ContractArtifactId::for_address(&contract_address, key)
                 .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
@@ -7628,6 +7648,7 @@ pub mod isi {
                 })?;
             verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
+                &state_transaction.execution_budget(),
                 &ContractArtifactId::for_address(&contract_address, code_hash)
                     .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
                 &manifest,
@@ -8025,11 +8046,11 @@ pub mod isi {
                 format!("code bytes exceed cap: {code_len} > {cap_bytes}").into(),
             ));
         }
-        let verified = ivm::verify_contract_artifact(&code).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        let verified = ivm::verify_contract_artifact_with_memory_budget(
+            &code,
+            &state_transaction.execution_budget(),
+        )
+        .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
         crate::smartcontracts::ivm::validate_cycle_ceiling(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
@@ -14893,6 +14914,7 @@ pub mod isi {
             }
             let _code_bytes = verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
+                &state_transaction.execution_budget(),
                 &key,
                 &manifest,
             )?;
@@ -22510,7 +22532,11 @@ pub mod isi {
         }
         fn original_world_header(state: &State) -> BlockHeader {
             use crate::state::StateReadOnly as _;
-            let parent = state.view().latest_block().expect("original signed parent");
+            let parent = state
+                .view()
+                .latest_block()
+                .expect("completed original State read")
+                .expect("original signed parent");
             let time_ms = u64::try_from(parent.header().creation_time().as_millis())
                 .expect("original parent timestamp fits")
                 .checked_add(1)
@@ -22556,7 +22582,11 @@ pub mod isi {
             assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
             let header = original_world_header(&state);
             assert_eq!(header.prev_block_hash(), Some(parent));
-            let original_parent = state.view().latest_block().expect("original signed parent");
+            let original_parent = state
+                .view()
+                .latest_block()
+                .expect("completed original State read")
+                .expect("original signed parent");
             assert_eq!(
                 header.creation_time(),
                 original_parent.header().creation_time() + std::time::Duration::from_millis(1),
@@ -23053,7 +23083,7 @@ pub mod isi {
             chain.commit(Vec::new());
             assert_eq!(chain.height(), 10);
             let state = chain.state();
-            let parent = state.view().latest_block().expect("original certified H10");
+            let parent = state.view().latest_block().expect("completed original State read").expect("original certified H10");
             let time_ms = u64::try_from(parent.header().creation_time().as_millis())
                 .expect("original parent time fits")
                 .checked_add(1).expect("successor clock follows its original parent");
@@ -25498,7 +25528,7 @@ pub mod isi {
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(height);
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .unwrap()
         }
@@ -25521,13 +25551,13 @@ pub mod isi {
                 header.set_height(height);
                 header.set_prev_block_hash(parent);
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .expect("commit fixture block");
             let hash = block.as_ref().hash();
             state
                 .kura()
-                .store_block(Arc::new(block.as_ref().clone()))
+                .store_block(block.into_shared())
                 .expect("retain fixture block bytes");
             let mut hashes = state.block_hashes.block();
             hashes.push_for_tests(hash);
@@ -25934,6 +25964,78 @@ pub mod isi {
                 "cap rejection must precede authoritative policy mutation"
             );
         });
+        #[test]
+        fn registered_artifact_admission_keeps_original_state_refusal_and_retries() {
+            use std::{
+                future::Future as _,
+                pin::pin,
+                task::{Context, Waker},
+            };
+
+            let (code, manifest) = contract_artifact_with_max_cycles(1000);
+            let key = ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
+            let mut world = World::default();
+            world.contract_code.insert(key, code.clone());
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(first_test_block_header());
+            let transaction = block.transaction();
+            let budget = transaction.execution_budget();
+            let mut registration = crate::unit_test_support::release_registration(&budget);
+            let original = budget.reserved_bytes();
+            let occupied = budget
+                .try_reserve_bytes(budget.limit_bytes() - original)
+                .unwrap();
+            let error = super::verify_registered_contract_artifact_for_manifest(
+                &transaction.world,
+                &budget,
+                &key,
+                &manifest,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvariantViolation(_)
+            ));
+            let retained = transaction.execution_deferral().unwrap();
+            let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+                retained.allocation_refusal()
+            else {
+                panic!("artifact admission lost the original State pool refusal");
+            };
+            let mut wait = pin!(release.clone().wait_for_release(&mut registration));
+            assert!(
+                wait.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+            drop(occupied);
+            assert!(
+                wait.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_ready()
+            );
+            assert_eq!(budget.reserved_bytes(), original);
+            drop(transaction);
+            let retry = block.transaction();
+            assert_eq!(
+                super::verify_registered_contract_artifact_for_manifest(
+                    &retry.world,
+                    &budget,
+                    &key,
+                    &manifest,
+                )
+                .unwrap(),
+                code
+            );
+            assert!(retry.execution_deferral().is_none());
+            assert_eq!(budget.reserved_bytes(), original);
+        }
+
         fn contract_artifact_with_max_cycles(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
             let meta = ivm::ProgramMetadata {
                 version_major: 1,
@@ -25947,8 +26049,8 @@ pub mod isi {
                 callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),

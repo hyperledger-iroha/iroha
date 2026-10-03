@@ -7,7 +7,7 @@ use crate::internals::bptree::states::LeafInsertState;
 use crossbeam_utils::atomic::AtomicCell;
 use std::{
     cell::Cell,
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
 
@@ -508,16 +508,19 @@ fn foreign_stale_busy_and_poisoned_roles_refuse_before_joined_admission() {
                 }
                 (1, 2) => undo_lock = Some(undo.try_write_admitted(|d| pool.reserve(d)).unwrap()),
                 (_, 3) => {
-                    assert!(catch_unwind(AssertUnwindSafe(|| {
-                        if role == 0 {
-                            let _held = current.try_write_admitted(|d| pool.reserve(d)).unwrap();
-                            panic!("poison current original lock");
-                        } else {
-                            let _held = undo.try_write_admitted(|d| pool.reserve(d)).unwrap();
-                            panic!("poison undo original lock");
-                        }
-                    }))
-                    .is_err());
+                    assert!(
+                        catch_unwind(AssertUnwindSafe(|| {
+                            if role == 0 {
+                                let _held =
+                                    current.try_write_admitted(|d| pool.reserve(d)).unwrap();
+                                panic!("poison current original lock");
+                            } else {
+                                let _held = undo.try_write_admitted(|d| pool.reserve(d)).unwrap();
+                                panic!("poison undo original lock");
+                            }
+                        }))
+                        .is_err()
+                    );
                 }
                 _ => {}
             }
@@ -569,32 +572,34 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
             undo.read().inner.as_ref().get_root(),
         );
         let takes = pool.takes.load();
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = current.try_insert_with_undo_owned_admitted(
-                c,
-                &undo,
-                u,
-                7,
-                70,
-                |d| -> Result<Policy, ()> {
-                    if fault == 0 {
-                        panic!("joined callback failed");
-                    }
-                    let provider = pool.reserve(d)?;
-                    if fault == 1 {
-                        pool.panic_clone.store(1);
-                    }
-                    if fault == 2 {
-                        pool.panic_clone.store(2);
-                    }
-                    if fault == 3 {
-                        pool.panic_drop.store(true);
-                    }
-                    Ok(provider)
-                },
-            );
-        }))
-        .is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = current.try_insert_with_undo_owned_admitted(
+                    c,
+                    &undo,
+                    u,
+                    7,
+                    70,
+                    |d| -> Result<Policy, ()> {
+                        if fault == 0 {
+                            panic!("joined callback failed");
+                        }
+                        let provider = pool.reserve(d)?;
+                        if fault == 1 {
+                            pool.panic_clone.store(1);
+                        }
+                        if fault == 2 {
+                            pool.panic_clone.store(2);
+                        }
+                        if fault == 3 {
+                            pool.panic_drop.store(true);
+                        }
+                        Ok(provider)
+                    },
+                );
+            }))
+            .is_err()
+        );
         assert!(current.is_poisoned() && undo.is_poisoned());
         assert_eq!(
             (
@@ -629,14 +634,16 @@ fn single_borrowed_edit_keeps_failure_armed_through_provider_drop() {
     let pool = Pool::new();
     let current = map::<usize>(&pool);
     let mut writer = current.try_write_admitted(|d| pool.reserve(d)).unwrap();
-    assert!(catch_unwind(AssertUnwindSafe(|| {
-        let _ = writer.try_insert_admitted(7, 70, |d| {
-            let provider = pool.reserve(d)?;
-            pool.panic_drop.store(true);
-            Ok::<_, ()>(provider)
-        });
-    }))
-    .is_err());
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = writer.try_insert_admitted(7, 70, |d| {
+                let provider = pool.reserve(d)?;
+                pool.panic_drop.store(true);
+                Ok::<_, ()>(provider)
+            });
+        }))
+        .is_err()
+    );
     assert!(catch_unwind(AssertUnwindSafe(|| writer.len())).is_err());
     assert!(current.read().is_empty());
     drop(writer);

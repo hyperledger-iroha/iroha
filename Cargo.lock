@@ -5106,6 +5106,7 @@ dependencies = [
  "amcl",
  "argon2",
  "ark-serialize",
+ "arrayvec",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -5261,6 +5262,7 @@ dependencies = [
  "norito",
  "rand 0.9.4",
  "rustix 1.1.4",
+ "sorafs_manifest",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -6379,12 +6381,14 @@ dependencies = [
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "ivm_abi",
  "kotodama_lang",
  "kotodama_surface",
  "mv",
  "norito",
+ "tempfile",
 ]
 
 [[package]]

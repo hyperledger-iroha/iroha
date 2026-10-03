@@ -1,8 +1,9 @@
 //! Retained decoding of Kura's original certificate into funded protocol artifacts.
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
+#[cfg(test)]
 use iroha_data_model::block::SignedBlock;
 use iroha_sumeragi::{
     availability::{AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES},
@@ -53,7 +54,7 @@ struct Layout {
 /// Exact source and decoded artifacts; decoding alone does not authorize a historical body.
 /// The caller checks independent height configuration, certificate relations and signatures.
 pub(in crate::sumeragi) struct DecodedCertificate {
-    pub(in crate::sumeragi) source: Arc<SignedBlock>,
+    pub(in crate::sumeragi) source: iroha_data_model::block::SharedSignedBlock,
     pub(in crate::sumeragi) header: BlockHeader,
     pub(in crate::sumeragi) availability: AvailabilityFrame,
     pub(in crate::sumeragi) commit_qc: Qc,
@@ -62,7 +63,7 @@ pub(in crate::sumeragi) struct DecodedCertificate {
 /// One bounded read owner retains its immutable source and every partial funded destination.
 /// No generic witness or availability decoding allocates a temporary bulk Vec.
 pub(in crate::sumeragi) struct CertificateRead {
-    source: Arc<SignedBlock>,
+    source: iroha_data_model::block::SharedSignedBlock,
     budget: AllocationBudget,
     layout: Option<Layout>,
     table_backing: Option<ChargedBuffer<u8>>,
@@ -71,7 +72,10 @@ pub(in crate::sumeragi) struct CertificateRead {
     witness: Option<ResultWitness>,
 }
 impl CertificateRead {
-    pub(in crate::sumeragi) fn new(source: Arc<SignedBlock>, budget: AllocationBudget) -> Self {
+    pub(in crate::sumeragi) fn new(
+        source: iroha_data_model::block::SharedSignedBlock,
+        budget: AllocationBudget,
+    ) -> Self {
         Self {
             source,
             budget,
@@ -84,7 +88,7 @@ impl CertificateRead {
     }
 
     #[cfg(test)]
-    pub(in crate::sumeragi) fn source(&self) -> &Arc<SignedBlock> {
+    pub(in crate::sumeragi) fn source(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.source
     }
 
@@ -111,7 +115,7 @@ impl CertificateRead {
                     .as_ref()
                     .map(|bytes| bytes.as_slice().as_ptr())
             });
-        (Arc::as_ptr(&self.source), table, witness)
+        (std::ptr::from_ref(self.source.as_ref()), table, witness)
     }
 
     #[allow(

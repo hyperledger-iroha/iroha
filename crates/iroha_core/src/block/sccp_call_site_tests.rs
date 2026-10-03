@@ -180,7 +180,10 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
     assert_eq!(genesis_inputs.roster, validators);
     // Block 2 executes exactly as `StateExecutor::run_execution` does.
     let view = state.view();
-    let parent = view.latest_block().expect("the applied genesis");
+    let parent = view
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("the applied genesis");
     let scheduled = view
         .world()
         .consensus_schedule()

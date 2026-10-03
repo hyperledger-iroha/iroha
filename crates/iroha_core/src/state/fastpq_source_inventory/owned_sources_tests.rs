@@ -151,6 +151,7 @@ fn fixture_with_effects(
     let genesis_time = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .unwrap()
         .header()
         .creation_time();
@@ -168,6 +169,7 @@ fn fixture_with_effects(
     let setup_header = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("original inventory registration parent")
         .header();
     assert_eq!(

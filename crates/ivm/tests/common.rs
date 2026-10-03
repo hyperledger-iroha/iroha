@@ -165,8 +165,8 @@ pub fn unit_callable(entry_pc: u64) -> ivm_abi::call::EmbeddedCallableV1 {
     ivm_abi::call::EmbeddedCallableV1 {
         entry_pc,
         frame_bytes: 0,
-        argument_words: Vec::new(),
-        result_words: vec![ivm_abi::call::CallWordV1::Unit],
+        arguments: ivm_abi::call::CallSchemaV1::empty(),
+        results: ivm_abi::call::CallSchemaV1::unit(),
     }
 }
 /// Complete frameless Unit return through the caller-owned result table.

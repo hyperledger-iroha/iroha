@@ -2493,11 +2493,7 @@ fn ensure_authority_registered(
         return;
     }
     drop(view);
-    let prev_hash = harness
-        .state
-        .view()
-        .latest_block()
-        .map(|block| block.hash());
+    let prev_hash = harness.state.view().latest_block_hash();
     let header = BlockHeader::new(
         NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
         prev_hash,
@@ -2550,11 +2546,7 @@ fn attach_governance_revocation(
     effective_at_unix: u64,
     next_height: &mut u64,
 ) {
-    let prev_hash = harness
-        .state
-        .view()
-        .latest_block()
-        .map(|block| block.hash());
+    let prev_hash = harness.state.view().latest_block_hash();
     let header = BlockHeader::new(
         NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
         prev_hash,
@@ -2640,11 +2632,7 @@ fn bind_alias_with_proof(
         bound_epoch,
         expiry_epoch,
     );
-    let prev_hash = harness
-        .state
-        .view()
-        .latest_block()
-        .map(|block| block.hash());
+    let prev_hash = harness.state.view().latest_block_hash();
     let header = BlockHeader::new(
         NonZeroU64::new(*next_height).unwrap_or_else(|| NonZeroU64::new(1).unwrap()),
         prev_hash,
@@ -3397,6 +3385,7 @@ fn commit_pin_readback_fixture(harness: &ToriiHarness) {
                     .state()
                     .view()
                     .latest_block()
+                    .expect("funded canonical history read")
                     .unwrap()
                     .header()
                     .creation_time()

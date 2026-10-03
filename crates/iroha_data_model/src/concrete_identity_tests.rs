@@ -467,7 +467,12 @@ fn block_message_send_identity_projection() -> Value {
     use crate::block::stream::{BlockMessage, BlockMessageSend};
     let block = stream_block();
     let owner = BlockMessage(block.clone());
-    let projection = BlockMessageSend(std::sync::Arc::new(block));
+    let budget = iroha_allocation::AllocationBudget::new(
+        crate::block::SharedSignedBlock::allocation_layout().size(),
+    );
+    let projection = BlockMessageSend(
+        crate::block::SharedSignedBlock::try_new(block, &budget).unwrap(),
+    );
     projected_record(&projection, &owner)
 }
 

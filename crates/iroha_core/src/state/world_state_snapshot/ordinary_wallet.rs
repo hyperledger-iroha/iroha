@@ -19,7 +19,7 @@ impl State {
         wallet: &AccountId,
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &AccountValue, &AccountValue) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         let key = signatory
             .try_signatory()
             .ok_or("ordinary current S is not a signatory")?;

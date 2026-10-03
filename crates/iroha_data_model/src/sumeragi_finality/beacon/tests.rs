@@ -108,3 +108,47 @@ fn payload_omits_derived_outputs_but_identifier_authenticates_them() {
         original.pulse_id
     );
 }
+
+#[test]
+fn inline_payload_and_streamed_identifier_match_exact_canonical_bytes() {
+    let mut original = pulse();
+    original.context.epoch = 0x0102_0304_0506_0708;
+    original.height = 0x1112_1314_1516_1718;
+    original.round = 0x2122_2324_2526_2728;
+    original.finalized_chain_anchor.height = 0x3132_3334_3536_3738;
+    let mut expected = b"iroha.global-threshold-beacon.pulse-payload.v1\0".to_vec();
+    expected.extend_from_slice(&[0, 1]);
+    expected.extend_from_slice(original.network_id.as_bytes());
+    expected.extend_from_slice(&[2; 32]);
+    expected.extend_from_slice(&[3; 32]);
+    expected.extend_from_slice(&[4; 32]);
+    expected.extend_from_slice(&[5; 32]);
+    expected.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    expected.extend_from_slice(&[6; 32]);
+    expected.extend_from_slice(&[7; 32]);
+    expected.extend_from_slice(&[8; 32]);
+    expected.extend_from_slice(&[0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]);
+    expected.extend_from_slice(&[0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28]);
+    expected.extend_from_slice(&[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38]);
+    expected.extend_from_slice(original.finalized_chain_anchor.block_hash.as_ref());
+    let inline: [u8; GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1] =
+        global_threshold_beacon_pulse_payload_v1(&original);
+    assert_eq!(inline.as_slice(), expected);
+
+    // Independent concatenation checks the exact domain, u32 big-endian length,
+    // payload and outputs, including an explicitly supplied verified seed.
+    let verified_seed = [0xA7; 32];
+    let mut preimage = b"iroha.global-threshold-beacon.pulse-id.v1\0".to_vec();
+    preimage.extend_from_slice(&u32::try_from(expected.len()).unwrap().to_be_bytes());
+    preimage.extend_from_slice(&expected);
+    preimage.extend_from_slice(&original.signature);
+    preimage.extend_from_slice(&verified_seed);
+    assert_eq!(
+        global_threshold_beacon_pulse_id_v1(&original, verified_seed),
+        *Hash::new(&preimage).as_ref()
+    );
+    assert_ne!(
+        global_threshold_beacon_pulse_id_v1(&original, verified_seed),
+        global_threshold_beacon_pulse_id_v1(&original, original.seed)
+    );
+}

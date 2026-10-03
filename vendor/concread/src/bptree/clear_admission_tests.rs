@@ -218,17 +218,19 @@ fn clear_caught_callback_and_provider_panics_leave_original_parent_unusable() {
             .try_insert_admitted(7, 70, |d| pool.reserve(d))
             .unwrap();
         let mut parent = writer.checkpoint().unwrap();
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = parent.try_clear_admitted(|d| -> Result<Policy, ()> {
-                if !provider_drop {
-                    panic!("clear admission callback failed");
-                }
-                let provider = pool.reserve(d)?;
-                pool.panic_drop.store(true);
-                Ok(provider)
-            });
-        }))
-        .is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = parent.try_clear_admitted(|d| -> Result<Policy, ()> {
+                    if !provider_drop {
+                        panic!("clear admission callback failed");
+                    }
+                    let provider = pool.reserve(d)?;
+                    pool.panic_drop.store(true);
+                    Ok(provider)
+                });
+            }))
+            .is_err()
+        );
         assert!(catch_unwind(AssertUnwindSafe(|| parent.len())).is_err());
         drop(parent);
         assert!(catch_unwind(AssertUnwindSafe(|| writer.len())).is_err());
@@ -253,14 +255,16 @@ fn clear_apply_cleanup_panic_cannot_expose_a_usable_partial_writer() {
     // Zero-capacity start ensures both original charged tracking buffers are
     // retained by the reset checkpoint and dropped by its successful apply.
     assert_eq!(writer.inner.as_ref().admitted_tracking(), [(0, 0), (0, 0)]);
-    assert!(catch_unwind(AssertUnwindSafe(|| {
-        let _ = writer.try_clear_admitted(|d| {
-            let provider = pool.reserve(d)?;
-            pool.arm_charge_panic_on_provider_drop.store(true);
-            Ok::<_, ()>(provider)
-        });
-    }))
-    .is_err());
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = writer.try_clear_admitted(|d| {
+                let provider = pool.reserve(d)?;
+                pool.arm_charge_panic_on_provider_drop.store(true);
+                Ok::<_, ()>(provider)
+            });
+        }))
+        .is_err()
+    );
     assert!(!pool.arm_charge_panic_on_provider_drop.load());
     assert!(
         !pool.panic_next_charge.load(),

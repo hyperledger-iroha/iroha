@@ -1439,6 +1439,172 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
 }
 
 #[test]
+fn threshold_beacon_inline_reducer_rejects_invalid_share_without_losing_original_slots() {
+    let fixture = adaptive_beacon_fixture();
+    let (pulse, _, anchor) = pulse_fixture(&fixture.session);
+    let partials = pulse_partial_signatures(&fixture, &pulse, [0xD1; 32]);
+    let mut reducer = GlobalThresholdBeaconPulseAggregatorV1::new(
+        fixture.session.clone(),
+        pulse.height,
+        anchor,
+        pulse.context,
+    )
+    .unwrap();
+    assert_eq!(reducer.verified_partial_count(), 0);
+    assert_eq!(reducer.accept_partial(partials[0]), Ok(true));
+    let original_slots = reducer.partials;
+
+    // All signature/proof points remain genuine and canonically encoded, but
+    // this share was not proved for seat three. HC59 must not admit it.
+    let mut rebound = partials[1];
+    rebound.signer_index = 3;
+    assert!(matches!(
+        reducer.accept_partial(rebound),
+        Err(GlobalThresholdBeaconError::ThresholdBls(_))
+    ));
+    assert_eq!(reducer.partials, original_slots);
+
+    // A retransmission is only idempotent after its proof has been rechecked.
+    let mut forged_retry = partials[0];
+    forged_retry.proof = partials[1].proof;
+    assert!(matches!(
+        reducer.accept_partial(forged_retry),
+        Err(GlobalThresholdBeaconError::ThresholdBls(_))
+    ));
+    assert_eq!(reducer.partials, original_slots);
+    for signer_index in [0, 5, THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 + 1, u16::MAX] {
+        let mut out_of_range = partials[0];
+        out_of_range.signer_index = signer_index;
+        assert_eq!(
+            reducer.accept_partial(out_of_range),
+            Err(ThresholdBlsError::InvalidParticipantIndex.into())
+        );
+        assert_eq!(reducer.partials, original_slots);
+    }
+    assert_eq!(reducer.verified_partial_count(), 1);
+    assert_eq!(
+        reducer.finalize(),
+        Err(GlobalThresholdBeaconError::InsufficientPartialSignatures)
+    );
+    assert_eq!(reducer.accept_partial(partials[0]), Ok(false));
+    let fresh_proof = pulse_partial_signatures(&fixture, &pulse, [0xD2; 32])[0];
+    assert_ne!(fresh_proof.proof, partials[0].proof);
+    assert_eq!(reducer.accept_partial(fresh_proof), Ok(false));
+    assert_eq!(
+        reducer.partials, original_slots,
+        "a valid retransmission preserves the originally admitted proof"
+    );
+    assert_eq!(reducer.accept_partial(partials[1]), Ok(true));
+    assert_eq!(reducer.verified_partial_count(), 2);
+    reducer
+        .finalize()
+        .expect("original shares remain usable after rejected input");
+}
+
+#[test]
+fn threshold_beacon_inline_reducer_preserves_conflicting_original_slot() {
+    let fixture = adaptive_beacon_fixture();
+    let (pulse, _, anchor) = pulse_fixture(&fixture.session);
+    let partials = pulse_partial_signatures(&fixture, &pulse, [0xD3; 32]);
+    let mut reducer = GlobalThresholdBeaconPulseAggregatorV1::new(
+        fixture.session.clone(),
+        pulse.height,
+        anchor,
+        pulse.context,
+    )
+    .unwrap();
+    let mut another_payload = pulse;
+    another_payload.height += 1;
+    let other_partials = pulse_partial_signatures(&fixture, &another_payload, [0xD4; 32]);
+    assert!(reducer.accept_partial(other_partials[0]).is_err());
+    assert_eq!(reducer.verified_partial_count(), 0);
+
+    // Two valid shares for one exact slot cannot disagree under the unique
+    // signature construction. Corrupt an internal slot here to exercise the
+    // reducer's fail-closed conflict guard without admitting an invalid proof.
+    reducer.partials[0] = Some(adaptive_partial_signature_from_dto_v1(&other_partials[0]).unwrap());
+    let original_slots = reducer.partials;
+    assert_eq!(
+        reducer.accept_partial(partials[0]),
+        Err(GlobalThresholdBeaconError::PartialSignatureEquivocation)
+    );
+    assert_eq!(reducer.partials, original_slots);
+}
+
+#[test]
+fn threshold_beacon_inline_reducer_maximum_committee_is_order_and_subset_invariant() {
+    let fixture = complete_dkg_fixture(THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1);
+    let (pulse, _, anchor) = pulse_fixture(&fixture.session);
+    let partials = pulse_partial_signatures(&fixture, &pulse, [0xD5; 32]);
+    let threshold = usize::from(fixture.session.transcript.session().threshold());
+    assert_eq!(threshold, GLOBAL_BEACON_MAX_THRESHOLD);
+    assert_eq!(partials.len(), GLOBAL_BEACON_PARTIAL_SLOTS);
+    let open = || {
+        GlobalThresholdBeaconPulseAggregatorV1::new(
+            fixture.session.clone(),
+            pulse.height,
+            anchor,
+            pulse.context,
+        )
+        .unwrap()
+    };
+
+    let mut high = open();
+    for partial in partials.iter().rev().take(threshold - 1).copied() {
+        assert_eq!(high.accept_partial(partial), Ok(true));
+    }
+    assert_eq!(high.verified_partial_count(), threshold - 1);
+    assert_eq!(
+        high.finalize(),
+        Err(GlobalThresholdBeaconError::InsufficientPartialSignatures)
+    );
+    assert_eq!(
+        high.partials.last().unwrap().unwrap().index(),
+        THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1
+    );
+    assert_eq!(
+        high.accept_partial(partials[partials.len() - threshold]),
+        Ok(true)
+    );
+    let expected = high
+        .finalize()
+        .expect("maximum-index threshold reconstructs");
+
+    let mut low = open();
+    for partial in partials.iter().take(threshold).copied() {
+        assert_eq!(low.accept_partial(partial), Ok(true));
+    }
+    assert_eq!(
+        low.finalize().unwrap(),
+        expected,
+        "disjoint low and high subsets produce the exact same public pulse"
+    );
+    for partial in partials.iter().rev().copied() {
+        let was_present = high.partials[usize::from(partial.signer_index - 1)].is_some();
+        assert_eq!(high.accept_partial(partial), Ok(!was_present));
+    }
+    assert_eq!(high.verified_partial_count(), GLOBAL_BEACON_PARTIAL_SLOTS);
+    assert_eq!(
+        high.partials
+            .iter()
+            .flatten()
+            .map(|partial| partial.index())
+            .collect::<Vec<_>>(),
+        (1..=THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        high.finalize().unwrap(),
+        expected,
+        "reverse arrival of all seats still uses a canonical ordered threshold"
+    );
+    assert_eq!(
+        high.finalize().unwrap(),
+        expected,
+        "reconstruction is repeatable without consuming or replacing original shares"
+    );
+}
+
+#[test]
 fn npos_successor_seed_binds_verified_pulse_and_target_epoch() {
     const BOUNDARY_HEIGHT: u64 = 42;
     const SUCCESSOR_EPOCH: u64 = 9;

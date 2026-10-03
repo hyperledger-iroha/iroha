@@ -10,10 +10,27 @@ use crate::{
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
 use iroha_allocation::AllocationBudget;
-use ivm_abi::call::{
-    CALL_WORD_BYTES_V1, EmbeddedCallableV1, MAX_CALL_FRAME_BYTES_V1, MAX_CALL_WORDS_V1,
-};
+use ivm_abi::call::{CALL_WORD_BYTES_V1, MAX_CALL_FRAME_BYTES_V1, MAX_CALL_WORDS_V1};
 use std::ops::{Deref, DerefMut};
+
+/// Derived shape from a fully validated immutable callable schema.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CallFrameShape {
+    pub(crate) entry_pc: u64,
+    pub(crate) frame_bytes: u32,
+    pub(crate) argument_words: usize,
+    pub(crate) result_words: usize,
+}
+
+impl CallFrameShape {
+    fn validate(&self) -> bool {
+        self.entry_pc.is_multiple_of(4)
+            && self.frame_bytes.is_multiple_of(16)
+            && self.frame_bytes <= MAX_CALL_FRAME_BYTES_V1
+            && self.argument_words <= MAX_CALL_WORDS_V1
+            && (1..=MAX_CALL_WORDS_V1).contains(&self.result_words)
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -400,7 +417,7 @@ impl CallFrameMemory {
     pub(crate) fn enter_root(
         &mut self,
         stack_pointer: u64,
-        callable: &EmbeddedCallableV1,
+        callable: &CallFrameShape,
         tables: CallTables,
         stack_top: u64,
     ) -> Result<(), VMError> {
@@ -413,7 +430,7 @@ impl CallFrameMemory {
     pub(crate) fn prepare_root(
         &mut self,
         stack_pointer: u64,
-        callable: &EmbeddedCallableV1,
+        callable: &CallFrameShape,
         tables: CallTables,
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
@@ -442,7 +459,7 @@ impl CallFrameMemory {
     pub(crate) fn enter_child(
         &mut self,
         stack_pointer: u64,
-        callable: &EmbeddedCallableV1,
+        callable: &CallFrameShape,
         tables: CallTables,
         stack_top: u64,
     ) -> Result<(), VMError> {
@@ -455,7 +472,7 @@ impl CallFrameMemory {
     pub(crate) fn prepare_child(
         &mut self,
         stack_pointer: u64,
-        callable: &EmbeddedCallableV1,
+        callable: &CallFrameShape,
         tables: CallTables,
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
@@ -481,14 +498,14 @@ impl CallFrameMemory {
 
     fn descriptor(
         stack_pointer: u64,
-        callable: &EmbeddedCallableV1,
+        callable: &CallFrameShape,
         tables: CallTables,
         stack_top: u64,
     ) -> Result<FrameDescriptor, VMError> {
         let frame_bytes = callable.frame_bytes;
         if !callable.validate()
-            || tables.argument_words != callable.argument_words.len() as u64
-            || tables.result_words != callable.result_words.len() as u64
+            || tables.argument_words != callable.argument_words as u64
+            || tables.result_words != callable.result_words as u64
             || frame_bytes > MAX_CALL_FRAME_BYTES_V1
             || !frame_bytes.is_multiple_of(CALL_WORD_BYTES_V1 as u32)
             || !stack_pointer.is_multiple_of(CALL_WORD_BYTES_V1 as u64)
@@ -647,6 +664,26 @@ impl CallFrameMemory {
         Ok(())
     }
 
+    /// Borrow actual active descriptor values for the sealed native packet owner.
+    pub(crate) fn native_packet_descriptor(&self) -> Option<[u64; 8]> {
+        self.frames.last().map(|frame| [
+            frame.stack.region.start, frame.stack.region.end,
+            frame.arguments.start, frame.arguments.end,
+            frame.results.region.start, frame.results.region.end,
+            frame.entry_stack_pointer, frame.entry_pc,
+        ])
+    }
+
+    /// Actual initialized bits for an absolute aligned cell, without allocating.
+    pub(crate) fn native_packet_initialized(&self, address: u64) -> u16 {
+        let Some(frame) = self.frames.last() else { return 0; };
+        (0..16).fold(0, |mask, byte| {
+            let Some(start) = address.checked_add(byte) else { return mask; };
+            let Ok(one) = Region::new(start, 1) else { return mask; };
+            mask | (u16::from(frame.stack.initialized(one) || frame.results.initialized(one)) << byte)
+        })
+    }
+
     /// Authenticated active function root, unaffected by guest control-register writes.
     pub(crate) fn entry_pc(&self) -> Result<u64, VMError> {
         self.frames
@@ -743,12 +780,12 @@ mod tests {
             result_words,
         }
     }
-    fn callable(bytes: u32) -> EmbeddedCallableV1 {
-        EmbeddedCallableV1 {
+    fn callable(bytes: u32) -> CallFrameShape {
+        CallFrameShape {
             entry_pc: 0,
             frame_bytes: bytes,
-            argument_words: vec![ivm_abi::call::CallWordV1::Bool],
-            result_words: vec![ivm_abi::call::CallWordV1::Bool],
+            argument_words: 1,
+            result_words: 1,
         }
     }
     fn root() -> CallFrameMemory {

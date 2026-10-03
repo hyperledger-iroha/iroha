@@ -64,8 +64,8 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     assert_eq!(callable.entry_pc, entrypoint.entry_pc);
     assert_ne!(callable.entry_pc, 0, "raw entry must not dispatch main");
     assert!(callable.validate());
-    assert!(callable.argument_words.is_empty());
-    assert_eq!(callable.result_words, vec![ivm::call::CallWordV1::Unit]);
+    assert_eq!(callable.arguments, ivm::call::CallSchemaV1::empty());
+    assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
 
     // Preserve all remaining compiler sections while removing only the
     // authenticated callable descriptor; admission must reject that omission.

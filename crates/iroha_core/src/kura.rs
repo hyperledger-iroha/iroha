@@ -89,9 +89,9 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-impl From<CommittedBlock> for Arc<SignedBlock> {
+impl From<CommittedBlock> for iroha_data_model::block::SharedSignedBlock {
     fn from(value: CommittedBlock) -> Self {
-        Arc::new(value.into())
+        value.into_shared()
     }
 }
 const INDEX_FILE_NAME: &str = "blocks.index";
@@ -4766,8 +4766,8 @@ impl Kura {
             ));
         }
         after_admission();
-        let mut file =
-            std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let mut file = open_read_only_regular_file(path, "bounded Kura sidecar")
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let opened_metadata = secure_file_metadata::from_file(&file)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         if !opened_metadata.is_file()
@@ -4780,7 +4780,14 @@ impl Kura {
         }
         let mut bytes = Vec::new();
         let expected_len = usize::try_from(metadata.file.len())?;
-        bytes.try_reserve_exact(expected_len)?;
+        // This is the sole owner of the retained raw sidecar buffer, including durable
+        // commit markers. Preserve any caller's cumulative allowance before allocating.
+        norito::core::reserve_decode_allocation(expected_len).map_err(Error::NoritoFrame)?;
+        bytes.try_reserve_exact(expected_len).map_err(|_| {
+            Error::NoritoFrame(norito::Error::AllocationFailed {
+                bytes: metadata.file.len(),
+            })
+        })?;
         bytes.resize(expected_len, 0);
         file.read_exact(&mut bytes)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
@@ -5463,8 +5470,17 @@ impl Kura {
         })
     }
     /// Get a reference to block by height, loading it from disk if needed.
-    pub fn get_block(&self, block_height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.get_block_inner(block_height, true)
+    /// # Errors
+    /// Preserves original local allocation refusal separately from malformed or unavailable storage.
+    pub fn get_block(
+        &self,
+        block_height: NonZeroUsize,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> std::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
+        self.get_block_inner(block_height, true, budget)
     }
     fn poison_corrupt_canonical_read(&self, block_index: usize, reason: &'static str) {
         let path = self.active_blocks_dir.lock().clone();
@@ -5479,7 +5495,17 @@ impl Kura {
         &self,
         block_height: NonZeroUsize,
         update_transaction_index: bool,
-    ) -> Option<Arc<SignedBlock>> {
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> std::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
+        use crate::execution_attempt::{
+            ExecutionAttemptError as Attempt, versioned_decode_attempt_error,
+        };
+        use iroha_data_model::block::SharedSignedBlock;
+        let reserve =
+            || SharedSignedBlock::reserve(budget).map_err(|error| Attempt::Deferred(error.into()));
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
         {
@@ -5489,17 +5515,17 @@ impl Kura {
                     "refusing canonical block read while Kura storage is fail-stop poisoned"
                 );
             }
-            return None;
+            return Err(Error::CanonicalStoragePoisoned.into());
         }
         #[cfg(test)]
         self.observe_canonical_read_after_prune_check_for_tests(CANONICAL_BLOCK_READER_OBSERVED);
         let (block_index, known_hash, known_previous_hash, cached_block, should_cache, chain_len) = {
             let data = self.block_data.lock();
             if self.prune_recovery_is_required() {
-                return None;
+                return Err(Error::CanonicalStoragePoisoned.into());
             }
             if data.len() < block_height.get() {
-                return None;
+                return Ok(None);
             }
             let idx = block_height.get() - 1;
             let known_hash = data.known_hash(idx);
@@ -5517,18 +5543,28 @@ impl Kura {
                 data.len(),
             )
         };
-        let expected_hash = known_hash.or_else(|| self.get_durable_block_hash(block_height))?;
+        let expected_hash = known_hash
+            .or_else(|| self.get_durable_block_hash(block_height))
+            .ok_or(Error::CanonicalBlockWireMismatch {
+                height: block_height.get() as u64,
+            })?;
         let expected_previous_hash = if block_index == 0 {
             None
         } else {
             let previous_height = NonZeroUsize::new(block_index)
                 .expect("a non-genesis block has a non-zero parent height");
-            Some(known_previous_hash.or_else(|| self.get_durable_block_hash(previous_height))?)
+            Some(
+                known_previous_hash
+                    .or_else(|| self.get_durable_block_hash(previous_height))
+                    .ok_or(Error::CanonicalBlockWireMismatch {
+                        height: previous_height.get() as u64,
+                    })?,
+            )
         };
         if should_cache {
             let mut data = self.block_data.lock();
             if data.len() != chain_len || self.prune_recovery_is_required() {
-                return None;
+                return Ok(None);
             }
             if update_transaction_index {
                 data.cache_hash(block_index, expected_hash);
@@ -5543,13 +5579,13 @@ impl Kura {
         let (block, is_evicted, authenticated_for_index) = {
             let mut block_store = self.block_store.lock();
             if self.prune_recovery_is_required() {
-                return None;
+                return Err(Error::CanonicalStoragePoisoned.into());
             }
             let index = match block_store.read_block_index(block_index as u64) {
                 Ok(index) => index,
                 Err(error) => {
                     error!(?error, block_index, "Failed to read block index from disk");
-                    return None;
+                    return Err(error.into());
                 }
             };
             let is_evicted = index.is_evicted();
@@ -5560,7 +5596,10 @@ impl Kura {
                     block_index,
                     "committed block length exceeds the canonical wire limit",
                 );
-                return None;
+                return Err(Error::CanonicalBlockWireMismatch {
+                    height: block_height.get() as u64,
+                }
+                .into());
             }
             if length == 0 {
                 debug!(
@@ -5569,7 +5608,7 @@ impl Kura {
                     evicted = is_evicted,
                     "Kura block body is unavailable for an invalid zero-length canonical slot"
                 );
-                return None;
+                return Ok(None);
             }
             if let Some(telemetry) = self.telemetry.get() {
                 let outcome = if is_evicted { "miss" } else { "hit" };
@@ -5580,13 +5619,13 @@ impl Kura {
                 let height = block_index.saturating_add(1) as u64;
                 let bytes = match block_store.read_optional_da_cache(height) {
                     Ok(Some(bytes)) => bytes,
-                    Ok(None) => return None,
+                    Ok(None) => return Ok(None),
                     Err(error) => {
                         error!(
                             ?error,
                             block_index, height, "Failed to read evicted block cache"
                         );
-                        return None;
+                        return Err(error.into());
                     }
                 };
                 if u64::try_from(bytes.len()).ok() != Some(length) {
@@ -5594,12 +5633,13 @@ impl Kura {
                         block_index,
                         height, "Evicted block cache differs from its signed complete-wire binding"
                     );
-                    return None;
+                    return Err(Error::CanonicalBlockWireMismatch { height }.into());
                 }
                 if let Some(telemetry) = self.telemetry.get() {
                     let actual_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                     telemetry.add_storage_da_churn_bytes("kura", "rehydrated", actual_len);
                 }
+                let shell = reserve()?;
                 let decoded = match decode_framed_signed_block(&bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
@@ -5607,13 +5647,13 @@ impl Kura {
                             ?error,
                             block_index, height, "Failed to decode evicted block payload"
                         );
-                        return None;
+                        return Err(versioned_decode_attempt_error(error, Error::VersionedCodec));
                     }
                 };
-                decoded
+                shell.initialize(decoded)
             } else {
                 if let Some(block) = cached_block {
-                    return Some(block);
+                    return Ok(Some(block));
                 }
                 let bytes = match block_store.block_bytes(start, length) {
                     Ok(slice) => slice,
@@ -5624,11 +5664,12 @@ impl Kura {
                             block_index,
                             "committed inline block range is unreadable",
                         );
-                        return None;
+                        return Err(error.into());
                     }
                 };
+                let shell = reserve()?;
                 match decode_framed_signed_block(bytes) {
-                    Ok(decoded) => decoded,
+                    Ok(decoded) => shell.initialize(decoded),
                     Err(error) => {
                         error!(?error, block_index, "Failed to decode block from disk");
                         drop(block_store);
@@ -5641,14 +5682,14 @@ impl Kura {
                                 "committed inline block body is not decodable",
                             );
                         }
-                        return None;
+                        return Err(versioned_decode_attempt_error(error, Error::VersionedCodec));
                     }
                 }
             };
             (loaded, is_evicted, authenticated_for_index)
         };
         if self.prune_recovery_is_required() {
-            return None;
+            return Err(Error::CanonicalStoragePoisoned.into());
         }
         if block.hash() != expected_hash {
             error!(
@@ -5661,10 +5702,14 @@ impl Kura {
                 block_index,
                 "loaded block hash mismatches the canonical hash journal",
             );
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch {
+                height: block_height.get() as u64,
+            }
+            .into());
         }
         let header = block.header();
-        let expected_height = u64::try_from(block_height.get()).ok()?;
+        let expected_height = u64::try_from(block_height.get())
+            .map_err(|_| Error::CanonicalBlockWireMismatch { height: u64::MAX })?;
         if header.height().get() != expected_height
             || header.prev_block_hash() != expected_previous_hash
         {
@@ -5680,12 +5725,15 @@ impl Kura {
                 block_index,
                 "loaded block height or parent mismatches the canonical journal",
             );
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch {
+                height: block_height.get() as u64,
+            }
+            .into());
         }
         if self.prune_recovery_is_required() {
-            return None;
+            return Err(Error::CanonicalStoragePoisoned.into());
         }
-        let block_arc = Arc::new(block);
+        let block_arc = block;
         if update_transaction_index {
             let height = NonZeroUsize::new(block_index.saturating_add(1))
                 .expect("canonical block index produces a non-zero height");
@@ -5726,11 +5774,8 @@ impl Kura {
                     if !index.is_evicted() && index.length > 0 && hash == expected_hash =>
                 {
                     if let Some(mut data) = self.block_data.try_lock() {
-                        let _ = data.cache_body_if_hash(
-                            block_index,
-                            expected_hash,
-                            Arc::clone(&block_arc),
-                        );
+                        let _ =
+                            data.cache_body_if_hash(block_index, expected_hash, block_arc.clone());
                     }
                 }
                 (Err(error), _) | (_, Err(error)) => {
@@ -5744,9 +5789,9 @@ impl Kura {
             drop(block_store);
         }
         if self.prune_recovery_is_required() {
-            return None;
+            return Err(Error::CanonicalStoragePoisoned.into());
         }
-        Some(block_arc)
+        Ok(Some(block_arc))
     }
     /// Authorize a durable sidecar or journal mutation which does not require
     /// canonical block-stage recovery.
@@ -6722,7 +6767,7 @@ impl Kura {
                 let block = block
                     .as_ref()
                     .expect("pending block missing from Kura memory cache");
-                blocks.push(Arc::clone(block));
+                blocks.push(block.clone());
             }
             blocks
         };
@@ -6823,8 +6868,8 @@ impl Kura {
         Ok(())
     }
     /// Persist the canonical block after checking append capacity and durable ordering.
-    pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
-        self.store_block_durable(&block.into())
+    pub fn store_block(&self, block: iroha_data_model::block::SharedSignedBlock) -> Result<()> {
+        self.store_block_durable(&block)
     }
     /// Read the exact canonical framed block bytes persisted at `height`.
     #[cfg(test)]
@@ -10826,8 +10871,10 @@ impl BlockStore {
     /// Fails if any of the required platform-specific functions
     /// fail.
     pub fn append_block_to_chain(&mut self, block: &SignedBlock) -> Result<()> {
-        // Delegate to the batch writer to share fsync/pending logic.
-        self.append_block_batch(&[Arc::new(block.clone())])
+        // Borrow the original body through the same writer; offline persistence
+        // needs neither a cloned execution graph nor a new shared control.
+        let start_height = self.read_index_count()?;
+        self.append_block_batch_at(start_height, &[block], 0)
     }
     /// Append multiple blocks to the chain in a single I/O batch.
     ///
@@ -10836,15 +10883,18 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O and encoding errors.
-    pub(crate) fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
+    pub(crate) fn append_block_batch(
+        &mut self,
+        blocks: &[iroha_data_model::block::SharedSignedBlock],
+    ) -> Result<()> {
         let start_height = self.read_index_count()?;
         self.append_block_batch_at(start_height, blocks, 0)
     }
     #[allow(clippy::too_many_lines)]
-    fn append_block_batch_at(
+    fn append_block_batch_at<B: core::ops::Deref<Target = SignedBlock>>(
         &mut self,
         start_height: u64,
-        blocks: &[Arc<SignedBlock>],
+        blocks: &[B],
         max_disk_usage_bytes: u64,
     ) -> Result<()> {
         if blocks.is_empty() {
@@ -11161,6 +11211,8 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::state::StateReadOnly as _;
+
     #[test]
     fn root_storage_frame_owners_roundtrip_and_reject_substitution() {
         fn check<T>(value: &T, nominal: &str) -> T

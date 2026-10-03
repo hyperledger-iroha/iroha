@@ -253,6 +253,12 @@ fn row_growth_refund_notifies_only_after_memory_releases_its_log_lock() {
     for index in 0..4 {
         memory.with_write_log(|log| append(log, index, &[index as u8]));
     }
+    let registration_layout = iroha_allocation::release::ReleaseRegistration::allocation_layout();
+    let mut registration = iroha_allocation::release::ReleaseRegistration::from_reservation(
+        &mut budget.try_reserve(registration_layout).unwrap(),
+    )
+    .unwrap();
+    assert!(registration.belongs_to(&budget));
     let occupied = budget.reserved_bytes();
     let next = 8 * std::mem::size_of::<WriteLogEntry>() + 1;
     budget.set_limit_bytes(occupied + next);
@@ -266,7 +272,7 @@ fn row_growth_refund_notifies_only_after_memory_releases_its_log_lock() {
         held: AtomicBool::new(false),
     });
     let waker = Waker::from(Arc::clone(&probe));
-    let mut future = release.wait_for_release();
+    let mut future = release.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))
@@ -277,5 +283,8 @@ fn row_growth_refund_notifies_only_after_memory_releases_its_log_lock() {
     assert!(!probe.held.load(Ordering::SeqCst));
     assert_eq!(memory.write_log.lock().rows.len(), 5);
     drop(memory);
+    assert_eq!(budget.reserved_bytes(), registration_layout.size());
+    drop(future);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }

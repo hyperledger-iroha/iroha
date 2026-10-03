@@ -422,27 +422,39 @@ pub mod isi {
         metadata: &Metadata,
         upper_bound: core::num::NonZeroU64,
         fuel: core::num::NonZeroU64,
-    ) -> Result<(), Error> {
+        prepared_contracts: crate::smartcontracts::ivm::cache::PreparedContractCache,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
             Executable::IvmProved(_) => {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract(
+                return Err(
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(
                         "proof-backed IVM triggers are unavailable".into(),
-                    ),
-                ));
+                    ))
+                    .into(),
+                );
             }
             Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
                 return Ok(());
             }
         };
-        let admitted = crate::smartcontracts::ivm::cache::IvmCache::new()
-            .summarize_executable(bytecode)
-            .map_err(|error| {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(format!(
-                    "invalid IVM trigger program: {error}"
-                )))
-            })?;
+        let admitted = crate::smartcontracts::ivm::cache::IvmCache::with_prepared_contract_cache(
+            0,
+            prepared_contracts,
+        )
+        .summarize_executable(bytecode)
+        .map_err(|error| {
+            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+            {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+            } else {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "invalid IVM trigger program: {error}"
+                    )),
+                ))
+            }
+        })?;
         if matches!(
             admitted,
             crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
@@ -604,7 +616,9 @@ pub mod isi {
                 .get()
                 .smart_contract()
                 .fuel(),
-        )?;
+            state_transaction.prepared_contract_cache(),
+        )
+        .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?;
         let data_scope_authorization =
             enforce_data_trigger_scope_and_capacity(state_transaction, authority, &new_trigger)?;
         {
@@ -1182,6 +1196,50 @@ pub mod isi {
         use super::*;
 
         #[test]
+        fn generic_trigger_admission_preserves_original_pool_refusal_and_retry() {
+            use crate::execution_attempt::ExecutionAttemptError;
+            use crate::smartcontracts::ivm::cache::PreparedContractCache;
+            use iroha_allocation::{AllocationBudget, AllocationRefusal};
+
+            let mut program = ivm::ProgramMetadata {
+                max_cycles: 10_000,
+                ..ivm::ProgramMetadata::default()
+            }
+            .encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
+            let bound = core::num::NonZeroU64::new(10_000).unwrap();
+            let budget = AllocationBudget::new(0);
+            let cache = PreparedContractCache::with_execution_budget(0, budget.clone());
+            let result = enforce_ivm_trigger_program_policy(
+                &executable,
+                &Metadata::default(),
+                bound,
+                bound,
+                cache.clone(),
+            );
+            let Err(ExecutionAttemptError::Deferred(reason)) = result else {
+                panic!("original pool pressure must not become trigger rejection");
+            };
+            assert!(matches!(
+                reason.allocation_refusal(),
+                Some(AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+            ));
+            assert_eq!(budget.peak_reserved_bytes(), 0);
+            budget.set_limit_bytes(64 * 1024 * 1024);
+            enforce_ivm_trigger_program_policy(
+                &executable,
+                &Metadata::default(),
+                bound,
+                bound,
+                cache,
+            )
+            .expect("same original pool admits after local pressure resolves");
+            assert!(budget.peak_reserved_bytes() > 0);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+
+        #[test]
         fn proved_ivm_trigger_policy_rejects_before_bytecode_admission() {
             let executable =
                 Executable::IvmProved(iroha_data_model::transaction::executable::IvmProved {
@@ -1192,8 +1250,16 @@ pub mod isi {
                 });
             let bound = core::num::NonZeroU64::new(1).expect("nonzero bound");
             assert!(matches!(
-                enforce_ivm_trigger_program_policy(&executable, &Metadata::default(), bound, bound),
-                Err(Error::InvalidParameter(InvalidParameterError::SmartContract(message)))
+                enforce_ivm_trigger_program_policy(
+                    &executable,
+                    &Metadata::default(),
+                    bound,
+                    bound,
+                    crate::smartcontracts::ivm::cache::PreparedContractCache::with_capacity(0),
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                ))
                     if message == "proof-backed IVM triggers are unavailable"
             ));
         }
@@ -1943,7 +2009,7 @@ mod tests {
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
             h.set_height(NonZeroU64::new(1).unwrap());
         })
-        .commit(&topology)
+        .commit(&topology, crate::block::reserve_block_for_tests())
         .unpack(|_| {})
         .unwrap()
     }

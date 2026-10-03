@@ -15,17 +15,17 @@ impl NativeBlocks {
             next_height: 1,
         }
     }
-    fn next(&mut self) -> Arc<SignedBlock> {
+    fn next(&mut self) -> iroha_data_model::block::SharedSignedBlock {
         while self.chain.height() < self.next_height {
             self.chain.commit(Vec::new());
         }
-        let original = Arc::clone(self.chain.committed(self.next_height).block());
+        let original = (self.chain.committed(self.next_height).block()).clone();
         self.next_height += 1;
         original
     }
-    fn get(&self, index: usize) -> Option<Arc<SignedBlock>> {
+    fn get(&self, index: usize) -> Option<iroha_data_model::block::SharedSignedBlock> {
         let height = u64::try_from(index).ok()?.checked_add(1)?;
-        (height < self.next_height).then(|| Arc::clone(self.chain.committed(height).block()))
+        (height < self.next_height).then(|| (self.chain.committed(height).block()).clone())
     }
 }
 
@@ -88,7 +88,8 @@ fn deep_history_get_block_uses_cached_bytes() {
     for _ in 0..3 {
         for (idx, height) in heights.iter().enumerate() {
             let block = kura
-                .get_block(*height)
+                .get_block(*height, &blocks.chain.state().view().execution_budget())
+                .expect("completed structural storage read")
                 .unwrap_or_else(|| panic!("block missing at height {height}"));
             assert_eq!(block.hash(), expected_hashes[idx]);
         }
@@ -125,7 +126,7 @@ fn debug_output_new_blocks_writes_jsonl() {
         Kura::start(kura.clone(), ShutdownSignal::new())
     };
     let block = NativeBlocks::new().next();
-    kura.store_block(Arc::clone(&block)).expect("store block");
+    kura.store_block((block).clone()).expect("store block");
     wait_for_block_hash(&kura, 1, block.hash());
     let dump_path = Kura::canonical_storage_path(temp_dir.path()).join("blocks.jsonl");
     let contents = fs::read_to_string(&dump_path).expect("read debug block dump");
@@ -249,7 +250,7 @@ fn two_lane_storage_fixture() -> (TempDir, KuraConfig, RuntimeLaneConfig) {
     expect_two_lane_storage_fixture("create temp dir")
 }
 
-fn blank_kura_with_next_block() -> (Arc<Kura>, Arc<SignedBlock>) {
+fn blank_kura_with_next_block() -> (Arc<Kura>, iroha_data_model::block::SharedSignedBlock) {
     let kura = Kura::blank_kura_for_testing();
     let block = NativeBlocks::new().next();
     (kura, block)

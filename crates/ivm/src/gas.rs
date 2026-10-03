@@ -624,6 +624,7 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             crate::call_gas::FORMULA_VERSION,
         ),
         ("call_table_per_byte", crate::call_gas::PER_BYTE),
+        ("call_schema_node", crate::call_gas::NODE),
         ("call_pointer_base", crate::call_gas::POINTER_BASE),
         ("call_bitmap_coverage", crate::call_gas::BITMAP_COVERAGE),
         ("call_word_bytes", ivm_abi::call::CALL_WORD_BYTES_V1 as u64),

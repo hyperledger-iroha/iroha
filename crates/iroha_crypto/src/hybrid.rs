@@ -154,7 +154,27 @@ impl HybridPublicKey {
         x25519: impl AsRef<[u8]>,
         kyber: impl AsRef<[u8]>,
     ) -> Result<Self, HybridError> {
-        let x25519_bytes = x25519.as_ref();
+        let kyber_bytes = kyber.as_ref();
+        let x25519 = Self::checked_components(x25519.as_ref(), kyber_bytes)?;
+        Ok(Self {
+            x25519,
+            kyber: kyber_bytes.to_vec(),
+        })
+    }
+    /// Validate borrowed component bytes without allocating an owned key.
+    ///
+    /// This applies the same ordered curve, length and canonical ML-KEM checks
+    /// as [`Self::from_bytes`]. It neither retains nor copies the input backing.
+    ///
+    /// # Errors
+    /// Returns the same [`HybridError`] as the owning constructor for invalid inputs.
+    pub fn validate_bytes(x25519: &[u8], kyber: &[u8]) -> Result<(), HybridError> {
+        Self::checked_components(x25519, kyber).map(|_| ())
+    }
+    fn checked_components(
+        x25519_bytes: &[u8],
+        kyber_bytes: &[u8],
+    ) -> Result<X25519PublicKey, HybridError> {
         if x25519_bytes.len() != 32 {
             return Err(HybridError::InvalidX25519PublicKeyLength {
                 expected: 32,
@@ -164,7 +184,6 @@ impl HybridPublicKey {
         let mut x25519_array = [0_u8; 32];
         x25519_array.copy_from_slice(x25519_bytes);
         let x25519 = decode_x25519_public_key(x25519_array)?;
-        let kyber_bytes = kyber.as_ref();
         let expected_len = HYBRID_KEM_SUITE.public_key_len();
         if kyber_bytes.len() != expected_len {
             return Err(HybridError::InvalidKyberPublicKeyLength {
@@ -176,10 +195,7 @@ impl HybridPublicKey {
         HYBRID_KEM_SUITE
             .validate_public_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberPublicKey)?;
-        Ok(Self {
-            x25519,
-            kyber: kyber_bytes.to_vec(),
-        })
+        Ok(x25519)
     }
     /// Return the contained X25519 public key.
     #[must_use]
@@ -388,7 +404,27 @@ impl HybridKemCiphertext {
         ephemeral_public: impl AsRef<[u8]>,
         kyber_ciphertext: impl AsRef<[u8]>,
     ) -> Result<Self, HybridError> {
-        let ephemeral_bytes = ephemeral_public.as_ref();
+        let kyber_bytes = kyber_ciphertext.as_ref();
+        let ephemeral_public = Self::checked_parts(ephemeral_public.as_ref(), kyber_bytes)?;
+        Ok(Self {
+            ephemeral_public,
+            kyber_ciphertext: kyber_bytes.to_vec(),
+        })
+    }
+    /// Validate borrowed ciphertext components without allocating an owned bundle.
+    ///
+    /// This applies the same ordered curve, length and ML-KEM checks as
+    /// [`Self::from_parts`]. It does not decrypt or authenticate a private payload.
+    ///
+    /// # Errors
+    /// Returns the same [`HybridError`] as the owning constructor for invalid inputs.
+    pub fn validate_parts(
+        ephemeral_public: &[u8],
+        kyber_ciphertext: &[u8],
+    ) -> Result<(), HybridError> {
+        Self::checked_parts(ephemeral_public, kyber_ciphertext).map(|_| ())
+    }
+    fn checked_parts(ephemeral_bytes: &[u8], kyber_bytes: &[u8]) -> Result<[u8; 32], HybridError> {
         if ephemeral_bytes.len() != 32 {
             return Err(HybridError::InvalidX25519PublicKeyLength {
                 expected: 32,
@@ -398,7 +434,6 @@ impl HybridKemCiphertext {
         let mut ephemeral_public_array = [0_u8; 32];
         ephemeral_public_array.copy_from_slice(ephemeral_bytes);
         let _ephemeral_public = decode_x25519_public_key(ephemeral_public_array)?;
-        let kyber_bytes = kyber_ciphertext.as_ref();
         let expected_ct_len = HYBRID_KEM_SUITE.ciphertext_len();
         if kyber_bytes.len() != expected_ct_len {
             return Err(HybridError::InvalidKyberCiphertext);
@@ -407,10 +442,7 @@ impl HybridKemCiphertext {
         HYBRID_KEM_SUITE
             .validate_ciphertext(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberCiphertext)?;
-        Ok(Self {
-            ephemeral_public: ephemeral_public_array,
-            kyber_ciphertext: kyber_bytes.to_vec(),
-        })
+        Ok(ephemeral_public_array)
     }
     /// Return the sender's ephemeral X25519 public key.
     #[must_use]
@@ -1208,3 +1240,7 @@ mod tests {
         assert_eq!(err, HybridError::InvalidX25519SharedSecret);
     }
 }
+
+#[cfg(test)]
+#[path = "hybrid/borrowed_validation_tests.rs"]
+mod borrowed_validation_tests;

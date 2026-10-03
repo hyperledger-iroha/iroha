@@ -27,6 +27,14 @@ pub(crate) use native_capture::{
     capture_account_alias_table_once, capture_accounts_table_once, capture_domains_table_once,
 };
 
+#[path = "complete/grouped_capture.rs"]
+mod grouped_capture;
+pub(crate) use grouped_capture::{
+    capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
+    capture_contract_alias_bindings_once, capture_escrows_once, capture_nfts_once,
+    capture_repo_agreements_once, capture_rwas_once,
+};
+
 /// A field that cannot yet participate in a complete State commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum CompleteInventoryError {
@@ -115,15 +123,18 @@ fn check_history_field(
     }
 }
 
+mod derivation_path;
+use derivation_path::DerivationPath;
+
 fn check_derivation_source(
     fields: &'static [Field],
     source: &'static str,
-    active: &mut Vec<&'static str>,
+    active: &DerivationPath<'_>,
 ) -> Result<(), CompleteInventoryError> {
     if count_identity(fields, source) != 1 {
         return Err(CompleteInventoryError::UnknownSource(source));
     }
-    if active.contains(&source) {
+    if active.contains(source) {
         return Err(CompleteInventoryError::DerivationCycle(source));
     }
     let field = find_identity(fields, source).expect("unique derivation source remains registered");
@@ -137,12 +148,10 @@ fn check_derivation_source(
             Err(CompleteInventoryError::NonAuthoritySource(source))
         }
         Role::Derived { sources, .. } => {
-            active.push(source);
-            let result = sources
+            let next = active.child(source);
+            sources
                 .iter()
-                .try_for_each(|next| check_derivation_source(fields, next, active));
-            active.pop();
-            result
+                .try_for_each(|source| check_derivation_source(fields, source, &next))
         }
     }
 }
@@ -216,10 +225,10 @@ fn check_field(
             }
             match check {
                 DerivationCheck::Rebuild(_) => {
-                    let mut active = vec![field.id];
-                    sources.iter().try_for_each(|source| {
-                        check_derivation_source(fields, source, &mut active)
-                    })?;
+                    let active = DerivationPath::root(field.id);
+                    sources
+                        .iter()
+                        .try_for_each(|source| check_derivation_source(fields, source, &active))?;
                 }
                 // A commitment derives from whole owners: their canonical descendants.
                 DerivationCheck::Commitment(_) => {
@@ -342,6 +351,7 @@ mod tests {
         world
             .account_aliases
             .insert(second_alias.clone(), second_owner.clone());
+        world.rebuild_account_alias_index().unwrap();
         let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -446,6 +456,7 @@ mod tests {
             .world
             .account_aliases
             .insert(first_alias.clone(), second_owner);
+        state.world.rebuild_account_alias_index().unwrap();
         let substituted = capture_account_alias_table_once(&state, limits)
             .expect("bounded substituted table")
             .expect("stable generation");
@@ -492,7 +503,7 @@ mod tests {
                         checked += 1;
                         continue;
                     }
-                    check_derivation_source(STATE_FIELDS, source, &mut vec![field.id])
+                    check_derivation_source(STATE_FIELDS, source, &DerivationPath::root(field.id))
                         .unwrap_or_else(|error| {
                             panic!(
                                 "{} has an unauthenticated derivation chain: {error}",

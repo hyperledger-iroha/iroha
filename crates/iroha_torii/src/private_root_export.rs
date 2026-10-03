@@ -136,16 +136,23 @@ mod tests {
 
     #[test]
     fn original_local_export_pool_refusal_is_a_retryable_http_response() {
-        use std::{future::Future, pin::pin, task::Context};
-        let budget = iroha_allocation::AllocationBudget::new(8);
+        use iroha_allocation::release::ReleaseRegistration;
+        use std::{future::Future, pin::Pin, task::Context};
+        let registration_bytes = ReleaseRegistration::allocation_layout().size();
+        let budget = iroha_allocation::AllocationBudget::new(8 + registration_bytes);
+        let mut prepaid = budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap();
+        let mut registration = ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+        drop(prepaid);
         let original_owner = budget.try_reserve_bytes(8).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let iroha_allocation::AllocationRefusal::Capacity { release, .. } = &refusal else {
             panic!("the original occupied pool refuses this actual attempt");
         };
-        let mut release = pin!(release.clone().wait_for_release());
+        let mut release = release.clone().wait_for_release(&mut registration);
         let mut context = Context::from_waker(std::task::Waker::noop());
-        assert!(release.as_mut().poll(&mut context).is_pending());
+        assert!(Pin::new(&mut release).poll(&mut context).is_pending());
         let error = export_error(
             iroha_core::sumeragi::private_dataspace_export::ExportError::Deferred(
                 refusal.clone().into(),
@@ -159,10 +166,12 @@ mod tests {
             error.into_response().status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
-        assert_eq!(budget.reserved_bytes(), 8);
-        assert!(release.as_mut().poll(&mut context).is_pending());
+        assert_eq!(budget.reserved_bytes(), 8 + registration_bytes);
+        assert!(Pin::new(&mut release).poll(&mut context).is_pending());
         drop(original_owner);
-        assert!(release.as_mut().poll(&mut context).is_ready());
+        assert!(Pin::new(&mut release).poll(&mut context).is_ready());
+        drop(release);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 

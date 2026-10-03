@@ -236,6 +236,7 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+mv = { workspace = true, features = ["test"] }
 iroha_core_privacy = { workspace = true, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
 kotodama_lang = { workspace = true }

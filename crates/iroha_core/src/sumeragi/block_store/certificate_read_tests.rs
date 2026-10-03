@@ -6,9 +6,10 @@ use iroha_data_model::{
     sumeragi_finality::test_fixtures::NativeFinalityFixture,
 };
 
-fn fixture() -> Arc<SignedBlock> {
+fn fixture() -> iroha_data_model::block::SharedSignedBlock {
     let fixture = NativeFinalityFixture::new();
-    Arc::new(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap())
+    crate::block::reserve_block_for_tests()
+        .initialize(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap())
 }
 
 fn with_parts(
@@ -16,8 +17,8 @@ fn with_parts(
     header: Vec<u8>,
     qc: Vec<u8>,
     table: Vec<u8>,
-) -> Arc<SignedBlock> {
-    Arc::new(
+) -> iroha_data_model::block::SharedSignedBlock {
+    crate::block::reserve_block_for_tests().initialize(
         source
             .clone()
             .with_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
@@ -35,7 +36,7 @@ fn with_parts(
 
 // This intentionally modifies an untrusted candidate to exercise only bounded witness parsing.
 // It is not an attested valid certificate and must still pass the independent verifier to serve.
-fn with_witness(source: &SignedBlock, size: usize) -> Arc<SignedBlock> {
+fn with_witness(source: &SignedBlock, size: usize) -> iroha_data_model::block::SharedSignedBlock {
     let c = source.commit_certificate().unwrap();
     let mut qc: Qc = norito::decode_canonical(c.commit_qc()).unwrap();
     qc.attestation_witness = Some(ResultWitness::from_untrusted(vec![7; size]).unwrap());
@@ -54,7 +55,10 @@ fn exact_canonical_artifacts_retain_original_source_and_original_pool() {
     let decoded = CertificateRead::new(source.clone(), budget.clone())
         .complete(&budget)
         .unwrap_or_else(|_| panic!("valid canonical artifacts"));
-    assert!(Arc::ptr_eq(&source, &decoded.source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &source,
+        &decoded.source
+    ));
     assert!(decoded.availability.admitted_to(&budget));
     let original = source.commit_certificate().unwrap();
     assert_eq!(
@@ -94,11 +98,14 @@ fn every_backing_and_shared_control_refusal_retains_exact_original_owners() {
         .err()
         .expect("table backing refuses");
     assert!(matches!(error, CertificateReadError::Admission(ref e) if e.is_local_refusal()));
-    assert!(Arc::ptr_eq(job.source(), &source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        job.source(),
+        &source
+    ));
     assert!(job.table_backing.is_none());
     assert_eq!(
         job.retained_owners_for_test(),
-        (Arc::as_ptr(&source), None, None)
+        (std::ptr::from_ref(source.as_ref()), None, None)
     );
 
     budget.set_limit_bytes(table_len);
@@ -110,7 +117,7 @@ fn every_backing_and_shared_control_refusal_retains_exact_original_owners() {
     let table_pointer = job.table_backing.as_ref().unwrap().as_slice().as_ptr();
     assert_eq!(
         job.retained_owners_for_test(),
-        (Arc::as_ptr(&source), Some(table_pointer), None)
+        (std::ptr::from_ref(source.as_ref()), Some(table_pointer), None)
     );
     assert_eq!(budget.reserved_bytes(), table_len);
     let (job, _) = job.complete(&budget).err().expect("same table retained");
@@ -142,7 +149,7 @@ fn every_backing_and_shared_control_refusal_retains_exact_original_owners() {
     assert_eq!(
         job.retained_owners_for_test(),
         (
-            Arc::as_ptr(&source),
+            std::ptr::from_ref(source.as_ref()),
             Some(table_pointer),
             Some(witness_pointer)
         )
@@ -154,7 +161,10 @@ fn every_backing_and_shared_control_refusal_retains_exact_original_owners() {
         witness_pointer
     );
     assert_eq!(budget.reserved_bytes(), reserved);
-    assert!(Arc::ptr_eq(job.source(), &source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        job.source(),
+        &source
+    ));
 
     budget.set_limit_bytes(1 << 25);
     let decoded = job
@@ -165,7 +175,10 @@ fn every_backing_and_shared_control_refusal_retains_exact_original_owners() {
     assert_eq!(witness.as_slice().as_ptr(), witness_pointer);
     assert_eq!(witness.as_slice(), &[7; 4096]);
     assert!(witness.admitted_to(&budget));
-    assert!(Arc::ptr_eq(&decoded.source, &source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &decoded.source,
+        &source
+    ));
     drop(decoded);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -185,7 +198,10 @@ fn foreign_pool_cannot_replace_captured_pool_before_or_during_admission() {
     let (job, error) = job.complete(&foreign).err().expect("foreign retry pool");
     assert!(matches!(error, CertificateReadError::ForeignBudget));
     assert_eq!(foreign.reserved_bytes(), 0);
-    assert!(Arc::ptr_eq(job.source(), &source));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        job.source(),
+        &source
+    ));
     budget.set_limit_bytes(1 << 25);
     let decoded = job
         .complete(&budget)
@@ -217,7 +233,10 @@ fn malformed_frames_remain_corruption_without_funded_destination_or_absence() {
                 .err()
                 .expect("same corruption on retry");
             assert!(matches!(error, CertificateReadError::Decode(_)));
-            assert!(Arc::ptr_eq(job.source(), &changed));
+            assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                job.source(),
+                &changed
+            ));
         }
     }
 }
@@ -257,7 +276,8 @@ fn malformed_signed_table_count_and_header_cap_reject_before_output_allocation()
 
 #[test]
 fn absent_certificate_is_an_explicit_error() {
-    let source = Arc::new(fixture().as_ref().clone().with_commit_certificate(None));
+    let source = crate::block::reserve_block_for_tests()
+        .initialize(fixture().as_ref().clone().with_commit_certificate(None));
     let budget = AllocationBudget::new(0);
     let (_, error) = CertificateRead::new(source, budget.clone())
         .complete(&budget)

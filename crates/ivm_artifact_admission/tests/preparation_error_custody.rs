@@ -1,6 +1,6 @@
 //! Compact admission errors preserve allocation-free local conversion and retry ownership.
 
-use iroha_allocation::AllocationBudget;
+use iroha_allocation::{AllocationBudget, release::ReleaseRegistration};
 use ivm_abi::{
     VMError,
     error::{AllocationRefusal, ExecutionDeferral},
@@ -9,8 +9,6 @@ use ivm_artifact_admission::ContractArtifactError;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
-    future::Future,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -115,7 +113,15 @@ impl Wake for Wakes {
 
 #[test]
 fn original_capacity_refusal_survives_unmetered_conversion_and_wakes_only_on_its_pool() {
-    let budget = AllocationBudget::new(8);
+    let observer_bytes = ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(8 + observer_bytes);
+    let mut registration = ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(registration.belongs_to(&budget));
     let occupied = budget.try_reserve_bytes(8).unwrap();
     let refusal = budget.try_reserve_bytes(1).unwrap_err();
     let original = VMError::AllocationDeferred(refusal.clone());
@@ -137,15 +143,25 @@ fn original_capacity_refusal_survives_unmetered_conversion_and_wakes_only_on_its
     let wake_count = Arc::new(Wakes::default());
     let waker = Waker::from(Arc::clone(&wake_count));
     let mut context = Context::from_waker(&waker);
-    let mut future = release.wait_for_release();
-    assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     let unrelated = AllocationBudget::new(8);
     drop(unrelated.try_reserve_bytes(8).unwrap());
     assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
-    assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     drop(occupied);
     assert_eq!(wake_count.0.load(Ordering::SeqCst), 1);
-    assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Ready(()));
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Ready(())
+    );
+    assert_eq!(budget.reserved_bytes(), observer_bytes);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

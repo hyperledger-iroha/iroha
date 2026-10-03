@@ -316,6 +316,7 @@ fn fixture_reward_claim_plan(
         expected_state,
         records,
         sources,
+        fee_claim: None,
     }
 }
 

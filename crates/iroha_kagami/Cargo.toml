@@ -6,7 +6,7 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
-description = "A tool used to generate cryptographic keys, docs, the schema and genesis block."
+description = "Managed Iroha developer networks and contract deployment, with native operator tools."
 
 license.workspace = true
 

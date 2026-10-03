@@ -47,7 +47,7 @@ pub(super) fn contains_exact_committed_input(
             work,
             iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
         )
-        .map_err(|_| unavailable())?;
+        .map_err(crate::canonical_history::query_attempt_error)?;
     if receipt.block().hash() != hash {
         return Err(unavailable());
     }

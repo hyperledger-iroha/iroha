@@ -161,8 +161,9 @@ impl RetailFeeReceiptPageV1 {
         }
         let mut next = cursor.clone();
         for receipt in &self.receipts {
+            let expected_sequence = next.next_sequence;
             if receipt.wallet_id != next.wallet_id
-                || receipt.sequence != next.next_sequence
+                || receipt.sequence != expected_sequence
                 || receipt.sequence == 0
                 || Some(retail_fee_receipt_chain_hash_v1(receipt)?) != next.next_receipt_hash
                 || receipt.collected_minor.checked_add(receipt.waived_minor)
@@ -218,18 +219,18 @@ pub(super) fn verify_finality_window(
     let mut roots = Vec::with_capacity(proofs.len());
     let mut closing_hash = None;
     for (index, proof) in proofs.into_iter().enumerate() {
-        let verified = if index == 0 {
+        let decision = if index == 0 {
             verifier.verify_same_decision(checkpoint.tip(), proof)
         } else {
             verifier.verify(proof)
         }
         .map_err(|e| format!("native finality certificate: {e}"))?;
-        if verified.height() != opening_height + index as u64
-            || verified.header() != proof.block_header
+        if decision.height() != opening_height + index as u64
+            || decision.header() != proof.block_header
         {
             return Err("native finality network or height mismatch".into());
         }
-        roots.push(verified.execution().ordinary_writes_root);
+        roots.push(decision.execution().ordinary_writes_root);
         closing_hash = Some(proof.block_header.hash());
     }
     if closing_hash != Some(anchor.closing_block_hash) {

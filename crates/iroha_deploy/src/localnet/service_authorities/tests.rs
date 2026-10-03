@@ -348,9 +348,15 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
                             id: asset_id.clone()
                         }
                         .execute(staged),
-                        Err(iroha_data_model::query::error::QueryExecutionFail::Find(
-                            iroha_data_model::query::error::FindError::Asset(Box::new(asset_id)),
-                        )),
+                        Err(
+                            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                                iroha_data_model::query::error::QueryExecutionFail::Find(
+                                    iroha_data_model::query::error::FindError::Asset(Box::new(
+                                        asset_id
+                                    )),
+                                ),
+                            )
+                        ),
                         "native reserve accounts start without a funded asset",
                     );
                 }

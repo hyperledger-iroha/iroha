@@ -24,6 +24,17 @@ fee quotes, plan verification and finality observation remain native SDK respons
   cursor, caller fee maxima and one shared deadline. Their submit/resume methods compare that
   selected request while holding the journal lock. An `Applied` transport result does not
   replace the attachment service's independently verified parent inclusion proof.
+  Stream-token custody Configure/Enroll requests use the same journal owner, with one
+  canonical native instruction, exact predecessor CAS and separate manager, signer and
+  attester identities. Recovery compares the original request and fee authorization before
+  dispatch; fresh read budgets never renew the signed transaction or enrollment interval.
+  Supplied predecessor records and anchors are claims: the managed coordinator must obtain
+  independently authenticated evidence, and native execution enforces current authorization.
+  Initial reserve-policy requests accept only revision one without a predecessor and bind
+  the exact asset, custody, treasury and service authorities. Their journal retains the
+  original signed policy, deadline and fee authorization through ambiguous submission and
+  read-only recovery. Selection fields express caller intent; independent native policy
+  evidence and managed reserve provisioning remain separate requirements.
 - `namespace` derives paid one-year domain requests and canonical private dataspace
   leases. Private dataspace names use SNS-derived ids and reject physical parent
   catalog collisions; preparing a lease never adds a parent lane or bootstrap grant.

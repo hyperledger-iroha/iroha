@@ -103,9 +103,7 @@ impl<'a> norito::core::DeserializePayload<'a> for Json {
         let wire = <JsonWireOwned as norito::core::DeserializePayload>::try_deserialize(
             archived.cast::<JsonWireOwned>(),
         )?;
-        let canonical = Self::require_canonical_text(&wire.value).map_err(|error| {
-            norito::core::Error::Message(format!("invalid Json payload: {error}"))
-        })?;
+        let canonical = Self::require_canonical_text(&wire.value)?;
         drop(wire);
         Self::try_from_canonical_string(canonical)
     }
@@ -151,9 +149,7 @@ impl Json {
             .get(header_len..end)
             .ok_or(norito::core::Error::LengthMismatch)?;
         let value = core::str::from_utf8(raw).map_err(|_| norito::core::Error::InvalidUtf8)?;
-        let canonical = Self::require_canonical_text(value).map_err(|error| {
-            norito::core::Error::Message(format!("invalid Json payload: {error}"))
-        })?;
+        let canonical = Self::require_canonical_text(value)?;
         norito::core::note_payload_access(bytes, used);
         Ok((canonical, used))
     }
@@ -162,15 +158,12 @@ impl Json {
         // `BTreeMap` and is the codec's single authority for JSON string and
         // finite-f64 spelling. Reusing it here prevents the ledger wrapper from
         // drifting from the JSON emitted by every other Norito component.
-        json::to_json_bounded(value, MAX_JSON_BYTES).map_err(|error| match error {
-            json::BoundedJsonError::DecodeResource(error) => error.into(),
-            error => norito::Error::Message(error.to_string()),
-        })
+        json::to_json_bounded(value, MAX_JSON_BYTES)
+            .map_err(json::BoundedJsonError::into_core_error)
     }
     fn canonicalize_text(value: &str) -> Result<String, norito::Error> {
         Self::ensure_size(value)?;
-        let parsed =
-            json::parse_value(value).map_err(|error| norito::Error::from(error.to_string()))?;
+        let parsed = json::parse_value(value).map_err(json::Error::into_core_error)?;
         let canonical = Self::serialize_canonical_value(&parsed);
         json::drop_json_value_iteratively(parsed);
         canonical
@@ -646,6 +639,58 @@ mod tests {
         let back: SerdeStruct = j.try_into_any().expect("try_into_any");
         assert_eq!(v, back);
     }
+    #[test]
+    fn canonical_binary_json_preserves_every_allocation_refusal_and_retries() {
+        for text in ["null", "[1,2]", r#"{"text":"canonical"}"#] {
+            let original = Json::from_str_norito(text).unwrap();
+            let bytes = norito::encode_canonical(&original).unwrap();
+            let protocol = norito::canonical_decode_limits(bytes.len());
+            let mut limit = 0;
+            loop {
+                let result = norito::with_decode_limits_scope(
+                    norito::DecodeLimits::new(
+                        usize::MAX,
+                        usize::MAX,
+                        usize::MAX,
+                        limit,
+                        usize::MAX,
+                    ),
+                    || norito::decode_canonical_for_admission::<Json>(&bytes, protocol),
+                );
+                match result {
+                    Ok(decoded) => {
+                        assert_eq!(decoded, original);
+                        break;
+                    }
+                    Err(error) => {
+                        assert_eq!(
+                            error.kind(),
+                            norito::core::DecodeAttemptErrorKind::EnclosingLimit,
+                            "{text}, budget {limit}: {error}"
+                        );
+                        let Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
+                            attempted,
+                            ..
+                        }) = error.into_error().decode_resource_error()
+                        else {
+                            panic!("expected exact cumulative refusal");
+                        };
+                        let next = usize::try_from(attempted).unwrap();
+                        assert!(
+                            next > limit && next < 1_048_576,
+                            "bounded progress through actual allocations"
+                        );
+                        limit = next;
+                    }
+                }
+            }
+            assert_eq!(
+                norito::decode_canonical_for_admission::<Json>(&bytes, protocol).unwrap(),
+                original
+            );
+        }
+    }
+
     #[test]
     fn canonical_json_value_writer_preserves_exact_original_destination_refusal() {
         let value = norito::json::Value::Null;

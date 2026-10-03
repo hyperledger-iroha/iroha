@@ -285,6 +285,9 @@ impl FileLaneBlockStore {
                 Ok(batch) => Some(batch),
                 // An authenticated malformed payload is distinct from local resource pressure.
                 Err(AdmissionAttemptError::Rejected(_)) => None,
+                Err(AdmissionAttemptError::AnchorDeferred(reason)) => {
+                    return Err(Attempt::Deferred(reason));
+                }
                 Err(AdmissionAttemptError::Deferred(reason)) => {
                     return Err(crate::execution_attempt::norito_decode_attempt_error(
                         reason.into(),

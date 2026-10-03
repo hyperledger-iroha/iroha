@@ -494,10 +494,15 @@ impl Core {
         }
     }
 
-    /// The driver may retain view-specific control builds only for this live signing round.
-    /// This allocation-free guard cancels stale retries after view advance, abstention or halt.
-    pub fn control_work_round(&self) -> Option<(u64, u64)> {
-        (self.halted.is_none() && self.signer().is_some()).then_some((self.height, self.view))
+    /// The driver may retain work only for this exact applied parent and signing view.
+    /// This allocation-free context cancels obsolete custody after source changes,
+    /// view advance, abstention or halt; it does not authenticate application bytes.
+    pub fn control_work_context(&self) -> Option<(crate::api::ApplicationControlContext, u64)> {
+        if self.halted.is_some() || self.signer().is_none() {
+            return None;
+        }
+        self.application_control_context()
+            .map(|source| (source, self.view))
     }
 
     /// Read-only diagnostics (§12.1 `status()`).

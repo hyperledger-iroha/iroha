@@ -90,11 +90,6 @@ impl WritePhase {
             tracked,
         })
     }
-
-    fn selected(self, byte: usize) -> bool {
-        let offset = (self.address & 15) as usize;
-        (offset..offset + self.length).contains(&byte)
-    }
 }
 
 /// A disabled effect cannot disclose otherwise inaccessible initialization state.
@@ -165,13 +160,11 @@ pub(super) fn append_residues(
     for value in initialized {
         out.push(F::ONE.sub(enabled).mul(*value));
     }
-    let before = row
-        .iter()
-        .enumerate()
-        .fold(F::ZERO, |sum, (byte, old)| sum.add(old.mul(F(1 << byte))));
-    let after = row.iter().enumerate().fold(F::ZERO, |sum, (byte, old)| {
-        sum.add((if phase.selected(byte) { F::ONE } else { *old }).mul(F(1 << byte)))
-    });
+    let (before, after) = initialized_masks(
+        row,
+        F(u64::from(phase.address & 8 != 0)),
+        phase.length == 16,
+    );
     out.push(initialized[BEFORE].sub(before));
     out.push(initialized[AFTER].sub(enabled.mul(after)));
     for offset in [BEFORE, AFTER] {
@@ -182,6 +175,27 @@ pub(super) fn append_residues(
     out.push(initialized[BEFORE_TAG]);
     out.push(initialized[AFTER_TAG]);
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
+}
+
+/// Exact OR of the selected bytes, shared with native STORE composition.
+/// Inputs remain witness fields; owner relations constrain all bits and enable.
+pub(super) fn initialized_masks(row: &[F; WIDTH], high_half: F, wide: bool) -> (F, F) {
+    row.iter()
+        .enumerate()
+        .fold((F::ZERO, F::ZERO), |(before, after), (byte, old)| {
+            let selected = if wide {
+                F::ONE
+            } else if byte < 8 {
+                F::ONE.sub(high_half)
+            } else {
+                high_half
+            };
+            let weight = F(1 << byte);
+            (
+                before.add(old.mul(weight)),
+                after.add(old.add(selected.mul(F::ONE.sub(*old))).mul(weight)),
+            )
+        })
 }
 
 fn header(

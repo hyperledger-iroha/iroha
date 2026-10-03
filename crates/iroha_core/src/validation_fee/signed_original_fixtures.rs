@@ -1,7 +1,7 @@
 //! Original signed fixture custody for the two retained Parliament reader cases.
 //! These test-only keys and ledger fixtures grant no live service or monetary authority.
 use super::*;
-fn signed_fee_registry_root_fixture() -> (
+pub(super) fn signed_fee_registry_root_fixture() -> (
     crate::sumeragi::test_chain::CertifiedTestChain,
     AccountId,
     Vec<u8>,
@@ -15,7 +15,7 @@ fn signed_fee_registry_root_fixture() -> (
     signed_fee_registry_root_fixture_with_config(config)
 }
 
-fn signed_fee_registry_root_fixture_with_config(
+pub(super) fn signed_fee_registry_root_fixture_with_config(
     mut config: crate::sumeragi::test_chain::TestChainConfig,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,

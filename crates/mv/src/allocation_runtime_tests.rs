@@ -16,12 +16,18 @@ fn real_epoch_reclamation_returns_capacity_and_its_release_notification() {
     use concread::ebrcell::EbrCell;
 
     let allocation = EbrCell::<u64, AllocationCharge>::allocation_layout();
-    let budget = AllocationBudget::new(allocation.size());
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(allocation.size() + registration_bytes);
+    let mut registration = crate::release_test_support::registration(&budget);
     let mut prepaid = budget.try_reserve(allocation).unwrap();
     let cell = EbrCell::new_charged(7_u64, prepaid.try_split(allocation).unwrap());
     drop(prepaid);
     let unrelated_pin = crossbeam_epoch::pin();
-    let mut wait = capacity_wait(budget.try_reserve(allocation).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(allocation).unwrap_err(),
+        &mut registration,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     drop(cell);
@@ -33,12 +39,15 @@ fn real_epoch_reclamation_returns_capacity_and_its_release_notification() {
     })
     .join()
     .unwrap();
-    assert_eq!(budget.reserved_bytes(), allocation.size());
+    assert_eq!(
+        budget.reserved_bytes(),
+        allocation.size() + registration_bytes
+    );
     assert_eq!(wakes.0.load(SeqCst), 0);
     assert!(poll(&mut wait, &wakes).is_pending());
     drop(unrelated_pin);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while budget.reserved_bytes() != 0 {
+    while budget.reserved_bytes() != registration_bytes {
         assert!(
             Instant::now() < deadline,
             "retired allocation was not reclaimed"
@@ -48,6 +57,8 @@ fn real_epoch_reclamation_returns_capacity_and_its_release_notification() {
     }
     assert!(poll(&mut wait, &wakes).is_ready());
     drop(budget.try_reserve(allocation).unwrap());
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -90,9 +101,15 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     }
     let layouts = Owner::writer_allocation_layouts();
     let initial_layouts = Owner::initial_allocation_layouts();
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
     let budget = AllocationBudget::new(
-        initial_layouts.root.size() + 3 * layouts.reader.size() + layouts.cursor.size(),
+        initial_layouts.root.size()
+            + 3 * layouts.reader.size()
+            + layouts.cursor.size()
+            + registration_bytes,
     );
+    let mut registration = crate::release_test_support::registration(&budget);
     let mut initial = budget
         .try_reserve_layouts([initial_layouts.root, initial_layouts.reader])
         .unwrap();
@@ -128,19 +145,25 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     let mut wait = None;
     budget.with_deferred_refund_notifications(|_| {
         let held = owner.write_charged(admit).unwrap();
-        let mut pending = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+        let mut pending = capacity_wait(
+            budget.try_reserve(layout(1)).unwrap_err(),
+            &mut registration,
+        );
         assert!(Pin::new(&mut pending).poll(&mut context).is_pending());
         wait = Some(pending);
         drop(oldest);
         assert_eq!(
             budget.reserved_bytes(),
-            initial_layouts.root.size() + 2 * layouts.reader.size() + layouts.cursor.size()
+            initial_layouts.root.size()
+                + 2 * layouts.reader.size()
+                + layouts.cursor.size()
+                + registration_bytes
         );
         assert_eq!(wake.wakes.load(SeqCst), 0);
         drop(held);
         assert_eq!(
             budget.reserved_bytes(),
-            initial_layouts.root.size() + layouts.reader.size()
+            initial_layouts.root.size() + layouts.reader.size() + registration_bytes
         );
         assert_eq!(wake.wakes.load(SeqCst), 0);
     });
@@ -154,5 +177,6 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     drop(waker);
     drop(wake);
     drop(owner);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }

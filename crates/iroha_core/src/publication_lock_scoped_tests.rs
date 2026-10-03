@@ -1,7 +1,6 @@
 //! Original physical fence release batches outlive enclosing publication owners.
 use super::*;
 use std::{
-    future::Future,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -27,6 +26,10 @@ impl Wake for CheckPhysicalFences {
 
 #[test]
 fn scoped_fence_coalesces_original_releases_after_all_siblings_on_return_and_unwind() {
+    let observer_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&observer_budget);
     for unwind in [false, true] {
         let locks = [
             Arc::new(PublicationMutex::default()),
@@ -45,8 +48,8 @@ fn scoped_fence_coalesces_original_releases_after_all_siblings_on_return_and_unw
             .try_lock_or_wait()
             .err()
             .expect("original guard is physically held");
-        let mut future = Box::pin(wait.clone().wait_for_release());
-        assert!(future.as_mut().poll(&mut cx).is_pending());
+        let future = wait.clone();
+        assert!(registration.poll_wait(&future, &mut cx).is_pending());
         drop(guard);
         assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
         assert!(locks[0].inner.try_lock().is_some());
@@ -62,7 +65,7 @@ fn scoped_fence_coalesces_original_releases_after_all_siblings_on_return_and_unw
         assert_eq!(result.is_err(), unwind);
         assert_eq!(callback.calls.load(Ordering::SeqCst), 1);
         assert_eq!(callback.busy.load(Ordering::SeqCst), 0);
-        assert!(future.as_mut().poll(&mut cx).is_ready());
+        assert!(registration.poll_wait(&future, &mut cx).is_ready());
         // PublicationMutex uses a non-poisoning parking-lot mutex.
         assert!(!wait.is_poisoned());
     }
@@ -70,33 +73,33 @@ fn scoped_fence_coalesces_original_releases_after_all_siblings_on_return_and_unw
 
 #[test]
 fn empty_scoped_fence_emits_no_synthetic_release() {
+    let observer_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&observer_budget);
     let original: PublicationMutex = PublicationMutex::default();
     let held = original.lock();
-    let mut future = Box::pin(
-        original
-            .try_lock_or_wait()
-            .err()
-            .unwrap()
-            .wait_for_release(),
-    );
+    let future = original.try_lock_or_wait().err().unwrap();
     drop(original.defer_notifications());
     assert!(
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
+        registration
+            .poll_wait(&future, &mut Context::from_waker(Waker::noop()))
             .is_pending()
     );
     drop(held);
     assert!(
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
+        registration
+            .poll_wait(&future, &mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
 }
 
 #[test]
 fn scoped_guard_preserves_mutations_and_defers_release_on_return_and_unwind() {
+    let observer_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&observer_budget);
     for unwind in [false, true] {
         let original = PublicationMutex::new(vec![1_u8]);
         let mut owner = original.defer_notifications();
@@ -112,11 +115,11 @@ fn scoped_guard_preserves_mutations_and_defers_release_on_return_and_unwind() {
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(&*original.inner.try_lock().unwrap(), &[1, 2]);
-        let mut future = Box::pin(wait.unwrap().wait_for_release());
+        let future = wait.unwrap();
         let mut context = Context::from_waker(Waker::noop());
-        assert!(future.as_mut().poll(&mut context).is_pending());
+        assert!(registration.poll_wait(&future, &mut context).is_pending());
         drop(owner);
-        assert!(future.as_mut().poll(&mut context).is_ready());
+        assert!(registration.poll_wait(&future, &mut context).is_ready());
         assert_eq!(&*original.lock(), &[1, 2]);
     }
 }

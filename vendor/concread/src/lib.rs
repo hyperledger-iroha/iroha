@@ -77,3 +77,6 @@ pub mod hashtrie;
 
 #[cfg(test)]
 mod lc_tests;
+
+#[cfg(test)]
+mod release_test_support;

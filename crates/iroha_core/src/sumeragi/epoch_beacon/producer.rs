@@ -4,11 +4,12 @@
 //! pulse. View changes and empty payload fallback never reset the pulse. Followers do not read
 //! this owner: they decode the exact signed header witness and validate it in pristine State.
 //!
-//! TODO: the existing lower beacon transcript/reducer owns ordinary nested allocations.
-//! Complete its original-pool allocation admission before production resource qualification.
+//! TODO: the lower beacon session/transcript and cryptographic scratch still own
+//! ordinary allocations. The reducer payload, partial slots and selected subset are
+//! bounded inline; complete the remaining original-pool admission before qualification.
 
 mod readiness;
-pub(crate) use readiness::NativeBeaconReadiness;
+pub(crate) use readiness::{NativeBeaconReadiness, NativeBeaconReadinessError};
 
 use super::control;
 use crate::{

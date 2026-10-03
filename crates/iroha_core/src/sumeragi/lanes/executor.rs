@@ -119,6 +119,8 @@ pub struct LaneExecutor<A, C, T> {
     payload_build: Option<LanePayloadBuild>,
     /// Exact latest local routing refusal, retained by the original lane builder.
     routing_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
+    /// The exact original anchor history refusal while the driver retains the lane body.
+    anchor_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 
 struct LanePayloadBuild {
@@ -197,6 +199,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                 budget,
                 payload_build: None,
                 routing_refusal: None,
+                anchor_refusal: None,
             },
             store,
             crypto,
@@ -260,7 +263,8 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         block: &AvailableBody,
         block_hash: &Hash32,
         parent: ChainState,
-    ) -> Result<ExecOutcome, norito::core::DecodeResourceError> {
+    ) -> Result<ExecOutcome, AdmissionAttemptError> {
+        self.anchor_refusal = None;
         if !block.admitted_to(&self.budget)
             || block.source().instance() != self.instance
             || block.source().config() != &self.config
@@ -286,7 +290,11 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         if let Ok(Admission::Pending) = outcome {
             let batch = match LaneBatch::from_payload(block.payload().as_slice()) {
                 Ok(batch) => batch,
-                Err(AdmissionAttemptError::Deferred(refusal)) => return Err(refusal),
+                Err(error @ AdmissionAttemptError::Deferred(_)) => return Err(error),
+                Err(AdmissionAttemptError::AnchorDeferred(reason)) => {
+                    self.anchor_refusal = Some(reason.clone());
+                    return Err(AdmissionAttemptError::AnchorDeferred(reason));
+                }
                 Err(AdmissionAttemptError::Rejected(_)) => return Ok(ExecOutcome::Invalid),
             };
             if self.anchors.wait_for(batch.anchor_height, self.anchor_wait) {
@@ -315,7 +323,11 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                 iroha_logger::debug!(lane = %self.record.lane, %error, "lane block is not admissible");
                 Ok(ExecOutcome::Invalid)
             }
-            Err(AdmissionAttemptError::Deferred(refusal)) => Err(refusal),
+            Err(error @ AdmissionAttemptError::Deferred(_)) => Err(error),
+            Err(AdmissionAttemptError::AnchorDeferred(reason)) => {
+                self.anchor_refusal = Some(reason.clone());
+                Err(AdmissionAttemptError::AnchorDeferred(reason))
+            }
         }
     }
 }
@@ -394,6 +406,9 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
                 Ok(batch) => batch,
                 Err(AdmissionAttemptError::Deferred(_)) => {
                     return Err(io::Error::from(io::ErrorKind::WouldBlock).into());
+                }
+                Err(AdmissionAttemptError::AnchorDeferred(reason)) => {
+                    return Err(Attempt::Deferred(reason));
                 }
                 Err(AdmissionAttemptError::Rejected(error)) => {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, error).into());
@@ -506,8 +521,16 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             Ok(ExecOutcome::Valid(result)) => Ok((result == commit_qc.result).then_some(result)),
             Ok(ExecOutcome::Invalid | ExecOutcome::Cancelled) => Ok(None),
             Ok(ExecOutcome::Failed(reason)) => Err(PublicationError::Retryable(reason)),
+            Err(AdmissionAttemptError::AnchorDeferred(reason)) => {
+                Err(PublicationError::Deferred(reason.into()))
+            }
             // Allocate no diagnostic while the driver retains its original body for retry.
-            Err(_) => Err(PublicationError::Retryable(String::new())),
+            Err(AdmissionAttemptError::Deferred(_)) => {
+                Err(PublicationError::Retryable(String::new()))
+            }
+            Err(AdmissionAttemptError::Rejected(_)) => {
+                unreachable!("completed rejection is Invalid")
+            }
         }
     }
 
@@ -680,8 +703,8 @@ mod tests {
         fn applied_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
             (height <= self.applied.load(Ordering::SeqCst)).then(|| anchor_hash(height))
         }
-        fn creation_time_ms(&self, height: u64) -> Option<u64> {
-            (height <= self.applied.load(Ordering::SeqCst)).then_some(height * 1000)
+        fn creation_time_ms(&self, height: u64) -> Result<Option<u64>, Attempt<io::Error>> {
+            Ok((height <= self.applied.load(Ordering::SeqCst)).then_some(height * 1000))
         }
     }
 

@@ -17,6 +17,8 @@ use std::{
 use zeroize::Zeroizing;
 
 mod private_files;
+#[cfg(unix)]
+pub use private_files::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 pub use private_files::{PendingPrivateFile, PrivateFileMetadata, SealedPrivateFile};
 
 #[cfg(unix)]
@@ -350,6 +352,17 @@ impl OwnerDirectory {
     /// Returns an error for replaced paths, changed access or native I/O failures.
     pub fn revalidate(&self) -> io::Result<()> {
         self.inner.revalidate()
+    }
+
+    /// List bounded direct child names through this retained project authority.
+    ///
+    /// Names are sorted; no child is followed or recursively visited. This validates the
+    /// directory during enumeration, but callers must retain and validate any children they use.
+    ///
+    /// # Errors
+    /// Refuses changed custody, invalid child names, excessive entries and native I/O errors.
+    pub fn entries(&self, maximum: usize) -> io::Result<Vec<std::ffi::OsString>> {
+        self.inner.entries(maximum)
     }
 
     /// Read this directory's retained kernel identity.
@@ -698,19 +711,17 @@ fn checked_name(name: &OsStr) -> io::Result<&OsStr> {
     {
         return Err(invalid("file name has a nonportable spelling"));
     }
-    let stem = text
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        stem.strip_prefix(prefix).is_some_and(|n| {
-            (n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')) || matches!(n, "¹" | "²" | "³")
-        })
-    }) {
+    // Compare borrowed spelling instead of allocating an uppercase copy for each open.
+    let stem = text.split('.').next().unwrap_or_default();
+    let named_device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved));
+    let numbered_device = stem.get(..3).is_some_and(|prefix| {
+        prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT")
+    }) && stem.get(3..).is_some_and(|n| {
+        (n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')) || matches!(n, "¹" | "²" | "³")
+    });
+    if named_device || numbered_device {
         return Err(invalid("reserved device name is not a regular file name"));
     }
     Ok(name)

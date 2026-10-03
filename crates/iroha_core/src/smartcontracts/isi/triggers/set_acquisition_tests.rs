@@ -56,6 +56,10 @@ impl Wake for ProbeActiveOnIdsRelease {
 }
 
 fn complete_trigger_drop_releases_siblings(replacement: bool) {
+    let waiter_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
     let set = seeded_set();
     let before = images(&set);
     let ids = set.ids.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -93,7 +97,7 @@ fn complete_trigger_drop_releases_siblings(replacement: bool) {
     });
     let waker = Waker::from(Arc::clone(&callback));
     let mut context = Context::from_waker(&waker);
-    let mut released = observation.wait_for_release();
+    let mut released = observation.wait_for_release(&mut registration);
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     drop(block);
     drop(refused);

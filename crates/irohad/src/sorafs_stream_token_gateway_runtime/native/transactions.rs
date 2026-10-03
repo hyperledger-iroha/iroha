@@ -196,12 +196,24 @@ impl NativeTransactions {
             .map_err(|_| Error::Ambiguous)?;
         loop {
             remaining(deadline).map_err(|_| Error::Ambiguous)?;
+            // Retain any local read refusal until this exact queued envelope is retried.
+            let mut deferred_read = None;
             if let Some(height) = self.state.committed_entrypoint_height(&hash) {
                 let view = self.state.view();
                 let expected_hash = view.block_hashes().get(height.get() - 1).copied();
+                let block = match view.kura().get_block(height, &view.execution_budget()) {
+                    Ok(block) => block,
+                    Err(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(error)) => {
+                        deferred_read = Some(error);
+                        None
+                    }
+                    Err(iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_)) => {
+                        return Err(Error::Ambiguous);
+                    }
+                };
                 if let Some(expected_hash) = expected_hash
                     && view.kura().get_durable_block_hash(height) == Some(expected_hash)
-                    && let Some(block) = view.kura().get_block(height)
+                    && let Some(block) = block
                     && block.hash() == expected_hash
                     && block.commit_certificate().is_some()
                     && let Some((index, _)) = block.network_entrypoints().enumerate().find(|(_, entry)| {
@@ -222,6 +234,7 @@ impl NativeTransactions {
                     .map_err(|_| Error::Ambiguous)?
                     .min(Duration::from_millis(25)),
             );
+            drop(deferred_read);
         }
     }
 }

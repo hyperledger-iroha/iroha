@@ -29,6 +29,7 @@ struct CanonicalReadContext {
     i18n: Localizer,
     output: Option<String>,
     operator_key_pair: Option<KeyPair>,
+    submitted: Option<Vec<InstructionBox>>,
 }
 impl RunContext for CanonicalReadContext {
     fn config(&self) -> &Config {
@@ -60,6 +61,22 @@ impl RunContext for CanonicalReadContext {
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         self.operator_key_pair.as_ref()
     }
+    fn submit_with_metadata(
+        &mut self,
+        instructions: impl Into<Executable>,
+        _metadata: Metadata,
+        wait_for_confirmation: bool,
+    ) -> Result<()> {
+        assert!(
+            wait_for_confirmation,
+            "committee submission waits for finality"
+        );
+        let Executable::Instructions(instructions) = instructions.into() else {
+            eyre::bail!("expected exact preparation instructions")
+        };
+        self.submitted = Some(instructions.into_vec());
+        Ok(())
+    }
 }
 fn canonical_read_context(
     responses: Vec<iroha::http::Response<Vec<u8>>>,
@@ -80,6 +97,7 @@ fn canonical_read_context(
             i18n: Localizer::new(Bundle::Cli, Language::English),
             output: None,
             operator_key_pair: None,
+            submitted: None,
         },
         transport,
     )
@@ -824,4 +842,585 @@ fn nexus_lane_report_signs_with_cli_operator_and_preserves_sealed_failure() {
         )
     );
     assert_exact_operator_request(&context, &transport, &operator);
+}
+
+fn staking_preparation_fixture() -> iroha::data_model::nexus::PublicLanePreparationV1 {
+    use iroha::data_model::{asset::AssetId, nexus::*, parameter::system::SumeragiNposParameters};
+    use iroha_model_base::{peer::PeerId, topology::LaneId};
+
+    let config = fallback_config();
+    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let source = AssetId::of(xor.clone(), config.account.clone());
+    let destination = AssetId::of(xor.clone(), iroha_test_samples::BOB_ID.clone());
+    let amount: iroha_primitives::numeric::Quantity = "10.000000001".parse().unwrap();
+    let plan = PublicLaneMonetaryPlanV1 {
+        network_scope: PublicLaneMonetaryScopeV1::Network(config.network_id),
+        valid_until_height: 15,
+        source_asset: source.clone(),
+        destination_asset: destination.clone(),
+        amount: amount.clone(),
+        precondition: PublicLaneMonetaryPreconditionV1::Registration(
+            PublicLaneMonetaryRegistrationV1 {
+                activation_height: 21,
+            },
+        ),
+    };
+    assert!(plan.has_canonical_shape());
+    let mut balances = vec![
+        PublicLanePreparationBalanceV1 {
+            asset: source,
+            balance: 100_u64.into(),
+            stake_reserved: 2_u64.into(),
+            rewards_reserved: 3_u64.into(),
+        },
+        PublicLanePreparationBalanceV1 {
+            asset: destination,
+            balance: 200_u64.into(),
+            stake_reserved: 4_u64.into(),
+            rewards_reserved: 5_u64.into(),
+        },
+    ];
+    balances.sort_by(|left, right| left.asset.cmp(&right.asset));
+    PublicLanePreparationV1 {
+        request: PublicLanePreparationRequestV1 {
+            lane_id: LaneId::SINGLE,
+            valid_for_blocks: 10,
+            operation: PublicLanePreparationOperationV1::Registration(
+                PublicLanePrepareRegistrationV1 {
+                    validator: config.account,
+                    peer_id: PeerId::new(
+                        KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
+                            .unwrap()
+                            .public_key()
+                            .clone(),
+                    ),
+                    amount,
+                    candidate: false,
+                },
+            ),
+        },
+        network_id: config.network_id,
+        observed_height: 5,
+        observed_block_hash: Hash::new(b"CLI staking observation"),
+        observed_ledger_time_ms: 123,
+        assumed_execution_height: 6,
+        xor_asset_definition_id: xor,
+        plan: PublicLanePreparedPlanV1::Monetary(plan),
+        balances,
+    }
+}
+
+#[test]
+fn staking_prepare_dispatch_preserves_exact_plan_tip_and_both_reserves() {
+    let prepared = staking_preparation_fixture();
+    let file = NamedTempFile::new().unwrap();
+    fs::write(
+        file.path(),
+        norito::json::to_json(&prepared.request).unwrap(),
+    )
+    .unwrap();
+    for substituted_network in [false, true] {
+        let mut response = prepared.clone();
+        if substituted_network {
+            response.network_id = iroha::data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"foreign preparation")),
+            );
+        }
+        let response = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/x-norito")
+            .body(norito::encode_canonical(&response).unwrap())
+            .unwrap();
+        let (mut context, transport) = canonical_read_context(vec![response]);
+        let result = Args::try_parse_from([
+            "iroha",
+            "app",
+            "staking",
+            "prepare",
+            "--request",
+            file.path().to_str().unwrap(),
+        ])
+        .unwrap()
+        .command
+        .run(&mut context);
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, iroha::http::Method::POST);
+        assert_eq!(requests[0].url.path(), "/v1/nexus/staking/prepare");
+        assert_eq!(
+            requests[0].body,
+            norito::encode_canonical(&prepared.request).unwrap()
+        );
+        assert!(
+            context.submitted.is_none(),
+            "preparation never signs or submits"
+        );
+        if substituted_network {
+            assert!(result.is_err());
+            assert!(
+                context.output.is_none(),
+                "substituted plans are not displayed"
+            );
+        } else {
+            result.unwrap();
+            assert_eq!(
+                context.output,
+                Some(norito::json::to_json(&prepared).unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn staking_prepare_rejects_missing_unknown_and_retired_request_fields_before_http() {
+    let request = norito::json::to_value(&staking_preparation_fixture().request).unwrap();
+    for mutation in 0..5 {
+        let mut malformed = request.clone();
+        let fields = malformed.as_object_mut().unwrap();
+        match mutation {
+            0 => {
+                fields.remove("operation");
+            }
+            1 => {
+                fields.remove("valid_for_blocks");
+            }
+            2 => {
+                fields.insert("automatic_amount".into(), json::Value::Bool(true));
+            }
+            3 => {
+                fields
+                    .get_mut("operation")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("value")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("candidate");
+            }
+            4 => {
+                fields
+                    .get_mut("operation")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("value")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("fee_from_principal".into(), json::Value::Bool(true));
+            }
+            _ => unreachable!(),
+        }
+        let file = NamedTempFile::new().unwrap();
+        fs::write(file.path(), norito::json::to_json(&malformed).unwrap()).unwrap();
+        let (mut context, transport) = canonical_read_context(vec![]);
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "app",
+                "staking",
+                "prepare",
+                "--request",
+                file.path().to_str().unwrap(),
+            ])
+            .unwrap()
+            .command
+            .run(&mut context)
+            .is_err(),
+            "mutation {mutation}"
+        );
+        assert!(transport.requests.lock().unwrap().is_empty());
+        assert!(context.output.is_none());
+        assert!(context.submitted.is_none());
+    }
+}
+
+fn committee_observation_fixture() -> iroha::data_model::nexus::ValidatorCommitteeStatusV1 {
+    use iroha::data_model::{
+        block::{BlockHeader, builder::BlockBuilder},
+        nexus::ValidatorCommitteeStatusV1,
+        sumeragi::finality::{NativeFinalityArtifact, NativeFinalityLimits},
+    };
+    let config = fallback_config();
+    // A transport observation, not an authenticated finality fixture. Core owns
+    // verification of the native chain; the CLI must preserve the original frame.
+    let transaction = TransactionBuilder::new(
+        config.network_id,
+        config.account,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .try_sign(config.key_pair.private_key())
+    .unwrap();
+    let mut block = BlockBuilder::new(BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+            b"CLI predecessor",
+        ))),
+        None,
+        10,
+        0,
+    ));
+    block.push_transaction(transaction);
+    let block = block
+        .try_build_with_signature(0, config.key_pair.private_key())
+        .unwrap();
+    ValidatorCommitteeStatusV1 {
+        network_id: config.network_id,
+        target_epoch: 7,
+        latest_finality: NativeFinalityArtifact::from_block(
+            &block,
+            NativeFinalityLimits {
+                block_bytes: 16 * 1024 * 1024,
+                journal_bytes: 16 * 1024 * 1024,
+                block_count: 256,
+                allocated_bytes: 64 * 1024 * 1024,
+            },
+        )
+        .unwrap(),
+        selected: None,
+        candidate_keys: Vec::new(),
+        pending_beacon_session: None,
+    }
+}
+
+#[test]
+fn committee_status_dispatch_preserves_original_finality_and_absent_preparation() {
+    let status = committee_observation_fixture();
+    let response = iroha::http::Response::builder()
+        .status(200)
+        .header("content-type", "application/x-norito")
+        .body(norito::encode_canonical(&status).unwrap())
+        .unwrap();
+    let (mut context, transport) = canonical_read_context(vec![response]);
+    Args::try_parse_from([
+        "iroha",
+        "app",
+        "nexus",
+        "public-lane",
+        "committee-status",
+        "--target-epoch",
+        "7",
+    ])
+    .unwrap()
+    .command
+    .run(&mut context)
+    .unwrap();
+    assert_eq!(
+        context.output,
+        Some(norito::json::to_json(&status).unwrap())
+    );
+    assert!(context.submitted.is_none());
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, iroha::http::Method::GET);
+    assert_eq!(requests[0].url.path(), "/v1/nexus/validator-committee");
+    assert_eq!(requests[0].url.query(), Some("target_epoch=7"));
+    assert!(requests[0].body.is_empty());
+}
+
+#[test]
+fn staking_workflow_commands_require_explicit_inputs_without_legacy_aliases() {
+    for args in [
+        vec!["iroha", "app", "staking", "prepare"],
+        vec!["iroha", "app", "nexus", "public-lane", "committee-submit"],
+        vec!["iroha", "app", "nexus", "public-lane", "committee-status"],
+        vec![
+            "iroha",
+            "app",
+            "nexus",
+            "public-lane",
+            "committee-status",
+            "--target-epoch",
+            "0",
+        ],
+        vec!["iroha", "app", "nexus", "public-lane", "committee-activate"],
+        vec!["iroha", "app", "nexus", "public-lane", "committee-cancel"],
+        vec!["iroha", "staking", "prepare", "--request", "intent.json"],
+    ] {
+        assert!(Args::try_parse_from(&args).is_err(), "{args:?}");
+    }
+}
+
+fn committee_operations_fixture() -> Vec<iroha::data_model::nexus::ValidatorCommitteeOperationV1> {
+    use iroha::data_model::{
+        consensus::{
+            GlobalThresholdBeaconPartialSignatureProofV1, GlobalThresholdBeaconPartialSignatureV1,
+        },
+        isi::kagemusha_v1::*,
+        nexus::*,
+    };
+    use iroha_model_base::peer::PeerId;
+
+    // Structural command-dispatch fixtures. Their bytes are never submitted to
+    // a network; Core tests own cryptographic possession and finality verification.
+    let signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal).unwrap();
+    let network_id = fallback_config().network_id;
+    let keys = KagemushaMintFinalityValidatorKeysV1 {
+        validator: PeerId::new(signer.public_key().clone()),
+        eq_proof_public_key: [1; 32],
+        ep_proof_public_key: [2; 32],
+    };
+    let possession = KagemushaMintFinalityPairedPossessionProofV1 {
+        eq_proof_signature: KagemushaPastaSchnorrSignatureV1 {
+            nonce_commitment: [3; 32],
+            response: [4; 32],
+        },
+        ep_proof_signature: KagemushaPastaSchnorrSignatureV1 {
+            nonce_commitment: [5; 32],
+            response: [6; 32],
+        },
+    };
+    let authorization =
+        ValidatorCandidateKeyAuthorizationV1::new(network_id, 1, keys.clone(), possession);
+    let candidate = ValidatorCandidateKeysV1 {
+        network_id,
+        generation: 1,
+        keys: keys.clone(),
+        possession,
+        peer_signature: iroha_crypto::SignatureOf::try_new(signer.private_key(), &authorization)
+            .unwrap(),
+    };
+    let mut validators = (1_u8..=4)
+        .map(|seed| KagemushaMintFinalityValidatorKeysV1 {
+            validator: PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            ),
+            eq_proof_public_key: [seed; 32],
+            ep_proof_public_key: [seed + 16; 32],
+        })
+        .collect::<Vec<_>>();
+    validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+    vec![
+        ValidatorCommitteeOperationV1::PublishCandidate(candidate),
+        ValidatorCommitteeOperationV1::PrepareCredentials(PrepareValidatorCommitteeCredentialsV1 {
+            transition_id: [7; 32],
+            target_epoch: 2,
+            credentials: ValidatorCommitteeCredentialsV1 {
+                authority: KagemushaMintFinalityAuthorityGenerationV1 {
+                    version: 1,
+                    network_id,
+                    generation: 1,
+                    validators,
+                },
+                beacon: InstalledBeaconEpochBindingV1 {
+                    session_id: [8; 32],
+                    transcript_hash: [9; 32],
+                },
+            },
+        }),
+        ValidatorCommitteeOperationV1::AdmitSeat(AdmitValidatorCommitteeSeatV1 {
+            transition_id: [7; 32],
+            target_epoch: 2,
+            readiness: ValidatorCommitteeSeatReadinessV1 {
+                validator_index: 0,
+                pasta: possession,
+                beacon: GlobalThresholdBeaconPartialSignatureV1 {
+                    session_id: [8; 32],
+                    signer_index: 1,
+                    signature_share: [10; 48],
+                    proof: GlobalThresholdBeaconPartialSignatureProofV1 {
+                        x: [11; 96],
+                        y: [12; 48],
+                        z_s: [13; 32],
+                        z_r: [14; 32],
+                        z_u: [15; 32],
+                    },
+                },
+            },
+        }),
+    ]
+}
+
+#[test]
+fn committee_submit_dispatch_preserves_every_exact_reviewed_operation() {
+    use iroha::data_model::{
+        isi::{SetParameter, kagemusha_v1::KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1},
+        nexus::ValidatorCommitteeOperationV1,
+        parameter::Parameter,
+    };
+
+    let mut operations = committee_operations_fixture();
+    let mut maximum_roster = operations
+        .iter()
+        .find_map(|operation| match operation {
+            ValidatorCommitteeOperationV1::PrepareCredentials(value) => Some(value.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let template = maximum_roster.credentials.authority.validators[0].clone();
+    maximum_roster.credentials.authority.validators = (1
+        ..=KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1)
+        .map(|index| {
+            let seed = u8::try_from(index).unwrap();
+            let mut keys = template.clone();
+            keys.validator = iroha_model_base::peer::PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            keys.eq_proof_public_key = [seed; 32];
+            keys.ep_proof_public_key = [seed + 32; 32];
+            keys
+        })
+        .collect();
+    maximum_roster
+        .credentials
+        .authority
+        .validators
+        .sort_by(|left, right| left.validator.cmp(&right.validator));
+    maximum_roster.credentials.authority.validate().unwrap();
+    operations.push(ValidatorCommitteeOperationV1::PrepareCredentials(
+        maximum_roster,
+    ));
+    for operation in operations {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(file.path(), norito::json::to_json(&operation).unwrap()).unwrap();
+        let (mut context, transport) = canonical_read_context(vec![]);
+        Args::try_parse_from([
+            "iroha",
+            "app",
+            "nexus",
+            "public-lane",
+            "committee-submit",
+            "--file",
+            file.path().to_str().unwrap(),
+        ])
+        .unwrap()
+        .command
+        .run(&mut context)
+        .unwrap();
+        let expected: InstructionBox =
+            SetParameter::new(Parameter::Custom(operation.into_custom_parameter())).into();
+        assert_eq!(context.submitted, Some(vec![expected]));
+        assert!(context.output.is_none());
+        assert!(
+            transport.requests.lock().unwrap().is_empty(),
+            "use existing signing flow without a discovery probe"
+        );
+    }
+}
+
+#[test]
+fn committee_submit_rejects_wrong_network_missing_and_unknown_fields_before_signing() {
+    use iroha::data_model::nexus::ValidatorCommitteeOperationV1;
+    let foreign_network = iroha::data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"foreign committee")),
+    );
+    for operation in committee_operations_fixture() {
+        let mut variants = Vec::new();
+        let original = norito::json::to_value(&operation).unwrap();
+        if let ValidatorCommitteeOperationV1::AdmitSeat(admission) = &operation {
+            let proof_bytes = iroha_crypto::threshold_bls::THRESHOLD_BLS_PUBLIC_KEY_BYTES;
+            assert_eq!(admission.readiness.beacon.proof.x.len(), proof_bytes);
+            for length in [proof_bytes - 1, proof_bytes + 1] {
+                let mut malformed = original.clone();
+                malformed
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("value")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("readiness")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("beacon")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("proof")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(
+                        "x".into(),
+                        json::Value::Array(vec![json::Value::from(11_u64); length]),
+                    );
+                let file = NamedTempFile::new().unwrap();
+                fs::write(file.path(), norito::json::to_json(&malformed).unwrap()).unwrap();
+                let error = crate::staking::load_committee_json(file.path(), "--file").unwrap_err();
+                if length > proof_bytes {
+                    assert!(error.to_string().contains("JSON resource bounds"));
+                } else {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("valid Norito JSON staking object")
+                    );
+                }
+                variants.push(malformed);
+            }
+        }
+        for missing in ["kind", "value"] {
+            let mut value = original.clone();
+            value.as_object_mut().unwrap().remove(missing);
+            variants.push(value);
+        }
+        let mut unknown = original.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("compatibility".into(), json::Value::Bool(true));
+        variants.push(unknown);
+        let mut unknown = original.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .get_mut("value")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("retired_epoch_staging".into(), json::Value::Null);
+        variants.push(unknown);
+        let mut unknown = original.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("kind".into(), json::Value::String("Activate".into()));
+        variants.push(unknown);
+        let mut foreign = operation;
+        match &mut foreign {
+            ValidatorCommitteeOperationV1::PublishCandidate(candidate) => {
+                candidate.network_id = foreign_network;
+                variants.push(norito::json::to_value(&foreign).unwrap());
+            }
+            ValidatorCommitteeOperationV1::PrepareCredentials(preparation) => {
+                preparation.credentials.authority.network_id = foreign_network;
+                variants.push(norito::json::to_value(&foreign).unwrap());
+            }
+            ValidatorCommitteeOperationV1::AdmitSeat(_) => {}
+        }
+        for malformed in variants {
+            let file = NamedTempFile::new().unwrap();
+            fs::write(file.path(), norito::json::to_json(&malformed).unwrap()).unwrap();
+            let (mut context, transport) = canonical_read_context(vec![]);
+            assert!(
+                Args::try_parse_from([
+                    "iroha",
+                    "app",
+                    "nexus",
+                    "public-lane",
+                    "committee-submit",
+                    "--file",
+                    file.path().to_str().unwrap(),
+                ])
+                .unwrap()
+                .command
+                .run(&mut context)
+                .is_err()
+            );
+            assert!(
+                context.submitted.is_none(),
+                "malformed operation must not reach signing"
+            );
+            assert!(transport.requests.lock().unwrap().is_empty());
+        }
+    }
 }

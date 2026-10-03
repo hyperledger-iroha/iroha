@@ -2748,6 +2748,16 @@ pub struct ReputationFinalizedArchive {
     index: ArchiveIndexLock<ArchiveIndex>,
 }
 impl ReputationFinalizedArchive {
+    /// Hold the actual archive reader while a component test attempts publication.
+    #[cfg(test)]
+    pub(crate) fn with_index_reader_for_testing<T>(
+        &self,
+        inspect: impl FnOnce() -> T,
+    ) -> Result<T, ReputationFinalizedArchiveError> {
+        let _reader = self.read_index()?;
+        Ok(inspect())
+    }
+
     /// Open or create a direct, bounded archive and validate every durable row.
     ///
     /// The supplied root must be a non-empty deployment-owned path. Existing
@@ -6436,9 +6446,14 @@ fn authenticate_archive_anchor_against_certified(
     Ok(())
 }
 fn certified_finality_error(error: ArchiveFinalityError) -> ReputationFinalizedArchiveError {
-    ReputationFinalizedArchiveError::KuraAuthentication {
-        operation: "authenticate current certified archive boundary",
-        detail: error.to_string(),
+    match error {
+        ArchiveFinalityError::Deferred(original) => {
+            ReputationFinalizedArchiveError::Deferred(original)
+        }
+        error => ReputationFinalizedArchiveError::KuraAuthentication {
+            operation: "authenticate current certified archive boundary",
+            detail: error.to_string(),
+        },
     }
 }
 fn candidate_capture_key(
@@ -8760,6 +8775,9 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
 /// Fail-closed errors returned by the finalized reputation archive.
 #[derive(Debug, Error)]
 pub enum ReputationFinalizedArchiveError {
+    /// The original authenticated history read has not completed locally.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// A physical index reader or writer currently prevents retained publication.
     #[error("finalized reputation archive index is busy")]
     IndexBusy {

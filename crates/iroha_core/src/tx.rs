@@ -25,7 +25,9 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     smartcontracts::{code, ivm::cache::IvmCache},
-    state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
+    state::{
+        StateBlock, StateReadOnly, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly,
+    },
 };
 pub(crate) use authority_admission::instructions_allow_multisig_envelope_authority;
 pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
@@ -2295,11 +2297,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &proved.bytecode.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("Failed to decode IVM instructions: {err}"),
-                    })
-                })?;
+                let decoded_count =
+                    ivm::ivm_cache::validate_instruction_stream(code).map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: format!("Failed to decode IVM instructions: {err}"),
+                        })
+                    })?;
                 let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
@@ -2312,14 +2315,14 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-                let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
+                let decoded_len = u64::try_from(decoded_count).unwrap_or(u64::MAX);
                 if decoded_len > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(
                                 "Too many IVM instructions in payload, max number is {}, but decoded {}",
                                 limits.max_instructions(),
-                                decoded.len()
+                                decoded_count
                             ),
                         },
                     ));
@@ -2357,11 +2360,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &smart_contract.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("Failed to decode IVM instructions: {err}"),
-                    })
-                })?;
+                let decoded_count =
+                    ivm::ivm_cache::validate_instruction_stream(code).map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: format!("Failed to decode IVM instructions: {err}"),
+                        })
+                    })?;
                 let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
@@ -2375,14 +2379,14 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
                 let instruction_limit = limits.max_instructions().get();
-                let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
+                let decoded_len = u64::try_from(decoded_count).unwrap_or(u64::MAX);
                 if decoded_len > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(
                                 "Too many IVM instructions in payload, max number is {}, but decoded {}",
                                 limits.max_instructions(),
-                                decoded.len()
+                                decoded_count
                             ),
                         },
                     ));
@@ -3501,13 +3505,24 @@ impl StateBlock<'_> {
         let decoded = if code.is_empty() {
             None
         } else {
-            Some(ivm::ivm_cache::global_get(code).map_err(|err| {
-                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
-                        err.to_string(),
-                    ),
-                ))
-            })?)
+            Some(
+                ivm::ivm_cache::IvmCache::decode_stream_with_memory_budget(
+                    code,
+                    &state_transaction.execution_budget(),
+                )
+                .map_err(|err| {
+                    if let Some(owner) = ExecutionDeferred::from_vm_error(&err) {
+                        return ExecutionAttemptError::Deferred(owner);
+                    }
+                    ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                        ValidationFail::IvmAdmission(
+                            iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
+                                err.to_string(),
+                            ),
+                        ),
+                    ))
+                })?,
+            )
         };
         let inst_cap = state_transaction.pipeline.ivm_max_decoded_instructions;
         let bytes_cap = state_transaction.pipeline.ivm_max_decoded_bytes;
@@ -5439,6 +5454,7 @@ pub mod tests {
         let view = state.view();
         let parent = view
             .latest_block()
+            .expect("completed original State read")
             .expect("original applied signed genesis or successor");
         BlockHeader::new(
             NonZeroU64::new(u64::try_from(view.height()).expect("height fits") + 1)
@@ -11354,7 +11370,6 @@ pub mod tests {
         };
         use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();

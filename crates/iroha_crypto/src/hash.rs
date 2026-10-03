@@ -462,9 +462,19 @@ impl<T: norito::codec::Encode> HashOf<T> {
     /// Construct typed hash
     #[must_use]
     pub fn new(value: &T) -> Self {
+        Self::try_new(value).expect("typed hash encoding should not fail")
+    }
+    /// Construct the same typed hash while preserving the original serialization failure.
+    ///
+    /// The fixed V1 serializer streams directly into the existing hash owner; no encoded
+    /// frame or alternate hash domain is constructed.
+    ///
+    /// # Errors
+    /// Returns the serializer's codec or local resource refusal without a partial hash.
+    pub fn try_new(value: &T) -> Result<Self, norito::Error> {
         let mut writer = HashWriter::new();
-        norito::codec::Encode::encode_to(value, &mut writer);
-        Self(writer.finalize(), PhantomData)
+        norito::codec::encode_adaptive_into(value, &mut writer)?;
+        Ok(Self(writer.finalize(), PhantomData))
     }
 }
 impl<T> FromStr for HashOf<T> {
@@ -738,6 +748,46 @@ mod tests {
         let encoded = norito::codec::Encode::encode(&value);
         let expected = HashOf::<Vec<u64>>::from_untyped_unchecked(Hash::new(encoded));
         assert_eq!(HashOf::new(&value), expected);
+        assert_eq!(HashOf::try_new(&value).unwrap(), expected);
+    }
+    #[test]
+    fn fallible_typed_hash_retains_serializer_resource_failure_after_partial_write() {
+        struct Refused;
+        impl norito::core::SerializePayload for Refused {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                norito::core::SerializePayload::serialize(&7_u64, writer)?;
+                Err(norito::Error::AllocationFailed { bytes: 17 })
+            }
+        }
+        assert!(matches!(
+            HashOf::try_new(&Refused),
+            Err(norito::Error::AllocationFailed { bytes: 17 })
+        ));
+    }
+    #[test]
+    fn fallible_typed_hash_preserves_inherited_allocation_scope() {
+        struct Charged;
+        impl norito::core::SerializePayload for Charged {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                norito::core::reserve_decode_allocation(8)?;
+                norito::core::SerializePayload::serialize(&7_u64, writer)
+            }
+        }
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 8, 64);
+        norito::with_decode_limits_scope(limits, || {
+            assert!(HashOf::try_new(&Charged).is_ok());
+            assert!(matches!(
+                HashOf::try_new(&Charged),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ));
+        });
+        assert!(HashOf::try_new(&Charged).is_ok());
     }
     #[test]
     fn hash_of_decode_rejects_invalid_lsb() {

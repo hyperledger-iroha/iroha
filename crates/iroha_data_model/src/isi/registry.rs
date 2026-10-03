@@ -361,11 +361,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 394;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 395;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 394;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 395;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 373;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 374;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -415,9 +415,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "83fe3f54c80e2b5ea3959dde41f12fb2f53e170aa153a75bc5e54d305ebf502c";
+            "baaaa43e453a38e62ccb72c39694a919fad4c3deddf2e125eed8b43c25bce004";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "a1f5619a47658284694f2be7106547e9e2348395b413e262786ff434cb759447";
+            "8a987c463423ce6f4a42ea4c70ea12e1193ac4540e7ab9c7c6976bc8892f41fe";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1398,6 +1398,7 @@ mod tests {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
             claim_plan: crate::nexus::PublicLaneRewardClaimPlanV1 {
+                fee_claim: None,
                 network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
                     crate::NetworkId::from_genesis_hash(
                         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(

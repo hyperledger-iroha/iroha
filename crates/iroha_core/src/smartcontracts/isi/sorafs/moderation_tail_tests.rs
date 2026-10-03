@@ -232,6 +232,7 @@ fn soft_fork_replacement_repins_the_reverted_anchor_block() -> Result<(), Instru
         .state
         .view()
         .latest_block()
+        .expect("original anchor history read completes")
         .expect("persisted original anchor block")
         .header();
     replacement_header.creation_time_ms = 1_004_500;

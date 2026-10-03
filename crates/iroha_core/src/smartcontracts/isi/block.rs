@@ -296,13 +296,18 @@ fn predicate_matches_signed_block(predicate: &PredicateJson, block: &SignedBlock
     }
     true
 }
-impl ValidQuery for FindBlocks {
+impl ValidQuery<crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>>
+    for FindBlocks
+{
     #[metrics(+"find_blocks")]
     fn execute(
         self,
         filter: CompoundPredicate<SignedBlock>,
         state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
+    ) -> Result<
+        impl Iterator<Item = Self::Item>,
+        crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+    > {
         let predicate_json = filter
             .json_payload()
             .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
@@ -322,7 +327,7 @@ impl ValidQuery for FindBlocks {
                 .rev()
                 .map(|height| state_ro.canonical_block_by_height(height))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
+                .map_err(|error| error.map_rejection(QueryExecutionFail::CanonicalHistory))?;
             let iter: Box<dyn Iterator<Item = SignedBlock> + '_> =
                 Box::new(blocks.into_iter().filter_map(move |block| {
                     predicate_json
@@ -339,7 +344,7 @@ impl ValidQuery for FindBlocks {
             .all_blocks(nonzero!(1_usize))
             .rev()
             .collect::<Result<Vec<_>, _>>()
-            .map_err(QueryExecutionFail::CanonicalHistory)?;
+            .map_err(|error| error.map_rejection(QueryExecutionFail::CanonicalHistory))?;
         let iter: Box<dyn Iterator<Item = SignedBlock> + '_> = Box::new(
             blocks
                 .into_iter()
@@ -354,13 +359,18 @@ impl ValidQuery for FindBlocks {
         Ok(iter)
     }
 }
-impl ValidQuery for FindBlockHeaders {
+impl ValidQuery<crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>>
+    for FindBlockHeaders
+{
     #[metrics(+"find_block_headers")]
     fn execute(
         self,
         filter: CompoundPredicate<BlockHeader>,
         state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
+    ) -> Result<
+        impl Iterator<Item = Self::Item>,
+        crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+    > {
         let predicate_json = filter
             .json_payload()
             .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
@@ -380,7 +390,7 @@ impl ValidQuery for FindBlockHeaders {
                 .rev()
                 .map(|height| state_ro.canonical_block_by_height(height))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
+                .map_err(|error| error.map_rejection(QueryExecutionFail::CanonicalHistory))?;
             let iter: Box<dyn Iterator<Item = BlockHeader> + '_> =
                 Box::new(blocks.into_iter().filter_map(move |block| {
                     let header = block.header();
@@ -396,7 +406,7 @@ impl ValidQuery for FindBlockHeaders {
             .all_blocks(nonzero!(1_usize))
             .rev()
             .collect::<Result<Vec<_>, _>>()
-            .map_err(QueryExecutionFail::CanonicalHistory)?;
+            .map_err(|error| error.map_rejection(QueryExecutionFail::CanonicalHistory))?;
         let iter: Box<dyn Iterator<Item = BlockHeader> + '_> =
             Box::new(blocks.into_iter().filter_map(move |block| {
                 let header = block.header();

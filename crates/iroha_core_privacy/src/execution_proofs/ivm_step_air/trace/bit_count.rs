@@ -21,7 +21,12 @@ pub(in super::super) fn witness(bits: &[F], leading: bool) -> [F; WIDTH] {
     })
 }
 
-pub(in super::super) fn append_residues(out: &mut Vec<F>, prefixes: &[F], bits: &[F], leading: F) {
+pub(in super::super) fn append_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    prefixes: &[F],
+    bits: &[F],
+    leading: F,
+) {
     let mut previous = F::ONE;
     for index in 0..WIDTH {
         let bit = F::ONE

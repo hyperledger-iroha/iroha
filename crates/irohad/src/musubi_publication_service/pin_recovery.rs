@@ -13,8 +13,10 @@ use super::{
 use iroha_data_model::sorafs::pin_registry::{ManifestDigest, PinManifestRecord};
 
 /// Closed read-only recovery failure before any provider or Queue effect.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPinRecoveryErrorV1 {
+    /// Original finalized-history capacity refusal retained until the same recovery retries.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// The outbox, operation, source, or finalized pin does not match.
     Invalid,
     /// The named finalized source or pin is ahead of local State/Kura.
@@ -25,6 +27,7 @@ pub enum MusubiPublicationPinRecoveryErrorV1 {
 impl core::fmt::Display for MusubiPublicationPinRecoveryErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "Musubi pin recovery is waiting for local history capacity",
             Self::Invalid => "Musubi pin recovery evidence is invalid",
             Self::LocallyAhead => "Musubi pin recovery evidence is ahead of local finality",
             Self::Unavailable => "Musubi pin recovery custody is unavailable",
@@ -35,6 +38,7 @@ impl std::error::Error for MusubiPublicationPinRecoveryErrorV1 {}
 impl From<MusubiPinIntentOutboxErrorV1> for MusubiPublicationPinRecoveryErrorV1 {
     fn from(error: MusubiPinIntentOutboxErrorV1) -> Self {
         match error {
+            MusubiPinIntentOutboxErrorV1::Deferred(error) => Self::Deferred(error),
             MusubiPinIntentOutboxErrorV1::LocallyAhead => Self::LocallyAhead,
             MusubiPinIntentOutboxErrorV1::Unavailable | MusubiPinIntentOutboxErrorV1::Locked => {
                 Self::Unavailable
@@ -160,6 +164,9 @@ impl MusubiPublicationPinRecoveryV1 {
             finalized_height,
         };
         let record = read_pin(&query).map_err(|error| match error {
+            MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(error) => {
+                MusubiPublicationPinRecoveryErrorV1::Deferred(error)
+            }
             MusubiPublicationFinalizedPinRegistrationReadErrorV1::LocallyAhead => {
                 MusubiPublicationPinRecoveryErrorV1::LocallyAhead
             }

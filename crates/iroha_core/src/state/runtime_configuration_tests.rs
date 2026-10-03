@@ -772,7 +772,12 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let retirement_pin = crossbeam_epoch::pin();
         drop(probe);
         retirement_pin.flush();
-        assert_eq!(probe_budget.reserved_bytes(), retained_bytes);
+        let pinned_bytes = probe_budget.reserved_bytes();
+        assert!(pinned_bytes > 0, "original EBR owners remain pinned");
+        assert!(
+            pinned_bytes < retained_bytes,
+            "unobserved synchronous release controls retire with State"
+        );
         drop(retirement_pin);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while probe_budget.reserved_bytes() != 0 {

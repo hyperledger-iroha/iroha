@@ -1,3 +1,5 @@
+import { readU32Le, readU64Le, readCompactField, decodeEmbeddedString, visitEmbeddedVector } from "./embeddedNorito.js";
+import { validateEmbeddedCallables } from "./embeddedCallSchema.js";
 const propertyDescriptor = Object.getOwnPropertyDescriptor.bind(Object);
 const ownKeys = Reflect.ownKeys.bind(Reflect);
 const isSafeInteger = Number.isSafeInteger.bind(Number);
@@ -45,7 +47,6 @@ const TEXT_ACCESS_HINTS_COMPLETE = "access_hints_complete";
 const TEXT_TRANSLATIONS = "translations";
 const TEXT_ACCESS_HINTS_SKIPPED = "access_hints_skipped";
 const TEXT_BOOLEAN = "boolean";
-const TEXT_FRAME_BYTES = "frame_bytes";
 import { normalizeContractErrorMessagesV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
 import { crc64Xz as noritoCrc64 } from "../crc64Xz.js";
 import { blake2b256 } from "../blake2b.js";
@@ -114,14 +115,12 @@ const MAX_WIRE_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_ITEMS = 65_536;
 const MAX_ENTRYPOINT_PARAMETERS = MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1;
 const MAX_ENTRYPOINT_WORDS = MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1;
-const MAX_CALL_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_STRING_BYTES = 1024 * 1024;
 const MAX_SOURCE_PATH_BYTES = 4096;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 65_536;
 const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
-const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 // IVM ABI v1 authenticates the syscall descriptor directly in the fixed
 // header: 17 execution bytes followed by the canonical 32-byte ABI hash.
 const IVM_EXECUTION_HEADER_BYTES = 17;
@@ -481,18 +480,6 @@ function normalizeArtifactBytes(value) {
   return bytes;
 }
 
-function readU32Le(bytes, offset, label) {
-  if (offset < 0 || offset + 4 > bytes.length) {
-    rejectAt(label, `${TEXT_IS_TRUNCATED}`);
-  }
-  return (
-    bytes[offset] |
-    (bytes[offset + 1] << 8) |
-    (bytes[offset + 2] << 16) |
-    (bytes[offset + 3] * 0x1000000)
-  ) >>> 0;
-}
-
 function readU32Be(bytes, offset, label) {
   if (offset < 0 || offset + 4 > bytes.length) {
     rejectAt(label, `${TEXT_IS_TRUNCATED}`);
@@ -505,19 +492,6 @@ function readU32Be(bytes, offset, label) {
   ) >>> 0;
 }
 
-function readU64Le(bytes, offset, label) {
-  if (offset < 0 || offset + 8 > bytes.length) {
-    rejectAt(label, `${TEXT_IS_TRUNCATED}`);
-  }
-  let value = 0n;
-  for (let index = 7; index >= 0; index -= 1) {
-    value = (value << 8n) | BigInt(bytes[offset + index]);
-  }
-  return value;
-}
-
-
-
 function equalBytes(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
@@ -528,113 +502,6 @@ function hasMagic(bytes, offset, magic) {
     if (bytes[offset + index] !== magic.charCodeAt(index)) return false;
   }
   return true;
-}
-
-function readCompactLength(bytes, state, label) {
-  let value = 0n;
-  let shift = 0n;
-  const start = state.offset;
-  for (;;) {
-    if (state.offset >= bytes.length || state.offset - start >= 8) {
-      rejectAt(label, " contains a truncated or oversized compact length");
-    }
-    const byte = bytes[state.offset];
-    state.offset += 1;
-    value |= BigInt(byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      if (state.offset - start > 1 && byte === 0) {
-        rejectAt(label, " contains a noncanonical compact length");
-      }
-      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        rejectRange(`${label} compact length exceeds the safe integer range`);
-      }
-      return Number(value);
-    }
-    shift += 7n;
-  }
-}
-
-function readCompactField(bytes, state, label) {
-  const length = readCompactLength(bytes, state, `${label}.${TEXT_LENGTH}`);
-  const end = state.offset + length;
-  if (end > bytes.length) {
-    rejectAt(label, ` payload${TEXT_IS_TRUNCATED}`);
-  }
-  const field = bytes.subarray(state.offset, end);
-  state.offset = end;
-  return field;
-}
-
-function decodeEmbeddedString(field, label) {
-  const state = { offset: 0 };
-  const encoded = readCompactField(field, state, label);
-  if (state.offset !== field.length) {
-    rejectAt(label, " contains trailing bytes");
-  }
-  try {
-    return UTF8_DECODER.decode(encoded);
-  } catch {
-    rejectAt(label, " is not valid UTF-8");
-  }
-}
-
-function visitEmbeddedVector(field, label, maximum, visit = () => {}) {
-  const count = readU64Le(field, 0, `${label}.count`);
-  if (count > BigInt(maximum)) {
-    rejectRange(`${label}${TEXT_EXCEEDS_THE}${maximum}-item limit`);
-  }
-  const state = { offset: 8 };
-  for (let index = 0; index < Number(count); index += 1) {
-    const itemLabel = `${label}[${index}]`;
-    visit(readCompactField(field, state, itemLabel), itemLabel);
-  }
-  if (state.offset !== field.length) {
-    rejectAt(label, " has trailing or missing vector bytes");
-  }
-  return Number(count);
-}
-
-function validateEmbeddedCallables(field, headerMode, minimumCount, label) {
-  let lastEntryPc = -1n;
-  const validateRole = (role, roleLabel) => {
-    const kind = readU32Le(role, 0, roleLabel);
-    if (kind === 3 || kind === 8) {
-      const state = { offset: 4 };
-      const idBytes = readCompactField(role, state, roleLabel);
-      const id = idBytes[0] | (idBytes[1] << 8);
-      if (idBytes.length !== 2 || state.offset !== role.length || id < 1 || id > 0x12) {
-        rejectAt(roleLabel, " has an invalid pointer role");
-      }
-      if (kind === 8 && ((headerMode & 1) === 0 || id < 0x10)) {
-        rejectAt(roleLabel, " requires a numeric private role in ZK mode");
-      }
-    } else if (kind > 7 || role.length !== 4) {
-      rejectAt(roleLabel, " has an invalid call-word role");
-    }
-  };
-  const count = visitEmbeddedVector(field, label, MAX_MANIFEST_ITEMS, (item, itemLabel) => {
-    const state = { offset: 0 };
-    const fields = Array.from({ length: 4 }, (_, index) =>
-      readCompactField(item, state, `${itemLabel}.field${index}`));
-    if (state.offset !== item.length || fields[0].length !== 8 || fields[1].length !== 4) {
-      rejectAt(itemLabel, " has an invalid callable descriptor");
-    }
-    const entryPc = readU64Le(fields[0], 0, `${itemLabel}.entry_pc`);
-    const frameBytes = readU32Le(fields[1], 0, `${itemLabel}.${TEXT_FRAME_BYTES}`);
-    if (entryPc <= lastEntryPc || entryPc % 4n !== 0n ||
-        frameBytes % 16 !== 0 || frameBytes > MAX_CALL_FRAME_BYTES) {
-      rejectAt(itemLabel, " requires ordered aligned roots and bounded aligned frames");
-    }
-    lastEntryPc = entryPc;
-    visitEmbeddedVector(fields[2], `${itemLabel}.argument_words`, MAX_ENTRYPOINT_WORDS, validateRole);
-    if (visitEmbeddedVector(fields[3], `${itemLabel}.result_words`, MAX_ENTRYPOINT_WORDS, validateRole) === 0) {
-      rejectAt(itemLabel, " requires a nonempty result table");
-    }
-  });
-  if (count < minimumCount) {
-    rejectAt(label, " must cover every public entrypoint");
-  }
-  return lastEntryPc;
 }
 
 function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex) {
@@ -748,7 +615,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
   if (JSON.stringify(normalizedMessages) !== JSON.stringify(manifest.error_messages ?? [])) {
     rejectAt(TEXT_KOTODAMA_MANIFEST, "error_messages do not match the embedded contract interface");
   }
-  return validateEmbeddedCallables(fields[7], headerMode, manifest.entrypoints.length, `${label}.callables`);
+  return validateEmbeddedCallables(fields[7], headerMode, manifest.entrypoints.length, `${label}.callables`, manifest.error_types ?? []);
 }
 
 function validateLiteralSection(bytes, start) {

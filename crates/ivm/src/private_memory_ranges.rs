@@ -59,6 +59,8 @@ impl PrivateMemoryRanges {
             .map_err(VMError::AllocationDeferred)
     }
 
+    /// Copy a test snapshot with an independent reservation in the original pool.
+    #[cfg(test)]
     pub(super) fn try_clone(&self) -> Result<Self, VMError> {
         let mut lease = self
             .active_budget

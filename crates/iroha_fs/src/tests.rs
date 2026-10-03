@@ -114,6 +114,45 @@ fn retained_directory_listing_is_bounded_and_does_not_follow_children() {
 }
 
 #[test]
+fn project_directory_listing_preserves_reader_access_and_enforces_entry_bound() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = OwnerDirectory::open(&path).unwrap();
+    assert!(project.entries(0).unwrap().is_empty());
+    project
+        .write_atomic("zeta.ko", b"source", PublishMode::CreateNew)
+        .unwrap();
+    let child = project.create_child("alpha").unwrap();
+    child
+        .write_atomic("nested.ko", b"nested", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(
+        project.entries(2).unwrap(),
+        vec![
+            OsStr::new("alpha").to_owned(),
+            OsStr::new("zeta.ko").to_owned()
+        ]
+    );
+    assert!(project.entries(1).is_err());
+    assert!(project.entries(0).is_err());
+    project.revalidate().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+}
+
+#[test]
 fn project_authority_keeps_readers_and_publishes_private_files() {
     let (_temporary, private) = store();
     let path = private.path().to_path_buf();

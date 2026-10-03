@@ -109,7 +109,7 @@ use iroha_core::{
     snapshot::{
         SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot_with_limits,
     },
-    state::{State, World, WorldReadOnly as _},
+    state::{State, StateReadOnly as _, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
     sumeragi::filter_validators_from_trusted,
 };
@@ -1582,12 +1582,24 @@ mod snapshot_read_error_tests {
     fn nonempty_kura_requires_its_original_signed_genesis_body() {
         let chain = native_snapshot_count_fixture(1);
         let count = iroha_core::kura::BlockCount(1);
-        let stored = read_stored_genesis_block(chain.kura(), count)
-            .expect("read native signed genesis")
-            .expect("nonempty chain has genesis");
-        assert_eq!(stored.0.hash(), chain.genesis().hash());
+        let stored = read_stored_genesis_block(
+            chain.kura(),
+            count,
+            &chain.state().view().execution_budget(),
+        )
+        .expect("read native signed genesis")
+        .expect("nonempty chain has genesis");
+        assert_eq!(stored.hash(), chain.genesis().hash());
+        assert!(
+            iroha_data_model::block::SharedSignedBlock::ptr_eq(&stored, chain.committed(1).block(),),
+            "startup must retain the original executed genesis graph"
+        );
+        assert!(stored.belongs_to(&chain.state().ivm_execution_budget()));
         let missing = Kura::blank_kura_for_testing();
-        assert!(read_stored_genesis_block(&missing, count).is_err());
+        assert!(
+            read_stored_genesis_block(&missing, count, &chain.state().view().execution_budget())
+                .is_err()
+        );
     }
     #[test]
     fn startup_nexus_merge_preserves_snapshot_catalogs_and_cooldown_only() {
@@ -2607,8 +2619,14 @@ impl Iroha {
             config.genesis.expected_hash,
             genesis.as_ref(),
         )?;
-        let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
-        let effective_genesis = stored_genesis_block.as_ref().or(genesis.as_ref());
+        let state_execution_budget =
+            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        let stored_genesis_block =
+            read_stored_genesis_block(kura.as_ref(), block_count, &state_execution_budget)?;
+        let effective_genesis = stored_genesis_block
+            .as_ref()
+            .map(AsRef::as_ref)
+            .or_else(|| genesis.as_ref().map(|genesis| &genesis.0));
         let genesis_to_verify = effective_genesis.ok_or_else(|| {
             Report::new(StartError::InitKura).attach(
                 "startup has an exact genesis trust anchor but no local or stored signed genesis body; peer genesis retrieval is not supported",
@@ -2632,8 +2650,6 @@ impl Iroha {
                 })?
         };
         let mut loaded_state_from_snapshot = false;
-        let state_execution_budget =
-            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
         let operation_index_budget = iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
@@ -2710,10 +2726,10 @@ impl Iroha {
                     &state_execution_budget,
                 )
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                if let Some(genesis_block) = effective_genesis {
                     iroha_core::sns::seed_genesis_alias_bootstrap(
                         &mut world,
-                        &genesis_block.0,
+                        genesis_block,
                         &config.nexus.dataspace_catalog,
                     )
                     .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -3072,22 +3088,17 @@ impl Iroha {
                     Report::new(StartError::InitKura)
                         .attach("emergency Fast startup found no signed genesis block")
                 })?;
-                iroha_core::sumeragi::node::root_instance(
-                    &genesis.0,
-                    &config.common.chain.to_string(),
-                )
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+                iroha_core::sumeragi::node::root_instance(genesis, &config.common.chain.to_string())
+                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             }
         };
         config_caps.native_config_fingerprint = match prepared_sumeragi.as_ref() {
             Some(prepared) => prepared.config_fingerprint().into(),
             None => iroha_core::sumeragi::node::consensus_configuration_fingerprint(
-                &effective_genesis
-                    .ok_or_else(|| {
-                        Report::new(StartError::InitKura)
-                            .attach("native handshake requires exact signed genesis")
-                    })?
-                    .0,
+                effective_genesis.ok_or_else(|| {
+                    Report::new(StartError::InitKura)
+                        .attach("native handshake requires exact signed genesis")
+                })?,
             )
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
@@ -3296,7 +3307,12 @@ impl Iroha {
                 if let Some(sidecar) = kura.read_pipeline_metadata(h as u64) {
                     let exp = sidecar.dag.fingerprint;
                     if let Some(height) = std::num::NonZeroUsize::new(h) {
-                        if let Some(block) = kura.get_block(height) {
+                        if let Some(block) = kura
+                            .get_block(height, &view.execution_budget())
+                            .map_err(|error| {
+                                Report::new(error).change_context(StartError::InitKura)
+                            })?
+                        {
                             let txs: Vec<&iroha_data_model::transaction::SignedTransaction> =
                                 block.external_transactions().collect();
                             let access: Vec<_> = txs
@@ -5405,11 +5421,11 @@ impl ResolvedGenesisTrustAnchor {
             consensus_header_hash: configured_hash,
         };
         if let Some(local_genesis) = local_genesis {
-            anchor.verify(local_genesis)?;
+            anchor.verify(&local_genesis.0)?;
         }
         Ok(anchor)
     }
-    fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
+    fn verify(&self, block: &SignedBlock) -> ReportResult<(), StartError> {
         let embedded_key = genesis_public_key_from_genesis_block(block)?;
         if embedded_key != self.public_key {
             return Err(Report::new(StartError::InitKura).attach(format!(
@@ -5417,14 +5433,14 @@ impl ResolvedGenesisTrustAnchor {
                 self.public_key
             )));
         }
-        let block_hash = block.0.hash();
+        let block_hash = block.hash();
         if block_hash != self.consensus_header_hash {
             return Err(Report::new(StartError::InitKura).attach(format!(
                 "genesis hash {block_hash} does not match the resolved genesis trust-anchor hash {}",
                 self.consensus_header_hash
             )));
         }
-        let mut signatures = block.0.signatures();
+        let mut signatures = block.signatures();
         let signature = signatures.next().ok_or_else(|| {
             Report::new(StartError::InitKura)
                 .attach("genesis block has no configured-authority signature")
@@ -5448,21 +5464,25 @@ impl ResolvedGenesisTrustAnchor {
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
-) -> ReportResult<Option<GenesisBlock>, StartError> {
+    execution_budget: &iroha_allocation::AllocationBudget,
+) -> ReportResult<Option<iroha_data_model::block::SharedSignedBlock>, StartError> {
     if block_count.0 == 0 {
         return Ok(None);
     }
     let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
-    let Some(stored) = kura.get_block(nz) else {
+    let Some(stored) = kura
+        .get_block(nz, execution_budget)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?
+    else {
         return Err(Report::new(StartError::InitKura)
             .attach("non-empty block store is missing genesis block at height 1"));
     };
-    Ok(Some(GenesisBlock((*stored).clone())))
+    Ok(Some(stored))
 }
 fn genesis_public_key_from_genesis_block(
-    block: &GenesisBlock,
+    block: &SignedBlock,
 ) -> ReportResult<PublicKey, StartError> {
-    let first = block.0.external_transactions().next().ok_or_else(|| {
+    let first = block.external_transactions().next().ok_or_else(|| {
         Report::new(StartError::InitKura).attach("stored genesis block contains no transactions")
     })?;
     let authority = first.authority();
@@ -5543,7 +5563,7 @@ mod genesis_key_tests {
             .expect("build genesis block");
         assert!(genesis_block.0.is_resultless_proposal());
         let derived =
-            genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
+            genesis_public_key_from_genesis_block(&genesis_block.0).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
     }
     #[test]
@@ -5562,7 +5582,7 @@ mod genesis_key_tests {
             consensus_header_hash: genesis.0.hash(),
         };
         anchor
-            .verify(&genesis)
+            .verify(&genesis.0)
             .expect("matching configured genesis trust anchor should verify");
     }
     #[test]
@@ -5574,7 +5594,7 @@ mod genesis_key_tests {
             consensus_header_hash: genesis.0.hash(),
         };
         let error = anchor
-            .verify(&genesis)
+            .verify(&genesis.0)
             .expect_err("configured public-key mismatch must reject genesis");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -5596,7 +5616,7 @@ mod genesis_key_tests {
         .expect("the local signed genesis matches the independently configured hash");
         let anchor = root;
         assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
-        anchor.verify(&genesis).expect("resolved anchor verifies");
+        anchor.verify(&genesis.0).expect("resolved anchor verifies");
     }
     #[test]
     fn startup_loads_original_configured_genesis() {
@@ -5664,7 +5684,7 @@ mod genesis_key_tests {
         .expect("the local trusted genesis matches the configured exact anchor");
         let anchor = root;
         let error = anchor
-            .verify(&alternate)
+            .verify(&alternate.0)
             .expect_err("same signer and chain must not authorize another genesis instance");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -5683,7 +5703,7 @@ mod genesis_key_tests {
                 .expect("configured expected hash resolves an exact anchor");
         let anchor = root;
         let error = anchor
-            .verify(&alternate)
+            .verify(&alternate.0)
             .expect_err("the configured hash must reject another genesis from the same signer");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -8784,7 +8804,7 @@ fn validate_available_genesis_for_check(
 ) -> ReportResult<(crate::authenticated_genesis::AuthenticatedGenesis, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
-        genesis_public_key_from_genesis_block(genesis).change_context(MainError::Config)?;
+        genesis_public_key_from_genesis_block(&genesis.0).change_context(MainError::Config)?;
     if &embedded_key != configured_key {
         return Err(Report::new(MainError::Config).attach(format!(
             "genesis authority `{embedded_key}` does not match configured genesis.public_key `{configured_key}`"
@@ -8801,7 +8821,7 @@ fn validate_available_genesis_for_check(
     iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
-    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(genesis)
+    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(&genesis.0)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
@@ -9165,7 +9185,7 @@ fn consensus_caps_from_genesis(
 }
 
 fn signed_genesis_context_metadata(
-    genesis: &GenesisBlock,
+    genesis: &SignedBlock,
 ) -> core::result::Result<
     (
         iroha_data_model::block::consensus::ConsensusMode,
@@ -9174,7 +9194,7 @@ fn signed_genesis_context_metadata(
     String,
 > {
     let mut metadata_entries = Vec::new();
-    for transaction in genesis.0.external_transactions() {
+    for transaction in genesis.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(
                 "Sumeragi genesis metadata must be carried by instruction batches".to_owned(),
@@ -11466,7 +11486,7 @@ mod tests {
                 .expect("signed genesis voters");
             let topology = Topology::new(voters.into_keys());
             let (mode, _) =
-                signed_genesis_context_metadata(&provisional).expect("signed genesis mode");
+                signed_genesis_context_metadata(&provisional.0).expect("signed genesis mode");
             match ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
@@ -11729,8 +11749,8 @@ mod tests {
                 &config,
             );
             config.genesis.expected_hash = genesis.0.hash();
-            let (mode, parameters) =
-                signed_genesis_context_metadata(&genesis).expect("signed genesis context metadata");
+            let (mode, parameters) = signed_genesis_context_metadata(&genesis.0)
+                .expect("signed genesis context metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)

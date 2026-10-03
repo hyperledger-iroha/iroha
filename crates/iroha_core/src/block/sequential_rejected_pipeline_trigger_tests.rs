@@ -56,7 +56,14 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             external_signed.clone(),
         ))])
-        .chain(0, probe_state.view().latest_block().as_deref())
+        .chain(
+            0,
+            probe_state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
         let (mut probe_state_block, probe_state_block_recorder) =
@@ -214,7 +221,14 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let accepted_commitment =
         AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
     let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
     assert_ne!(block.header().height(), nonzero!(9999_u64));

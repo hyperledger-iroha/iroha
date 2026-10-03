@@ -2699,6 +2699,11 @@ impl HostExecutionArtifacts {
             &self.durable_state_authorizations,
         )
         .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+        crate::deferred_authority::reject_opaque_instruction_authority(
+            self.queued.iter().map(|queued| &queued.instruction),
+            tx,
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         // The actual consumed group must fit before its first call-hash,
         // confidential-work, instruction, AXT or durable-state effect is applied.
         tx.admit_host_execution_effects(self.queued.iter().map(|queued| &queued.instruction))?;
@@ -9599,9 +9604,12 @@ impl<QS> CoreHostImpl<QS> {
         })? {
             return Err(ivm::VMError::PermissionDenied);
         }
-        let now_ms = state.latest_block().map_or(0, |block| {
-            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-        });
+        let now_ms = state
+            .latest_block()
+            .map_err(|error| error.into_vm_error(|_| ivm::VMError::DecodeError))?
+            .map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
         if let Some(account_id) = crate::sns::resolve_active_account_alias(
             state.world(),
             &state.nexus().dataspace_catalog,
@@ -11654,7 +11662,7 @@ mod pointer_abi_tests {
         .build_with_signature(0, signer.private_key());
         state
             .kura()
-            .store_block(Arc::new(block.clone()))
+            .store_block(crate::block::reserve_block_for_tests().initialize(block.clone()))
             .expect("store authenticated ledger-time fixture block");
         state.append_committed_block_header_for_tests(block.header().clone());
         assert_eq!(
@@ -20418,7 +20426,7 @@ seiyaku Callee {
         );
     }
     #[test]
-    fn call_contract_syscall_rolls_back_when_return_encoding_fails() {
+    fn call_contract_syscall_rolls_back_when_typed_return_validation_fails() {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20455,43 +20463,41 @@ seiyaku Callee {
                     .iter_mut()
                     .find(|entrypoint| entrypoint.name == "write_then_return")
                     .expect("callee entrypoint descriptor");
-                // Bytes and String share the exact public Blob call role. A genuine
-                // compiler-produced invalid UTF-8 Blob completes its protected return,
-                // then fails String encoding after the child wrote counter = 9.
+                // The bytecode produces invalid UTF-8 after writing counter = 9.
+                // Bind both metadata surfaces to String so admission succeeds and
+                // the complete callable type rejects that value at protected return.
+                let original = exact_return_type(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
+                );
                 assert_eq!(
                     descriptor.return_schema,
-                    Some(exact_return_type(
-                        iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
-                    )),
+                    Some(original.clone()),
                     "the unmodified compiler artifact declares its actual Bytes result"
                 );
-                descriptor.return_type = Some("string".to_owned());
-                descriptor.return_schema = Some(exact_return_type(
+                let claimed = exact_return_type(
                     iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::String,
-                ));
-                let entry_pc = descriptor.entry_pc;
-                let result_roles = descriptor
-                    .return_schema
-                    .as_ref()
-                    .unwrap()
-                    .word_kinds()
-                    .unwrap()
-                    .into_iter()
-                    .map(ivm::call::CallWordV1::from_entrypoint_word)
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    result_roles,
-                    vec![ivm::call::CallWordV1::Pointer(PointerType::Blob as u16)]
                 );
+                descriptor.return_type = Some("string".to_owned());
+                descriptor.return_schema = Some(claimed.clone());
+                let entry_pc = descriptor.entry_pc;
+                let callable = interface
+                    .callables
+                    .iter_mut()
+                    .find(|callable| callable.entry_pc == entry_pc)
+                    .expect("the compiled entrypoint has its authenticated callable");
                 assert_eq!(
-                    interface
-                        .callables
-                        .iter()
-                        .find(|callable| callable.entry_pc == entry_pc)
-                        .expect("the compiled entrypoint has its authenticated callable")
-                        .result_words,
-                    result_roles,
-                    "the post-child schema error must not be an artifact or call-role error"
+                    callable.results,
+                    ivm::call::CallSchemaV1::from_entrypoint_type(&original).unwrap(),
+                    "the compiled callable preserves the complete Bytes type"
+                );
+                callable.results = ivm::call::CallSchemaV1::from_entrypoint_type(&claimed).unwrap();
+                assert!(
+                    callable.results.matches_entrypoint_type(&claimed),
+                    "entrypoint and callable must agree on the complete String type"
+                );
+                assert!(
+                    !callable.results.matches_entrypoint_type(&original),
+                    "String and Bytes remain distinct despite sharing a Blob envelope"
                 );
             },
         );
@@ -20539,10 +20545,10 @@ seiyaku Callee {
         vm.set_register(12, 0);
         let err = host
             .syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
-            .expect_err("mismatched return schema must fail");
+            .expect_err("invalid UTF-8 must fail typed return validation");
         assert!(
-            matches!(err.as_unmetered(), ivm::VMError::DecodeError),
-            "a signed return-schema/type mismatch must be reported as a decode error: {err:?}",
+            matches!(err.as_unmetered(), ivm::VMError::NoritoInvalid),
+            "invalid String payload must be rejected by protected return validation: {err:?}",
         );
         assert_eq!(
             host.authority, authority,
@@ -23193,8 +23199,10 @@ seiyaku DurableOwner {
         .build_with_signature(0, ALICE_KEYPAIR.private_key());
         // State authenticates the lane's physical storage before history is retained.
         let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-        kura.store_block(Arc::new(authenticated_block.clone()))
-            .expect("store authenticated ledger-time fixture block");
+        kura.store_block(
+            crate::block::reserve_block_for_tests().initialize(authenticated_block.clone()),
+        )
+        .expect("store authenticated ledger-time fixture block");
         state.append_committed_block_header_for_tests(authenticated_block.header());
         let source = r#"
             seiyaku ValidationFeeConversionReader {

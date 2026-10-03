@@ -126,10 +126,14 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
         );
         assert_eq!(kura.blocks_count(), 1);
         assert_eq!(
-            kura.get_block(std::num::NonZeroUsize::new(1).unwrap())
-                .unwrap()
-                .encode_wire()
-                .unwrap(),
+            kura.get_block(
+                std::num::NonZeroUsize::new(1).unwrap(),
+                &state.ivm_execution_budget()
+            )
+            .expect("original block read attempt")
+            .unwrap()
+            .encode_wire()
+            .unwrap(),
             parent
         );
         drop(pending);

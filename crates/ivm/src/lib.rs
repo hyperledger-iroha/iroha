@@ -23,6 +23,8 @@
 //! generated `instruction` module provides detailed
 //! commentary on every opcode constant and is summarised in
 //! [`docs/opcodes.md`](../docs/opcodes.md).
+#[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal"), test))]
+mod acceleration_cost;
 mod aes;
 pub mod analysis;
 mod argument_record;
@@ -31,11 +33,14 @@ pub mod bn254_vec;
 mod byte_merkle_tree;
 pub mod cache_memory;
 mod call_frame;
-mod call_gas;
+pub mod call_gas;
 pub mod contract_artifact;
 mod contract_return_stack;
 mod core_host;
 mod cuda;
+#[cfg(any(feature = "cuda", test))]
+#[path = "cuda_dispatch/bn254_cost.rs"]
+mod cuda_bn254_cost;
 #[cfg(feature = "cuda")]
 mod cuda_dispatch;
 // Exercise the production admission state machine without requiring PTX artifacts.
@@ -54,6 +59,8 @@ pub mod execution_diagnostics;
 pub mod execution_memory;
 /// Bounded local memory-transfer diagnostics, separate from proof admission.
 pub mod execution_memory_recorder;
+/// Sealed original native packets for a bounded root invocation component.
+pub mod execution_packets;
 /// Local, prepaid interpreter snapshots for diagnostic AIR development only.
 pub mod execution_step_recorder;
 mod execution_summary;
@@ -136,7 +143,8 @@ pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
     ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
-    prepare_koto_test_contract, verify_contract_artifact,
+    prepare_contract_with_memory_budget, prepare_koto_test_contract, verify_contract_artifact,
+    verify_contract_artifact_with_memory_budget,
 };
 pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
@@ -155,10 +163,11 @@ pub use crate::{
     },
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_batch_cuda_into, aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into,
-        aesenc_cuda, aesenc_rounds_batch_cuda_into, bitonic_sort_pairs, bn254_add_batch_cuda_into,
+        CudaCompletionError, CudaCompletionSnapshot, CudaKernel, aesdec_batch_cuda_into,
+        aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into, aesenc_cuda,
+        aesenc_rounds_batch_cuda_into, bitonic_sort_pairs, bn254_add_batch_cuda_into,
         bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda, bn254_sub_batch_cuda_into,
-        bn254_sub_cuda, cuda_available, cuda_completed_dispatches, cuda_disabled,
+        bn254_sub_cuda, cuda_available, cuda_completion_snapshot, cuda_disabled,
         cuda_last_error_message, ed25519_verify_batch_cuda_into, ed25519_verify_cuda,
         keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda,
         poseidon6_cuda_many_into, reset_cuda_backend_for_tests, sha256_compress_cuda,
@@ -196,7 +205,7 @@ pub use crate::{
 };
 pub use crate::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
-    registers::Registers,
+    registers::{REGISTER_MERKLE_PATH_DEPTH, Registers},
     signature::{SignatureScheme, verify_signature},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     vector::{

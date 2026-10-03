@@ -172,9 +172,10 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         ))
         .execute(&validator, &mut transaction)
         .expect("install the genesis network XOR and staking policy");
-        Register::asset_definition(AssetDefinition::numeric(
+        Register::asset_definition(AssetDefinition::new(
             custody_asset.definition().clone(),
             "Snapshot staking reserve",
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         ))
@@ -257,7 +258,7 @@ fn snapshot_owner_policy_fixture_with_stored_history(
                 .validate_output_merkle_cache()
                 .expect("complete canonical output caches");
             previous = Some(carrier.hash());
-            kura.store_block(Arc::new(carrier))
+            kura.store_block(crate::block::reserve_block_for_tests().initialize(carrier))
                 .expect("persist actual predecessor body");
         }
     }

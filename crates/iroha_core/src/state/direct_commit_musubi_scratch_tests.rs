@@ -118,6 +118,7 @@ fn check_direct_refusal(replacement: bool) {
     let (state, proposal) = fixture();
     let header = proposal.header();
     let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let initial_reserved = budget.reserved_bytes();
     let successor_bytes = original_cell_successor_bytes(&state);
     let [scalar_current, scalar_undo] =
@@ -207,7 +208,7 @@ fn check_direct_refusal(replacement: bool) {
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(Arc::clone(&wakes));
     let mut context = Context::from_waker(&waker);
-    let mut abandoned = release.clone().wait_for_release();
+    let mut abandoned = release.clone().wait_for_release(&mut registration);
     assert_eq!(
         Pin::new(&mut abandoned).poll(&mut context),
         Poll::Ready(()),
@@ -229,7 +230,8 @@ fn check_direct_refusal(replacement: bool) {
         &fresh_release, release,
         "actual abandonment advanced the original source"
     );
-    let mut released = fresh_release.wait_for_release();
+    drop(abandoned);
+    let mut released = fresh_release.wait_for_release(&mut registration);
     assert_eq!(Pin::new(&mut released).poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(requested_bytes);
     drop(unrelated.try_reserve_bytes(requested_bytes).unwrap());
@@ -284,6 +286,8 @@ fn check_direct_refusal(replacement: bool) {
         published_bytes,
         "successful publication retains exact identities and current/undo owners after retirement",
     );
+    drop(released);
+    drop(registration);
     drop(state);
     collect_original_ebr_until(&budget, 0);
     assert_eq!(budget.reserved_bytes(), 0);

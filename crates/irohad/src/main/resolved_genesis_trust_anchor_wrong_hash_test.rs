@@ -9,7 +9,7 @@ fn resolved_genesis_trust_anchor_rejects_wrong_hash() {
         consensus_header_hash: wrong_hash,
     };
     let error = anchor
-        .verify(&genesis)
+        .verify(&genesis.0)
         .expect_err("configured genesis hash mismatch must reject genesis");
     assert!(matches!(error.current_context(), StartError::InitKura));
     assert!(

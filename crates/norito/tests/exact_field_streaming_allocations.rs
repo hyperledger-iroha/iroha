@@ -210,3 +210,6 @@ fn exact_frame_verification_does_not_allocate_an_output_sized_buffer() {
         "exact-frame verification allocated an output-sized buffer"
     );
 }
+
+#[path = "exact_field_streaming_allocations/nominal_text.rs"]
+mod nominal_text;

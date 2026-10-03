@@ -1,6 +1,8 @@
 //! Canonical byte-chunk Merkle commitments with fixed leaf ownership.
 
 mod canonical_nodes;
+mod cpu_leaves;
+mod rehash;
 use canonical_nodes::CanonicalNodes;
 
 use crate::VMError;
@@ -47,7 +49,7 @@ impl DerefMut for MerkleLeaves {
 }
 
 impl MerkleLeaves {
-    #[cfg(any(target_os = "macos", feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", test))]
     fn replace_equal_length(&mut self, digests: &[[u8; 32]]) -> bool {
         if self.len() != digests.len() {
             return false;
@@ -290,8 +292,8 @@ impl ByteMerkleTree {
             .inc();
     }
 
-    #[cfg(any(target_os = "macos", feature = "cuda"))]
-    fn from_leaf_digests(digests: &[[u8; 32]], chunk: usize) -> Result<Self, VMError> {
+    #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "cuda"))]
+    pub(crate) fn from_leaf_digests(digests: &[[u8; 32]], chunk: usize) -> Result<Self, VMError> {
         let mut leaves =
             crate::cache_memory::OwnedAllocation::try_filled_copy(digests.len(), [0; 32])?;
         leaves.copy_from_slice(digests);
@@ -304,7 +306,7 @@ impl ByteMerkleTree {
         })
     }
 
-    #[cfg(any(target_os = "macos", feature = "cuda", test))]
+    #[cfg(feature = "cuda")]
     fn install_leaf_digests(&self, digests: &[[u8; 32]]) -> bool {
         let mut nodes = self.nodes.lock();
         let mut leaves = self.leaves.lock();
@@ -335,40 +337,6 @@ impl ByteMerkleTree {
     /// Returns a bounds error for invalid chunk geometry or a local allocation deferral.
     pub fn from_bytes_parallel(data: &[u8], chunk: usize) -> Result<Self, VMError> {
         Self::from_bytes_hashed(data, chunk, true)
-    }
-    fn from_bytes_hashed(data: &[u8], chunk: usize, parallel: bool) -> Result<Self, VMError> {
-        use rayon::prelude::*;
-        Self::validate_chunk_size(chunk)?;
-        let zero_hash = Self::compute_zero_hash(chunk);
-        let mut leaves = crate::cache_memory::OwnedAllocation::try_filled_copy(
-            data.len().div_ceil(chunk).max(1),
-            zero_hash,
-        )?;
-        let hash = |(index, leaf): (usize, &mut [u8; 32])| {
-            let start = index * chunk;
-            let end = start.saturating_add(chunk).min(data.len());
-            let mut bytes = [0; 32];
-            if start < end {
-                bytes[..end - start].copy_from_slice(&data[start..end]);
-            }
-            *leaf = if bytes[..chunk].iter().all(|byte| *byte == 0) {
-                zero_hash
-            } else {
-                sha256_oneblock32(&bytes[..chunk])
-            };
-        };
-        if parallel {
-            leaves.par_iter_mut().enumerate().for_each(hash);
-        } else {
-            leaves.iter_mut().enumerate().for_each(hash);
-        }
-        let nodes = CanonicalNodes::from_leaves(&leaves, None)?;
-        Ok(Self {
-            chunk,
-            zero_hash,
-            leaves: Mutex::new(leaves.into()),
-            nodes: Mutex::new(nodes),
-        })
     }
     /// Whether two trees have the same immutable leaf geometry.
     pub(crate) fn has_same_shape(&self, other: &ByteMerkleTree) -> bool {
@@ -410,50 +378,27 @@ impl ByteMerkleTree {
     }
     /// Construct a tree from raw bytes using acceleration when beneficial.
     ///
-    /// - If a CUDA backend is available and the number of leaves is above a
-    ///   threshold, compute leaf digests on the GPU (one padded block per leaf),
-    ///   then build the canonical Merkle tree on the CPU.
-    /// - Otherwise, fall back to the canonical parallel builder (Rayon-backed)
-    ///   or sequential builder.
+    /// Metal selects complete construction costs for the exact public chunk
+    /// and tail geometry against the actual qualified parallel CPU path.
+    /// CUDA retains its independently qualified leaf attempt. Every refusal
+    /// falls back to the same canonical parallel constructor.
     ///
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
     pub fn from_bytes_accel(data: &[u8], chunk: usize) -> Result<Self, VMError> {
         Self::validate_chunk_size(chunk)?;
         let leaves_count = data.len().div_ceil(chunk).max(1);
-        // Prefer CPU SHA2 on AArch64 for medium sizes to avoid GPU overheads.
+        // Platforms without exact Metal construction profiles retain their
+        // existing CUDA/CPU policy until that operation is independently measured.
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
         if prefer_cpu_sha2(leaves_count) {
             return Self::from_bytes_parallel(data, chunk);
         }
-        // Attempt Metal offload for large trees (macOS)
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && let Some(selected) = crate::vector::select_metal_merkle(
-                crate::vector::MetalMerkleWork::Leaves,
-                leaves_count,
-            )
+            && let Some(tree) = crate::vector::metal_tree_from_bytes_auto(data, chunk)
         {
-            let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);
-            let bit_len_be = (chunk as u64 * 8).to_be_bytes();
-            for i in 0..leaves_count {
-                let start = i * chunk;
-                let end = (start + chunk).min(data.len());
-                let mut block = [0u8; 64];
-                if start < end {
-                    let len = end - start;
-                    block[..len].copy_from_slice(&data[start..end]);
-                }
-                block[chunk] = 0x80;
-                block[56..64].copy_from_slice(&bit_len_be);
-                blocks.push(block);
-            }
-            if let Some(digests) = selected
-                .run(|| crate::vector::metal_sha256_leaves(&blocks))
-                .flatten()
-                && digests.len() == leaves_count
-            {
-                return Self::from_leaf_digests(&digests, chunk);
-            }
+            return Ok(tree);
         }
         // CUDA keeps generated padded chunks and complete output in owned host storage.
         #[cfg(feature = "cuda")]
@@ -469,7 +414,8 @@ impl ByteMerkleTree {
         Self::from_bytes_parallel(data, chunk)
     }
     /// Recompute all leaf digests from `data` using acceleration when available.
-    /// On success, updates leaves and marks the retained canonical nodes stale.
+    /// On success, installs complete leaves; Metal also refreshes the retained
+    /// canonical nodes under its original owner before returning.
     /// Returns true if acceleration was used, false otherwise (no changes made).
     pub(crate) fn recompute_all_leaves_accel(&self, data: &[u8]) -> bool {
         let leaves_count = self.leaf_count();
@@ -479,30 +425,9 @@ impl ByteMerkleTree {
         }
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && let Some(selected) = crate::vector::select_metal_merkle(
-                crate::vector::MetalMerkleWork::Leaves,
-                leaves_count,
-            )
+            && crate::vector::metal_rehash_tree_auto(self, data)
         {
-            let bit_len_be = (self.chunk as u64 * 8).to_be_bytes();
-            let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);
-            for i in 0..leaves_count {
-                let start = i * self.chunk;
-                let end = (start + self.chunk).min(data.len());
-                let mut block = [0u8; 64];
-                if start < end {
-                    block[..end - start].copy_from_slice(&data[start..end]);
-                }
-                block[self.chunk] = 0x80;
-                block[56..64].copy_from_slice(&bit_len_be);
-                blocks.push(block);
-            }
-            if let Some(digests) = selected
-                .run(|| crate::vector::metal_sha256_leaves(&blocks))
-                .flatten()
-            {
-                return self.install_leaf_digests(&digests);
-            }
+            return true;
         }
         #[cfg(feature = "cuda")]
         if let Some(output) =
@@ -517,26 +442,7 @@ impl ByteMerkleTree {
     /// Rehash every fixed leaf in place on the CPU. A large memory commit must
     /// keep the original prepaid backing instead of replacing the whole tree.
     pub(crate) fn recompute_all_leaves_parallel(&self, data: &[u8]) {
-        use rayon::prelude::*;
-
-        let chunk = self.chunk;
-        let zero_hash = self.zero_hash;
-        let mut nodes = self.nodes.lock();
-        let mut leaves = self.leaves.lock();
-        leaves.par_iter_mut().enumerate().for_each(|(index, leaf)| {
-            let start = index.saturating_mul(chunk);
-            let end = start.saturating_add(chunk).min(data.len());
-            let mut buf = [0u8; 32];
-            if start < end {
-                buf[..end - start].copy_from_slice(&data[start..end]);
-            }
-            *leaf = if buf[..chunk].iter().all(|&byte| byte == 0) {
-                zero_hash
-            } else {
-                sha256_oneblock32(&buf[..chunk])
-            };
-        });
-        nodes.mark_stale();
+        self.rehash_parallel_in_context(data, crate::vector::Sha256Context::production());
     }
     /// Construct a zero-filled tree with at least one leaf.
     ///
@@ -684,19 +590,9 @@ impl ByteMerkleTree {
         }
         let chunk = self.chunk;
         let zero_hash = self.zero_hash;
-        let digest = |index: usize| {
-            let start = index.saturating_mul(chunk);
-            let end = start.saturating_add(chunk).min(data.len());
-            let mut bytes = [0_u8; 32];
-            if start < end {
-                bytes[..end - start].copy_from_slice(&data[start..end]);
-            }
-            if bytes[..chunk].iter().all(|&byte| byte == 0) {
-                zero_hash
-            } else {
-                sha256_oneblock32(&bytes[..chunk])
-            }
-        };
+        let context = crate::vector::Sha256Context::production();
+        let digest =
+            |index: usize| cpu_leaves::digest_leaf(data, index, chunk, zero_hash, context).0;
         if dirty.len() < 256 {
             for index in dirty.iter() {
                 leaves[index] = digest(index);
@@ -750,52 +646,21 @@ impl ByteMerkleTree {
     /// accelerators are unavailable.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
+    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`,
+    /// or a local execution deferral when the canonical CPU backing is unavailable.
     pub fn root_from_bytes_accel(data: &[u8], chunk: usize) -> Result<[u8; 32], VMError> {
         Self::validate_chunk_size(chunk)?;
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
         let leaves_count = data.len().div_ceil(chunk).max(1);
-        // Prefer CPU SHA2 on AArch64 for medium sizes
-        if prefer_cpu_sha2(leaves_count) {
-            let canonical =
-                MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
-            let metrics = iroha_telemetry::metrics::global_or_default();
-            metrics.merkle_root_cpu_total.inc();
-            return Ok(*canonical.root().expect("non-empty").as_ref());
-        }
-        // GPU Metal path (macOS)
+        // Exact public byte/chunk geometry compares the complete canonical CPU
+        // and Metal operation; a CPU ISA heuristic cannot replace this evidence.
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && let Some(selected) = crate::vector::select_metal_merkle(
-                crate::vector::MetalMerkleWork::Root,
-                leaves_count,
-            )
+            && let Some(root) = crate::vector::metal_root_from_bytes_auto(data, chunk)
         {
-            let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);
-            let bit_len_be = (chunk as u64 * 8).to_be_bytes();
-            for i in 0..leaves_count {
-                let start = i * chunk;
-                let end = (start + chunk).min(data.len());
-                let mut block = [0u8; 64];
-                if start < end {
-                    let len = end - start;
-                    block[..len].copy_from_slice(&data[start..end]);
-                }
-                block[chunk] = 0x80;
-                block[56..64].copy_from_slice(&bit_len_be);
-                blocks.push(block);
-            }
-            if let Some(root) = selected
-                .run(|| {
-                    let digests = crate::vector::metal_sha256_leaves(&blocks)?;
-                    crate::vector::metal_merkle_root(&digests)
-                })
-                .flatten()
-            {
-                // Telemetry: GPU merkle root
-                let metrics = iroha_telemetry::metrics::global_or_default();
-                metrics.merkle_root_gpu_total.inc();
-                return Ok(root);
-            }
+            let metrics = iroha_telemetry::metrics::global_or_default();
+            metrics.merkle_root_gpu_total.inc();
+            return Ok(root);
         }
         // GPU CUDA path
         #[cfg(feature = "cuda")]
@@ -812,7 +677,13 @@ impl ByteMerkleTree {
             }
         }
         // CPU fallback
-        let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
+        let canonical =
+            MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).map_err(|error| match error {
+                iroha_crypto::MerkleError::AllocationUnavailable => VMError::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable,
+                ),
+                _ => VMError::MemoryOutOfBounds,
+            })?;
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.merkle_root_cpu_total.inc();
         Ok(*canonical.root().expect("non-empty").as_ref())
@@ -820,6 +691,14 @@ impl ByteMerkleTree {
 }
 #[inline]
 pub(crate) fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
+    sha256_oneblock32_in_context(input, crate::vector::Sha256Context::production()).0
+}
+
+#[inline]
+pub(crate) fn sha256_oneblock32_in_context(
+    input: &[u8],
+    context: crate::vector::Sha256Context,
+) -> ([u8; 32], crate::vector::Sha256Observed) {
     debug_assert!(input.len() <= 32);
     // IV
     let mut state = [
@@ -839,13 +718,14 @@ pub(crate) fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
     block[len] = 0x80;
     let bit_len_be = (len as u64 * 8).to_be_bytes();
     block[56..64].copy_from_slice(&bit_len_be);
-    // Use accelerated sha256_compress (Metal/CUDA/ARM SHA2/x86 SHA-NI/scalar)
-    crate::vector::sha256_compress(&mut state, &block);
+    // Single blocks stay below the GPU launch floor. Preserve the original
+    // caller's native/scalar policy and receipt bank on every Rayon worker.
+    let observed = crate::vector::Sha256Observed::completed(context.compress(&mut state, &block));
     let mut out = [0u8; 32];
     for (i, w) in state.iter().enumerate() {
         out[i * 4..i * 4 + 4].copy_from_slice(&w.to_be_bytes());
     }
-    out
+    (out, observed)
 }
 #[cfg(test)]
 mod tests {

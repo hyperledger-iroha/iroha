@@ -2,8 +2,15 @@
 #[iroha_futures::telemetry_future]
 pub async fn handle_version(state: Arc<CoreState>) -> Response {
     use iroha_version::Version;
-    let latest_block = std::num::NonZeroUsize::new(state.committed_height())
-        .and_then(|height| state.block_by_height(height));
+    let latest_block = match std::num::NonZeroUsize::new(state.committed_height()) {
+        Some(height) => match state.block_by_height(height) {
+            Ok(block) => block,
+            Err(error) => {
+                return crate::canonical_history::canonical_attempt_error(error).into_response();
+            }
+        },
+        None => None,
+    };
     let mut resp = match latest_block {
         Some(block) => Response::new(Body::from(block.version().to_string())),
         None => {
@@ -64,13 +71,17 @@ fn status_snapshot_failure(error: iroha_core::telemetry::StatusSnapshotError) ->
     use iroha_core::telemetry::StatusSnapshotError;
     use iroha_torii_shared::status::StatusFailureReason;
 
-    let reason = match error {
+    let reason = match &error {
         StatusSnapshotError::Disabled => StatusFailureReason::Disabled,
         StatusSnapshotError::MailboxUnavailable => StatusFailureReason::MailboxUnavailable,
         StatusSnapshotError::ActorClosed => StatusFailureReason::ActorClosed,
         StatusSnapshotError::DeadlineElapsed => StatusFailureReason::DeadlineElapsed,
-        StatusSnapshotError::StateBusy => StatusFailureReason::StateBusy,
-        StatusSnapshotError::StateUnavailable => StatusFailureReason::StateUnavailable,
+        StatusSnapshotError::StateBusy | StatusSnapshotError::Deferred(_) => {
+            StatusFailureReason::StateBusy
+        }
+        StatusSnapshotError::StateUnavailable | StatusSnapshotError::HistoryRead(_) => {
+            StatusFailureReason::StateUnavailable
+        }
         StatusSnapshotError::CheckpointChanged => StatusFailureReason::CheckpointChanged,
         StatusSnapshotError::MissingBlock => StatusFailureReason::MissingBlock,
         StatusSnapshotError::JournalMismatch => StatusFailureReason::JournalMismatch,
@@ -176,7 +187,20 @@ mod status_failure_reason_tests {
 
     #[tokio::test]
     async fn snapshot_failure_reasons_match_json_norito_and_header() {
+        let original_budget = iroha_allocation::AllocationBudget::new(1);
+        let retained = original_budget.try_reserve_bytes(1).unwrap();
+        let refusal = original_budget
+            .try_reserve_bytes(1)
+            .expect_err("original capacity occupied");
         let cases = [
+            (
+                StatusSnapshotError::Deferred(refusal.into()),
+                StatusFailureReason::StateBusy,
+            ),
+            (
+                StatusSnapshotError::HistoryRead("invalid durable frame".into()),
+                StatusFailureReason::StateUnavailable,
+            ),
             (StatusSnapshotError::Disabled, StatusFailureReason::Disabled),
             (
                 StatusSnapshotError::MailboxUnavailable,
@@ -222,6 +246,7 @@ mod status_failure_reason_tests {
         for (error, reason) in cases {
             assert_wire_reason(status_snapshot_failure(error), reason).await;
         }
+        drop(retained);
     }
 
     #[tokio::test]

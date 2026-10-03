@@ -2146,8 +2146,8 @@ mod tests {
             callables: vec![ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm_abi::call::CallWordV1::Unit],
+                arguments: ivm_abi::call::CallSchemaV1::empty(),
+                results: ivm_abi::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "StateMapHostFixture".to_owned(),
             compiler_fingerprint: "ivm-core-host-tests".to_owned(),

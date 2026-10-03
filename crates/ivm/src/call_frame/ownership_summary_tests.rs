@@ -9,12 +9,12 @@ const TOP: u64 = Memory::STACK_START + 4096;
 const ARG: u64 = Memory::HEAP_START;
 const RESULT: u64 = Memory::HEAP_START + 32;
 
-fn callable(frame_bytes: u32, words: usize) -> EmbeddedCallableV1 {
-    EmbeddedCallableV1 {
+fn callable(frame_bytes: u32, words: usize) -> CallFrameShape {
+    CallFrameShape {
         entry_pc: 0,
         frame_bytes,
-        argument_words: vec![ivm_abi::call::CallWordV1::Bool; words],
-        result_words: vec![ivm_abi::call::CallWordV1::Bool; words],
+        argument_words: words,
+        result_words: words,
     }
 }
 
@@ -178,12 +178,12 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
     ));
     assert!(frames.is_empty());
     assert_equivalent(&frames);
-    let leaf = EmbeddedCallableV1 {
-        result_words: vec![ivm_abi::call::CallWordV1::Unit],
+    let leaf = CallFrameShape {
+        result_words: 1,
         ..callable(0, 0)
     };
     assert!(leaf.validate());
-    let reserved = EmbeddedCallableV1 {
+    let reserved = CallFrameShape {
         frame_bytes: 16,
         ..leaf.clone()
     };

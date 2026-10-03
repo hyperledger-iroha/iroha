@@ -23,14 +23,14 @@ pub struct NativeExecutionEvidenceLimits {
     pub max_retained_bytes: u64,
 }
 struct RetainedCarrier {
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
 }
 
 /// Exact authenticated global carrier and its complete lane state for read-only queries.
 /// This receipt does not grant a lane signing or execution capability.
 #[derive(Debug)]
 pub struct VerifiedNativeExecutionCarrier {
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     lanes: Arc<SumeragiLaneState>,
     ordinary_writes_root: iroha_crypto::Hash,
     core_hash: iroha_sumeragi::types::Hash32,
@@ -127,16 +127,7 @@ impl NativeExecutionEvidenceVerifier {
     /// native BLS/Pasta/RS16 certificates, missing contiguous history and bounds.
     pub fn push_height(
         &mut self,
-        block: SignedBlock,
-        context_evidence: &[u8],
-    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
-        self.push_shared_height(Arc::new(block), context_evidence)
-    }
-
-    /// Reuse the exact immutable Kura carrier for the live original-source reader.
-    pub(crate) fn push_shared_height(
-        &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         context_evidence: &[u8],
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         self.push_shared_height_with_genesis(block, context_evidence, |_| Ok(()))
@@ -146,7 +137,7 @@ impl NativeExecutionEvidenceVerifier {
     /// A rejected callback poisons this same interval; it cannot grant prefix completion.
     pub(crate) fn push_shared_height_with_genesis(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         context_evidence: &[u8],
         genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
@@ -162,7 +153,7 @@ impl NativeExecutionEvidenceVerifier {
         genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         self.push_original_height(
-            Arc::clone(artifacts.source()),
+            artifacts.source().clone(),
             context_evidence,
             Some(artifacts),
             genesis,
@@ -171,7 +162,7 @@ impl NativeExecutionEvidenceVerifier {
 
     fn push_original_height(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         context_evidence: &[u8],
         artifacts: Option<PrefixArtifacts>,
         genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
@@ -189,7 +180,7 @@ impl NativeExecutionEvidenceVerifier {
 
     fn push_height_inner(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         context_evidence: &[u8],
         artifacts: Option<PrefixArtifacts>,
         accept_genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
@@ -262,13 +253,16 @@ impl NativeExecutionEvidenceVerifier {
     }
 
     /// Borrow a retained original carrier only after the interval has its actual H2 anchor.
-    pub(crate) fn authenticated_carrier(&self, height: u64) -> Option<Arc<SignedBlock>> {
+    pub(crate) fn authenticated_carrier(
+        &self,
+        height: u64,
+    ) -> Option<iroha_data_model::block::SharedSignedBlock> {
         if self.poisoned || self.pending_genesis.is_some() || self.carriers.len() < 2 {
             return None;
         }
         self.carriers
             .get(&height)
-            .map(|carrier| Arc::clone(&carrier.block))
+            .map(|carrier| carrier.block.clone())
     }
 
     /// Transfer the exact latest global lane state after a clean, fully anchored interval.
@@ -285,7 +279,7 @@ impl NativeExecutionEvidenceVerifier {
         committed: CommittedBlock,
         evidence: NativeExecutionProjectionV1,
     ) -> Result<VerifiedNativeExecutionCarrier, String> {
-        let block = Arc::clone(committed.block());
+        let block = committed.block().clone();
         let height = committed.height();
         if !committed.commitment().native_lanes.matches_state(
             self.network,
@@ -305,7 +299,7 @@ impl NativeExecutionEvidenceVerifier {
         self.carriers.insert(
             height,
             RetainedCarrier {
-                block: Arc::clone(&block),
+                block: block.clone(),
             },
         );
         self.lanes = Some(Arc::clone(&lanes));

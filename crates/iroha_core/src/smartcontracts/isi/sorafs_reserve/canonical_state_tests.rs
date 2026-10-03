@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::smartcontracts::isi::query::SingularQueryCurrentAllocation;
+use norito::DecodeLimits;
 
 type PersistedState = ReserveAppealRecordV1;
 

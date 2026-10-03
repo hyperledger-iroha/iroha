@@ -187,7 +187,7 @@ fn outcome(
         after_next,
     }
 }
-fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
+fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
     let mut policy = SumeragiNposParameters::default();
@@ -263,7 +263,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         result.preimage().unwrap(),
         Vec::new(),
     )));
-    let mut history = vec![Arc::new(genesis)];
+    let mut history = vec![crate::block::reserve_block_for_tests().initialize(genesis)];
     let mut active_keys = original_keys;
     let mut active_beacon = crate::beacon::tests::HistoricalBeaconFixture::new(
         network,
@@ -475,7 +475,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         block = block.with_commit_certificate(Some(
             commit_certificate(&header, &qc, preimage, availability).unwrap(),
         ));
-        history.push(Arc::new(block));
+        history.push(crate::block::reserve_block_for_tests().initialize(block));
         if let Some((next, keys, beacon)) = successor {
             current = next;
             active_keys = keys;
@@ -486,12 +486,12 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     }
     history
 }
-fn history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(false)).clone()
 }
-fn retained_history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn retained_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(true)).clone()
 }
 
@@ -613,7 +613,8 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
         ));
     }
     let mut missing = history;
-    missing[5] = Arc::new(missing[5].as_ref().clone().with_commit_certificate(None));
+    missing[5] = crate::block::reserve_block_for_tests()
+        .initialize(missing[5].as_ref().clone().with_commit_certificate(None));
     let state = state_with_history(&missing);
     let view = state.view();
     assert!(matches!(
@@ -731,10 +732,11 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
         result.preimage().unwrap(),
         certificate.availability().to_vec(),
     );
-    history[0] = Arc::new(original.clone().with_commit_certificate(Some(certificate)));
+    history[0] = crate::block::reserve_block_for_tests()
+        .initialize(original.clone().with_commit_certificate(Some(certificate)));
     let state = state_with_history(&history);
     let view = state.view();
-    assert!(read_frame(Arc::clone(&history[0]), 1).is_ok());
+    assert!(read_frame(Clone::clone(&history[0]), 1).is_ok());
     assert!(
         committed_block(&view, 1).is_err(),
         "stored frames and a hash index cannot replace original execution provenance"
@@ -806,14 +808,20 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
     let history = history();
     let kura = Kura::blank_kura_for_testing();
     for block in &history {
-        kura.store_block(Arc::clone(block)).unwrap();
+        kura.store_block(Clone::clone(block)).unwrap();
     }
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = NetworkId::from_genesis_hash(history[0].hash());
     let hashes = history.iter().map(|block| block.hash()).collect::<Vec<_>>();
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        &kura,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+    )
+    .unwrap()
+    .with_attestation_verifier(&TestAttestations);
     for (index, receipt) in reader.walk(1, 14).enumerate() {
         let receipt = receipt.unwrap();
         assert_eq!(receipt.block_hash(), hashes[index]);

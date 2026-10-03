@@ -8,7 +8,7 @@ use super::*;
 fn unit_root_call_gas() -> u64 {
     let callable = crate::ivm_test_support::unit_callable(0);
     assert_eq!(callable.frame_bytes, 0);
-    let result_words = u64::try_from(callable.result_words.len()).unwrap();
+    let result_words = u64::try_from(callable.result_word_count().unwrap()).unwrap();
     // V1 root setup charges one logical byte per reserved result byte and one
     // initialization bitmap byte per result word for this zero-byte frame.
     result_words * ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + result_words

@@ -308,10 +308,14 @@ async fn finalized_state_observation(
             == original.0.canonical_resultless_proposal()?.encode_wire()?,
         "peer history replaced the independently signed genesis"
     );
+    // Independent public-history verification owns one finite shared-block pool.
+    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
+    let genesis = iroha_data_model::block::SharedSignedBlock::try_new(first.clone(), &budget)
+        .map_err(|(_, error)| error)?;
     let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
         &network.chain_id(),
         network.network_id(),
-        std::sync::Arc::new(first.clone()),
+        genesis,
     )?;
     let mut verified = None;
     for block in blocks
@@ -319,7 +323,9 @@ async fn finalized_state_observation(
         .skip(1)
         .take_while(|block| block.header().height().get() <= height)
     {
-        let (certified, _) = prefix.push(std::sync::Arc::new(block))?.into_parts();
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
+        let (certified, _) = prefix.push(block)?.into_parts();
         if certified.committed().height() == height {
             verified = Some(certified);
         }

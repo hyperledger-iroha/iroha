@@ -8,7 +8,8 @@
 //! TODO: fund preimage allocation and bind this value to atomic State root
 //! publication and authenticated recovery.
 
-use crate::state::{State, is_stable_state_view_generation};
+use super::lane_manifest_policy::StateAuthorityCaptureError;
+use crate::state::{State, StateViewError, is_stable_state_view_generation};
 use iroha_config::parameters::actual::{
     Nexus, NexusConsensusPolicyDigestError, nexus_consensus_policy_preimage_with_runtime_policies,
 };
@@ -64,14 +65,18 @@ impl NexusStaticAuthorityV1 {
 /// World catalog and installed manifest baseline. The manifest and compliance
 /// identities are checked again after encoding because those process-local
 /// installation handles can be replaced outside a World MV transaction.
-/// `None` asks the caller to retry a concurrent publication or policy install.
+/// Physical contention retains its exact State view error; `None` retries a
+/// concurrent policy installation without inventing a physical release source.
 /// This does not publish a finalized State root or authorize snapshot recovery.
-pub(super) fn canonical_preimage_once(state: &State) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn canonical_preimage_once(
+    state: &State,
+) -> Result<Option<Vec<u8>>, StateAuthorityCaptureError> {
+    let publication_release = state.view_publication_release();
     let generation = state.state_view_generation();
     if generation & 1 != 0 {
-        return Ok(None);
+        return Err(StateViewError::Busy(publication_release).into());
     }
-    let attempt = (|| -> Result<Option<Vec<u8>>, String> {
+    let attempt = (|| -> Result<Option<Vec<u8>>, StateAuthorityCaptureError> {
         let installed = state.lane_manifests.read().clone();
         installed.validate_materialized_source_projection()?;
         let manifest_digest = installed.baseline_consensus_policy_digest();
@@ -79,12 +84,7 @@ pub(super) fn canonical_preimage_once(state: &State) -> Result<Option<Vec<u8>>, 
         let compliance_digest = compliance
             .as_deref()
             .map(crate::compliance::LaneComplianceEngine::consensus_policy_digest);
-        let Some(view) = state
-            .try_view_once()
-            .map_err(|error| format!("effective Nexus State view is invalid: {error}"))?
-        else {
-            return Ok(None);
-        };
+        let view = state.try_view_once()?;
         if view.lane_manifests.baseline_consensus_policy_digest() != manifest_digest {
             return Ok(None);
         }
@@ -99,7 +99,7 @@ pub(super) fn canonical_preimage_once(state: &State) -> Result<Option<Vec<u8>>, 
         drop(view);
         let Some(current) = state
             .try_nexus_snapshot_once()
-            .map_err(|error| format!("current Nexus projection is invalid: {error}"))?
+            .map_err(StateViewError::Runtime)?
         else {
             return Ok(None);
         };
@@ -121,7 +121,7 @@ pub(super) fn canonical_preimage_once(state: &State) -> Result<Option<Vec<u8>>, 
         Ok(Some(encoded))
     })();
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
-        return Ok(None);
+        return Err(StateViewError::Busy(publication_release).into());
     }
     attempt
 }
@@ -304,7 +304,10 @@ mod tests {
             iroha_data_model::nexus::DataSpaceCatalog::new(Vec::new()).unwrap();
         let error = canonical_preimage_once(&state).unwrap_err();
         assert!(
-            error.contains("effective Nexus State view is invalid"),
+            matches!(
+                error,
+                StateAuthorityCaptureError::View(StateViewError::Runtime(_))
+            ),
             "{error}"
         );
 
@@ -313,13 +316,18 @@ mod tests {
             Default::default(),
         )));
         let error = canonical_preimage_once(&state).unwrap_err();
-        assert!(error.contains("materialized frozen source"), "{error}");
+        assert!(
+            error.to_string().contains("materialized frozen source"),
+            "{error}"
+        );
 
         let state = materialized_state();
         state.nexus.write().compliance.enabled = true;
         let error = canonical_preimage_once(&state).unwrap_err();
         assert!(
-            error.contains("effective Nexus policy is invalid"),
+            error
+                .to_string()
+                .contains("effective Nexus policy is invalid"),
             "{error}"
         );
     }

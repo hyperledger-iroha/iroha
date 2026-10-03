@@ -290,3 +290,34 @@ fn locked_reproposal_and_restart_preserve_exact_control_header() {
     assert_eq!(replayed.header, original.header().clone());
     assert_eq!(replayed.block_hash(&h.v.crypto), hash);
 }
+
+#[test]
+fn control_work_context_requires_complete_applied_parent_and_current_signer() {
+    let mut h = H::new(4, pick::leader(1));
+    let (source, view) = h.core.control_work_context().unwrap();
+    assert_eq!(Some(source), h.core.application_control_context());
+    assert_eq!(view, h.core.view);
+    h.enter_view(2);
+    let (same_source, next_view) = h.core.control_work_context().unwrap();
+    assert_eq!(same_source, source);
+    assert_eq!(next_view, 2);
+    h.auto_apply = false;
+    h.commit_with(2, b"new applied parent");
+    assert!(h.core.control_work_context().is_none());
+    h.apply_height(1);
+    let (next_source, _) = h.core.control_work_context().unwrap();
+    assert_eq!(next_source.height, 2);
+    assert_eq!(next_source.epoch, h.core.cfg.epoch.id);
+    assert_eq!(next_source.parent_hash, h.core.tip.block_hash);
+    assert_eq!(next_source.parent_result, h.core.tip.result);
+    assert_ne!(next_source.parent_hash, source.parent_hash);
+    let signer = h.core.me.take();
+    assert!(
+        h.core.control_work_context().is_none(),
+        "an observer cannot authorize work"
+    );
+    h.core.me = signer;
+    assert!(h.core.control_work_context().is_some());
+    h.core.halted = Some(crate::api::HaltReason::PublicationRecoveryRequired { height: 1 });
+    assert!(h.core.control_work_context().is_none());
+}

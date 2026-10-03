@@ -1,7 +1,13 @@
 #![cfg_attr(not(feature = "cuda"), allow(dead_code))]
 #[cfg(any(feature = "cuda", test))]
+#[path = "cuda/output_validation.rs"]
+mod output_validation;
 #[path = "cuda_policy.rs"]
 pub(crate) mod policy;
+#[path = "cuda/receipts.rs"]
+pub(crate) mod receipts;
+pub use policy::Kernel as CudaKernel;
+pub use receipts::{CudaCompletionError, CudaCompletionSnapshot};
 #[cfg(feature = "cuda")]
 #[path = "cuda/vector_api.rs"]
 mod vectors;
@@ -42,10 +48,22 @@ pub use poseidons::{
 #[path = "cuda/bn254_api.rs"]
 mod bn254_batches;
 #[cfg(feature = "cuda")]
+pub(crate) use bn254_batches::bn254_batch_auto_into;
+#[cfg(feature = "cuda")]
 pub use bn254_batches::{
     bn254_add_batch_cuda_into, bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda,
     bn254_sub_batch_cuda_into, bn254_sub_cuda,
 };
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn bn254_batch_auto_into(
+    _operation: crate::bn254_vec::BatchOperation,
+    _left: &[[u64; 4]],
+    _right: &[[u64; 4]],
+    _destination: &mut [[u64; 4]],
+    _cpu: &'static dyn crate::field_dispatch::FieldArithmetic,
+) -> bool {
+    false
+}
 #[cfg(feature = "cuda")]
 #[path = "cuda/signature_api.rs"]
 mod signatures;
@@ -99,7 +117,6 @@ mod imp {
     static CUDA_LAST_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     thread_local! {
         static CUDA_SELFTEST_RUNNING: Cell<bool> = const { Cell::new(false) };
-        static CUDA_COMPLETED_DISPATCHES: Cell<u64> = const { Cell::new(0) };
         static CUDA_EXECUTION_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
     }
     fn cuda_error_slot() -> &'static Mutex<Option<String>> {
@@ -148,16 +165,27 @@ mod imp {
         }
         eprintln!("ivm: cuda acceleration quarantined: {message}");
     }
-    /// Completed CUDA kernel batches on this thread, excluding admission self-tests.
-    ///
-    /// This diagnostic counts successfully completed operation batches, not individual launches.
-    /// Qualification must also compare each returned result with its scalar reference.
-    pub fn cuda_completed_dispatches() -> u64 {
-        CUDA_COMPLETED_DISPATCHES.with(Cell::get)
-    }
-    pub(super) fn record_completed_cuda_dispatch() {
+    pub(super) fn record_completed_cuda_dispatch(
+        kernel: Kernel,
+        artifact: iroha_accel::PtxArtifact,
+    ) {
         if !cuda_selftest_running() {
-            CUDA_COMPLETED_DISPATCHES.with(|count| count.set(count.get().saturating_add(1)));
+            crate::cuda_dispatch::record_completed(kernel, artifact);
+        }
+    }
+    pub(super) fn record_completed_cuda_compound(
+        kernel: Kernel,
+        artifact: iroha_accel::PtxArtifact,
+        other: Kernel,
+        other_artifact: iroha_accel::PtxArtifact,
+    ) {
+        if !cuda_selftest_running() {
+            crate::cuda_dispatch::record_completed_compound(
+                kernel,
+                artifact,
+                other,
+                other_artifact,
+            );
         }
     }
     pub(crate) fn record_cuda_attempt() {
@@ -177,12 +205,9 @@ mod imp {
                 .all(super::bn254_batches::admit)
         })
     }
-    pub(super) fn ensure_cuda_kernel(kernel: Kernel) -> bool {
-        if CUDA_FORCED_DISABLED.load(Ordering::SeqCst) || CUDA_DISABLED.load(Ordering::SeqCst) {
+    pub(super) fn cuda_policy_allows_attempt() -> bool {
+        if cuda_disabled() {
             return false;
-        }
-        if cuda_selftest_running() {
-            return crate::cuda_dispatch::current_kernel() == Some(kernel);
         }
         for name in ["IVM_DISABLE_CUDA", "IVM_FORCE_CUDA_SELFTEST_FAIL"] {
             if crate::dev_env::dev_env_flag(name) && std::env::var(name).as_deref() == Ok("1") {
@@ -191,6 +216,15 @@ mod imp {
                 ));
                 return false;
             }
+        }
+        true
+    }
+    pub(super) fn ensure_cuda_kernel(kernel: Kernel) -> bool {
+        if cuda_selftest_running() {
+            return !cuda_disabled() && crate::cuda_dispatch::current_kernel() == Some(kernel);
+        }
+        if !cuda_policy_allows_attempt() {
+            return false;
         }
         match kernel {
             Kernel::BnAdd | Kernel::BnSub | Kernel::BnMul => super::bn254_batches::admit(kernel),
@@ -413,18 +447,6 @@ mod imp {
             });
             let _reset = ResetGuard(previous);
             func()
-        }
-        #[test]
-        fn cuda_dispatch_receipts_exclude_selftests_and_other_threads() {
-            let before = cuda_completed_dispatches();
-            with_cuda_selftest_running_for_tests(record_completed_cuda_dispatch);
-            assert_eq!(cuda_completed_dispatches(), before);
-            std::thread::spawn(record_completed_cuda_dispatch)
-                .join()
-                .unwrap();
-            assert_eq!(cuda_completed_dispatches(), before);
-            record_completed_cuda_dispatch();
-            assert_eq!(cuda_completed_dispatches(), before.saturating_add(1));
         }
         #[test]
         fn poseidon_kernel_reports_round_errors_without_disabling_backend() {
@@ -1367,10 +1389,26 @@ mod imp {
 }
 #[cfg(feature = "cuda")]
 pub use imp::*;
-/// Number of completed CUDA kernel dispatches; zero without the CUDA backend.
+/// Read the original IVM policy owner without discovering devices or admitting work.
+///
+/// `Ok(None)` means that this stable slot has no IVM owner and has never received
+/// completion credit. Busy registry custody is an error, never a zero baseline.
+/// Snapshots remain readable after policy opt-out or kernel/device quarantine.
+///
+/// # Errors
+/// Returns [`CudaCompletionError::Busy`] if another caller borrows the registry.
+#[cfg(feature = "cuda")]
+pub fn cuda_completion_snapshot(
+    slot: usize,
+) -> Result<Option<CudaCompletionSnapshot>, CudaCompletionError> {
+    crate::cuda_dispatch::completion_snapshot(slot)
+}
+/// CPU-only builds have no IVM CUDA policy owners or completion credit.
 #[cfg(not(feature = "cuda"))]
-pub fn cuda_completed_dispatches() -> u64 {
-    0
+pub fn cuda_completion_snapshot(
+    _slot: usize,
+) -> Result<Option<CudaCompletionSnapshot>, CudaCompletionError> {
+    Ok(None)
 }
 #[cfg(not(feature = "cuda"))]
 pub fn cuda_available() -> bool {

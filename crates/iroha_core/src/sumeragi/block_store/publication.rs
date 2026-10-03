@@ -43,6 +43,9 @@ impl KuraBlockStore {
             .get(&qc.block_hash)
             .ok_or_else(|| invalid("no original executed frame staged for commit"))?;
         let executed = &staged.executed;
+        if !executed.belongs_to(&self.execution_budget) {
+            return Err(invalid("staged block control uses another allocation pool").into());
+        }
         if executed.header().height().get() != height || !executed.has_results() {
             return Err(invalid("staged frame has another height or no execution result").into());
         }
@@ -65,7 +68,7 @@ impl KuraBlockStore {
             return Err(invalid("staged proposal differs from the original signed payload").into());
         }
         self.kura
-            .store_block(Arc::clone(executed))
+            .store_block(executed.clone())
             .map_err(|error| io::Error::other(error).into())
     }
 }

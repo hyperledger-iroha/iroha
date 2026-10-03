@@ -51,7 +51,11 @@ impl State {
         let mut state_write_release = self.state_write_lock.defer_notifications();
         let _state_write_lock = state_write_release.lock();
         let publication = publication_notice.begin();
-        let nexus = self.nexus_ownership_projection();
+        let nexus = self
+            .canonical_runtime
+            .view()
+            .nexus_projection(&releases.nexus.read())
+            .expect("persisted canonical runtime must be valid");
         let Ok(candidate_bytes) = manifests
             .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
         else {

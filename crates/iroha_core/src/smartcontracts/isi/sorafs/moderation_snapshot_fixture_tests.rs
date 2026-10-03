@@ -15,7 +15,13 @@ fn panel_fixture_with_kura() -> PanelFixture {
     fixture
         .state
         .kura()
-        .store_block(foundation)
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                foundation,
+                &fixture.state.ivm_execution_budget(),
+            )
+            .expect("admit moderation fixture block control"),
+        )
         .expect("persist moderation foundation block");
     cache_moderation_fixture_header(&fixture.state, foundation_header);
     fixture
@@ -52,7 +58,13 @@ fn run_panel_kura_block(
     fixture
         .state
         .kura()
-        .store_block(signed_block)
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                signed_block,
+                &fixture.state.ivm_execution_budget(),
+            )
+            .expect("admit moderation fixture block control"),
+        )
         .expect("persist exact executed moderation header and body");
     retain_moderation_fixture_header(&mut fixture.state, committed_header);
     fixture.next_height += 1;
@@ -66,6 +78,7 @@ fn snapshot_time_requires_the_exact_committed_header_cache_even_when_kura_is_pre
         .state
         .view()
         .latest_block()
+        .expect("foundation history read completes")
         .expect("signed committed foundation")
         .header();
     let expected = FindSorafsModerationSnapshot::new(8, 16)
@@ -79,7 +92,13 @@ fn snapshot_time_requires_the_exact_committed_header_cache_even_when_kura_is_pre
         .state
         .update_latest_block_header_cache_for_tests(wrong);
     assert_eq!(
-        fixture.state.view().latest_block().unwrap().hash(),
+        fixture
+            .state
+            .view()
+            .latest_block()
+            .expect("foundation history read completes")
+            .expect("signed foundation is retained")
+            .hash(),
         committed.hash(),
         "the exact Kura block remains available during cache substitution"
     );
@@ -121,6 +140,7 @@ fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
     assert_eq!(
         snapshot.finalized_at_unix_ms,
         view.latest_block()
+            .expect("finalized history read completes")
             .expect("exact finalized block")
             .header()
             .creation_time_ms

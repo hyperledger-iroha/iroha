@@ -535,7 +535,7 @@ fn commit_native_with_timing(
     // Successful signing has 22 instructions; recovery and the issuer add fresh Checks.
     // Bound diagnostic output while always including the first failed execution.
     if sequence <= 32 || !executed {
-        let block = fixture.state.view().latest_block().unwrap();
+        let block = fixture.state.view().latest_block().unwrap().unwrap();
         let failure = block.network_output_at(0).and_then(|(_, output)| {
             output.result.0.as_ref().err().map(|error| {
                 // Print only the native rejection reason, never the signed instruction,

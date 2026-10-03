@@ -1,6 +1,12 @@
 // Actual canonical journals, signed body custody and complete physical recounts.
 
-fn canonical_physical_fixture(count: usize) -> (TempDir, Arc<Kura>, Vec<Arc<SignedBlock>>) {
+fn canonical_physical_fixture(
+    count: usize,
+) -> (
+    TempDir,
+    Arc<Kura>,
+    Vec<iroha_data_model::block::SharedSignedBlock>,
+) {
     let directory = TempDir::new().unwrap();
     let config = kura_config_for_dir(&directory, nonzero!(1_usize));
     let (kura, _) =
@@ -10,8 +16,11 @@ fn canonical_physical_fixture(count: usize) -> (TempDir, Arc<Kura>, Vec<Arc<Sign
     (directory, kura, blocks)
 }
 
-fn canonical_physical_block_at(blocks: &[Arc<SignedBlock>], height: usize) -> Arc<SignedBlock> {
-    Arc::new(
+fn canonical_physical_block_at(
+    blocks: &[iroha_data_model::block::SharedSignedBlock],
+    height: usize,
+) -> iroha_data_model::block::SharedSignedBlock {
+    share_storage_fixture(
         ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
             header.set_height(NonZeroU64::new(height as u64).unwrap());
             header.set_prev_block_hash(height.checked_sub(2).map(|index| blocks[index].hash()));
@@ -21,7 +30,10 @@ fn canonical_physical_block_at(blocks: &[Arc<SignedBlock>], height: usize) -> Ar
     )
 }
 
-fn canonical_physical_seed_da_suffix(kura: &Kura, blocks: &[Arc<SignedBlock>]) {
+fn canonical_physical_seed_da_suffix(
+    kura: &Kura,
+    blocks: &[iroha_data_model::block::SharedSignedBlock],
+) {
     let _write = kura.block_store_write_lock.lock();
     let mut store = kura.block_store.lock();
     // First publish the real durable prefix. Rewriting an already-published
@@ -51,7 +63,11 @@ fn canonical_physical_seed_da_suffix(kura: &Kura, blocks: &[Arc<SignedBlock>]) {
     assert!(store.read_da_block_rewrite_stage().unwrap().is_none());
 }
 
-fn canonical_physical_leave_rewrite(kura: &Kura, replacement: &Arc<SignedBlock>, new_marker: bool) {
+fn canonical_physical_leave_rewrite(
+    kura: &Kura,
+    replacement: &iroha_data_model::block::SharedSignedBlock,
+    new_marker: bool,
+) {
     let _write = kura.block_store_write_lock.lock();
     let mut store = kura.block_store.lock();
     if new_marker {

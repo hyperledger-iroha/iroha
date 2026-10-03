@@ -28,10 +28,7 @@ use crate::{
     instruction,
     limits::MAX_CONTRACT_CALL_DEPTH,
     memory::{Memory, MemoryTemplateMismatch},
-    metadata::{
-        EmbeddedContractDebugInfoV1, LiteralKindV1, ParsedLiteralSection, ProgramMetadata,
-        decode_literal_descriptor,
-    },
+    metadata::{EmbeddedContractDebugInfoV1, ProgramMetadata},
     pointer_abi::PointerPolicyGuard,
     prepared::PreparedContract,
     private_memory_ranges::PrivateMemoryRanges,
@@ -47,10 +44,18 @@ use crate::{
 };
 #[path = "call_runtime.rs"]
 mod call_runtime;
+mod cycle_logging;
+#[cfg(test)]
+mod funded_instruction_tests;
 #[cfg(test)]
 #[path = "ivm/tests/hardware_discovery.rs"]
 mod hardware_discovery_tests;
 mod input_cursor;
+mod literal_table;
+#[path = "execution_packets/runtime.rs"]
+mod native_packets;
+pub(crate) mod register_logging;
+pub(crate) use literal_table::{DecodedLiteral, DecodedLiteralTable, decode_literal_table};
 #[cfg(test)]
 mod snapshot;
 use iroha_allocation::AllocationBudget;
@@ -149,135 +154,6 @@ struct HostRegisterLogIsolation {
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
-}
-/// One admission-validated value in an indexed literal table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DecodedLiteral {
-    /// Exact start address of a validated pointer-ABI TLV.
-    Pointer(u64),
-    /// Public signed scalar, retained in its exact two's-complement bit pattern.
-    I64(u64),
-}
-/// Immutable indexed literal values and the pointer-only provenance index.
-#[derive(Clone, Debug)]
-pub(crate) struct DecodedLiteralTable {
-    entries: crate::cache_memory::SharedAllocation<DecodedLiteral>,
-    pointer_starts: crate::cache_memory::SharedAllocation<u64>,
-}
-impl DecodedLiteralTable {
-    fn empty() -> Self {
-        Self {
-            entries: Vec::<DecodedLiteral>::new().into(),
-            pointer_starts: Vec::<u64>::new().into(),
-        }
-    }
-    /// Return values in their authenticated table-index order.
-    pub(crate) fn entries(&self) -> &[DecodedLiteral] {
-        &self.entries
-    }
-    fn pointer_starts(&self) -> &[u64] {
-        &self.pointer_starts
-    }
-    pub(crate) fn try_retain(&self) -> bool {
-        self.entries.try_retain() && self.pointer_starts.try_retain()
-    }
-}
-/// Decode and fully validate an ABI-v1 indexed literal table.
-pub(crate) fn decode_literal_table(
-    program: &[u8],
-    header_len: usize,
-    section: Option<ParsedLiteralSection>,
-    policy: SyscallPolicy,
-) -> Result<DecodedLiteralTable, VMError> {
-    let Some(section) = section else {
-        return Ok(DecodedLiteralTable::empty());
-    };
-    if section.count > usize::from(u16::MAX) + 1 {
-        return Err(VMError::InvalidMetadata);
-    }
-    let mut descriptors = Vec::with_capacity(section.count);
-    let mut previous_target = None;
-    for index in 0..section.count {
-        let entry_start = section
-            .entries_start
-            .checked_add(index.checked_mul(8).ok_or(VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
-        let entry_end = entry_start.checked_add(8).ok_or(VMError::InvalidMetadata)?;
-        let raw = u64::from_le_bytes(
-            program
-                .get(entry_start..entry_end)
-                .ok_or(VMError::InvalidMetadata)?
-                .try_into()
-                .map_err(|_| VMError::InvalidMetadata)?,
-        );
-        let (kind, relative) = decode_literal_descriptor(raw)?;
-        let target = section
-            .start
-            .checked_add(usize::try_from(relative).map_err(|_| VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
-        if target < section.data_start || target >= section.data_end {
-            return Err(VMError::InvalidMetadata);
-        }
-        if previous_target.is_some_and(|previous| target <= previous) {
-            return Err(VMError::InvalidMetadata);
-        }
-        previous_target = Some(target);
-        descriptors.push((kind, target));
-    }
-    if descriptors.is_empty() {
-        if section.data_start != section.data_end {
-            return Err(VMError::InvalidMetadata);
-        }
-        return Ok(DecodedLiteralTable::empty());
-    }
-    if descriptors.first().map(|(_, target)| *target) != Some(section.data_start) {
-        return Err(VMError::InvalidMetadata);
-    }
-    // Descriptor order defines exact payload ranges. This makes every byte in
-    // the authenticated literal data have exactly one interpretation and lets
-    // admission reject pointer/scalar type confusion before execution.
-    let mut entries = Vec::with_capacity(descriptors.len());
-    let mut pointer_starts = Vec::new();
-    for (index, (kind, target)) in descriptors.iter().copied().enumerate() {
-        let end = descriptors
-            .get(index + 1)
-            .map_or(section.data_end, |(_, target)| *target);
-        let bytes = program.get(target..end).ok_or(VMError::InvalidMetadata)?;
-        match kind {
-            LiteralKindV1::PointerTlv => {
-                let tlv = crate::pointer_abi::validate_tlv_bytes(bytes)
-                    .map_err(|_| VMError::InvalidMetadata)?;
-                let exact_len = 7usize
-                    .checked_add(tlv.payload.len())
-                    .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-                    .ok_or(VMError::InvalidMetadata)?;
-                if bytes.len() != exact_len {
-                    return Err(VMError::InvalidMetadata);
-                }
-                if !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: 1,
-                        type_id: tlv.type_id as u16,
-                    });
-                }
-                let pointer = target
-                    .checked_sub(header_len)
-                    .and_then(|pointer| u64::try_from(pointer).ok())
-                    .ok_or(VMError::InvalidMetadata)?;
-                pointer_starts.push(pointer);
-                entries.push(DecodedLiteral::Pointer(pointer));
-            }
-            LiteralKindV1::I64 => {
-                let value =
-                    u64::from_le_bytes(bytes.try_into().map_err(|_| VMError::InvalidMetadata)?);
-                entries.push(DecodedLiteral::I64(value));
-            }
-        }
-    }
-    Ok(DecodedLiteralTable {
-        entries: entries.into(),
-        pointer_starts: pointer_starts.into(),
-    })
 }
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
     let vl = if raw == 0 { 1 } else { raw };
@@ -854,19 +730,26 @@ impl PreparedProgram {
     fn prepare_ops(
         decoded: &[crate::ivm_cache::DecodedOp],
         instruction_len: usize,
+        budget: Option<&AllocationBudget>,
     ) -> Result<crate::cache_memory::SharedAllocation<PreparedOp>, VMError> {
         let expected_len = decoded.len().saturating_mul(WIDE_INSTRUCTION_LEN as usize);
         if instruction_len != expected_len {
             return Err(VMError::DecodeError);
         }
-        crate::cache_memory::SharedAllocation::try_from_iter(decoded.iter().enumerate().map(
-            |(idx, op)| {
-                if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
-                    return Err(VMError::DecodeError);
-                }
-                PreparedOp::from_decoded(op)
-            },
-        ))
+        let values = decoded.iter().enumerate().map(|(idx, op)| {
+            if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
+                return Err(VMError::DecodeError);
+            }
+            PreparedOp::from_decoded(op)
+        });
+        match budget {
+            Some(budget) => {
+                crate::cache_memory::SharedAllocation::try_from_iter_with_memory_budget(
+                    values, budget,
+                )
+            }
+            None => crate::cache_memory::SharedAllocation::try_from_iter(values),
+        }
     }
 
     fn from_prepared_ops(
@@ -904,6 +787,9 @@ impl PreparedProgram {
     pub(crate) fn try_retain(&self) -> bool {
         self.ops.try_retain()
     }
+    pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.ops.belongs_to(budget)
+    }
 }
 type PreparedProgramCacheKey = [u8; 32];
 struct PreparedProgramCache {
@@ -938,14 +824,14 @@ impl PreparedProgramCache {
             || crate::cache_memory::memory_stats().limit_bytes == 0
         {
             self.clear_storage();
-            return PreparedProgram::prepare_ops(decoded, code.len());
+            return PreparedProgram::prepare_ops(decoded, code.len(), None);
         }
         let key = Self::key_for(code);
         if let Some(hit) = self.map.get(&key).cloned() {
             self.touch(key);
             return Ok(hit);
         }
-        let prepared = PreparedProgram::prepare_ops(decoded, code.len())?;
+        let prepared = PreparedProgram::prepare_ops(decoded, code.len(), None)?;
         // Both instruction caches share one allocation-owned byte budget.
         // Evicted borrowers can keep it full; never wait for their execution.
         while !prepared.try_retain() {
@@ -1093,12 +979,16 @@ pub(crate) fn prepare_instruction_stream(
     decoded: &[crate::ivm_cache::DecodedOp],
     first_pc: u64,
     literals: &[DecodedLiteral],
+    budget: Option<&AllocationBudget>,
 ) -> Result<PreparedProgram, VMError> {
     // A prepared-cache hit is keyed by code bytes, so validate the caller's
     // decoded stream against those bytes before looking up or sharing any ops.
     validate_prepared_instruction_bytes(code, decoded)?;
     validate_indexed_literal_instructions(decoded, literals)?;
-    let prepared_ops = {
+    let prepared_ops = if let Some(budget) = budget {
+        // Original State custody never enters the code-only global cache.
+        PreparedProgram::prepare_ops(decoded, code.len(), Some(budget))?
+    } else {
         let mut guard = prepared_program_cache()
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -1135,6 +1025,7 @@ pub enum TraceMode {
 mod private_cleanup;
 #[cfg(test)]
 mod private_disposal_tests;
+mod program_load;
 mod runtime_template;
 pub use runtime_template::RuntimeTemplate;
 use runtime_template::{RuntimeTemplateBacking, RuntimeTemplateData};
@@ -1417,7 +1308,7 @@ pub struct IVM {
     contract_abort_error: Option<VMError>,
     constraints: zk::ConstraintLog,
     mem_log: MemLog,
-    reg_log: zk::SharedRegLog,
+    reg_log: Option<zk::SharedRegLog>,
     /// Whether a host callback currently owns `&mut IVM` with a detached
     /// register log.
     host_trace_log_detached: bool,
@@ -1447,6 +1338,7 @@ pub struct IVM {
     code_hash: [u8; 32],
     contract_interface:
         Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
+    call_layouts: Option<call_runtime::CallLayouts>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
     predecoded: Option<crate::ivm_cache::DecodedStream>,
@@ -1460,6 +1352,8 @@ pub struct IVM {
     contract_return_stack: ContractReturnStack,
     /// Aligned outer-return sentinel captured from r1 at invocation start.
     contract_outer_return_pc: Option<u64>,
+    /// Bounded optional native producer; only a fresh sealed component run installs it.
+    native_packets: Option<native_packets::Recorder>,
     #[cfg(test)]
     predecoded_misses: u64,
     #[cfg(test)]
@@ -1773,12 +1667,12 @@ impl IVM {
             contract_abort_error: None,
             constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
-            reg_log: Arc::new(parking_lot::Mutex::new(zk::RegLog::default())),
+            reg_log: Some(zk::SharedRegLog::try_new(memory_budget)?),
             host_trace_log_detached: false,
             host_trace_invocation_log: None,
             proof_state_epoch: 0,
             trace_log: DeltaTraceLog::default(),
-            step_log: zk::StepLog::default(),
+            step_log: zk::StepLog::new(memory_budget),
             trace_mode: TraceMode::Off,
             pc_trace: Vec::new(),
             delta_trace: zk::DeltaTraceLog::default(),
@@ -1789,6 +1683,7 @@ impl IVM {
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
             contract_interface: None,
+            call_layouts: None,
             contract_debug: None,
             literal_table: DecodedLiteralTable::empty(),
             predecoded: None,
@@ -1801,6 +1696,7 @@ impl IVM {
                 ContractReturnStack::with_memory_budget,
             ),
             contract_outer_return_pc: None,
+            native_packets: None,
             #[cfg(test)]
             predecoded_misses: 0,
             #[cfg(test)]
@@ -1858,14 +1754,16 @@ impl IVM {
     pub fn set_zk_trace_enabled(&mut self, enabled: bool) {
         self.zk_trace_enabled = enabled;
         let scoped_invocation_log = zk::scoped_reg_logger();
-        let invocation_owns_this_log = scoped_invocation_log
-            .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(active, &self.reg_log));
+        let invocation_owns_this_log = scoped_invocation_log.as_ref().is_some_and(|active| {
+            self.reg_log
+                .as_ref()
+                .is_some_and(|log| zk::SharedRegLog::ptr_eq(active, log))
+        });
         let active_callback_owns_this_log = self.host_trace_log_detached
             && scoped_invocation_log.as_ref().is_some_and(|active| {
                 self.host_trace_invocation_log
                     .as_ref()
-                    .is_some_and(|invocation| Arc::ptr_eq(active, invocation))
+                    .is_some_and(|invocation| zk::SharedRegLog::ptr_eq(active, invocation))
             });
         if !enabled && !invocation_owns_this_log && !active_callback_owns_this_log {
             self.clear_zk_trace_logs();
@@ -1908,6 +1806,7 @@ impl IVM {
         self.program_prefix_len = 0;
         self.contract_debug = None;
         self.contract_interface = None;
+        self.call_layouts = None;
         self.literal_table = DecodedLiteralTable::empty();
         self.last_diagnostic = None;
         self.predecoded = None;
@@ -1930,79 +1829,37 @@ impl IVM {
         self.memory.mark_template_clean();
         Ok(())
     }
+    /// Validate the canonical program and its complete static execution policy.
+    ///
+    /// Uses exactly the same preparation as [`Self::load_program`] without allocating
+    /// mutable VM storage, callable layouts, or a runtime template. Immutable decoder
+    /// and preparation allocations retain their existing independent ownership.
+    ///
+    /// # Errors
+    /// Returns the loader's exact metadata, artifact, instruction, syscall, or local
+    /// preparation error. Allocation refusal is never converted into invalid bytecode.
+    pub fn validate_program(program: &[u8]) -> Result<(), VMError> {
+        program_load::prepare(program, None).map(drop)
+    }
+
     /// Load a program (bytecode) into the VM's code memory.
     pub fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
         #[cfg(test)]
         {
             self.program_parse_attempts = self.program_parse_attempts.saturating_add(1);
         }
-        let parsed = ProgramMetadata::parse(program)?;
-        if parsed.metadata.abi_version != 1 {
-            return Err(VMError::InvalidMetadata);
+        match program_load::prepare(program, self.memory.allocation_budget())? {
+            program_load::PreparedLoadImage::Contract(contract) => self.load_prepared(&contract),
+            program_load::PreparedLoadImage::Generic(image) => self.install_program(image),
         }
-        if parsed.contract_interface.is_some() {
-            let contract = crate::prepare_contract(Arc::<[u8]>::from(program))
-                .map_err(crate::ContractArtifactError::into_vm_error)?;
-            return self.load_prepared(&contract);
-        }
-        let strict_return_integrity = false;
-        let header_len = parsed.header_len;
-        let literal_prefix = parsed.prefix_len();
-        let literal_table = decode_literal_table(
-            program,
-            header_len,
-            parsed.literal_section,
-            SyscallPolicy::AbiV1,
-        )?;
-        let code_region = &program[header_len..];
-        let code_len = u64::try_from(code_region.len()).map_err(|_| VMError::InvalidMetadata)?;
-        if code_len > Memory::HEAP_START {
-            return Err(VMError::InvalidMetadata);
-        }
-        if literal_prefix > code_region.len() {
-            return Err(VMError::InvalidMetadata);
-        }
-        let instruction_region = &code_region[literal_prefix..];
-        let entry_pc = u64::try_from(literal_prefix).map_err(|_| VMError::InvalidMetadata)?;
-        let meta = parsed.metadata;
-        let (predecoded, prepared) = if instruction_region.is_empty() {
-            (None, None)
-        } else {
-            let decoded = crate::ivm_cache::global_get(instruction_region)?;
-            validate_generic_program_syscalls(decoded.as_ref())?;
-            let prepared = prepare_instruction_stream(
-                instruction_region,
-                decoded.as_ref(),
-                entry_pc,
-                literal_table.entries(),
-            )?;
-            (Some(decoded), Some(prepared))
-        };
-        self.install_program(ProgramLoadImage {
-            code_region,
-            metadata: meta,
-            contract_interface: parsed.contract_interface.map(|interface| {
-                let exclusively_owned = interface
-                    .entrypoints
-                    .iter()
-                    .all(|entry| entry.triggers.is_empty());
-                crate::prepared::shared_metadata(interface, exclusively_owned)
-            }),
-            contract_debug: parsed.contract_debug,
-            literal_table,
-            predecoded,
-            prepared,
-            code_hash: crate::metadata::contract_code_hash(program).into(),
-            entry_pc,
-            strict_return_integrity,
-            allow_koto_test_syscalls: false,
-        })
     }
-    /// Load an already validated and prepared contract without reparsing or redecoding it.
+    /// Load an already validated and prepared contract without reparsing it.
     ///
     /// The immutable artifact, metadata, literal index, decoded stream, and
-    /// prepared operations remain shared with `contract`; only the code bytes
-    /// are installed into this VM's memory image.
+    /// prepared operations share their original owner when it is this VM's pool.
+    /// A funded VM copies diagnostic or foreign-pool instruction and literal indexes
+    /// into its own admitted storage before installation. Code bytes are installed into
+    /// this VM's memory image.
     pub fn load_prepared(&mut self, contract: &PreparedContract) -> Result<(), VMError> {
         self.load_prepared_with_koto_test_capability(contract, false)
     }
@@ -2031,14 +1888,41 @@ impl IVM {
         {
             self.prepared_loads = self.prepared_loads.saturating_add(1);
         }
+        let literal_table = match self.memory.allocation_budget() {
+            Some(budget) => contract.literal_table().for_budget(budget)?,
+            None => contract.literal_table().clone(),
+        };
+        let (decoded, prepared) = if let Some(budget) = self.memory.allocation_budget()
+            && (!contract.decoded().belongs_to(budget)
+                || !contract.prepared_program().belongs_to(budget))
+        {
+            // A code-only cache or another State cannot lend this VM execution
+            // credit. Rebuild only instruction arrays from the admitted image.
+            let code = &contract.artifact()[contract.code_offset()..];
+            let decoded =
+                crate::ivm_cache::IvmCache::decode_stream_with_memory_budget(code, budget)?;
+            let prepared = prepare_instruction_stream(
+                code,
+                decoded.as_ref(),
+                contract.instruction_entry_pc(),
+                literal_table.entries(),
+                Some(budget),
+            )?;
+            (decoded, prepared)
+        } else {
+            (
+                contract.decoded().clone(),
+                contract.prepared_program().clone(),
+            )
+        };
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
             contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
-            literal_table: contract.literal_table().clone(),
-            predecoded: Some(contract.decoded().clone()),
-            prepared: Some(contract.prepared_program().clone()),
+            literal_table,
+            predecoded: Some(decoded),
+            prepared: Some(prepared),
             code_hash: contract.code_hash().into(),
             entry_pc: contract.instruction_entry_pc(),
             strict_return_integrity: true,
@@ -2051,8 +1935,18 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
+        // Prepare complete type traversal indexes before changing the loaded image.
+        // Warm invocations retain these original-pool allocations without reanalysis.
+        let call_layouts = image
+            .contract_interface
+            .as_ref()
+            .map(|interface| {
+                call_runtime::CallLayouts::prepare(interface, self.memory.allocation_budget())
+            })
+            .transpose()?;
         self.scrub_private_state()?;
         self.memory.call_frames.clear();
+        self.call_layouts = call_layouts;
         self.metadata = image.metadata.clone();
         self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
@@ -2094,11 +1988,13 @@ impl IVM {
         self.contract_abort_error = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log.lock().scrub();
+        if let Some(log) = &self.reg_log {
+            log.lock().scrub();
+        }
         self.host_trace_log_detached = false;
         self.host_trace_invocation_log = None;
         self.trace_log = DeltaTraceLog::default();
-        self.step_log = zk::StepLog::default();
+        self.step_log.reset();
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
         self.cycles = 0;
@@ -2339,21 +2235,6 @@ impl IVM {
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
         zk::scoped_reg_logger_enabled().unwrap_or(self.zk_mode && self.zk_trace_enabled)
-    }
-    fn clear_zk_trace_logs(&mut self) {
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
-        self.constraints.list.clear();
-        self.mem_log.scrub();
-        self.reg_log.lock().scrub();
-        if let Some(invocation_log) = &self.host_trace_invocation_log
-            && !Arc::ptr_eq(invocation_log, &self.reg_log)
-        {
-            invocation_log.lock().scrub();
-        }
-        self.trace_log.scrub();
-        self.step_log.steps.clear();
-        self.pc_trace.clear();
-        self.delta_trace.scrub();
     }
     #[inline]
     fn zk_match_tags(&self, rs1: usize, rs2: usize) -> Result<Option<bool>, VMError> {
@@ -2980,13 +2861,15 @@ impl IVM {
         self.contract_abort_error = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log.lock().scrub();
+        if let Some(log) = &self.reg_log {
+            log.lock().scrub();
+        }
         self.host_trace_log_detached = false;
         if let Some(invocation_log) = self.host_trace_invocation_log.take() {
             invocation_log.lock().scrub();
         }
         self.trace_log = DeltaTraceLog::default();
-        self.step_log = zk::StepLog::default();
+        self.step_log.reset();
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
         self.contract_return_stack.clear();
@@ -3151,21 +3034,39 @@ impl IVM {
         self.active_cycle_budget = None;
         self.pc_trace = Vec::new();
         self.contract_return_stack.compact_for_cache();
-        self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        let Some(log) = self.reg_log.as_ref() else {
+            return false;
+        };
+        if self
+            .memory
+            .allocation_budget()
+            .is_some_and(|budget| !log.belongs_to(budget))
+        {
+            return false;
+        }
+        if log.lock().capacity() != 0 {
+            let Ok(replacement) = zk::SharedRegLog::try_new(self.memory.allocation_budget()) else {
+                return false;
+            };
+            self.reg_log = Some(replacement);
+        }
         if !self.memory.prepare_for_cache() {
             return false;
         }
-        let Ok(reg_log_bytes) =
-            norito::core::owned_arc_allocation_bytes::<parking_lot::Mutex<zk::RegLog>>()
-        else {
-            return false;
-        };
-        self.cache_reservation.set_known_bytes(reg_log_bytes);
+        self.cache_reservation.set_known_bytes(0);
         self.cache_reservation.try_retain()
+            && self
+                .reg_log
+                .as_mut()
+                .is_some_and(zk::SharedRegLog::try_retain)
             && self.memory.try_retain()
             && self.registers.try_retain()
             && self.private_memory_bytes.try_retain()
             && self.contract_return_stack.try_retain()
+            && self
+                .call_layouts
+                .as_ref()
+                .is_none_or(call_runtime::CallLayouts::try_retain)
             && self
                 .contract_interface
                 .as_ref()
@@ -3188,6 +3089,9 @@ impl IVM {
     /// ownership until reset, so it cannot be mistaken for a complete heap cap.
     pub fn activate_cached_runtime(&mut self) {
         self.cache_reservation.mark_unmeasured();
+        if let Some(log) = &mut self.reg_log {
+            log.activate();
+        }
         self.memory.activate_cache_accounting();
         self.registers.make_active();
         self.private_memory_bytes.make_active();
@@ -3415,27 +3319,21 @@ impl IVM {
             return Err(VMError::HostUnavailable);
         }
         budget.with_deferred_refund_notifications(|_| {
-            let register_log = self.reg_log.lock();
+            let empty = zk::RegLog::new(self.memory.allocation_budget());
+            let register_log = self.reg_log.as_ref().map(zk::SharedRegLog::lock);
+            let register_log = register_log.as_deref().unwrap_or(&empty);
             let source = zk::DiagnosticTraceSource {
                 registers: zk::DiagnosticRegisterSource::Deltas(&self.trace_log.entries),
                 constraints: &self.constraints.list,
                 memory_events: &self.mem_log.events,
-                register_events: &register_log.events,
-                steps: &self.step_log.steps,
+                register_events: register_log.as_slice(),
+                steps: self.step_log.as_slice(),
             };
             let plan = source.allocation_plan()?;
             let mut parent = crate::execution_memory::ExecutionMemoryLease::reserve(budget, plan)
                 .map_err(VMError::AllocationDeferred)?;
             source.try_snapshot_from_parent(&mut parent)
         })
-    }
-    fn proof_register_log_handle(&self) -> zk::SharedRegLog {
-        if self.host_trace_log_detached
-            && let Some(invocation_log) = &self.host_trace_invocation_log
-        {
-            return Arc::clone(invocation_log);
-        }
-        Arc::clone(&self.reg_log)
     }
     fn finish_digest(hasher: Sha256) -> [u8; 32] {
         hasher.finalize().into()
@@ -3594,8 +3492,15 @@ impl IVM {
             .saturating_add(u64::try_from(self.trace_log.entries.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.constraints.list.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.mem_log.events.len()).unwrap_or(u64::MAX))
-            .saturating_add(u64::try_from(register_log.lock().events.len()).unwrap_or(u64::MAX))
-            .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
+            .saturating_add(
+                u64::try_from(
+                    register_log
+                        .as_ref()
+                        .map_or(0, |log| log.lock().as_slice().len()),
+                )
+                .unwrap_or(u64::MAX),
+            )
+            .saturating_add(u64::try_from(self.step_log.as_slice().len()).unwrap_or(u64::MAX))
     }
     /// Build a deterministic, self-reported summary of the current execution state.
     ///
@@ -3603,7 +3508,9 @@ impl IVM {
     /// authenticated attestation of execution.
     pub fn execution_summary(&mut self) -> ExecutionSummary {
         let register_log = self.proof_register_log_handle();
-        let register_log = register_log.lock();
+        let empty = zk::RegLog::new(self.memory.allocation_budget());
+        let register_log = register_log.as_ref().map(zk::SharedRegLog::lock);
+        let register_log = register_log.as_deref().unwrap_or(&empty);
         let output = self.memory.read_output();
         let mut output_hasher = Sha256::new();
         output_hasher.update(b"ivm-summary:output:v1");
@@ -3621,8 +3528,8 @@ impl IVM {
             register_trace_hash: Self::hash_delta_trace(&self.trace_log.entries),
             constraint_hash: Self::hash_constraints(&self.constraints.list),
             memory_log_hash: Self::hash_memory_log(&self.mem_log.events),
-            register_log_hash: Self::hash_register_log(&register_log.events),
-            step_log_hash: Self::hash_step_log(&self.step_log.steps),
+            register_log_hash: Self::hash_register_log(register_log.as_slice()),
+            step_log_hash: Self::hash_step_log(self.step_log.as_slice()),
             cycles: self.cycles,
             max_cycles: self.max_cycles,
             gas_used: self.gas_limit.saturating_sub(gas_remaining),
@@ -3632,8 +3539,8 @@ impl IVM {
             register_trace_len: self.trace_log.entries.len() as u64,
             constraint_len: self.constraints.list.len() as u64,
             memory_log_len: self.mem_log.events.len() as u64,
-            register_log_len: register_log.events.len() as u64,
-            step_log_len: self.step_log.steps.len() as u64,
+            register_log_len: register_log.as_slice().len() as u64,
+            step_log_len: self.step_log.as_slice().len() as u64,
             zk_mode: self.zk_mode,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
@@ -3660,36 +3567,11 @@ impl IVM {
     }
     /// Access per-cycle Merkle roots collected during the last run.
     pub fn step_log(&self) -> &[zk::StepEntry] {
-        &self.step_log.steps
+        self.step_log.as_slice()
     }
     /// Access constraints logged during execution.
     pub fn constraints(&self) -> &[Constraint] {
         &self.constraints.list
-    }
-    #[inline]
-    fn flush_cycle_logs(&mut self, last_logged_cycle: &mut u64) {
-        // Cycle-by-cycle trace logging is only required for ZK proof/telemetry
-        // collection. ZK semantic execution can remain enabled without forcing
-        // consensus validators to snapshot every padded cycle.
-        // Leaving it enabled for non-ZK programs (when `max_cycles` is set)
-        // makes validation orders of magnitude slower due to per-cycle
-        // snapshotting and Merkle proof bookkeeping.
-        if !self.zk_trace_collection_enabled() || self.max_cycles == 0 {
-            return;
-        }
-        while *last_logged_cycle < self.cycles {
-            self.trace_log.record(
-                self.pc,
-                self.registers.snapshot(),
-                self.registers.snapshot_tags(),
-            );
-            self.step_log.record(
-                self.pc,
-                self.registers.merkle_root(),
-                self.memory.current_root(),
-            );
-            *last_logged_cycle += 1;
-        }
     }
     #[inline]
     fn record_runtime_trace(&mut self) {
@@ -3709,6 +3591,9 @@ impl IVM {
     pub(crate) fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
         if unlikely(self.gas_remaining < gas) {
             return Err(VMError::OutOfGas);
+        }
+        if let Some(recorder) = &mut self.native_packets {
+            recorder.gas_debit(self.gas_remaining, gas)?;
         }
         self.gas_remaining -= gas;
         Ok(())
@@ -3804,6 +3689,15 @@ impl IVM {
         host: &mut dyn IVMHost,
         number: u32,
     ) -> Result<(), VMError> {
+        self.execute_syscall_with_register_log(host, number, None)
+    }
+
+    pub(crate) fn execute_syscall_with_register_log(
+        &mut self,
+        host: &mut dyn IVMHost,
+        number: u32,
+        prepared_log: Option<&register_logging::PreparedHostRegisterLog>,
+    ) -> Result<(), VMError> {
         if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
             return Err(VMError::UnknownSyscall(number));
         }
@@ -3816,9 +3710,18 @@ impl IVM {
             }
         }
         let metering = resolve_syscall_metering(host, self.syscall_policy(), number)?;
+        let _register_batch = self.prepare_syscall_register_events(number)?;
+        let admitted_log;
+        let prepared_log = match prepared_log {
+            Some(prepared) => prepared,
+            None => {
+                admitted_log = self.prepare_host_register_log()?;
+                &admitted_log
+            }
+        };
         match metering {
-            SyscallMetering::Reserved => self.execute_reserved_syscall(host, number),
-            SyscallMetering::Staged => self.execute_staged_syscall(host, number),
+            SyscallMetering::Reserved => self.execute_reserved_syscall(host, number, prepared_log),
+            SyscallMetering::Staged => self.execute_staged_syscall(host, number, prepared_log),
         }
     }
     #[inline]
@@ -3826,12 +3729,13 @@ impl IVM {
         &mut self,
         host: &mut dyn IVMHost,
         number: u32,
+        prepared_log: &register_logging::PreparedHostRegisterLog,
     ) -> Result<(), VMError> {
         debug_assert_eq!(self.syscall_gas_reserve, 0);
         debug_assert!(self.staged_syscall.is_none());
         self.validate_syscall_privacy(number)?;
         let saved_outputs = self.sanitize_syscall_output_privacy(number);
-        let prepare_isolation = self.isolate_host_register_log()?;
+        let prepare_isolation = self.isolate_host_register_log(prepared_log)?;
         let prepared = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Host code may create or inspect unrelated VMs on this thread.
             // Mask the invocation logger so those accesses cannot contaminate
@@ -3868,7 +3772,7 @@ impl IVM {
         self.syscall_gas_reserve = quoted;
         let register_values_before = self.registers.snapshot();
         let register_tags_before = self.registers.snapshot_tags();
-        let syscall_isolation = match self.isolate_host_register_log() {
+        let syscall_isolation = match self.isolate_host_register_log(prepared_log) {
             Ok(isolation) => isolation,
             Err(error) => {
                 self.syscall_gas_reserve = 0;
@@ -3931,6 +3835,7 @@ impl IVM {
         &mut self,
         host: &mut dyn IVMHost,
         number: u32,
+        prepared_log: &register_logging::PreparedHostRegisterLog,
     ) -> Result<(), VMError> {
         debug_assert_eq!(self.syscall_gas_reserve, 0);
         if self.staged_syscall.is_some() {
@@ -3953,7 +3858,7 @@ impl IVM {
         self.sanitize_syscall_output_privacy(number);
         let register_values_before = self.registers.snapshot();
         let register_tags_before = self.registers.snapshot_tags();
-        let syscall_isolation = match self.isolate_host_register_log() {
+        let syscall_isolation = match self.isolate_host_register_log(prepared_log) {
             Ok(isolation) => isolation,
             Err(error) => {
                 self.finish_staged_syscall(SyscallCompletion::Trap);
@@ -4018,74 +3923,6 @@ impl IVM {
             }
             self.last_staged_syscall = Some(context);
         }
-    }
-    fn isolate_host_register_log(&mut self) -> Result<Option<HostRegisterLogIsolation>, VMError> {
-        let Some(invocation_log) = zk::event_reg_logger() else {
-            return Ok(None);
-        };
-        if !Arc::ptr_eq(&self.reg_log, &invocation_log) {
-            invocation_log.lock().scrub();
-            self.host_trace_log_detached = false;
-            if let Some(stale_log) = self.host_trace_invocation_log.take() {
-                stale_log.lock().scrub();
-            }
-            self.clear_zk_trace_logs();
-            return Err(VMError::PrivacyViolation);
-        }
-        let detached_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
-        self.reg_log = Arc::clone(&detached_log);
-        self.host_trace_log_detached = true;
-        self.host_trace_invocation_log = Some(Arc::clone(&invocation_log));
-        Ok(Some(HostRegisterLogIsolation {
-            invocation_log,
-            detached_log,
-            proof_state_epoch: self.proof_state_epoch,
-            code_hash: self.code_hash,
-            zk_mode: self.zk_mode,
-        }))
-    }
-    fn restore_host_register_log(
-        &mut self,
-        isolation: Option<HostRegisterLogIsolation>,
-    ) -> Result<bool, VMError> {
-        let Some(isolation) = isolation else {
-            return Ok(false);
-        };
-        if !self.host_trace_log_detached
-            || !Arc::ptr_eq(&self.reg_log, &isolation.detached_log)
-            || !self
-                .host_trace_invocation_log
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, &isolation.invocation_log))
-            || self.proof_state_epoch != isolation.proof_state_epoch
-            || self.code_hash != isolation.code_hash
-            || self.zk_mode != isolation.zk_mode
-        {
-            isolation.invocation_log.lock().scrub();
-            isolation.detached_log.lock().scrub();
-            self.host_trace_log_detached = false;
-            self.clear_zk_trace_logs();
-            self.host_trace_invocation_log = None;
-            return Err(VMError::PrivacyViolation);
-        }
-        isolation.detached_log.lock().scrub();
-        self.host_trace_log_detached = false;
-        self.host_trace_invocation_log = None;
-        self.reg_log = isolation.invocation_log;
-        Ok(true)
-    }
-    fn abort_host_register_log_isolation(&mut self, isolation: Option<HostRegisterLogIsolation>) {
-        // A caught host panic must leave the VM safe for an outer
-        // `catch_unwind` caller to inspect or reuse. Restore ownership when it
-        // is still valid, then scrub every proof-facing artifact before
-        // resuming the original panic.
-        let _host_logger_mask = zk::RegLoggerGuard::mask();
-        let _ = self.restore_host_register_log(isolation);
-        self.host_trace_log_detached = false;
-        if let Some(invocation_log) = self.host_trace_invocation_log.take() {
-            invocation_log.lock().scrub();
-        }
-        self.clear_zk_trace_logs();
     }
     fn record_host_register_changes(&self, values_before: &[u64; 256], tags_before: &[bool; 256]) {
         let values_after = self.registers.snapshot();
@@ -4251,27 +4088,13 @@ impl IVM {
         if let Some(budget) = &cycle_budget {
             budget.ensure_healthy()?;
         }
-        if self.host_trace_log_detached || self.host_trace_invocation_log.is_some() {
-            // A VM moved out of a host callback still borrows both logger
-            // allocations from the active outer invocation. Do not scrub or
-            // adopt those shared allocations here: sever the aliases, clear
-            // this VM's independent proof state, and make the attempted reuse
-            // fail closed. The owning isolation guard scrubs its logs.
-            self.host_trace_log_detached = false;
-            self.host_trace_invocation_log = None;
-            self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
-            self.clear_zk_trace_logs();
-            self.memory.clear_tracking();
-            return Err(VMError::PrivacyViolation);
-        }
-        self.host_trace_log_detached = false;
-        self.reg_log.lock().scrub();
-        self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
-        // Select this invocation's policy from the VM configuration, not from
-        // a possibly active outer VM's thread-local scope. Install the scope
-        // before any register access and retain it through trap diagnostics.
+        // Admit the next logger before changing guest state or clearing the
+        // preceding invocation. Invalid detached custody is severed without allocation.
+        self.prepare_invocation_register_log()?;
+        // Select this invocation's policy from its configuration, never from
+        // an outer VM's thread-local scope.
         let invocation_log = if self.zk_mode && self.zk_trace_enabled {
-            Some(Arc::clone(&self.reg_log))
+            self.reg_log.clone()
         } else {
             None
         };
@@ -4302,6 +4125,7 @@ impl IVM {
             self.delta_trace = zk::DeltaTraceLog::default();
             let mut last_logged_cycle = 0;
             let mut pending_cycles: Option<(u64, VmCycleReservation<'_>)> = None;
+            let mut pending_register_batch = None;
             // Fetch-Decode-Execute loop
             loop {
                 if let Some((before, reservation)) = pending_cycles.take() {
@@ -4317,6 +4141,8 @@ impl IVM {
                             DiagnosticStepOutcome::Completed,
                         )?;
                 }
+                self.native_finish_step();
+                drop(pending_register_batch.take());
                 self.flush_cycle_logs(&mut last_logged_cycle);
                 // Stop the loop if HALT was executed. When a cycle limit is set we
                 // continue executing even after a failed assertion so the trace
@@ -4365,10 +4191,21 @@ impl IVM {
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
                 }
+                self.prepare_cycle_logs(completed_instruction_cycles(wide_op))?;
+                pending_register_batch = Some(self.prepare_instruction_register_events(instr)?);
+                // Host isolation belongs to this instruction's public demand,
+                // before base gas, cycle allowance or native/guest effects.
+                let prepared_host_log = matches!(
+                    wide_op,
+                    instruction::wide::system::SCALL | instruction::wide::system::SYSTEM
+                )
+                .then(|| self.prepare_host_register_log())
+                .transpose()?;
                 if let Some(budget) = &cycle_budget {
                     let reservation = budget.reserve(completed_instruction_cycles(wide_op))?;
                     pending_cycles = Some((self.cycles, reservation));
                 }
+                self.native_preflight_step(instr, cost)?;
                 self.gas_remaining -= cost;
                 // Execute the instruction
                 let opcode = instr & 0x7F;
@@ -4393,7 +4230,11 @@ impl IVM {
                         if !host_allows_syscall_masked(host, self.syscall_policy(), imm8) {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
-                        self.execute_syscall(host, imm8)?;
+                        self.execute_syscall_with_register_log(
+                            host,
+                            imm8,
+                            prepared_host_log.as_ref(),
+                        )?;
                         self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
@@ -4403,7 +4244,11 @@ impl IVM {
                         if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
-                        self.execute_syscall(host, number)?;
+                        self.execute_syscall_with_register_log(
+                            host,
+                            number,
+                            prepared_host_log.as_ref(),
+                        )?;
                         self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
@@ -6376,6 +6221,13 @@ impl IVM {
                 // Append dummy cycles (treated as NOPs) until the target length is
                 // reached. Each padded cycle still costs one unit of gas.
                 let remaining = self.max_cycles - self.cycles;
+                // Preserve the existing OOG outcome when padding cannot be paid.
+                // Otherwise admit its complete root backing before any padding
+                // cycles, shared allowance or gas are consumed.
+                if self.gas_remaining >= remaining {
+                    self.prepare_cycle_logs(remaining)?;
+                }
+                let native_before_padding = (self.gas_remaining, self.cycles);
                 if let Some(budget) = &cycle_budget {
                     // Padding contributes to architectural cycles even when the
                     // existing following gas check rejects the padded execution.
@@ -6388,6 +6240,7 @@ impl IVM {
                 } else {
                     self.gas_remaining -= remaining;
                 }
+                self.native_padding_completed(native_before_padding.0, native_before_padding.1);
                 self.flush_cycle_logs(&mut last_logged_cycle);
             }
             self.commit_memory_after_run_if_needed();
@@ -7447,8 +7300,8 @@ mod tests {
             callables: vec![ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm_abi::call::CallWordV1::Unit],
+                arguments: ivm_abi::call::CallSchemaV1::empty(),
+                results: ivm_abi::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "ivm-runtime-tests".to_owned(),
@@ -7513,18 +7366,18 @@ mod tests {
         // Reject inconsistency both before preparation and after a valid call
         // may have warmed the code-keyed prepared cache.
         assert!(matches!(
-            prepare_instruction_stream(&code, &wrong_word, 0, &[]),
+            prepare_instruction_stream(&code, &wrong_word, 0, &[], None),
             Err(VMError::DecodeError)
         ));
-        assert!(prepare_instruction_stream(&code, &valid, 0, &[]).is_ok());
+        assert!(prepare_instruction_stream(&code, &valid, 0, &[], None).is_ok());
         for decoded in [&wrong_word[..], &wrong_pc[..], &[][..]] {
             assert!(matches!(
-                prepare_instruction_stream(&code, decoded, 0, &[]),
+                prepare_instruction_stream(&code, decoded, 0, &[], None),
                 Err(VMError::DecodeError)
             ));
         }
         assert!(matches!(
-            prepare_instruction_stream(&code[..3], &[], 0, &[]),
+            prepare_instruction_stream(&code[..3], &[], 0, &[], None),
             Err(VMError::DecodeError)
         ));
     }

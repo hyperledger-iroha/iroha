@@ -65,6 +65,22 @@ impl From<iroha_allocation::AllocationRefusal> for ExecutionDeferred {
     }
 }
 
+impl From<iroha_data_model::block::SharedBlockAdmissionError> for ExecutionDeferred {
+    fn from(error: iroha_data_model::block::SharedBlockAdmissionError) -> Self {
+        use iroha_allocation::PrepaidSharedError;
+        use iroha_data_model::block::SharedBlockAdmissionError;
+        match error {
+            SharedBlockAdmissionError::Admission(original) => original.into(),
+            SharedBlockAdmissionError::Allocation(PrepaidSharedError::Allocator { .. }) => {
+                ExecutionDeferral::AllocationUnavailable.into()
+            }
+            SharedBlockAdmissionError::Allocation(PrepaidSharedError::Reservation(_)) => {
+                ExecutionDeferral::ActiveMemoryCapacity.into()
+            }
+        }
+    }
+}
+
 impl core::fmt::Display for ExecutionDeferred {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match &self.allocation {
@@ -325,6 +341,17 @@ impl crate::state::StateTransaction<'_, '_> {
             Some(reason) => self.defer_execution(reason),
             None => deterministic(error),
         }
+    }
+
+    /// Keep analysis allocation refusal local before constructing a diagnostic.
+    pub(crate) fn program_analysis_error_to_validation_fail(
+        &mut self,
+        error: ivm::analysis::ProgramAnalysisError,
+        context: &str,
+    ) -> ValidationFail {
+        self.vm_error_to_validation_fail(error.into_vm_error(), |error| {
+            ValidationFail::InternalError(format!("invalid admitted {context} analysis: {error}"))
+        })
     }
 }
 
@@ -600,7 +627,10 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
         }
-        let budget = iroha_allocation::AllocationBudget::new(8);
+        let budget = iroha_allocation::AllocationBudget::new(
+            8 + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&budget);
         let occupied = budget.try_reserve_bytes(8).expect("initial reservation");
         let refusal = budget.try_reserve_bytes(1).expect_err("pool is occupied");
         let owner = ExecutionDeferred::from(refusal.clone());
@@ -614,7 +644,7 @@ mod tests {
         else {
             panic!("original capacity release evidence must survive");
         };
-        let mut release = release.clone().wait_for_release();
+        let mut release = release.clone().wait_for_release(&mut registration);
         let wakes = Arc::new(Wakes::default());
         let waker = Waker::from(Arc::clone(&wakes));
         let mut context = Context::from_waker(&waker);
@@ -696,6 +726,63 @@ mod tests {
             transaction.execution_deferral(),
             Some(ExecutionDeferral::ActiveMemoryCapacity.into())
         );
+    }
+
+    #[test]
+    fn analysis_refusal_bridge_keeps_original_owner_and_never_accounts_gas() {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+        use ivm::analysis::ProgramAnalysisError;
+
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        for original in [
+            ivm::VMError::AllocationDeferred(refusal),
+            ivm::VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
+        ] {
+            let expected = ExecutionDeferred::from_vm_error(&original);
+            for (context, metadata) in [("generic-program", false), ("generic-trigger", true)] {
+                let mut transaction = block.transaction();
+                let error = if metadata {
+                    ProgramAnalysisError::Metadata(original.clone())
+                } else {
+                    ProgramAnalysisError::Decode(original.clone())
+                };
+                transaction.program_analysis_error_to_validation_fail(error, context);
+                transaction.defer_execution(ExecutionDeferral::ActiveMemoryCapacity);
+                assert_eq!(transaction.execution_deferral(), expected);
+                assert_eq!(transaction.last_tx_gas_used, 0);
+            }
+        }
+        let mut transaction = block.transaction();
+        let malformed = transaction.program_analysis_error_to_validation_fail(
+            ProgramAnalysisError::Decode(ivm::VMError::DecodeError),
+            "generic-program",
+        );
+        assert!(matches!(
+            malformed,
+            iroha_data_model::ValidationFail::InternalError(_)
+        ));
+        assert_eq!(transaction.execution_deferral(), None);
+        assert_eq!(transaction.last_tx_gas_used, 0);
+        drop(occupied);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]

@@ -86,17 +86,20 @@ impl Wake for WakeCount {
 }
 
 pub(crate) fn poll(
-    wait: &mut iroha_allocation::release::ReleaseFuture,
+    wait: &mut iroha_allocation::release::ReleaseFuture<'_>,
     wakes: &Arc<WakeCount>,
 ) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wakes))))
 }
 
-pub(crate) fn capacity_wait(error: AllocationRefusal) -> iroha_allocation::release::ReleaseFuture {
+pub(crate) fn capacity_wait(
+    error: AllocationRefusal,
+    registration: &mut iroha_allocation::release::ReleaseRegistration,
+) -> iroha_allocation::release::ReleaseFuture<'_> {
     let AllocationRefusal::Capacity { release, .. } = error else {
         panic!("expected temporary capacity refusal: {error}");
     };
-    release.wait_for_release()
+    release.wait_for_release(registration)
 }
 
 pub(crate) fn layout(size: usize) -> Layout {

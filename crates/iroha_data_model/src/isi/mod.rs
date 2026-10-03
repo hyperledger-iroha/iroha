@@ -465,6 +465,7 @@ impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
     AdvanceMusubiPinOutboxV1,
+    CheckMusubiPinOutboxV1,
     RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,

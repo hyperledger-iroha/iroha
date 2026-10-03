@@ -12,6 +12,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -21,7 +22,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 class ValidatorStakingNoritoV1FixtureTest {
     private val expectedKinds = setOf(
         "authority_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
-        "committee_transition", "monetary_plan", "rebind_peer",
+        "committee_transition", "monetary_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
     )
 
     @Test
@@ -81,6 +82,35 @@ class ValidatorStakingNoritoV1FixtureTest {
         assertEquals(plan.sourceAsset.definition, plan.destinationAsset.definition)
         assertContentEquals(rows.getValue("monetary_plan"), plan.encode())
 
+        for (kind in listOf("reward_claim_plan", "fee_reward_claim_plan")) {
+            val claim = ValidatorStakingNoritoV1.RewardClaimPlan.decode(rows.getValue(kind))
+            assertNotNull(claim.networkScope)
+            assertEquals(210L, claim.validUntilHeight)
+            assertEquals(200L, claim.expectedState?.throughEpoch)
+            assertEquals(1, claim.records.size)
+            assertEquals(201L, claim.records.single().epoch)
+            assertEquals(32, claim.records.single().recordHash.bytes().size)
+            assertEquals(1, claim.sources.size)
+            assertEquals(BigInteger.valueOf(5), claim.sources.single().expectedAccrued?.mantissa)
+            assertEquals(BigInteger.valueOf(15), claim.sources.single().payout.mantissa)
+            assertContentEquals(plan.destinationAsset.encode(), claim.sources.single().sourceAsset.encode())
+            assertContentEquals(plan.sourceAsset.encode(), claim.sources.single().destinationAsset.encode())
+            assertContentEquals(rows.getValue(kind), claim.encode())
+            if (kind == "reward_claim_plan") {
+                assertNull(claim.feeClaim)
+            } else {
+                val fee = assertNotNull(claim.feeClaim)
+                assertContentEquals(ByteArray(32) { 0x77 }, fee.lifecycleSeal.bytes())
+                assertEquals(plan.sourceAsset.account, fee.beneficiaryId)
+                assertEquals(4L, fee.beneficiaryRevision)
+                assertContentEquals(plan.destinationAsset.encode(), fee.sourceAsset.encode())
+                assertContentEquals(plan.sourceAsset.encode(), fee.destinationAsset.encode())
+                assertEquals(BigInteger.valueOf(7), fee.amount.mantissa)
+                assertEquals(5L, fee.expectedClaimSequence)
+                assertContentEquals(fee.encode(), ValidatorStakingNoritoV1.FeeRewardClaim.decode(fee.encode()).encode())
+            }
+        }
+
         val rebind = ValidatorStakingNoritoV1.RebindPeer.decode(rows.getValue("rebind_peer"))
         assertEquals(0L, rebind.laneId)
         assertContentEquals(rows.getValue("rebind_peer"), rebind.encode())
@@ -96,6 +126,8 @@ class ValidatorStakingNoritoV1FixtureTest {
             "dkg_transcript" to ValidatorStakingNoritoV1.DkgTranscript::decode,
             "committee_transition" to ValidatorStakingNoritoV1.CommitteeTransition::decode,
             "monetary_plan" to ValidatorStakingNoritoV1.MonetaryPlan::decode,
+            "reward_claim_plan" to ValidatorStakingNoritoV1.RewardClaimPlan::decode,
+            "fee_reward_claim_plan" to ValidatorStakingNoritoV1.RewardClaimPlan::decode,
             "rebind_peer" to ValidatorStakingNoritoV1.RebindPeer::decode,
         )
         for ((kind, bytes) in rows) {
@@ -261,6 +293,185 @@ class ValidatorStakingNoritoV1FixtureTest {
         assertFails { ValidatorStakingNoritoV1.DkgSession.decode(replacing(session, 6, uint(34, 16))) }
     }
 
+    @Test
+    fun `reward plans require explicit fee option and bounded ordered records`() {
+        val plan = fields(fixtureRows().getValue("reward_claim_plan"))
+        val records = vectorFields(plan[3])
+        val sources = vectorFields(plan[4])
+        val invalid = listOf(
+            record(plan.dropLast(1)), record(plan + listOf(byteArrayOf(0))),
+            replacing(plan, 5, byteArrayOf(2)), replacing(plan, 5, byteArrayOf(0, 0)),
+            replacing(plan, 1, uint(0, 64)),
+            replacing(plan, 3, vector(List(65) { records[0] })),
+            replacing(plan, 4, vector(List(65) { sources[0] })),
+            replacing(plan, 3, vector(listOf(records[0], records[0]))),
+            replacing(plan, 4, vector(listOf(sources[0], sources[0]))),
+            replacing(plan, 2, option(record(listOf(option(uint(201, 64)))))),
+        )
+        for (bytes in invalid) assertFails { ValidatorStakingNoritoV1.RewardClaimPlan.decode(bytes) }
+        val reference = fields(records[0])
+        assertFails { ValidatorStakingNoritoV1.RewardRecordRef.decode(replacing(reference, 1, ByteArray(31) { 1 })) }
+        assertFails { ValidatorStakingNoritoV1.RewardRecordRef.decode(record(reference.dropLast(1))) }
+        assertFails { ValidatorStakingNoritoV1.RewardClaimState.decode(byteArrayOf()) }
+        assertFails { ValidatorStakingNoritoV1.RewardClaimState.decode(record(listOf(byteArrayOf(0), byteArrayOf(0)))) }
+        assertNull(ValidatorStakingNoritoV1.RewardClaimState.decode(record(listOf(byteArrayOf(0)))).throughEpoch)
+        assertEquals(0L, ValidatorStakingNoritoV1.RewardClaimState.decode(record(listOf(option(uint(0, 64))))).throughEpoch)
+        val high = plan.toMutableList().apply {
+            this[1] = uint(-1L, 64)
+            this[2] = option(record(listOf(option(uint(-2L, 64)))))
+            this[3] = vector(listOf(replacing(reference, 0, uint(-1L, 64))))
+        }
+        val decoded = ValidatorStakingNoritoV1.RewardClaimPlan.decode(record(high))
+        assertEquals(-1L, decoded.validUntilHeight)
+        assertEquals(-1L, decoded.records.single().epoch)
+        assertContentEquals(record(high), decoded.encode())
+    }
+
+    @Test
+    fun `reward plan retains all sixty four sources in their signed order`() {
+        val plan = fields(fixtureRows().getValue("reward_claim_plan")).toMutableList()
+        val reference = fields(vectorFields(plan[3])[0])
+        val source = fields(vectorFields(plan[4])[0])
+        val sourceAsset = fields(source[0])
+        val destinationAsset = fields(source[1])
+        val sources = List(64) { index ->
+            val definition = record(listOf(byteArrayOf(index.toByte())) + List(15) { byteArrayOf(9) })
+            record(source.toMutableList().apply {
+                this[0] = replacing(sourceAsset, 1, definition)
+                this[1] = replacing(destinationAsset, 1, definition)
+            })
+        }
+        plan[2] = byteArrayOf(0)
+        plan[3] = vector(List(64) { replacing(reference, 0, uint(it.toLong(), 64)) })
+        plan[4] = vector(sources)
+        val payload = record(plan)
+        val decoded = ValidatorStakingNoritoV1.RewardClaimPlan.decode(payload)
+        assertNull(decoded.expectedState)
+        assertEquals(64, decoded.records.size)
+        assertEquals(64, decoded.sources.size)
+        sources.zip(decoded.sources).forEach { (bytes, value) -> assertContentEquals(bytes, value.encode()) }
+        assertContentEquals(payload, decoded.encode())
+    }
+
+    @Test
+    fun `reward sources require semantic account definition and scope order`() {
+        val plan = fields(fixtureRows().getValue("reward_claim_plan"))
+        val source = fields(vectorFields(plan[4])[0])
+        val asset = fields(source[0])
+        val destination = fields(source[1])
+        fun claim(owner: ByteArray, scope: ByteArray): ByteArray = record(listOf(
+            record(listOf(owner, asset[1], scope)), replacing(destination, 2, scope), source[2], source[3],
+        ))
+        fun assertOrdered(sources: List<ByteArray>) {
+            val payload = replacing(plan, 4, vector(sources))
+            assertContentEquals(payload, ValidatorStakingNoritoV1.RewardClaimPlan.decode(payload).encode())
+            assertFails {
+                ValidatorStakingNoritoV1.RewardClaimPlan.decode(replacing(plan, 4, vector(sources.reversed())))
+            }
+        }
+        val scopes = listOf(uint(0, 32)) + listOf(255L, 256L, -1L).map {
+            uint(1, 32) + record(listOf(uint(it, 64)))
+        }
+        assertOrdered(scopes.map { claim(asset[0], it) })
+        // Rust compares the u16 threshold numerically; its little-endian frame reverses 255/256.
+        val key = fields(asset[0].copyOfRange(4, asset[0].size))[0]
+        fun multisig(threshold: Long): ByteArray = uint(1, 32) + record(listOf(record(listOf(
+            byteArrayOf(1), uint(threshold, 16), vector(listOf(record(listOf(key, uint(256, 16))))),
+        ))))
+        assertOrdered(listOf(asset[0], multisig(255), multisig(256)).map { claim(it, uint(0, 32)) })
+        val laterDefinition = record(List(16) { byteArrayOf(0xff.toByte()) })
+        val later = record(listOf(replacing(asset, 1, laterDefinition),
+            replacing(destination, 1, laterDefinition), source[2], source[3]))
+        assertOrdered(listOf(record(source), later))
+    }
+
+    @Test
+    fun `reward sources bind assets and retain zero payout dust`() {
+        val plan = fields(fixtureRows().getValue("reward_claim_plan"))
+        val source = fields(vectorFields(plan[4])[0])
+        val destination = fields(source[1])
+        val invalid = listOf(
+            record(source.dropLast(1)), record(source + listOf(byteArrayOf(0))),
+            replacing(source, 2, option(quantity(byteArrayOf(), 0))),
+            replacing(source, 1, replacing(destination, 1, record(List(16) { byteArrayOf(9) }))),
+            replacing(source, 1, replacing(destination, 2, uint(1, 32) + record(listOf(uint(7, 64))))),
+        )
+        for (bytes in invalid) assertFails { ValidatorStakingNoritoV1.RewardClaimSource.decode(bytes) }
+        val dust = ValidatorStakingNoritoV1.RewardClaimSource.decode(replacing(source, 3, quantity(byteArrayOf(), 0)))
+        assertEquals(BigInteger.ZERO, dust.payout.mantissa)
+        assertEquals(BigInteger.valueOf(5), dust.expectedAccrued?.mantissa)
+        assertNull(ValidatorStakingNoritoV1.RewardClaimSource.decode(replacing(source, 2, byteArrayOf(0))).expectedAccrued)
+    }
+
+    @Test
+    fun `fee reward claim rejects changed custody and zero amount`() {
+        val plan = fields(fixtureRows().getValue("fee_reward_claim_plan"))
+        val decoded = ValidatorStakingNoritoV1.RewardClaimPlan.decode(record(plan))
+        val fee = assertNotNull(decoded.feeClaim)
+        val claim = fields(fee.encode())
+        val source = fields(claim[3])
+        val destination = fields(claim[4])
+        val invalid = listOf(
+            record(claim.dropLast(1)), record(claim + listOf(byteArrayOf(0))),
+            replacing(claim, 0, ByteArray(32)),
+            replacing(claim, 0, ByteArray(31) { 0x77 }),
+            replacing(claim, 0, ByteArray(33) { 0x77 }),
+            replacing(claim, 0, record(List(32) { byteArrayOf(0x77) })),
+            replacing(claim, 5, quantity(byteArrayOf(), 0)),
+            replacing(claim, 3, replacing(source, 2, uint(1, 32) + record(listOf(uint(7, 64))))),
+            replacing(claim, 4, replacing(destination, 1, record(List(16) { byteArrayOf(9) }))),
+            replacing(claim, 4, replacing(destination, 2, uint(1, 32) + record(listOf(uint(7, 64))))),
+        )
+        for (bytes in invalid) {
+            assertFails { ValidatorStakingNoritoV1.FeeRewardClaim.decode(bytes) }
+            assertFails { ValidatorStakingNoritoV1.RewardClaimPlan.decode(replacing(plan, 5, option(bytes))) }
+        }
+        val high = claim.toMutableList().apply {
+            this[2] = uint(-1L, 64)
+            this[6] = uint(-1L, 64)
+        }
+        val max = ValidatorStakingNoritoV1.FeeRewardClaim.decode(record(high))
+        assertEquals(-1L, max.beneficiaryRevision)
+        assertEquals(-1L, max.expectedClaimSequence)
+    }
+
+    @Test
+    fun `fee reward claim retains exact self custody payment`() {
+        val plan = fields(fixtureRows().getValue("fee_reward_claim_plan"))
+        val original = ValidatorStakingNoritoV1.RewardClaimPlan.decode(record(plan))
+        val claim = fields(assertNotNull(original.feeClaim).encode())
+        val selfCustody = replacing(claim, 3, claim[4])
+        val payload = replacing(plan, 5, option(selfCustody))
+        val decoded = ValidatorStakingNoritoV1.RewardClaimPlan.decode(payload)
+        val fee = assertNotNull(decoded.feeClaim)
+        assertContentEquals(fee.sourceAsset.encode(), fee.destinationAsset.encode())
+        assertEquals(BigInteger.valueOf(7), fee.amount.mantissa)
+        assertContentEquals(selfCustody, fee.encode())
+        assertContentEquals(payload, decoded.encode())
+    }
+
+    @Test
+    fun `reward plans own original bytes and defensive collections`() {
+        val bytes = fixtureRows().getValue("fee_reward_claim_plan")
+        val original = bytes.copyOf()
+        val decoded = ValidatorStakingNoritoV1.RewardClaimPlan.decode(bytes)
+        bytes.fill(0)
+        decoded.records.single().recordHash.bytes().fill(0)
+        decoded.sources.single().sourceAsset.account.bytes().fill(0)
+        assertNotNull(decoded.feeClaim).lifecycleSeal.bytes().fill(0)
+        val records = decoded.records as MutableList<ValidatorStakingNoritoV1.RewardRecordRef>
+        records[0] = ValidatorStakingNoritoV1.RewardRecordRef.decode(
+            replacing(fields(records[0].encode()), 0, uint(202, 64)))
+        val sources = decoded.sources as MutableList<ValidatorStakingNoritoV1.RewardClaimSource>
+        sources[0] = ValidatorStakingNoritoV1.RewardClaimSource.decode(
+            replacing(fields(sources[0].encode()), 3, quantity(byteArrayOf(), 0)))
+        assertEquals(201L, decoded.records.single().epoch)
+        assertEquals(BigInteger.valueOf(15), decoded.sources.single().payout.mantissa)
+        assertContentEquals(original, decoded.encode())
+    }
+
+    private fun option(value: ByteArray): ByteArray = byteArrayOf(1) + record(listOf(value))
+
     private fun preparationFields(): List<ByteArray> =
         fields(fields(fixtureRows().getValue("committee_transition"))[0])
 
@@ -296,6 +507,61 @@ class ValidatorStakingNoritoV1FixtureTest {
 
     private fun quantity(mantissa: ByteArray, scale: Long): ByteArray =
         record(listOf(uint(mantissa.size.toLong(), 32) + mantissa, uint(scale, 32)))
+
+    @Test
+    fun monetaryPlansRetainFullUnsignedExpiry() {
+        val plan = fields(fixtureRows().getValue("monetary_plan"))
+        for (expiry in listOf(1L, Long.MAX_VALUE, Long.MIN_VALUE, -1L)) {
+            val payload = replacing(plan, 1, uint(expiry, 64))
+            val decoded = ValidatorStakingNoritoV1.MonetaryPlan.decode(payload)
+            assertEquals(expiry, decoded.validUntilHeight)
+            assertContentEquals(payload, decoded.encode())
+        }
+        assertFails { ValidatorStakingNoritoV1.MonetaryPlan.decode(replacing(plan, 1, uint(0, 64))) }
+    }
+
+    @Test
+    fun decodedAuthorityAndDkgCollectionsRetainOriginalValues() {
+        val rows = fixtureRows()
+        val authority = ValidatorStakingNoritoV1.AuthorityGeneration.decode(rows.getValue("authority_generation"))
+        (authority.validators as MutableList<*>).clear()
+        assertEquals(4, authority.validators.size)
+        assertContentEquals(rows.getValue("authority_generation"), authority.encode())
+
+        val transcript = ValidatorStakingNoritoV1.DkgTranscript.decode(rows.getValue("dkg_transcript"))
+        val dealer = transcript.dealerCommitments.first()
+        val dealerBytes = dealer.encode()
+        val coefficients = dealer.coefficientCommitments.size
+        assertEquals(2, coefficients)
+        (dealer.coefficientCommitments as MutableList<*>).clear()
+        assertEquals(coefficients, dealer.coefficientCommitments.size)
+        assertContentEquals(dealerBytes, dealer.encode())
+        (transcript.dealerCommitments as MutableList<*>).clear()
+        (transcript.recipientKeys as MutableList<*>).clear()
+        (transcript.encryptedShares as MutableList<*>).clear()
+        (transcript.shareAcceptances as MutableList<*>).clear()
+        (transcript.qualifiedDealers as MutableList<*>).clear()
+        assertEquals(4, transcript.dealerCommitments.size)
+        assertEquals(4, transcript.recipientKeys.size)
+        assertEquals(16, transcript.encryptedShares.size)
+        assertEquals(16, transcript.shareAcceptances.size)
+        assertEquals(4, transcript.qualifiedDealers.size)
+        assertContentEquals(rows.getValue("dkg_transcript"), transcript.encode())
+    }
+
+    @Test
+    fun transitionReadinessRetainsItsDecodedRecords() {
+        val transition = fields(fixtureRows().getValue("committee_transition"))
+        // These opaque proof fields exercise collection ownership only; decoding
+        // does not authenticate possession or authorize a committee transition.
+        val readiness = record(listOf(uint(0, 32), byteArrayOf(1), byteArrayOf(2)))
+        val payload = replacing(transition, 2, vector(listOf(readiness, readiness)))
+        val decoded = ValidatorStakingNoritoV1.CommitteeTransition.decode(payload)
+        (decoded.readiness as MutableList<*>).clear()
+        assertEquals(2, decoded.readiness.size)
+        assertContentEquals(readiness, decoded.readiness.first().encode())
+        assertContentEquals(payload, decoded.encode())
+    }
 
     private fun fixtureRows(): Map<String, ByteArray> {
         val rows = linkedMapOf<String, ByteArray>()

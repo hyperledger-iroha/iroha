@@ -7,17 +7,73 @@
 
 use super::{Error, StateView};
 use crate::sumeragi::certified_chain::{CertifiedBlock, CertifiedChain};
+use iroha_data_model::{
+    query::error::QueryExecutionFail, sumeragi::finality::NativeFinalityLimits,
+};
+use std::{cell::RefCell, num::NonZeroUsize};
 
-/// One existing certified reader tied to the exact immutable view used for native proof rows.
+const LIMITS: NativeFinalityLimits = NativeFinalityLimits {
+    block_bytes: iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_BYTES,
+    journal_bytes: 64 * 1024 * 1024,
+    block_count: 2 * super::MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1 as usize + 3,
+    allocated_bytes: 256 * 1024 * 1024,
+};
+
+/// Retain one finite cumulative decoder owner around the complete purpose operation.
+/// Nested callers retain every narrower original allowance; no frame replenishes it.
+pub(crate) fn with_native_check_read_limits<T>(consume: impl FnOnce() -> T) -> T {
+    norito::core::with_decode_limits_scope(
+        LIMITS
+            .decode_limits()
+            .expect("fixed native Check limits are valid"),
+        consume,
+    )
+}
+
+struct SourceAllowance {
+    frames: u64,
+    bytes: u64,
+    failed: bool,
+}
+impl SourceAllowance {
+    fn admit(&mut self, frames: u64, bytes: u64) -> Result<(), QueryExecutionFail> {
+        let remaining = self
+            .frames
+            .checked_sub(frames)
+            .zip(self.bytes.checked_sub(bytes));
+        if self.failed || bytes > LIMITS.block_bytes as u64 || remaining.is_none() {
+            self.failed = true;
+            return Err(QueryExecutionFail::GasBudgetExceeded);
+        }
+        (self.frames, self.bytes) = remaining.unwrap();
+        Ok(())
+    }
+}
+
+/// One native reader tied to the exact immutable view used for proof rows.
+/// Purpose owners retain [`with_native_check_read_limits`] around construction, every
+/// iterator step and their complete proof relations. Source allowances belong to this reader
+/// and cannot be refreshed by starting another interval on it.
 pub(crate) struct SignerCertifiedWalkV1<'view, 'state> {
     view: &'view StateView<'state>,
     chain: CertifiedChain<'view, StateView<'state>>,
+    allowance: RefCell<SourceAllowance>,
 }
 impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
     pub(crate) fn new(view: &'view StateView<'state>) -> Result<Self, Error> {
+        let mut allowance = SourceAllowance {
+            frames: LIMITS.block_count as u64,
+            bytes: LIMITS.journal_bytes as u64,
+            failed: false,
+        };
+        let chain = CertifiedChain::new_with_source_admission(view, |frames, bytes| {
+            allowance.admit(frames, bytes)
+        })
+        .map_err(|_| Error::Finality)?;
         Ok(Self {
             view,
-            chain: CertifiedChain::new(view).map_err(|_| Error::Finality)?,
+            chain,
+            allowance: RefCell::new(allowance),
         })
     }
 
@@ -27,13 +83,39 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
         start: u64,
         end: u64,
     ) -> impl Iterator<Item = Result<SignerCertifiedBlockV1<'view, 'state>, Error>> + '_ {
-        self.chain.walk(start, end).map(|block| {
-            block
+        let interval = super::check_history_span_v1(start, end).and_then(|()| {
+            usize::try_from(start)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .zip(usize::try_from(end).ok().and_then(NonZeroUsize::new))
+                .ok_or(Error::Finality)
+        });
+        let mut failed = false;
+        let mut invalid = interval.is_err();
+        let mut walk = interval.ok().map(|(start, end)| {
+            self.chain.walk_from_execution(start, end, |frames, bytes| {
+                self.allowance.borrow_mut().admit(frames, bytes)
+            })
+        });
+        std::iter::from_fn(move || {
+            if failed {
+                return None;
+            }
+            if invalid {
+                invalid = false;
+                failed = true;
+                return Some(Err(Error::Finality));
+            }
+            let result = walk
+                .as_mut()?
+                .next()?
                 .map_err(|_| Error::Finality)
                 .map(|block| SignerCertifiedBlockV1 {
                     view: self.view,
                     block,
-                })
+                });
+            failed = result.is_err();
+            Some(result)
         })
     }
 }

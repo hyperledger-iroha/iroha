@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::internals::bptree::node::allocation_tests::{
-    all_refunded, prepaid, record, without_allocations, Charge, Prepaid as Records,
+    Charge, Prepaid as Records, all_refunded, prepaid, record, without_allocations,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -336,7 +336,7 @@ fn owned_floor_excludes_stale_successor_chain_and_does_not_authorize_reacquisiti
 
 #[test]
 fn owned_floor_rejects_a_caught_copy_panic_without_new_authority() {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     let (records, map) = fixture();
     let mut seed = owned(&map, &records);
     seed.try_insert_admitted(1, 11, |d| admit(&records, d))

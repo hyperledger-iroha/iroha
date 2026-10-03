@@ -3,9 +3,7 @@
 use super::{detached_publication::DetachedTransactionsPublicationSlot, *};
 use mv::PublicationPreparationError;
 use std::{
-    future::Future as _,
     panic::{AssertUnwindSafe, catch_unwind},
-    pin::Pin,
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Wake, Waker},
 };
@@ -87,20 +85,31 @@ fn probe(targets: &[Arc<TransactionsStorage>; 2]) -> Arc<Probe> {
 fn register(
     target: &TransactionsStorage,
     probe: &Arc<Probe>,
-) -> iroha_allocation::release::ReleaseFuture {
-    let mut wait = target.released.observe().wait_for_release();
+    mut registration: iroha_allocation::release::ReleaseRegistration,
+) -> (
+    iroha_allocation::release::ReleaseWait,
+    iroha_allocation::release::ReleaseRegistration,
+) {
+    let wait = target.released.observe();
     let waker = Waker::from(Arc::clone(probe));
     assert!(
-        Pin::new(&mut wait)
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&wait, &mut Context::from_waker(&waker))
             .is_pending()
     );
-    wait
+    (wait, registration)
 }
-fn assert_ready(wait: &mut iroha_allocation::release::ReleaseFuture, probe: &Probe) {
+fn assert_ready(
+    pending: &mut (
+        iroha_allocation::release::ReleaseWait,
+        iroha_allocation::release::ReleaseRegistration,
+    ),
+    probe: &Probe,
+) {
     assert!(
-        Pin::new(wait)
-            .poll(&mut Context::from_waker(Waker::noop()))
+        pending
+            .1
+            .poll_wait(&pending.0, &mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
     assert_eq!(probe.busy.load(Ordering::SeqCst), 0);
@@ -117,11 +126,15 @@ fn detached_membership_slots_retain_actual_preflight_on_refusal_and_caught_panic
     for replace in [false, true] {
         for panics in [false, true] {
             let targets = targets();
+            let release_registration_0 =
+                crate::unit_test_support::release_registration(&targets[0].budget);
+            let release_registration_1 =
+                crate::unit_test_support::release_registration(&targets[1].budget);
             let mut pair = pair(&targets, replace);
             let first_probe = probe(&targets);
             let second_probe = probe(&targets);
-            let mut first_wait = register(&targets[0], &first_probe);
-            let mut second_wait = register(&targets[1], &second_probe);
+            let mut first_wait = register(&targets[0], &first_probe, release_registration_0);
+            let mut second_wait = register(&targets[1], &second_probe, release_registration_1);
             pair.first
                 .try_prepare(|_, _| Ok::<_, ()>(Installation(Arc::clone(&first_probe))))
                 .unwrap();
@@ -170,14 +183,16 @@ fn detached_membership_slots_retain_actual_preflight_on_refusal_and_caught_panic
 #[test]
 fn detached_membership_slots_outer_unwind_releases_all_original_writers_before_cleanup() {
     let targets = targets();
+    let release_registration_0 = crate::unit_test_support::release_registration(&targets[0].budget);
+    let release_registration_1 = crate::unit_test_support::release_registration(&targets[1].budget);
     let first_probe = probe(&targets);
     let second_probe = probe(&targets);
     let mut waits = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut pair = pair(&targets, false);
         waits = Some((
-            register(&targets[0], &first_probe),
-            register(&targets[1], &second_probe),
+            register(&targets[0], &first_probe, release_registration_0),
+            register(&targets[1], &second_probe, release_registration_1),
         ));
         pair.first
             .try_prepare(|_, _| Ok::<_, ()>(Installation(Arc::clone(&first_probe))))
@@ -253,6 +268,7 @@ fn detached_membership_slots_recover_exact_original_action_and_identity() {
 #[test]
 fn detached_membership_slots_late_changed_retains_actual_acquisition_and_installation() {
     let targets = targets();
+    let release_registration_0 = crate::unit_test_support::release_registration(&targets[1].budget);
     let mut pair = pair(&targets, false);
     let first_probe = probe(&targets);
     let second_probe = probe(&targets);
@@ -268,7 +284,7 @@ fn detached_membership_slots_late_changed_retains_actual_acquisition_and_install
             replacement.insert_block(HashSet::from([key(11)]), NonZeroUsize::new(1).unwrap());
             competitor_retirement = Some(replacement.prepare_commit().unwrap().publish());
             // This observes the next actual acquisition, after the unrelated commit.
-            second_wait = Some(register(target, &second_probe));
+            second_wait = Some(register(target, &second_probe, release_registration_0));
             Ok::<_, ()>(Installation(Arc::clone(&second_probe)))
         })
         .unwrap_err();
@@ -292,6 +308,8 @@ fn detached_membership_slots_late_changed_retains_actual_acquisition_and_install
 fn detached_membership_slots_busy_has_no_fabricated_release_and_late_busy_keeps_admission() {
     for late in [false, true] {
         let targets = targets();
+        let release_registration_0 =
+            crate::unit_test_support::release_registration(&targets[1].budget);
         let mut pair = pair(&targets, false);
         let first_probe = probe(&targets);
         let second_probe = probe(&targets);
@@ -299,7 +317,7 @@ fn detached_membership_slots_busy_has_no_fabricated_release_and_late_busy_keeps_
             .try_prepare(|_, _| Ok::<_, ()>(Installation(Arc::clone(&first_probe))))
             .unwrap();
         let mut competitor = if late { None } else { Some(targets[1].block()) };
-        let mut wait = register(&targets[1], &second_probe);
+        let mut wait = register(&targets[1], &second_probe, release_registration_0);
         let error = pair
             .second
             .try_prepare(|_, _| {
@@ -353,10 +371,12 @@ fn detached_membership_slots_terminal_release_revokes_original_and_prepared_auth
 fn detached_membership_slots_completed_abort_and_publish_retain_preflight_with_retirement() {
     for publish in [false, true] {
         let targets = targets();
+        let release_registration_0 =
+            crate::unit_test_support::release_registration(&targets[0].budget);
         let journal = stage(&targets[0], false, 7);
         let probe = probe(&targets);
         let mut slot = journal.publication_slot(&targets[0]);
-        let mut wait = register(&targets[0], &probe);
+        let mut wait = register(&targets[0], &probe, release_registration_0);
         slot.try_prepare(|_, _| Ok::<_, ()>(Installation(Arc::clone(&probe))))
             .unwrap();
         let prepared = slot.into_prepared();

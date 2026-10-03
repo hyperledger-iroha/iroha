@@ -53,6 +53,24 @@ fn sample_signed_transaction() -> SignedTransaction {
     .with_instructions([Log::new(Level::INFO, "exact slice".into())])
     .sign(&private_key)
 }
+
+#[test]
+fn fallible_external_hash_is_exact_original_intent_under_inherited_scope() {
+    let signed = sample_signed_transaction();
+    let expected = signed.hash_as_entrypoint();
+    assert_eq!(Hash::from(signed.hash()), Hash::from(expected));
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let actual =
+        norito::with_decode_limits_scope(limits, || signed.try_hash_as_entrypoint()).unwrap();
+    assert_eq!(actual, expected);
+    let prehash = HashOf::try_new(signed.payload()).unwrap();
+    let signatory = signed.authority().try_signatory().unwrap();
+    assert!(
+        iroha_crypto::verify_signature_borrowed(&signed.signature().0, signatory, prehash.as_ref())
+            .is_ok()
+    );
+    signed.verify_signature().unwrap();
+}
 fn split_default_norito_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
     let flags = norito::core::default_encode_flags();
     let mut offset = 0usize;

@@ -193,6 +193,27 @@ fn retired_ivm_binding_names_cannot_select_any_generic_relation() {
     }
 }
 
+#[test]
+fn reserved_ivm_components_cannot_select_a_generic_relation() {
+    let backend = ZK_BACKEND_STARK_FRI_V1;
+    let control = format!("{backend}:tenant:my-ivm-execution-v1/binding");
+    assert_eq!(
+        compiled_relation(backend, &control),
+        Some(ProofRelation::PublicInputBinding)
+    );
+    for relation in crate::ivm_proof_identity::RESERVED_RELATIONS {
+        let circuit = format!("{backend}:{relation}");
+        assert_eq!(compiled_relation(backend, &circuit), None, "{circuit}");
+        let proof = ProofBox::new(backend.to_owned(), envelope(BackendTag::Stark, &circuit));
+        let key = VerifyingKeyBox::new(backend.to_owned(), Vec::new());
+        assert_eq!(
+            verify_for_relation(ProofRelation::PublicInputBinding, &proof, &key, policy()),
+            Err(ProofVerificationError::UnsupportedRelation),
+            "identity rejection must precede key/proof validity: {circuit}"
+        );
+    }
+}
+
 #[cfg(feature = "zk-stark")]
 #[test]
 fn native_public_binding_verifies_only_its_relation_and_rejects_tampering() {

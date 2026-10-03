@@ -405,7 +405,11 @@ impl DataspaceChain {
             let stored = validator
                 .state
                 .kura()
-                .get_block(height.try_into().unwrap())
+                .get_block(
+                    height.try_into().unwrap(),
+                    &validator.state.ivm_execution_budget(),
+                )
+                .expect("original block read attempt")
                 .unwrap();
             assert_eq!(stored.network_entrypoint_count(), 1);
             assert!(
@@ -506,8 +510,13 @@ fn independent_dataspace_roots_pay_and_restart_without_sharing_state_or_storage(
     shutdown(a);
     let (_, b_fee) = second.submit(&b, "B advances while A is stopped");
     second.balances(&b, b_fee);
+    let inspection_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let stored = |disks: &[Disk], height: usize| {
-        disks[0].kura.get_block(height.try_into().unwrap()).unwrap()
+        disks[0]
+            .kura
+            .get_block(height.try_into().unwrap(), &inspection_budget)
+            .expect("original block read attempt")
+            .unwrap()
     };
     let mut prefix = super::super::super::certified_chain::CertifiedPrefix::new(
         &first.chain.chain_id,
@@ -625,7 +634,11 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
     // already refused the original carrier. Native execution still authenticates it.
     let selected = [foreign];
     assert_eq!(selected[0].hash_as_entrypoint(), foreign_hash);
-    let parent = state.view().latest_block().unwrap();
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("completed original State parent read")
+        .unwrap();
     let proposal = payload::assemble(
         &state,
         Assembly {

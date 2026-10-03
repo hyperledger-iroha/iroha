@@ -229,4 +229,63 @@ fn shared_check_replay_span_rejects_overlong_history_before_finality_io() {
         Err(Error::Finality)
     );
     assert_eq!(check_history_span_v1(1, u64::MAX), Err(Error::Finality));
+    assert_eq!(
+        check_history_span_v1(u64::MAX - 1, u64::MAX),
+        Ok(()),
+        "only relative work, never absolute height, is bounded"
+    );
+}
+
+#[test]
+fn canonical_check_frames_preserve_wire_and_charge_one_original_allocation_scope() {
+    let value = vec![7_u8; 64];
+    let canonical = norito::encode_canonical(&value).unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, canonical.len(), 32);
+    norito::core::with_decode_limits_scope(limits, || {
+        assert_eq!(bounded_frame(&value).unwrap(), canonical);
+        assert_eq!(
+            bounded_frame(&value),
+            Err(Error::Transaction),
+            "second retained frame cannot renew the original allowance"
+        );
+    });
+    norito::core::with_decode_limits_scope(limits, || {
+        assert_eq!(
+            bounded_frame(&vec![0_u8; FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1]),
+            Err(Error::Transaction)
+        );
+        assert_eq!(
+            bounded_frame(&value).unwrap(),
+            canonical,
+            "oversized input refuses before charging its nonexistent owned frame"
+        );
+    });
+}
+
+#[test]
+fn refused_signed_binding_spends_round_without_an_unbounded_clone_or_retry() {
+    let state = state();
+    let mut round = NativeCheckRoundV1::start(Duration::from_secs(60)).unwrap();
+    let instruction = instruction(&mut round, &state);
+    let signed = sign(&state, instruction.clone().into(), 2, 3_000);
+    let chain_id = state.view().chain_id().to_string();
+    let authority = AccountId::new(key(2).public_key().clone());
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    assert_eq!(
+        norito::core::with_decode_limits_scope(limits, || bind_signed_check_v1(
+            &mut round,
+            NativeCustodyCheckRefV1::FinalPromotionAccount(&instruction),
+            &chain_id,
+            *state.network_id_ref().as_bytes(),
+            &authority,
+            floor(),
+            signed,
+        ))
+        .err(),
+        Some(Error::Transaction)
+    );
+    assert_eq!(
+        bind(&mut round, &state, &instruction).err(),
+        Some(Error::Invalid)
+    );
 }

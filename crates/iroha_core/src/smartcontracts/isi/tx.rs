@@ -8,7 +8,7 @@ use eyre::Result;
 use iroha_crypto::{HashOf, MerkleTree};
 use iroha_data_model::{
     AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::BlockHeader,
     kaigi::KaigiId,
     query::{
         CommittedTransaction, CommittedTxFilters, dsl::CompoundPredicate,
@@ -457,12 +457,12 @@ pub(crate) fn canonical_network_projection_calls_for_test() -> usize {
 /// Validated source/output structure and one input proof tree for a single carrier.
 /// Finality and physical byte admission belong to the caller's canonical reader.
 struct NetworkCarrierProjection {
-    block: std::sync::Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     inputs: MerkleTree<TransactionEntrypoint>,
     count: u32,
 }
 impl NetworkCarrierProjection {
-    fn new(block: std::sync::Arc<SignedBlock>) -> Result<Self, QueryExecutionFail> {
+    fn new(block: iroha_data_model::block::SharedSignedBlock) -> Result<Self, QueryExecutionFail> {
         #[cfg(test)]
         CANONICAL_NETWORK_PROJECTION_CALLS.set(CANONICAL_NETWORK_PROJECTION_CALLS.get() + 1);
         if block
@@ -556,13 +556,13 @@ impl NetworkCarrierProjection {
 /// Limits bound wire I/O and source/output validation, not the complete decoder heap.
 #[derive(Debug)]
 pub struct FinalizedExecutionCarrier {
-    block: std::sync::Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     wire_bytes: u64,
     work_items: u64,
 }
 impl FinalizedExecutionCarrier {
     /// Borrow the exact authenticated complete carrier.
-    pub fn block(&self) -> &std::sync::Arc<SignedBlock> {
+    pub fn block(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.block
     }
     /// Aggregate native source bytes charged before body I/O, including genesis and H2.
@@ -588,7 +588,7 @@ impl FinalizedExecutionCarrier {
         if max_row_bytes == 0 {
             return Err(QueryExecutionFail::GasBudgetExceeded);
         }
-        let projection = NetworkCarrierProjection::new(std::sync::Arc::clone(&self.block))?;
+        let projection = NetworkCarrierProjection::new(self.block.clone())?;
         projection.transaction_at(input_index, |bytes| {
             if bytes > max_row_bytes {
                 return Err(QueryExecutionFail::GasBudgetExceeded);
@@ -597,7 +597,7 @@ impl FinalizedExecutionCarrier {
         })
     }
     /// Consume the read result and retain its immutable authenticated body.
-    pub fn into_block(self) -> std::sync::Arc<SignedBlock> {
+    pub fn into_block(self) -> iroha_data_model::block::SharedSignedBlock {
         self.block
     }
 }
@@ -620,19 +620,24 @@ pub(crate) fn read_finalized_execution_carrier(
     expected_hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
-) -> Result<FinalizedExecutionCarrier, QueryExecutionFail> {
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    FinalizedExecutionCarrier,
+    crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+> {
     use crate::sumeragi::certified_chain::{
         NativeExecutionReadError, NativeExecutionReadLimits, read_authenticated_execution,
     };
     if max_work == 0 || max_bytes == 0 {
-        return Err(QueryExecutionFail::GasBudgetExceeded);
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
     }
     let height_u64 =
         u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
     if hashes.hash_at(height.get() - 1).copied() != Some(expected_hash) {
         return Err(canonical_transaction_history_error(
             "requested execution is outside its original State hash cut",
-        ));
+        )
+        .into());
     }
     // Admit the exact target before the prefix's first body read. Occupied metadata is
     // untrusted until the actual native certificates authenticate all these same frames.
@@ -642,7 +647,7 @@ pub(crate) fn read_finalized_execution_carrier(
         .ok_or_else(|| canonical_transaction_history_error("native carrier is unavailable"))?;
     let target_wire_bytes = target.wire_len();
     if target_wire_bytes > max_bytes {
-        return Err(QueryExecutionFail::GasBudgetExceeded);
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
     }
     let verified = read_authenticated_execution(
         kura,
@@ -656,12 +661,22 @@ pub(crate) fn read_finalized_execution_carrier(
             max_source_wire_bytes: max_bytes,
             max_frame_wire_bytes: max_bytes,
         },
+        budget,
     )
     .map_err(|error| match error {
-        NativeExecutionReadError::Capacity { .. } => QueryExecutionFail::GasBudgetExceeded,
-        error => canonical_transaction_history_error(error),
+        NativeExecutionReadError::Capacity { .. } => {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(
+                QueryExecutionFail::GasBudgetExceeded,
+            )
+        }
+        NativeExecutionReadError::Deferred(reason) => {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+        }
+        error => crate::execution_attempt::ExecutionAttemptError::Rejected(
+            canonical_transaction_history_error(error),
+        ),
     })?;
-    let block = std::sync::Arc::clone(verified.authority.block());
+    let block = verified.authority.block().clone();
     let work = u64::try_from(
         block
             .network_entrypoint_count()
@@ -673,7 +688,7 @@ pub(crate) fn read_finalized_execution_carrier(
         .checked_add(verified.source_blocks)
         .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
     if work > max_work {
-        return Err(QueryExecutionFail::GasBudgetExceeded);
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
     }
     if block
         .execution_context()
@@ -681,7 +696,8 @@ pub(crate) fn read_finalized_execution_carrier(
     {
         return Err(canonical_transaction_history_error(
             "retired merge carrier is not a Network source",
-        ));
+        )
+        .into());
     }
     block
         .validate_output_merkle_cache()
@@ -706,12 +722,13 @@ pub fn visit_finalized_network_transactions(
     max_work: u64,
     max_bytes: u64,
     mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
-) -> Result<BlockHeader, QueryExecutionFail> {
+) -> Result<BlockHeader, crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>> {
     let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
     if carrier.block().hash() != expected_hash {
         return Err(canonical_transaction_history_error(
             "native carrier differs from the caller's exact committed binding",
-        ));
+        )
+        .into());
     }
     let block = carrier.block();
     for index in 0..block.network_entrypoint_count() {
@@ -731,9 +748,11 @@ pub fn visit_finalized_network_transactions(
 
 #[cfg(test)]
 fn block_committed_transactions(
-    block: &SignedBlock,
+    block: &iroha_data_model::block::SignedBlock,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    let projection = NetworkCarrierProjection::new(std::sync::Arc::new(block.clone()))?;
+    let projection = NetworkCarrierProjection::new(
+        crate::block::reserve_block_for_tests().initialize(block.clone()),
+    )?;
     (0..projection.count)
         .rev()
         .map(|index| projection.transaction_at(index, |_| Ok(())))
@@ -1213,7 +1232,7 @@ pub(crate) fn visit_committed_transactions(
                 {
                     return Ok(ControlFlow::Continue(()));
                 }
-                let block = std::sync::Arc::clone(receipt.block());
+                let block = receipt.block().clone();
                 let work = block
                     .network_entrypoint_count()
                     .max(block.execution_outputs().len())
@@ -1575,7 +1594,7 @@ pub(crate) mod tests {
     fn canonical_network_exact_projection_returns_only_requested_source() {
         let block = canonical_query_carrier(&empty_query_block(None), 2, true, 0);
         let full = block_committed_transactions(&block).unwrap();
-        let projection = NetworkCarrierProjection::new(Arc::clone(&block)).unwrap();
+        let projection = NetworkCarrierProjection::new(block.clone()).unwrap();
         let exact = projection.transaction_at(0, |_| Ok(())).unwrap();
         assert_eq!(exact, full[1]);
         assert_eq!(exact.entrypoint_proof.leaf_index(), 0);
@@ -1650,7 +1669,7 @@ pub(crate) mod tests {
         epoch: u64,
         result_ok: bool,
         metadata_bytes: usize,
-    ) -> Arc<SignedBlock> {
+    ) -> iroha_data_model::block::SharedSignedBlock {
         let network = crate::kura::tests::canonical_query_network_id();
         let height = previous.header().height().get() + 1;
         let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
@@ -1700,7 +1719,7 @@ pub(crate) mod tests {
             })
             .collect();
         install_query_outputs(&mut block, outputs);
-        Arc::new(block)
+        crate::block::reserve_block_for_tests().initialize(block)
     }
     /// Physical finality-backed Network history shared by pagination/index regressions.
     pub(crate) struct CanonicalQueryFixture {
@@ -1828,7 +1847,7 @@ pub(crate) mod tests {
         let store = crate::kura::tests::CanonicalQueryStore::from_chain(
             native_query_chain_with_query_gas(16, 0, units),
         );
-        let target = Arc::clone(&store.blocks[9]);
+        let target = store.blocks[9].clone();
         let input = target.network_entrypoint_at(0).unwrap();
         let target_entrypoint_hash = input.hash();
         let target_authority = input.authority_opt().unwrap().clone();
@@ -2090,7 +2109,9 @@ pub(crate) mod tests {
                 chain
                     .state()
                     .read_finalized_execution_carrier(height, work, limit),
-                Err(QueryExecutionFail::GasBudgetExceeded)
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    QueryExecutionFail::GasBudgetExceeded
+                ))
             ));
             assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
         }
@@ -2104,7 +2125,9 @@ pub(crate) mod tests {
                 bytes,
                 |_, _| visits += 1
             ),
-            Err(QueryExecutionFail::GasBudgetExceeded)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                QueryExecutionFail::GasBudgetExceeded
+            ))
         ));
         assert_eq!(visits, 0);
         kura.reset_canonical_query_reads_for_test();
@@ -2368,9 +2391,11 @@ pub(crate) mod tests {
         let decoded = iroha_data_model::block::decode_framed_signed_block(&wire)
             .expect("changed output is internally canonical, unlike a checksum corruption");
         let expected_height = fixture.target_height.get() as u64;
-        let frame_error =
-            crate::sumeragi::certified_chain::read_frame(Arc::new(decoded), expected_height)
-                .expect_err("original execution certificate cannot commit the changed output");
+        let frame_error = crate::sumeragi::certified_chain::read_frame(
+            crate::block::reserve_block_for_tests().initialize(decoded),
+            expected_height,
+        )
+        .expect_err("original execution certificate cannot commit the changed output");
         assert!(matches!(&frame_error,
             crate::execution_attempt::ExecutionAttemptError::Rejected(
                 crate::sumeragi::certified_chain::ChainReadError::ExecutionMismatch { height })

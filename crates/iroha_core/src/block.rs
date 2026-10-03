@@ -369,6 +369,15 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST;
 pub(crate) use self::event::WithEvents;
 pub use self::{chained::Chained, commit::CommittedBlock, new::NewBlock, valid::ValidBlock};
+
+/// Reserve exact control for a standalone structural block fixture.
+/// Production and original-execution tests must reserve from their actual State pool.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub fn reserve_block_for_tests() -> ReservedSharedSignedBlock {
+    let budget =
+        iroha_allocation::AllocationBudget::new(SharedSignedBlock::allocation_layout().size());
+    SharedSignedBlock::reserve(&budget).expect("finite standalone block fixture control")
+}
 use crate::da::{
     DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
     receipts::DaReceiptCursorError,
@@ -1646,6 +1655,8 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
+    /// Local State view could not be captured before candidate validation: {0}
+    StateView(#[source] crate::state::StateViewError),
     /// Local World storage admission failed before State execution: {0}
     StateStorageAdmission(crate::state::StateStorageAdmissionError),
     /// Local evidence or stake-index penalty preparation failed: {0}
@@ -1826,6 +1837,7 @@ impl BlockValidationError {
     ) -> Self {
         use crate::state::MergeLedgerCommitError;
         match error {
+            MergeLedgerCommitError::StateView(error) => Self::StateView(error),
             MergeLedgerCommitError::StateStorageAdmission(error) => {
                 Self::StateStorageAdmission(error)
             }
@@ -1892,6 +1904,7 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
     fn from(error: crate::sumeragi::lanes::merge::MergeError) -> Self {
         use crate::sumeragi::lanes::merge::MergeError;
         match error {
+            MergeError::StateView(error) => Self::StateView(error),
             MergeError::RoutingDeferred(reason) => Self::ExecutionDeferred(reason),
             MergeError::Storage(crate::execution_attempt::ExecutionAttemptError::Deferred(
                 local,
@@ -2006,7 +2019,12 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
         // These errors arise while replaying already committed local history,
         // including its cursors. Preserve that context so block validation does
         // not mistake local reconstruction failure for a malformed candidate.
-        Self::DaIndexHydration(error.to_string())
+        match error {
+            crate::state::DaIndexHydrationError::Deferred(original) => {
+                Self::ExecutionDeferred(original)
+            }
+            error => Self::DaIndexHydration(error.to_string()),
+        }
     }
 }
 #[cfg(test)]
@@ -4115,7 +4133,7 @@ pub(crate) mod valid {
         #[cfg(test)]
         pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
             Self::new_signatures_verified(block)
-                .commit_unchecked()
+                .commit_unchecked(crate::block::reserve_block_for_tests())
                 .unpack(|_| {})
         }
         #[cfg(test)]
@@ -5213,7 +5231,17 @@ pub(crate) mod valid {
                     state.prev_block()
                 } else {
                     state.latest_block()
-                };
+                }
+                .map_err(|error| {
+                    BlockValidationError::ExecutionDeferred(match error {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                            original
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                            ivm::error::ExecutionDeferral::CanonicalHistoryUnavailable.into()
+                        }
+                    })
+                })?;
                 if let Some(prev_block) = prev_block {
                     let prev_block_time = prev_block.header().creation_time();
                     if let Some(block_cadence) = validation_profile.block_cadence() {
@@ -6580,11 +6608,15 @@ pub(crate) mod valid {
         ///
         /// - Block is missing the leader signature
         /// - Block doesn't have enough valid signatures
-        pub fn commit(self, topology: &Topology) -> WithCommittedBlockEvents {
+        pub fn commit(
+            self,
+            topology: &Topology,
+            shell: ReservedSharedSignedBlock,
+        ) -> WithCommittedBlockEvents {
             WithEvents::new(
                 match Self::is_commit_internal(self.as_ref(), topology, self.signatures_verified) {
                     Err(err) => Err((Box::new(self), Box::new(err.into()))),
-                    Ok(()) => Ok(CommittedBlock::from_execution(self)),
+                    Ok(()) => Ok(CommittedBlock::from_execution(self, shell)),
                 },
             )
         }
@@ -6599,6 +6631,7 @@ pub(crate) mod valid {
             topology: &Topology,
             signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
+            shell: ReservedSharedSignedBlock,
         ) -> WithCommittedBlockEvents {
             let validation = (|| -> Result<(), SignatureVerificationError> {
                 // Ensure the QC-reported signer set matches the expected quorum shape.
@@ -6614,15 +6647,25 @@ pub(crate) mod valid {
             })();
             WithEvents::new(match validation {
                 Err(err) => Err((Box::new(self), Box::new(err.into()))),
-                Ok(()) => Ok(CommittedBlock::from_execution(self)),
+                Ok(()) => Ok(CommittedBlock::from_execution(self, shell)),
             })
         }
         /// Like [`Self::commit`], but without block signature checks.
         ///
         /// Useful e.g. for Explorer, which assumes all blocks from Iroha are valid, and
         /// only executes them to produce state changes.
-        pub fn commit_unchecked(self) -> WithEvents<CommittedBlock> {
-            WithEvents::new(CommittedBlock::from_execution(self))
+        pub fn commit_unchecked(
+            self,
+            shell: ReservedSharedSignedBlock,
+        ) -> WithEvents<CommittedBlock> {
+            WithEvents::new(CommittedBlock::from_execution(self, shell))
+        }
+
+        /// Attach the independently checked finality artifact before freezing this original.
+        /// This grants no finality or allocation authority and never copies the block graph.
+        pub(crate) fn with_commit_certificate(mut self, certificate: CommitCertificate) -> Self {
+            self.block.set_commit_certificate(Some(certificate));
+            self
         }
         /// Check if block satisfy requirements to be committed
         ///
@@ -7193,6 +7236,7 @@ pub(crate) mod valid {
             let previous = state
                 .view()
                 .latest_block()
+                .expect("original block read attempt")
                 .expect("original genesis parent");
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source)
                 .chain(0, Some(&previous));
@@ -7362,7 +7406,10 @@ pub(crate) mod valid {
                 .try_for_each(|signature| block.add_signature(signature, &topology))
                 .expect("Failed to add signatures");
             block.sign(&key_pairs[4], &topology);
-            let _ = block.commit(&topology).unpack(|_| {}).unwrap();
+            let _ = block
+                .commit(&topology, crate::block::reserve_block_for_tests())
+                .unpack(|_| {})
+                .unwrap();
         }
         #[test]
         fn signature_verification_consensus_not_required_ok() {
@@ -7373,7 +7420,12 @@ pub(crate) mod valid {
             .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
-            assert!(block.commit(&topology).unpack(|_| {}).is_ok());
+            assert!(
+                block
+                    .commit(&topology, crate::block::reserve_block_for_tests())
+                    .unpack(|_| {})
+                    .is_ok()
+            );
         }
         /// Check requirement of having at least $2f + 1$ signatures in $3f + 1$ network
         #[test]
@@ -7386,7 +7438,11 @@ pub(crate) mod valid {
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             block.sign(&key_pairs[4], &topology);
-            let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let err = block
+                .commit(&topology, crate::block::reserve_block_for_tests())
+                .unpack(|_| {})
+                .unwrap_err()
+                .1;
             let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
                 panic!("unexpected validation failure: {err:?}");
             };
@@ -7413,7 +7469,11 @@ pub(crate) mod valid {
             let tally = commit_signature_tally(block.as_ref(), &topology);
             assert_eq!(tally.counted, 2);
             assert_eq!(tally.present, 2);
-            let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let err = block
+                .commit(&topology, crate::block::reserve_block_for_tests())
+                .unpack(|_| {})
+                .unwrap_err()
+                .1;
             let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
                 panic!("unexpected validation failure: {err:?}");
             };
@@ -7441,7 +7501,12 @@ pub(crate) mod valid {
             assert_eq!(tally.counted, 3);
             assert_eq!(tally.present, 3);
             assert_eq!(tally.set_b_signatures, 0);
-            assert!(block.commit(&topology).unpack(|_| {}).is_ok());
+            assert!(
+                block
+                    .commit(&topology, crate::block::reserve_block_for_tests())
+                    .unpack(|_| {})
+                    .is_ok()
+            );
         }
         #[cfg(feature = "bls")]
         #[test]
@@ -7465,7 +7530,12 @@ pub(crate) mod valid {
             block.sign(&key_pairs[5], &topology);
             let signers: BTreeSet<_> = [1_u32, 2_u32, 3_u32, 4_u32, 5_u32].into_iter().collect();
             let result = block
-                .commit_with_signers(&topology, &signers, false)
+                .commit_with_signers(
+                    &topology,
+                    &signers,
+                    false,
+                    crate::block::reserve_block_for_tests(),
+                )
                 .unpack(|_| {});
             assert!(
                 result.is_ok(),
@@ -7585,7 +7655,10 @@ pub(crate) mod valid {
             block.sign(&key_pairs[1], &topology); // validator
             block.sign(&key_pairs[3], &topology); // set B
             assert!(
-                block.commit(&topology).unpack(|_| {}).is_ok(),
+                block
+                    .commit(&topology, crate::block::reserve_block_for_tests())
+                    .unpack(|_| {})
+                    .is_ok(),
                 "set B signatures should count toward quorum without requiring proxy tail"
             );
         }
@@ -7693,7 +7766,13 @@ pub(crate) mod valid {
                 )
                 .expect("validator signature");
             block.sign(&key_pairs[2], &topology);
-            assert!(block.clone().commit(&topology).unpack(|_| {}).is_ok());
+            assert!(
+                block
+                    .clone()
+                    .commit(&topology, crate::block::reserve_block_for_tests())
+                    .unpack(|_| {})
+                    .is_ok()
+            );
             let original = block.as_ref().signatures().cloned().collect::<Vec<_>>();
             // Replacement below quorum should fail and restore the original set.
             let mut replacement = BTreeSet::new();
@@ -8069,7 +8148,14 @@ pub(crate) mod valid {
             )
             .expect("valid tx");
             let new_block = BlockBuilder::new(vec![tx.clone()])
-                .chain(0, state.view().latest_block().as_deref())
+                .chain(
+                    0,
+                    state
+                        .view()
+                        .latest_block()
+                        .expect("original block read attempt")
+                        .as_deref(),
+                )
                 .sign(alice_keypair.private_key())
                 .unpack(|_| {});
             let mut first_block: SignedBlock = new_block.clone().into();
@@ -8183,7 +8269,11 @@ pub(crate) mod valid {
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
                 .expect("Failed to add signatures");
-            let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let err = block
+                .commit(&topology, crate::block::reserve_block_for_tests())
+                .unpack(|_| {})
+                .unwrap_err()
+                .1;
             let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
                 panic!("unexpected validation failure: {err:?}");
             };
@@ -8547,32 +8637,28 @@ mod commit {
     /// original canonical carrier and `sumeragi::certified_chain::CommittedBlock`.
     #[derive(Debug, Clone)]
     pub struct CommittedBlock {
-        block: ValidBlock,
+        block: SharedSignedBlock,
     }
     impl CommittedBlock {
-        pub(super) fn from_execution(block: ValidBlock) -> Self {
-            Self { block }
+        pub(super) fn from_execution(block: ValidBlock, shell: ReservedSharedSignedBlock) -> Self {
+            Self {
+                block: shell.initialize(block.into()),
+            }
         }
-    }
-    impl From<CommittedBlock> for ValidBlock {
-        fn from(source: CommittedBlock) -> Self {
-            source.block
+
+        /// Borrow the immutable original graph shared with staging and durable storage.
+        pub fn shared(&self) -> &SharedSignedBlock {
+            &self.block
         }
-    }
-    impl From<CommittedBlock> for SignedBlock {
-        fn from(source: CommittedBlock) -> Self {
-            source.block.into()
+
+        /// Transfer this original shared reference without extracting or cloning its graph.
+        pub fn into_shared(self) -> SharedSignedBlock {
+            self.block
         }
     }
     impl AsRef<SignedBlock> for CommittedBlock {
         fn as_ref(&self) -> &SignedBlock {
             self.block.as_ref()
-        }
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    impl AsMut<SignedBlock> for CommittedBlock {
-        fn as_mut(&mut self) -> &mut SignedBlock {
-            self.block.as_mut()
         }
     }
     #[cfg(all(test, feature = "app_api"))]
@@ -8786,6 +8872,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::StateView(_)
             | BlockValidationError::LaneStorage(_)
             | BlockValidationError::StateStorageAdmission(_)
             | BlockValidationError::EvidencePreparation(_)
@@ -9425,7 +9512,14 @@ pub(crate) mod tests {
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -9520,7 +9614,11 @@ pub(crate) mod tests {
                 })
                 .collect::<Vec<_>>();
             let _previous = previous_block_at_height(1);
-            let previous = state.view().latest_block().expect("original genesis");
+            let previous = state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .expect("original genesis");
             let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let block = BlockBuilder::new_with_time_source(accepted, time_source)
                 .chain(1, Some(&previous))
@@ -9601,7 +9699,11 @@ pub(crate) mod tests {
         .with_instructions([instruction])
         .sign(keypair.private_key());
         let _previous = previous_block_at_height(1);
-        let previous = state.view().latest_block().expect("original genesis");
+        let previous = state
+            .view()
+            .latest_block()
+            .expect("original block read attempt")
+            .expect("original genesis");
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
@@ -9769,7 +9871,14 @@ pub(crate) mod tests {
         let entrypoint_hash = TransactionEntrypoint::External(signed.clone()).hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
         let block = BlockBuilder::new(vec![accepted])
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -9993,7 +10102,14 @@ seiyaku GuardedOverlay {
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -10181,7 +10297,14 @@ seiyaku DynamicAccessCounter {
             .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
             .collect();
         let block = BlockBuilder::new(accepted)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -10440,7 +10563,14 @@ seiyaku DynamicTarget {
             .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
             .collect();
         let block = BlockBuilder::new(accepted)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -10560,6 +10690,7 @@ seiyaku DynamicTarget {
         let parent = state
             .view()
             .latest_block()
+            .expect("original block read attempt")
             .expect("original signed genesis");
         let metadata_key = Name::from_str("sequential_fallback_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
@@ -10771,7 +10902,14 @@ seiyaku DynamicTarget {
         let accepted_commitment =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
         let block = BlockBuilder::new(vec![accepted_commitment])
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(keypair.private_key())
             .unpack(|_| {});
         assert_ne!(block.header().height(), nonzero!(9999_u64));
@@ -11379,7 +11517,11 @@ seiyaku DynamicTarget {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let _previous = previous_block_at_height(1);
-        let previous = state.view().latest_block().expect("original genesis");
+        let previous = state
+            .view()
+            .latest_block()
+            .expect("original block read attempt")
+            .expect("original genesis");
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))
             .sign(keypair.private_key())
@@ -11426,7 +11568,11 @@ seiyaku DynamicTarget {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let _previous = previous_block_at_height(1);
-        let previous = state.view().latest_block().expect("original genesis");
+        let previous = state
+            .view()
+            .latest_block()
+            .expect("original block read attempt")
+            .expect("original genesis");
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))
             .sign(keypair.private_key())
@@ -11510,7 +11656,14 @@ seiyaku DynamicTarget {
         // Creating a block of two semantically repetitive transactions and validating it
         let transactions = vec![first_tx, second_tx];
         let unverified_block = BlockBuilder::new_with_time_source(transactions, time_source)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, state_block_recorder) =
@@ -11609,7 +11762,14 @@ seiyaku DynamicTarget {
         // Creating a block of where first transaction must fail and second one fully executed
         let transactions = vec![tx_fail, tx_accept];
         let unverified_block = BlockBuilder::new(transactions)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, state_block_recorder) =

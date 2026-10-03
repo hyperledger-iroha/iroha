@@ -34,6 +34,10 @@ impl Wake for ObserveTail {
 }
 
 fn check_world_publication(replacement: bool, completion: u8) {
+    let waiter_pool = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&waiter_pool);
     let world = Arc::new(World::default());
     let mut baseline = world.block();
     *baseline.soradns_last_publish_ms.get_mut() = Some(17);
@@ -62,7 +66,7 @@ fn check_world_publication(replacement: bool, completion: u8) {
         tail: AtomicU64::new(0),
     });
     let waker = Waker::from(Arc::clone(&callback));
-    let mut future = wait.clone().wait_for_release();
+    let mut future = wait.clone().wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))

@@ -61,10 +61,14 @@ impl Kura {
             &iroha_data_model::block::CommitCertificate,
         ) -> Option<iroha_data_model::block::CommitCertificate>,
     ) -> Result<()> {
-        let original = self.get_block(height).ok_or(Error::OutOfBoundsBlockRead {
-            start_block_height: u64::try_from(height.get())?,
-            block_count: self.blocks_count(),
-        })?;
+        let inspection_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let original = self
+            .get_block(height, &inspection_budget)
+            .expect("funded corruption fixture history read")
+            .ok_or(Error::OutOfBoundsBlockRead {
+                start_block_height: u64::try_from(height.get())?,
+                block_count: self.blocks_count(),
+            })?;
         let height_u64 = u64::try_from(height.get())?;
         let certificate = original
             .commit_certificate()

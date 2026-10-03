@@ -20,18 +20,27 @@ impl Wake for WakeCount {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn poll(wait: &mut ReleaseFuture, wake: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut ReleaseFuture<'_>, wake: &Arc<WakeCount>) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wake))))
 }
-fn busy<E>(error: PublicationPreparationError<E>) -> ReleaseFuture {
+fn busy<'a, E>(
+    error: PublicationPreparationError<E>,
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> ReleaseFuture<'a> {
     let PublicationPreparationError::Busy(wait) = error else {
         panic!("expected exact lock contention");
     };
-    wait.wait_for_release()
+    wait.wait_for_release(registration_1)
 }
 
 #[test]
 fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     use std::sync::{Barrier, atomic::AtomicBool};
 
     #[derive(Debug)]
@@ -85,7 +94,7 @@ fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
             .err()
             .expect("original undo writer remains held during revert preimage cloning");
         drop(_cleanup);
-        let mut wait = busy(error);
+        let mut wait = busy(error, &mut helper_release_registration_1);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         finish.wait();
@@ -103,6 +112,12 @@ fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
 
 #[test]
 fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for finish in 0..5 {
         let target = Cell::new(10_u64);
         let original = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -112,7 +127,7 @@ fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
             .err()
             .expect("block owns writers");
         drop(_cleanup);
-        let mut wait = busy(error);
+        let mut wait = busy(error, &mut helper_release_registration_1);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         match finish {
@@ -153,6 +168,12 @@ fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
 
 #[test]
 fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for finish in 0..3 {
         let target: Storage<u64, u64> = [(1, 10)].into_iter().collect();
         let journal = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -165,7 +186,7 @@ fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
             .err()
             .expect("prepared publisher owns writers");
         drop(_cleanup);
-        let mut wait = busy(error);
+        let mut wait = busy(error, &mut helper_release_registration_1);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         match finish {
@@ -192,6 +213,12 @@ fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
 
 #[test]
 fn partial_writer_acquisition_does_not_wake_its_own_refused_lock() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let target = Cell::new(10_u64);
     let journal = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
     let current = target.blocks_released.guard(target.blocks.write());
@@ -200,7 +227,7 @@ fn partial_writer_acquisition_does_not_wake_its_own_refused_lock() {
         .err()
         .expect("current writer is busy");
     drop(_cleanup);
-    let mut wait = busy(error);
+    let mut wait = busy(error, &mut helper_release_registration_1);
     let wake = Arc::new(WakeCount::default());
     assert!(
         target.revert.try_write().is_some(),
@@ -222,13 +249,27 @@ fn partial_writer_acquisition_does_not_wake_its_own_refused_lock() {
 
 #[test]
 fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     for finish in 0..3 {
         let target = Cell::new(10_u64);
         let journal = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
         let prepared = journal
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .unwrap_or_else(|_| panic!("prepare"));
-        let mut wait = target.revert_released.observe().wait_for_release();
+        let mut wait = target
+            .revert_released
+            .observe()
+            .wait_for_release(&mut release_registration_1);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         match finish {
@@ -254,7 +295,7 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
             .err()
             .expect("original writer");
         drop(_cleanup);
-        let mut wait = busy(error);
+        let mut wait = busy(error, &mut helper_release_registration_1);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         match finish {
@@ -276,8 +317,15 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
 
 #[test]
 fn a_nonpoisoning_guard_unwind_does_not_poison_later_contention() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let source = ReleaseNotification::default();
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -295,6 +343,11 @@ fn a_nonpoisoning_guard_unwind_does_not_poison_later_contention() {
 
 #[test]
 fn inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     struct PanicOnDrop<'a> {
         _guard: std::sync::MutexGuard<'a, ()>,
     }
@@ -308,7 +361,9 @@ fn inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases()
     let guard = source.poisoning_guard(PanicOnDrop {
         _guard: physical.lock().unwrap(),
     });
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(guard)));
@@ -327,9 +382,17 @@ fn inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases()
 
 #[test]
 fn acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     let source = ReleaseNotification::default();
     let physical = Mutex::new(());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -352,7 +415,9 @@ fn acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard(
 
     let source = ReleaseNotification::default();
     let physical = Mutex::new(());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_2);
     let guard = source.with_acquisition_unwind_notification(|| physical.lock().unwrap());
     let guard = source.poisoning_guard(guard);
     assert!(poll(&mut wait, &wake).is_pending());

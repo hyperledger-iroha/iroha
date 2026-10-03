@@ -324,8 +324,8 @@ paths; reward records do not authorize slashing.
 
 Records the payout for an epoch. Fields:
 
-- `reward_asset`: exact configured fee asset held by the configured fee sink.
-- `total_reward`: fee-funded amount reserved for the supplied distribution.
+- `reward_asset`: exact genesis-pinned network XOR held by the configured treasury.
+- `total_reward`: funded amount reserved for the supplied distribution; recording does not mint XOR.
 - `shares`: vector of `PublicLaneRewardShare` entries.
 
 ### 2.8 `ClaimPublicLaneRewards`
@@ -337,6 +337,14 @@ binds its prior positive accrual or absence and exact payment to the recipient.
 Sources are exactly those touched by the records plus explicitly selected old
 accruals. Missing records, skipped prefixes, stale cursors or accruals, and wrong
 payouts reject before funds move.
+
+The required `fee_claim` field separately authorizes one independently accrued
+validation-fee reward, or is explicitly `None` for no fee reward effects. Its
+lifecycle seal, beneficiary identity and revision, exact global XOR source and
+recipient assets, complete positive credit and next receipt sequence must match
+the current authenticated entitlement. Omission is not a supported layout.
+All bindings are checked before either reward leg changes state; execution
+failure rolls back both legs in the transaction.
 
 `public_lane_reward_claims[(lane, recipient)]` stores
 `PublicLaneRewardClaimStateV1 { through_epoch: Option<u64> }`.
@@ -350,7 +358,8 @@ leaves cursor and accrual state unchanged. Pending queries expose
 
 Pinned custody records retain each validator's exact scoped escrow asset and
 held quantity (bonded plus pending unbond). The aggregate stake reserve and unpaid
-reward reserve are additive balance floors for ordinary and native debits.
+reward reserve and fee-custody obligations are additive balance floors for
+ordinary and native debits.
 Deposits reserve real available funds; an escrow account cannot repeatedly bond
 its own already-reserved balance. Matured unbond and verified slash owners release
 only their authenticated quantity, restoring reserve preimages if transfer fails.

@@ -27,7 +27,7 @@ use crate::{
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock, consensus::LaneEvidenceScope},
+    block::{BlockHeader, consensus::LaneEvidenceScope},
     sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
 };
 use iroha_model_base::topology::LaneId;
@@ -149,7 +149,7 @@ pub(in crate::sumeragi) struct HistoryScan {
     verifier: NativeExecutionEvidenceVerifier,
     selected: LaneSelection,
     next: u64,
-    current: Option<Arc<SignedBlock>>,
+    current: Option<iroha_data_model::block::SharedSignedBlock>,
     current_bytes: Option<ChargedBuffer<u8>>,
     artifacts: Option<PrefixArtifactsRead>,
     genesis_bytes: Option<ChargedBuffer<u8>>,
@@ -333,18 +333,13 @@ impl HistoryScan {
                     .ok()
                     .and_then(NonZeroUsize::new)
                     .ok_or_else(|| invalid("native carrier height overflow"))?;
-                let Some(block) = self.kura.get_block(index) else {
-                    if self.kura.native_consensus_gate().is_closed() {
-                        return Err(io::Error::other(
-                            "original native storage gate is closed; recovery is required",
-                        )
-                        .into());
-                    }
-                    // Kura's Option API cannot distinguish resource refusal from missing
-                    // bytes. Neither outcome proves corrupt authority. Keep this original
-                    // cut/cursor pending; a typed Kura read remains a separate prerequisite.
-                    return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock).into());
-                };
+                let block = self
+                    .kura
+                    .get_block(index, &self.budget)
+                    .map_err(|error| error.map_rejection(io::Error::other))?
+                    .ok_or_else(|| {
+                        invalid("native carrier is missing from the captured committed prefix")
+                    })?;
                 let length = norito::canonical_frame_len(block.as_ref())
                     .map_err(invalid)?
                     .checked_add(1)
@@ -399,7 +394,7 @@ impl HistoryScan {
             // archive bytes and partial artifact acquisition from this original carrier.
             let artifacts = if self.next > 1 {
                 let read = self.artifacts.take().unwrap_or_else(|| {
-                    PrefixArtifactsRead::new(Arc::clone(block), self.budget.clone())
+                    PrefixArtifactsRead::new(Clone::clone(block), self.budget.clone())
                 });
                 match read.complete(&self.budget) {
                     Ok(artifacts) => Some(artifacts),
@@ -442,7 +437,7 @@ impl HistoryScan {
                     accept_genesis,
                 ),
                 None => self.verifier.push_shared_height_with_genesis(
-                    Arc::clone(block),
+                    Clone::clone(block),
                     bytes.as_slice(),
                     accept_genesis,
                 ),
@@ -815,13 +810,17 @@ mod artifact_tests {
         // H2 must authenticate it after acquiring its original bulk certificate artifacts.
         let genesis = chain
             .kura()
-            .get_block(NonZeroUsize::new(1).unwrap())
+            .get_block(
+                NonZeroUsize::new(1).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original block read attempt")
             .unwrap();
         let archive = scan.archive.as_ref().unwrap();
         let genesis_bytes = archive.read_exact(1, genesis.hash()).unwrap();
         assert!(
             scan.verifier
-                .push_shared_height(Arc::clone(&genesis), genesis_bytes.as_slice())
+                .push_height(Clone::clone(&genesis), genesis_bytes.as_slice())
                 .unwrap()
                 .is_none()
         );
@@ -829,15 +828,19 @@ mod artifact_tests {
         scan.next = 2;
         let block = chain
             .kura()
-            .get_block(NonZeroUsize::new(2).unwrap())
+            .get_block(
+                NonZeroUsize::new(2).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original block read attempt")
             .unwrap();
         scan.current_bytes = Some(archive.read_exact(2, block.hash()).unwrap());
         let bytes = scan.current_bytes.as_ref().unwrap().as_slice().as_ptr();
-        scan.current = Some(Arc::clone(&block));
+        scan.current = Some(Clone::clone(&block));
         // The fixture pin retains only retired State generations. The reader's table,
         // proposal and shared-control owners still refund immediately while it is live.
         let artifact_baseline = budget.reserved_bytes();
-        let artifacts = PrefixArtifactsRead::new(Arc::clone(&block), budget.clone())
+        let artifacts = PrefixArtifactsRead::new(Clone::clone(&block), budget.clone())
             .complete(&budget)
             .unwrap_or_else(|(_, error)| panic!("original artifacts: {error}"));
         assert!(budget.reserved_bytes() > artifact_baseline);
@@ -852,7 +855,10 @@ mod artifact_tests {
         );
         assert_eq!(scan.next, 2);
         assert!(scan.artifacts.is_some());
-        assert!(Arc::ptr_eq(scan.current.as_ref().unwrap(), &block));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            scan.current.as_ref().unwrap(),
+            &block
+        ));
         assert_eq!(
             scan.current_bytes.as_ref().unwrap().as_slice().as_ptr(),
             bytes
@@ -907,7 +913,7 @@ mod capture_tests {
     #[test]
     fn original_cut_capture_does_not_open_the_archive_and_never_upgrades_to_a_successor() {
         let (mut chain, record, _epoch) = super::super::tests::fixed_lane_chain();
-        let state = Arc::clone(chain.state());
+        let state = Clone::clone(chain.state());
         let generation = state.state_view_generation();
         let view = state.view();
         let original = view.native_execution_tip().unwrap();
@@ -974,7 +980,7 @@ mod capture_tests {
         let state = chain.state();
         let other = State::new_with_chain_and_network_id_for_testing(
             World::new(),
-            Arc::clone(chain.kura()),
+            Clone::clone(chain.kura()),
             LiveQueryStore::start_test(),
             state.chain_id_ref().clone(),
             chain.network_id(),

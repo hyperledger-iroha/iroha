@@ -151,10 +151,13 @@ fn certified_capture_capacity_refusal_retries_without_artifact_or_state_writes()
 fn certified_capture_contention_preserves_exact_bytes_and_releases_for_retry() {
     use std::{
         future::Future as _,
+        pin::Pin,
         task::{Context, Poll, Waker},
     };
     let directory = physical_tempdir().unwrap();
     let chain = chain();
+    let waiter_budget = chain.state().ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
     let archive =
         ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
     let reader = archive.read_index().unwrap();
@@ -164,20 +167,16 @@ fn certified_capture_contention_preserves_exact_bytes_and_releases_for_retry() {
     let ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait } = error else {
         panic!("held physical reader must refuse capture")
     };
-    let mut release = Box::pin(wait.wait_for_release());
+    let mut release = wait.wait_for_release(&mut registration);
     assert!(matches!(
-        release
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop())),
+        Pin::new(&mut release).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Pending
     ));
     assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
     drop(reader);
     let later_reader = archive.read_index().unwrap();
     assert!(matches!(
-        release
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop())),
+        Pin::new(&mut release).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(())
     ));
     assert!(
@@ -198,6 +197,14 @@ fn certified_capture_contention_preserves_exact_bytes_and_releases_for_retry() {
         .unwrap();
     assert_eq!(archive_namespace_snapshot(&archive.records), bytes);
     assert_eq!(archive.health_generation().unwrap(), generation);
+    drop(release);
+    let with_registration = waiter_budget.reserved_bytes();
+    drop(registration);
+    assert_eq!(
+        waiter_budget.reserved_bytes(),
+        with_registration
+            - iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]

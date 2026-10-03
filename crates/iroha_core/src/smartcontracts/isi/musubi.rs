@@ -40,8 +40,10 @@ use std::collections::{BTreeMap, BTreeSet};
 mod attestation_records;
 use attestation_records::load_location_provider_attestations;
 mod current_providers;
+mod pin_outbox;
 mod replication_binding;
 pub(crate) use current_providers::current_location_providers;
+pub(crate) use pin_outbox::{PinOutboxOperationOrigin, capture_pin_outbox_operation_origin};
 use replication_binding::validate_replication_order_archive_binding;
 impl Execute for RegisterMusubiNamespaceBindingV1 {
     fn execute(
@@ -220,52 +222,6 @@ impl Execute for RegisterMusubiArchiveV1 {
                 Ok(())
             },
         )
-    }
-}
-impl Execute for AdvanceMusubiPinOutboxV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        self.validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        if &self.pin_authority != authority || &self.network_id != state_transaction.network_id() {
-            return Err(invariant(
-                "Musubi pin-outbox advance signer or network mismatch",
-            ));
-        }
-        let transaction_hash = state_transaction
-            .current_tx_hash
-            .as_ref()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| invariant("Musubi pin-outbox advance requires a signed transaction"))?;
-        let current = state_transaction
-            .world
-            .musubi_pin_outbox_high_waters
-            .get(authority);
-        match current {
-            None if self.expected_revision == 0 => {}
-            Some(record)
-                if record.network_id == self.network_id
-                    && record.pin_authority == *authority
-                    && record.session_id == self.session_id
-                    && record.revision == self.expected_revision
-                    && record.inventory_digest == self.expected_inventory_digest => {}
-            _ => {
-                return Err(invariant(
-                    "Musubi pin-outbox predecessor is stale or substituted",
-                ));
-            }
-        }
-        let record = self
-            .recorded_high_water(execution_height(state_transaction), transaction_hash)
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        state_transaction
-            .world
-            .musubi_pin_outbox_high_waters
-            .insert(authority.clone(), record);
-        Ok(())
     }
 }
 impl Execute for RegisterMusubiProviderBundleAttestationV1 {

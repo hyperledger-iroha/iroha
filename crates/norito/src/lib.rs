@@ -896,7 +896,16 @@ pub mod json {
         /// An active decode scope rejected allocation or structural work.
         #[error("JSON decode resource limit exceeded")]
         DecodeResourceLimit,
-        /// A fallible allocation needed by the JSON decoder failed.
+        /// Original resource refusal retained across a canonical binary/JSON boundary.
+        #[error(transparent)]
+        ScopedDecodeResource(crate::core::ScopedDecodeResourceError),
+        /// An original binary decoder allocation failed with its recorded request size.
+        #[error("JSON decode allocation of {bytes} bytes failed")]
+        DecodeAllocationFailed {
+            /// Exact requested allocation size from the binary decoder.
+            bytes: u64,
+        },
+        /// A fallible allocation needed by the JSON decoder failed without a recorded size.
         #[error("JSON decode allocation failed")]
         AllocationFailed,
         #[error("invalid utf8")]
@@ -930,6 +939,8 @@ pub mod json {
             matches!(
                 self,
                 Self::DecodeResourceLimit
+                    | Self::ScopedDecodeResource(_)
+                    | Self::DecodeAllocationFailed { .. }
                     | Self::AllocationFailed
                     | Self::NestingDepthExceeded { .. }
             )
@@ -937,10 +948,33 @@ pub mod json {
         /// Convert a core decode-budget failure without copying its diagnostics.
         #[doc(hidden)]
         pub fn from_decode_resource(error: crate::core::Error) -> Self {
+            if let crate::core::Error::ScopedDecodeResource(origin) = error {
+                return Self::ScopedDecodeResource(origin);
+            }
+            if let crate::core::Error::AllocationFailed { bytes } = error {
+                return Self::DecodeAllocationFailed { bytes };
+            }
             if error.is_decode_resource_limit() {
                 Self::DecodeResourceLimit
             } else {
                 Self::AllocationFailed
+            }
+        }
+        /// Preserve an original scoped refusal when returning to binary decoding.
+        ///
+        /// Other JSON errors retain their JSON category. A native allocation failure has no
+        /// recorded byte count; zero reports that unavailable size without inventing a scope.
+        #[doc(hidden)]
+        pub fn into_core_error(self) -> crate::core::Error {
+            match self {
+                Self::ScopedDecodeResource(origin) => {
+                    crate::core::Error::ScopedDecodeResource(origin)
+                }
+                Self::DecodeAllocationFailed { bytes } => {
+                    crate::core::Error::AllocationFailed { bytes }
+                }
+                Self::AllocationFailed => crate::core::Error::AllocationFailed { bytes: 0 },
+                error => crate::core::Error::Json(error),
             }
         }
     }
@@ -9045,6 +9079,28 @@ where
         return Err(Error::NonCanonicalEncoding);
     }
     Ok(())
+}
+
+/// Decode one exact canonical V1 frame while retaining the original admission refusal.
+///
+/// The complete synchronous decode and canonical byte comparison use the same implementation as
+/// [`decode_canonical_with_limits`]. Default and schema ceilings remain protocol errors. An actual
+/// refusal from an enclosing decode budget is identified by its original scope, including cumulative
+/// limits; matching numeric ceilings alone cannot establish that origin. This does not alter the
+/// wire encoding or provide an allocation-pool release owner.
+///
+/// # Errors
+/// Returns the original decoder error with an opaque classification established before its scopes
+/// unwind. Reconstructed resource errors without current-attempt provenance are invalid input.
+pub fn decode_canonical_for_admission<T>(
+    bytes: &[u8],
+    limits: DecodeLimits,
+) -> Result<T, core::DecodeAttemptError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    core::classify_decode_attempt(|| decode_canonical_with_limits(bytes, limits))
 }
 
 /// Decode one exact canonical V1 frame under default and schema-specific limits.

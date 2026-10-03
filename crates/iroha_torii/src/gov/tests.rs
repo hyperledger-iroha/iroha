@@ -2097,7 +2097,7 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
     let mut publish = |totals: [u128; 3]| {
         let height = chain.height() + 1;
-        let parent = state.view().latest_block().map(|block| block.hash());
+        let parent = state.view().latest_block_hash();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(height).unwrap(),
             parent,
@@ -2269,7 +2269,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
                     ds_asset_id: state.gov.voting_asset_id.clone(),
                     xor_asset_id: state.gov.voting_asset_id.clone(),
                     reward_pool_account_id: ALICE_ID.clone(),
-                    validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+                    validator_lane_id: iroha_model_base::topology::LaneId::new(0),
                 },
             },
         },

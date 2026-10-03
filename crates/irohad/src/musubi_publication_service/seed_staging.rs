@@ -35,8 +35,10 @@ const MAX_STAGE_RECORD_BYTES: u64 = STAGE_HEADER_BYTES as u64
 const STAGE_SUFFIX: &str = ".seed";
 
 /// Closed failure for the private seed-custody directory.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiSeedStagingErrorV1 {
+    /// Original finalized-history allocation refusal, retained for a local retry.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// The configured root, its ancestry, or a resident record is unsafe or substituted.
     Invalid,
     /// Another process owns the staging directory.
@@ -53,9 +55,11 @@ pub enum MusubiSeedStagingErrorV1 {
 impl MusubiSeedStagingErrorV1 {
     fn backend(self) -> MusubiPublicationServiceBackendErrorV1 {
         match self {
-            Self::Locked | Self::Capacity | Self::Unavailable | Self::LocallyAhead => {
-                MusubiPublicationServiceBackendErrorV1::Retryable
-            }
+            Self::Deferred(_)
+            | Self::Locked
+            | Self::Capacity
+            | Self::Unavailable
+            | Self::LocallyAhead => MusubiPublicationServiceBackendErrorV1::Retryable,
             Self::Invalid | Self::Conflict => MusubiPublicationServiceBackendErrorV1::Permanent,
         }
     }

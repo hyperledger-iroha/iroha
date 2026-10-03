@@ -2641,11 +2641,60 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
         )
         .expect("the original active runtime is a vacant lifecycle head");
         assert!(matches!(expected, GovernanceExpectedHeadV1::Absent(_)));
-        let refused = norito::with_decode_limits_scope(
-            norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+        super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+            &binding,
+            transaction,
+        )
+        .expect("the original exact runtime is ready before the due effect");
+        // Measure the real currency-read prefix, then permit exactly that much
+        // decoding. The contract read, rather than an earlier NPoS read, must
+        // produce the refusal observed by the due-effect runtime validator.
+        let prefix = || {
+            crate::state::validate_network_xor_asset(
+                &transaction.world,
+                &binding.xor_asset_id,
+            )
+            .expect("the complete committed NPoS currency read succeeds");
+        };
+        const CEILING: usize = 1 << 20;
+        let prefix_bytes = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, CEILING, 32),
             || {
-                super::parliament_validation_fee_payout_observed_head_v1(
-                    subject_id,
+                prefix();
+                let norito::Error::TotalAllocationExceeded { attempted, limit } =
+                    norito::core::reserve_decode_allocation(CEILING + 1).unwrap_err()
+                else {
+                    panic!("original currency-read allocation observation changed");
+                };
+                assert_eq!(limit, CEILING as u64);
+                usize::try_from(attempted).unwrap() - CEILING - 1
+            },
+        );
+        assert!(prefix_bytes > 0);
+        let limits = norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix_bytes,
+            32,
+        );
+        norito::with_decode_limits_scope(limits, || prefix());
+        let producer_refusal = norito::with_decode_limits_scope(limits, || {
+            prefix();
+            crate::smartcontracts::code::fetch_bound_contract_record(
+                transaction,
+                &binding.contract_address,
+            )
+        });
+        assert!(
+            matches!(producer_refusal, Err(ExecutionAttemptError::Deferred(ref reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+            "the bound-contract read must retain the original local refusal after the currency prefix"
+        );
+        let refused = norito::with_decode_limits_scope(
+            limits,
+            || {
+                super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &binding,
                     transaction,
                 )

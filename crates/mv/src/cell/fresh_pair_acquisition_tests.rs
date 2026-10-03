@@ -214,21 +214,26 @@ impl Wake for Probe {
     }
 }
 
-struct Waits {
+struct Waits<'a> {
     undo: crate::ReleaseWait,
     current: crate::ReleaseWait,
-    undo_future: iroha_allocation::release::ReleaseFuture,
-    current_future: iroha_allocation::release::ReleaseFuture,
+    undo_future: iroha_allocation::release::ReleaseFuture<'a>,
+    current_future: iroha_allocation::release::ReleaseFuture<'a>,
     undo_waker: Waker,
     current_waker: Waker,
 }
-impl Waits {
-    fn new(target: &Target, control: &Arc<Control>) -> Self {
+impl<'a> Waits<'a> {
+    fn new(
+        target: &Target,
+        control: &Arc<Control>,
+        registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+        registration_2: &'a mut iroha_allocation::release::ReleaseRegistration,
+    ) -> Self {
         let undo = target.revert_released.observe();
         let current = target.blocks_released.observe();
         let mut result = Self {
-            undo_future: undo.clone().wait_for_release(),
-            current_future: current.clone().wait_for_release(),
+            undo_future: undo.clone().wait_for_release(registration_1),
+            current_future: current.clone().wait_for_release(registration_2),
             undo,
             current,
             undo_waker: Waker::from(Arc::new(Probe {
@@ -298,10 +303,21 @@ fn assert_original(target: &Target, before: &CapturedPublication) {
 
 #[test]
 fn cell_second_clone_panic_releases_both_before_native_notifications() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for replacement in [false, true] {
         let (target, control) = fixture(false);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         control.fail_current_clone.store(true, SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| attempt(&target, &control, replacement)));
         control.fail_current_clone.store(false, SeqCst);
@@ -348,6 +364,12 @@ fn cell_second_clone_panic_reclaims_completed_undo_only_after_pair_unlock() {
 
 #[test]
 fn cell_known_undo_poison_rejects_before_waiting_for_current() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{sync::mpsc, time::Duration};
 
     for replacement in [false, true] {
@@ -363,7 +385,12 @@ fn cell_known_undo_poison_rejects_before_waiting_for_current() {
         let held = target
             .blocks_released
             .poisoning_guard(target.blocks.try_acquire_writer().unwrap());
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         let (started_tx, started_rx) = mpsc::sync_channel(1);
         let (finished_tx, finished_rx) = mpsc::sync_channel(1);
         let worker_target = Arc::clone(&target);
@@ -417,12 +444,23 @@ fn attempt_kind(target: &Target, control: &Arc<Control>, kind: u8) {
 
 #[test]
 fn cell_first_clone_panic_releases_pair_before_unused_current_charge() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     // Ordinary, replacement block, and same-cut current replacement all use
     // the same partial-pair constructor. None may consume current's charge.
     for kind in 0..3 {
         let (target, control) = fixture(true);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         control.fail_undo_clone.store(true, SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| attempt_kind(&target, &control, kind)));
         control.fail_undo_clone.store(false, SeqCst);
@@ -448,6 +486,12 @@ fn cell_first_clone_panic_releases_pair_before_unused_current_charge() {
 
 #[test]
 fn cell_known_current_poison_precedes_both_clones_and_charge_cleanup() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for kind in 0..3 {
         let (target, control) = fixture(true);
         let predecessor = target.publication.capture();
@@ -458,7 +502,12 @@ fn cell_known_current_poison_precedes_both_clones_and_charge_cleanup() {
             }))
             .is_err()
         );
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         let result = catch_unwind(AssertUnwindSafe(|| attempt_kind(&target, &control, kind)));
         assert!(result.is_err());
         assert_eq!(control.undo_clones.load(SeqCst), 0);
@@ -481,10 +530,21 @@ fn cell_known_current_poison_precedes_both_clones_and_charge_cleanup() {
 
 #[test]
 fn cell_successful_pair_acquisition_keeps_clones_locked_and_notifications_pending() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for replacement in [false, true] {
         let (target, control) = fixture(false);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         control.observe_clones.store(true, SeqCst);
         let charges = CellAllocationCharges::new(
             Charge::original(&control, false),
@@ -544,10 +604,21 @@ fn arm_completed_pair_cleanup(control: &Control) {
 
 #[test]
 fn cell_complete_block_and_current_replacement_abandonment_unlocks_before_cleanup() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for kind in 0..3 {
         let (target, control) = fixture(false);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         let charges = CellAllocationCharges::new(
             Charge::original(&control, false),
             Charge::original(&control, true),
@@ -596,10 +667,21 @@ fn cell_complete_block_and_current_replacement_abandonment_unlocks_before_cleanu
 
 #[test]
 fn cell_explicit_detach_keeps_original_generations_and_defers_both_notifications() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for replacement in [false, true] {
         let (target, control) = fixture(false);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         let charges = CellAllocationCharges::new(
             Charge::original(&control, false),
             Charge::original(&control, true),
@@ -651,10 +733,21 @@ fn cell_explicit_detach_keeps_original_generations_and_defers_both_notifications
 
 #[test]
 fn cell_publication_poison_preserves_pair_through_commit_refusal_cleanup() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     for kind in 0..3 {
         let (target, control) = fixture(false);
         let predecessor = target.publication.capture();
-        let mut waits = Waits::new(&target, &control);
+        let mut waits = Waits::new(
+            &target,
+            &control,
+            &mut release_registration_1,
+            &mut release_registration_2,
+        );
         let charges = CellAllocationCharges::new(
             Charge::original(&control, false),
             Charge::original(&control, true),

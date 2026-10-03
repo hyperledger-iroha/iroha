@@ -6,7 +6,6 @@ use iroha_allocation::AllocationRefusal;
 use iroha_data_model::musubi::MusubiNamespaceV1;
 use std::{
     future::Future,
-    pin::pin,
     task::{Context, Poll, Waker},
 };
 
@@ -125,7 +124,10 @@ fn nfc_admission_keeps_the_original_capacity_release_and_retries_after_shrink() 
     let world = unicode_world(&format!("q{}", "\u{301}".repeat(100)));
     let plan = admit(&world.view(), limits()).unwrap();
     let complete = complete_bytes(&world, &plan);
-    let budget = AllocationBudget::new(complete);
+    let budget = AllocationBudget::new(
+        complete + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let occupied = budget.try_reserve_bytes(complete).unwrap();
     let Err(SourceValidationError::Attempt(ExecutionAttemptError::Deferred(reason))) =
         validate(&world.view(), &budget, limits())
@@ -141,7 +143,7 @@ fn nfc_admission_keeps_the_original_capacity_release_and_retries_after_shrink() 
         panic!("original capacity owner required")
     };
     assert_eq!(*requested_bytes, plan.nfc_scratch_bytes);
-    let mut wait = pin!(release.clone().wait_for_release());
+    let mut wait = Box::pin(release.clone().wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(complete);
@@ -156,6 +158,8 @@ fn nfc_admission_keeps_the_original_capacity_release_and_retries_after_shrink() 
             ExecutionAttemptError::Deferred(_)
         ))
     ));
+    drop(wait);
+    drop(registration);
     budget.set_limit_bytes(complete);
     validate(&world.view(), &budget, limits()).unwrap();
     assert_eq!(budget.reserved_bytes(), 0);

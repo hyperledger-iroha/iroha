@@ -1,7 +1,7 @@
 //! Generation-bound diagnostics from the sole native pulse custodian.
 
 use super::*;
-use iroha_allocation::{AllocationBudget, ChargedShared};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedShared, PrepaidSharedError};
 use iroha_data_model::{governance::types::BeaconSessionId, sumeragi::BeaconHorizonStatusV1};
 use std::sync::Mutex;
 
@@ -17,14 +17,27 @@ struct Observation {
 /// Shared fixed-size report: no key, proof, transcript or mutable signing API escapes.
 #[derive(Clone, Debug)]
 pub(crate) struct NativeBeaconReadiness(ChargedShared<Mutex<Option<Observation>>>);
+/// The original failed readiness-control admission, without a fabricated release source.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeBeaconReadinessError {
+    /// Exact demand against the original State execution pool.
+    #[error(transparent)]
+    Admission(#[from] AllocationRefusal),
+    /// The prepaid control could not be physically constructed.
+    #[error(transparent)]
+    Allocator(PrepaidSharedError),
+    /// The existing producer already retains its original reporting control.
+    #[error("native beacon readiness owner is already attached")]
+    AlreadyAttached,
+}
 impl NativeBeaconReadiness {
-    pub(super) fn new(budget: &AllocationBudget) -> Result<Self, String> {
+    pub(super) fn new(budget: &AllocationBudget) -> Result<Self, NativeBeaconReadinessError> {
         let mut reservation = budget
             .try_reserve(ChargedShared::<Mutex<Option<Observation>>>::allocation_layout())
-            .map_err(|error| error.to_string())?;
+            .map_err(NativeBeaconReadinessError::Admission)?;
         ChargedShared::from_reservation(Mutex::new(None), &mut reservation)
             .map(Self)
-            .map_err(|(_, error)| error.to_string())
+            .map_err(|(_, error)| NativeBeaconReadinessError::Allocator(error))
     }
 
     /// A concurrent publication or a different core height invalidates the entire observation.
@@ -51,9 +64,9 @@ impl NativeBeaconProducer {
     pub(crate) fn attach_readiness(
         &mut self,
         budget: &AllocationBudget,
-    ) -> Result<NativeBeaconReadiness, String> {
+    ) -> Result<NativeBeaconReadiness, NativeBeaconReadinessError> {
         if self.readiness.is_some() {
-            return Err("native beacon readiness owner is already attached".into());
+            return Err(NativeBeaconReadinessError::AlreadyAttached);
         }
         let reporting = NativeBeaconReadiness::new(budget)?;
         self.readiness = Some(reporting.clone());
@@ -238,16 +251,78 @@ mod tests {
 
     #[test]
     fn reporting_shell_retains_original_pool_charge_until_last_reader_drops() {
+        use iroha_allocation::release::ReleaseRegistration;
+        use std::task::{Context, Poll, Waker};
         let bytes = ChargedShared::<Mutex<Option<Observation>>>::allocation_layout().size();
-        let budget = AllocationBudget::new(bytes);
+        let registration_bytes = ReleaseRegistration::allocation_layout().size();
+        let budget = AllocationBudget::new(bytes + registration_bytes);
+        let mut registration = crate::unit_test_support::release_registration(&budget);
         let report = NativeBeaconReadiness::new(&budget).unwrap();
-        assert_eq!(budget.reserved_bytes(), bytes);
+        assert_eq!(budget.reserved_bytes(), bytes + registration_bytes);
         let reader = report.clone();
-        assert!(NativeBeaconReadiness::new(&budget).is_err());
+        let NativeBeaconReadinessError::Admission(AllocationRefusal::Capacity {
+            requested_bytes,
+            release,
+            ..
+        }) = NativeBeaconReadiness::new(&budget).unwrap_err()
+        else {
+            panic!("the last-reader control must retain its original capacity source");
+        };
+        assert_eq!(requested_bytes, bytes);
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(
+            registration.poll_wait(&release, &mut context),
+            Poll::Pending
+        );
         drop(report);
+        assert_eq!(budget.reserved_bytes(), bytes + registration_bytes);
+        assert_eq!(
+            registration.poll_wait(&release, &mut context),
+            Poll::Pending
+        );
+        drop(reader);
+        assert_eq!(budget.reserved_bytes(), registration_bytes);
+        assert_eq!(
+            registration.poll_wait(&release, &mut context),
+            Poll::Ready(())
+        );
+        registration.cancel();
+        let retried = NativeBeaconReadiness::new(&budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), bytes + registration_bytes);
+        drop(retried);
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn reporting_policy_refusal_and_duplicate_attach_preserve_original_owner() {
+        let bytes = ChargedShared::<Mutex<Option<Observation>>>::allocation_layout().size();
+        let budget = AllocationBudget::new(bytes - 1);
+        let mut producer = NativeBeaconProducer::new(Hash32([4; 32]), None, None);
+        let NativeBeaconReadinessError::Admission(AllocationRefusal::ExceedsLimit {
+            requested_bytes,
+            ..
+        }) = producer.attach_readiness(&budget).unwrap_err()
+        else {
+            panic!("a policy shortfall is not a transient release-bearing refusal");
+        };
+        assert_eq!(requested_bytes, bytes);
+        assert!(producer.readiness.is_none());
+        assert_eq!(budget.reserved_bytes(), 0);
+        budget.set_limit_bytes(bytes);
+        let reader = producer.attach_readiness(&budget).unwrap();
+        assert!(matches!(
+            producer.attach_readiness(&budget),
+            Err(NativeBeaconReadinessError::AlreadyAttached)
+        ));
+        assert!(ChargedShared::ptr_eq(
+            &reader.0,
+            &producer.readiness.as_ref().unwrap().0
+        ));
+        assert_eq!(budget.reserved_bytes(), bytes);
+        drop(producer);
         assert_eq!(budget.reserved_bytes(), bytes);
         drop(reader);
         assert_eq!(budget.reserved_bytes(), 0);
-        assert!(NativeBeaconReadiness::new(&budget).is_ok());
     }
 }

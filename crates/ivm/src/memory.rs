@@ -170,6 +170,14 @@ pub(crate) struct MemoryTemplateMismatch {
     pub(crate) template: MemoryGeometry,
 }
 impl Memory {
+    /// Original physical cell for the sealed native producer. This does not
+    /// perform a guest read, grant access, charge gas or alter access logs.
+    pub(crate) fn native_packet_cell(&self, address: u64) -> Option<[u8; 16]> {
+        if !address.is_multiple_of(16) { return None; }
+        let start = usize::try_from(address).ok()?;
+        self.data.get(start..start.checked_add(16)?)?.try_into().ok()
+    }
+
     pub(crate) fn capture_diagnostic_initial_image(
         &self,
         recorder: &DiagnosticMemoryAccessRecorder,
@@ -1528,7 +1536,7 @@ mod tests {
 
     #[test]
     fn funded_memory_passes_its_original_pool_to_root_frame_preparation() {
-        use ivm_abi::call::{CallWordV1, EmbeddedCallableV1};
+        use crate::call_frame::CallFrameShape;
 
         let frame_backing_bytes = crate::call_frame::frame_backing_bytes_for_test();
         let stack_limit = Memory::MIN_STACK_SIZE;
@@ -1542,11 +1550,11 @@ mod tests {
         let budget = AllocationBudget::new(base_bytes);
         let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
         assert_eq!(budget.reserved_bytes(), base_bytes);
-        let callable = EmbeddedCallableV1 {
+        let callable = CallFrameShape {
             entry_pc: 0,
             frame_bytes: 128,
-            argument_words: vec![CallWordV1::Bool],
-            result_words: vec![CallWordV1::Bool],
+            argument_words: 1,
+            result_words: 1,
         };
         let tables = crate::call_frame::CallTables {
             argument_base: Memory::HEAP_START,

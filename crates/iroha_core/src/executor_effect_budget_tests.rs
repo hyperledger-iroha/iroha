@@ -460,7 +460,7 @@ seiyaku ActualEffectGroups {
                 .iter()
                 .find(|callable| callable.entry_pc == entry.entry_pc)
                 .unwrap();
-            assert_eq!(callable.result_words, [ivm::call::CallWordV1::Unit]);
+            assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
             let mut host = crate::smartcontracts::ivm::host::CoreHost::new(ALICE_ID.clone());
             if limited {
                 let (cycles, gas, trace): (u64, u64, Vec<u64>) = completed.take().unwrap();

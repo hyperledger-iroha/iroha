@@ -1412,7 +1412,11 @@ mod tests {
         let genesis = fixture
             .state
             .kura()
-            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .get_block(
+                std::num::NonZeroUsize::new(1).unwrap(),
+                &fixture.state.ivm_execution_budget(),
+            )
+            .expect("completed original genesis read")
             .unwrap();
         let signed =
             iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
@@ -2863,8 +2867,13 @@ mod tests {
         ));
         let view = state.query_view();
         assert!(
-            view.latest_block().is_none(),
-            "the blank Kura fixture must not provide a block body"
+            matches!(
+                view.latest_block(),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable { .. }
+                ))
+            ),
+            "the committed header cannot supply the missing Kura body"
         );
         assert!(matches!(
             FindDataspaceNameOwnerById::new(DataSpaceId::new(9)).execute(&view),

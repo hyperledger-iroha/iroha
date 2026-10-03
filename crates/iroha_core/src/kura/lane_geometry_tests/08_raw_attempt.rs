@@ -62,7 +62,7 @@ fn raw_geometry_uses_lease_pending_capacity_without_a_held_lock_rescan() {
     let capacity = iroha_config_base::util::Bytes(u64::MAX / 4);
     with_raw_geometry_fixture_mode(false, capacity, |kura, request| {
         let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
-        kura.append_pending_block_for_bench(Arc::clone(chain.committed(1).block()));
+        kura.append_pending_block_for_bench(chain.committed(1).block().clone());
         kura.pending_budget_raw_scans.store(0, Ordering::Relaxed);
         let lease = kura.try_publication_lease().unwrap();
         assert!(lease.pending_canonical_bytes() > 0);
@@ -220,7 +220,6 @@ fn raw_geometry_abandoned_partial_operation_refuses_replacement() {
         );
     });
 }
-
 
 #[test]
 fn raw_geometry_in_memory_map_change_keeps_abandonment_fence() {

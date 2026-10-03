@@ -3,9 +3,7 @@
 use super::capture::MembershipCapturePhase;
 use super::*;
 use std::{
-    future::Future as _,
     panic::{AssertUnwindSafe, catch_unwind},
-    pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Wake, Waker},
 };
@@ -51,21 +49,31 @@ fn probe(first: &Arc<TransactionsStorage>, second: &Arc<TransactionsStorage>) ->
 fn register(
     wait: iroha_allocation::release::ReleaseWait,
     probe: &Arc<Probe>,
-) -> iroha_allocation::release::ReleaseFuture {
-    let mut future = wait.wait_for_release();
+    mut registration: iroha_allocation::release::ReleaseRegistration,
+) -> (
+    iroha_allocation::release::ReleaseWait,
+    iroha_allocation::release::ReleaseRegistration,
+) {
     let waker = Waker::from(Arc::clone(probe));
     assert!(
-        Pin::new(&mut future)
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&wait, &mut Context::from_waker(&waker))
             .is_pending()
     );
-    future
+    (wait, registration)
 }
 
-fn assert_released(future: &mut iroha_allocation::release::ReleaseFuture, probe: &Probe) {
+fn assert_released(
+    pending: &mut (
+        iroha_allocation::release::ReleaseWait,
+        iroha_allocation::release::ReleaseRegistration,
+    ),
+    probe: &Probe,
+) {
     assert!(
-        Pin::new(future)
-            .poll(&mut Context::from_waker(Waker::noop()))
+        pending
+            .1
+            .poll_wait(&pending.0, &mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
@@ -120,6 +128,8 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
     for replace in [false, true] {
         let first = seeded(2);
         let second = seeded(4);
+        let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+        let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
         let first_tip = first.latest_block.load_full().unwrap();
         let second_tip = second.latest_block.load_full().unwrap();
         let first_identity = (*first.write_lock.lock()).clone();
@@ -134,8 +144,16 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
         };
         let first_probe = probe(&first, &second);
         let second_probe = probe(&first, &second);
-        let mut first_wait = register(first.released.observe(), &first_probe);
-        let mut second_wait = register(second.released.observe(), &second_probe);
+        let mut first_wait = register(
+            first.released.observe(),
+            &first_probe,
+            release_registration_0,
+        );
+        let mut second_wait = register(
+            second.released.observe(),
+            &second_probe,
+            release_registration_1,
+        );
         pair.first.as_mut().unwrap().try_prepare().unwrap();
         let first_next = match &pair.first.as_ref().unwrap().phase {
             MembershipCapturePhase::Prepared(prepared) => {
@@ -216,6 +234,8 @@ fn membership_capture_real_refusal_keeps_original_writer_until_joint_release() {
     for wrong_height in [false, true] {
         let first = seeded(2);
         let second = seeded(4);
+        let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+        let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
         let first_tip = first.latest_block.load_full().unwrap();
         let second_tip = second.latest_block.load_full().unwrap();
         let first_block = staged(&first, false, 6);
@@ -230,8 +250,16 @@ fn membership_capture_real_refusal_keeps_original_writer_until_joint_release() {
         };
         let first_probe = probe(&first, &second);
         let second_probe = probe(&first, &second);
-        let mut first_wait = register(first.released.observe(), &first_probe);
-        let mut second_wait = register(second.released.observe(), &second_probe);
+        let mut first_wait = register(
+            first.released.observe(),
+            &first_probe,
+            release_registration_0,
+        );
+        let mut second_wait = register(
+            second.released.observe(),
+            &second_probe,
+            release_registration_1,
+        );
         pair.first.as_mut().unwrap().try_prepare().unwrap();
         let error = pair.second.as_mut().unwrap().try_prepare().unwrap_err();
         assert!(if wrong_height {
@@ -272,12 +300,22 @@ fn membership_capture_outer_unwind_releases_prepared_or_captured_and_attached_si
     for capture_first in [false, true] {
         let first = seeded(2);
         let second = seeded(4);
+        let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+        let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
         let first_probe = probe(&first, &second);
         let second_probe = probe(&first, &second);
         let first_observation = first.released.observe();
         let second_observation = second.released.observe();
-        let mut first_wait = register(first_observation.clone(), &first_probe);
-        let mut second_wait = register(second_observation.clone(), &second_probe);
+        let mut first_wait = register(
+            first_observation.clone(),
+            &first_probe,
+            release_registration_0,
+        );
+        let mut second_wait = register(
+            second_observation.clone(),
+            &second_probe,
+            release_registration_1,
+        );
         let result = catch_unwind(AssertUnwindSafe(|| {
             let mut pair = Pair {
                 first: Some(staged(&first, false, 6).capture_slot()),
@@ -346,13 +384,23 @@ fn membership_terminal_release_rejects_read_mutation_preparation_and_publication
 fn membership_capture_wake_panic_keeps_other_original_release_healthy() {
     let first = seeded(2);
     let second = seeded(4);
+    let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+    let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
     let first_probe = probe(&first, &second);
     let second_probe = probe(&first, &second);
     first_probe.panic_after_probe.store(true, Ordering::SeqCst);
     let first_observation = first.released.observe();
     let second_observation = second.released.observe();
-    let mut first_wait = register(first_observation.clone(), &first_probe);
-    let mut second_wait = register(second_observation.clone(), &second_probe);
+    let mut first_wait = register(
+        first_observation.clone(),
+        &first_probe,
+        release_registration_0,
+    );
+    let mut second_wait = register(
+        second_observation.clone(),
+        &second_probe,
+        release_registration_1,
+    );
     let result = catch_unwind(AssertUnwindSafe(|| {
         let pair = Pair {
             first: Some(staged(&first, false, 6).capture_slot()),
@@ -385,6 +433,8 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
     for replace in [false, true] {
         let first = seeded(2);
         let second = seeded(4);
+        let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+        let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
         let first_original_identity = (*first.write_lock.lock()).clone();
         let original_tip = first.latest_block.load_full().unwrap();
         let first_block = staged(&first, replace, 6);
@@ -415,8 +465,16 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
         );
         let first_probe = probe(&first, &second);
         let second_probe = probe(&first, &second);
-        let mut first_wait = register(first.released.observe(), &first_probe);
-        let mut second_wait = register(second.released.observe(), &second_probe);
+        let mut first_wait = register(
+            first.released.observe(),
+            &first_probe,
+            release_registration_0,
+        );
+        let mut second_wait = register(
+            second.released.observe(),
+            &second_probe,
+            release_registration_1,
+        );
         pair.first.try_prepare_publication().unwrap();
         pair.first.try_prepare_physical().unwrap();
         pair.second.try_prepare_publication().unwrap();
@@ -474,6 +532,8 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
     for failure in 0..3 {
         let first = seeded(2);
         let second = seeded(4);
+        let release_registration_0 = crate::unit_test_support::release_registration(&first.budget);
+        let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
         let first_tip = first.latest_block.load_full().unwrap();
         let second_tip = second.latest_block.load_full().unwrap();
         let mut second_block = second.block();
@@ -482,8 +542,16 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
         }
         let first_probe = probe(&first, &second);
         let second_probe = probe(&first, &second);
-        let mut first_wait = register(first.released.observe(), &first_probe);
-        let mut second_wait = register(second.released.observe(), &second_probe);
+        let mut first_wait = register(
+            first.released.observe(),
+            &first_probe,
+            release_registration_0,
+        );
+        let mut second_wait = register(
+            second.released.observe(),
+            &second_probe,
+            release_registration_1,
+        );
         let result = catch_unwind(AssertUnwindSafe(|| {
             let mut pair = PublicationPair {
                 first: TransactionsBlockField::new(staged(&first, false, 6)),

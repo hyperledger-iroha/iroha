@@ -173,6 +173,7 @@ fn assert_healthy_contention<V: Copy + Send + Sync + 'static>(
     records: &Arc<Records>,
     notification: &ReleaseNotification,
 ) {
+    let mut registration = crate::release_test_support::registration(budget);
     let provider = |demand: AllocationDemand| {
         Ok::<_, AdmittedStorageError>(Policy {
             reservation: budget.try_reserve_bytes(demand.bytes()).unwrap(),
@@ -195,7 +196,7 @@ fn assert_healthy_contention<V: Copy + Send + Sync + 'static>(
     assert_eq!(notification.observe(), wait);
     let count = Arc::new(WakeCount(AtomicUsize::new(0)));
     let waker = Waker::from(Arc::clone(&count));
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut registration));
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&waker)),
         Poll::Pending
@@ -341,6 +342,7 @@ fn direct_and_reacquired_publication_install_whole_pair_before_charge_cleanup_pa
 #[test]
 fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
     let budget = AllocationBudget::new(1 << 20);
+    let mut registration = crate::release_test_support::registration(&budget);
     let records = Arc::new(Records {
         live: Mutex::new(Vec::new()),
         panic_on: AtomicUsize::new(usize::MAX),
@@ -386,12 +388,11 @@ fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
                     ));
                     let wait = notification.observe();
                     assert_eq!(wait, expected);
-                    let mut future = wait.wait_for_release();
                     assert_eq!(
-                        std::pin::Pin::new(&mut future).poll(&mut Context::from_waker(&waker)),
+                        registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
                         Poll::Pending
                     );
-                    registered = Some(future);
+                    registered = Some(wait);
                     Err::<Policy, _>(match refuse_with {
                         0 => AdmittedStorageError::PolicyIdentity,
                         1 => {
@@ -435,10 +436,13 @@ fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
                 assert_eq!(count.0.load(SeqCst), 1);
                 assert!(!expected.is_poisoned());
                 assert_eq!(
-                    std::pin::Pin::new(registered.as_mut().expect("registered under raw writer"))
-                        .poll(&mut Context::from_waker(&waker)),
+                    registration.poll_wait(
+                        registered.as_ref().expect("registered under raw writer"),
+                        &mut Context::from_waker(&waker)
+                    ),
                     Poll::Ready(())
                 );
+                registration.cancel();
                 assert_eq!(storage.blocks.read().get(&7), Some(&70));
             }
         }
@@ -455,6 +459,7 @@ fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
             .iter()
             .all(|(_, live, _)| !live)
     );
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -724,6 +729,8 @@ fn admitted_block_abandonment_unlocks_both_writers_before_native_wakes() {
     for replacement in [false, true] {
         for mode in 0..3 {
             let budget = AllocationBudget::new(1 << 20);
+            let mut undo_registration = crate::release_test_support::registration(&budget);
+            let mut current_registration = crate::release_test_support::registration(&budget);
             let _context = ReplacementContext::new(&budget);
             let storage = Arc::new(replacement_fixture(&budget));
             let before = replacement_rows(&storage.view());
@@ -742,8 +749,18 @@ fn admitted_block_abandonment_unlocks_both_writers_before_native_wakes() {
             });
             let waker = Waker::from(Arc::clone(&probe));
             let mut context = Context::from_waker(&waker);
-            let mut undo = std::pin::pin!(storage.revert_released.observe().wait_for_release());
-            let mut current = std::pin::pin!(storage.blocks_released.observe().wait_for_release());
+            let mut undo = std::pin::pin!(
+                storage
+                    .revert_released
+                    .observe()
+                    .wait_for_release(&mut undo_registration)
+            );
+            let mut current = std::pin::pin!(
+                storage
+                    .blocks_released
+                    .observe()
+                    .wait_for_release(&mut current_registration)
+            );
             assert!(undo.as_mut().poll(&mut context).is_pending());
             assert!(current.as_mut().poll(&mut context).is_pending());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -902,6 +919,7 @@ fn admitted_replacement_retains_mode_and_restored_preimages_through_callback_abo
 fn admitted_replacement_contention_names_only_the_original_held_writer() {
     for hold_undo in [false, true] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut registration = crate::release_test_support::registration(&budget);
         let _context = ReplacementContext::new(&budget);
         let storage = replacement_fixture(&budget);
         budget.with_deferred_refund_notifications(|_| {
@@ -948,7 +966,7 @@ fn admitted_replacement_contention_names_only_the_original_held_writer() {
                 predecessor.try_check_current::<()>(&storage.publication).0,
                 Ok(())
             );
-            let mut future = std::pin::pin!(release.wait_for_release());
+            let mut future = std::pin::pin!(release.wait_for_release(&mut registration));
             assert!(
                 future
                     .as_mut()
@@ -970,6 +988,7 @@ fn admitted_replacement_contention_names_only_the_original_held_writer() {
                 .unwrap();
         });
         drop(storage);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }

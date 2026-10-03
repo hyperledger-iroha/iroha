@@ -516,8 +516,14 @@ mod tests {
             record_hash: Hash::new(b"immutable reward fixture"),
         };
         let source = PublicLaneRewardClaimSourceV1 {
-            source_asset: transfer.destination_asset,
-            destination_asset: transfer.source_asset,
+            source_asset: AssetId::new(
+                crate::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id,
+                transfer.destination_asset.account().clone(),
+            ),
+            destination_asset: AssetId::new(
+                crate::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id,
+                transfer.source_asset.account().clone(),
+            ),
             expected_accrued: Some(Quantity::from(2_u64)),
             payout: Quantity::from(12_u64),
         };
@@ -527,6 +533,15 @@ mod tests {
             expected_state: Some(state),
             records: vec![record],
             sources: vec![source.clone()],
+            fee_claim: Some(crate::nexus::PublicLaneFeeRewardClaimV1 {
+                lifecycle_seal: [0x81; 32],
+                beneficiary_id: sample_account(),
+                beneficiary_revision: 3,
+                source_asset: source.source_asset.clone(),
+                destination_asset: source.destination_asset.clone(),
+                amount: Quantity::from(7_u64),
+                expected_claim_sequence: 17,
+            }),
         };
         assert!(plan.has_canonical_shape(&sample_account()));
         ClaimPublicLaneRewards {
@@ -550,6 +565,7 @@ mod tests {
         assert_closed_claim_json(&instruction.claim_plan.expected_state.unwrap());
         assert_closed_claim_json(&instruction.claim_plan.records[0]);
         assert_closed_claim_json(&instruction.claim_plan.sources[0]);
+        assert_closed_claim_json(instruction.claim_plan.fee_claim.as_ref().unwrap());
         assert_closed_claim_json(&instruction.claim_plan);
         let boxed = crate::isi::InstructionBox::from(instruction.clone());
         let bytes = norito::encode_canonical(&boxed).expect("canonical claim instruction frame");
@@ -563,11 +579,13 @@ mod tests {
         let mut no_prior_state = instruction.claim_plan;
         no_prior_state.expected_state = None;
         no_prior_state.sources[0].expected_accrued = None;
+        no_prior_state.fee_claim = None;
         let value = norito::json::to_value(&no_prior_state).expect("explicit absence JSON");
         assert_eq!(
             value.get("expected_state"),
             Some(&norito::json::Value::Null)
         );
+        assert_eq!(value.get("fee_claim"), Some(&norito::json::Value::Null));
         assert_eq!(
             norito::json::from_value::<PublicLaneRewardClaimPlanV1>(value)
                 .expect("explicit absence"),
@@ -578,6 +596,39 @@ mod tests {
             through_epoch: None,
         });
         assert_closed_claim_json(&no_prior_state.sources[0]);
+    }
+    #[test]
+    fn fee_reward_claim_shape_requires_exact_global_positive_recipient_payment() {
+        let instruction = reward_claim_fixture();
+        let fee = instruction.claim_plan.fee_claim.unwrap();
+        assert!(fee.has_canonical_shape(&instruction.account));
+        for change in 0..5 {
+            let mut invalid = fee.clone();
+            match change {
+                0 => invalid.lifecycle_seal = [0; 32],
+                1 => invalid.amount = Quantity::zero(),
+                2 => invalid.destination_asset = invalid.source_asset.clone(),
+                3 => {
+                    invalid.source_asset = AssetId::with_scope(
+                        invalid.source_asset.definition().clone(),
+                        invalid.source_asset.account().clone(),
+                        crate::asset::AssetBalanceScope::Dataspace(
+                            iroha_model_base::topology::DataSpaceId::new(1),
+                        ),
+                    )
+                }
+                _ => {
+                    invalid.destination_asset = AssetId::with_scope(
+                        invalid.destination_asset.definition().clone(),
+                        instruction.account.clone(),
+                        crate::asset::AssetBalanceScope::Dataspace(
+                            iroha_model_base::topology::DataSpaceId::new(1),
+                        ),
+                    )
+                }
+            }
+            assert!(!invalid.has_canonical_shape(&instruction.account));
+        }
     }
     #[test]
     fn reward_claim_rejects_retired_bound_only_layout() {

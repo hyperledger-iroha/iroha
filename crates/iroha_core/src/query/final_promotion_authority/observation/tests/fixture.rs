@@ -56,6 +56,7 @@ pub(super) struct Fixture {
     pub(super) chain: CertifiedTestChain,
     pub(super) reserve_signed: Option<SignedTransaction>,
     pub(super) reserve_floor: Option<FinalPromotionCheckFloorV1>,
+    fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
 }
 
 impl Fixture {
@@ -65,6 +66,17 @@ impl Fixture {
 
     pub(super) fn with_observer_permissions(
         extra_permissions: impl IntoIterator<Item = Permission>,
+    ) -> Self {
+        Self::with_options(extra_permissions, false)
+    }
+
+    pub(super) fn with_fees() -> Self {
+        Self::with_options([], true)
+    }
+
+    fn with_options(
+        extra_permissions: impl IntoIterator<Item = Permission>,
+        charged: bool,
     ) -> Self {
         let manager = AccountId::new(key(1).public_key().clone());
         let operator = AccountId::new(key(2).public_key().clone());
@@ -91,7 +103,7 @@ impl Fixture {
                 }),
             ),
             (
-                operator,
+                operator.clone(),
                 Permission::from(CanOperateSorafsFinalPromotion {
                     deployment_id: DEPLOYMENT.into(),
                 }),
@@ -111,7 +123,50 @@ impl Fixture {
             }
             world.account_permissions.insert(authority, permissions);
         }
-        let chain = chain_fixture::chain(world);
+        let fee_asset = charged.then(|| {
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .unwrap()
+        });
+        let chain = if let Some(asset) = &fee_asset {
+            use crate::sumeragi::test_chain::TestChainConfig;
+            use iroha_data_model::{
+                asset::{AssetBalancePolicy, AssetDefinition, AssetId},
+                isi::{Mint, Register},
+            };
+            use iroha_primitives::numeric::Quantity;
+            let mut config = TestChainConfig::new(world, chain_fixture::GENESIS_TIME_MS);
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_instruction_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            nexus.fees.fee_asset_id = asset.to_string();
+            nexus.fees.fee_sink_account_id = observer.to_string();
+            config.nexus = Some(nexus);
+            config.genesis_instructions.push(
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset.clone(),
+                    "Native final-promotion fee",
+                    AssetBalancePolicy::Global,
+                    None,
+                ))
+                .into(),
+            );
+            for authority in [&manager, &operator, &observer] {
+                config.genesis_instructions.push(
+                    Mint::asset_quantity(
+                        Quantity::from(100_u32),
+                        AssetId::of(asset.clone(), authority.clone()),
+                    )
+                    .into(),
+                );
+            }
+            CertifiedTestChain::start(config).unwrap()
+        } else {
+            chain_fixture::chain(world)
+        };
         let state = Arc::clone(chain.state());
         let policy = SignerCustodyPolicyV1 {
             binding: SignerCustodyBindingV1 {
@@ -164,6 +219,7 @@ impl Fixture {
             chain,
             reserve_signed: None,
             reserve_floor: None,
+            fee_asset,
         };
         let configure = MutateSorafsFinalPromotionAuthority {
             deployment_id: DEPLOYMENT.into(),
@@ -354,7 +410,30 @@ impl Fixture {
         seed: u8,
         now: u64,
     ) -> SignedTransaction {
-        chain_fixture::sign(&self.state, instruction, seed, now)
+        let Some(asset) = &self.fee_asset else {
+            return chain_fixture::sign(&self.state, instruction, seed, now);
+        };
+        use iroha_data_model::transaction::{
+            FeeChargeKind, FeeChargeLimit, FeePaymentIntent, TransactionBuilder,
+        };
+        let signer = key(seed);
+        let mut builder = TransactionBuilder::new(
+            *self.state.network_id_ref(),
+            AccountId::new(signer.public_key().clone()),
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    asset.clone(),
+                    2_u32.into(),
+                )],
+                None,
+            ),
+        );
+        builder.set_creation_time(Duration::from_millis(now.saturating_sub(1)));
+        builder
+            .with_instructions([instruction])
+            .try_sign(signer.private_key())
+            .unwrap()
     }
 
     pub(super) fn pending(&self) -> PendingFinalPromotionCheckV1 {

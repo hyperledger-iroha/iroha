@@ -29,15 +29,12 @@ fn original_genesis_and_successor_have_exact_native_execution_authority() {
     let mut prefix = super::super::super::certified_chain::CertifiedPrefix::new(
         state.chain_id_ref(),
         chain.network_id(),
-        Arc::clone(first.block()),
+        first.block().clone(),
     )
     .unwrap();
     chain.commit_at(2000, Vec::new());
     let second = chain.committed(2);
-    let (certified, anchor) = prefix
-        .push(Arc::clone(second.block()))
-        .unwrap()
-        .into_parts();
+    let (certified, anchor) = prefix.push(second.block().clone()).unwrap().into_parts();
     assert_eq!(certified.core_hash(), second.core_hash());
     assert_eq!(
         anchor

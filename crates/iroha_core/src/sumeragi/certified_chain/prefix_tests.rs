@@ -46,14 +46,16 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     // Preserve the authenticated lane-write opening's structural consistency. This
     // attack changes a well-formed execution result which only the successor can bind.
     result.execution.world_state_root = Hash::new(b"unsigned genesis result replacement");
-    let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
-        CommitCertificate::from_untrusted_parts(
-            Vec::new(),
-            Vec::new(),
-            result.preimage().unwrap(),
-            Vec::new(),
-        ),
-    )));
+    let changed = crate::block::reserve_block_for_tests().initialize(
+        original.as_ref().clone().with_commit_certificate(Some(
+            CommitCertificate::from_untrusted_parts(
+                Vec::new(),
+                Vec::new(),
+                result.preimage().unwrap(),
+                Vec::new(),
+            ),
+        )),
+    );
     assert_eq!(changed.hash(), original.hash());
     let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), changed).unwrap();
     assert!(matches!(

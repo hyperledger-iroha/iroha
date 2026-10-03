@@ -59,10 +59,15 @@ package, genuine signed context and selected hardware release.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, and peer rebinding. Its Rust-authored fixture is
+monetary plans, bounded reward claims with an explicit optional fee-custody
+payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records and noncanonical quantity decimals. Decoding preserves exact
+truncated records, retired reward-plan layouts, invalid fee custody and
+noncanonical quantity decimals. Decoding preserves exact
 Norito bytes but does not verify signatures, custody, or committee activation.
+Unsigned 64-bit fields retain their complete wire bits in `Long`, including
+staking-plan expiry heights; compare them as unsigned values. Collection and
+byte-array access returns copies, preserving the original decoded record.
 
 `UpdatePlainConvictionInstruction` exposes the public standalone ballot's
 choice-free conviction update to Kotlin and Java callers. It emits the registered

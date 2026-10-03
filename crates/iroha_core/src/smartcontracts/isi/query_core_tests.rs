@@ -192,6 +192,7 @@ async fn validate_for_client_world_parts_matches_state_view_path() {
         &world,
         latest_block,
         limits,
+        &state.ivm_execution_budget(),
     )
     .expect("world validation should pass");
 }

@@ -3,8 +3,8 @@
 use super::*;
 use crate::internals::bptree::node::L_CAPACITY;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
+    atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 struct NestedPool {

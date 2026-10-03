@@ -164,6 +164,11 @@ fn nonblocking_original_maps_preserve_both_roots_and_reject_stale_or_foreign_own
 
 #[test]
 fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::pin,
@@ -178,7 +183,7 @@ fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
     else {
         panic!("publication lock must refuse immediately")
     };
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = pin!(release.wait_for_release(&mut release_registration_1));
     let mut cx = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
     drop(guard);

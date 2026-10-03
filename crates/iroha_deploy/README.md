@@ -15,7 +15,9 @@ What exists so far:
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
   requires one signed transaction to be applied by every validator. Kagami and
-  Mochi call this owner directly. Windows uses owner-restricted native named pipes;
+  Mochi call this owner directly. Explicit deployment/recovery targets preserve the
+  workspace selection; ordinary startup and default auto-creation select their environment.
+  Windows uses owner-restricted native named pipes;
   native Windows lifecycle execution still requires qualification.
   A new generation renders its final paths in private staging, then publishes its
   complete keys, configuration and immutable manifest in one native directory rename.
@@ -34,7 +36,7 @@ What exists so far:
   protection and explicit network reset identity. `ParentFinalityStore` retains
   the advancing native prefix separately and publishes before returning fresh
   readiness; reopening an older release never rewinds it. Official Taira release-key
-  installation, artifact publication and parent provisioning remain outstanding.
+  installation, artifact publication and combined parent-provisioning qualification remain outstanding.
   Native installation profiles and bounded unsigned HTTPS retrieval select the release
   independently. Signed account profiles, committee endpoints and optional faucet
   allowances feed exact parent SDK contexts without forwarding child credentials.
@@ -101,7 +103,9 @@ The committed definitions are `networks/dev.toml`, `networks/ci.toml` and
 
 TODO: add `networks/taira.toml` at release time (P9), once the real host keys
 are pinned. Until then `tests/fixtures/taira.toml` has the same shape with
-generated keys.
+generated keys. These operator definitions are separate from managed developer
+commands, which use release-authenticated installation profiles and require no
+user-supplied TOML.
 
 The shared managed generator also has an internal `StreamTokenAuthorities` profile for
 preparing a future native token service. It retains seven distinct private credentials,
@@ -122,3 +126,12 @@ selected retained profile. Profile changes require a new context and private roo
 service profile. Neither profile metadata nor generated credentials establish provider admission
 or current token eligibility. Token services remain disabled until a separate production owner
 commits the ordinary policies/enrollment/grants and publishes a retained configuration revision.
+
+`managed::ManagedStreamTokenCustody` implements shared initial Configure/Enroll coordination for
+that authenticated profile and its original signed genesis. It retains the original requests,
+UTC limits and bounded fees before dispatch, and recovers the exact wallet transaction through
+its once-only journal. Independently verified inclusion of that transaction is separate from a
+fresh native custody-state proof; retained inclusion remains reportable during a network outage
+without granting current eligibility. This source implementation does not activate services,
+admit providers, declare capacity or publish configuration revisions. CLI/Mochi integration and
+runtime qualification remain separate work.

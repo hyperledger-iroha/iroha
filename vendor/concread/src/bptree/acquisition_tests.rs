@@ -11,6 +11,11 @@ use std::{
 
 #[test]
 fn acquired_map_validation_retains_stale_and_poisoned_physical_writers() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     for poisoned in [false, true] {
         let map: BptreeMap<u64, u64> = [(1, 10)].into_iter().collect();
         let owned = map.write().detach();
@@ -27,7 +32,9 @@ fn acquired_map_validation_retains_stale_and_poisoned_physical_writers() {
             writer.commit();
         }
         let source = ReleaseNotification::default();
-        let mut wait = source.observe().wait_for_release();
+        let mut wait = source
+            .observe()
+            .wait_for_release(&mut release_registration_1);
         let acquired = without_allocations(|| {
             map.try_acquire_owned(owned)
                 .unwrap_or_else(|_| panic!("actual acquisition"))
@@ -70,6 +77,11 @@ fn acquired_map_validation_retains_stale_and_poisoned_physical_writers() {
 
 #[test]
 fn acquired_map_foreign_busy_success_and_unwind_preserve_original_custody() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let map: BptreeMap<u64, u64> = [(1, 10)].into_iter().collect();
     let foreign: BptreeMap<u64, u64> = [(1, 10)].into_iter().collect();
     let owned = map.write().detach();
@@ -109,7 +121,7 @@ fn acquired_map_foreign_busy_success_and_unwind_preserve_original_custody() {
     .is_err());
     assert!(map.is_poisoned());
     assert!(observation.is_poisoned());
-    let mut wait = observation.wait_for_release();
+    let mut wait = observation.wait_for_release(&mut release_registration_1);
     assert!(Pin::new(&mut wait)
         .poll(&mut Context::from_waker(Waker::noop()))
         .is_ready());

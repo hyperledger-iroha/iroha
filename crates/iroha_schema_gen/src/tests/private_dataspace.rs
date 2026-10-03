@@ -64,3 +64,24 @@ fn provider_discovery_export_contains_the_exact_current_state_schema_closure() {
     }
     assert!(find_missing_schema_references(&expected).is_empty());
 }
+
+#[test]
+fn independent_custody_export_contains_presence_and_absence_schema_closure() {
+    use iroha_data_model::sorafs::stream_token_custody::proof::{
+        StreamTokenCustodyProofV1, StreamTokenCustodyRecordProofV1,
+    };
+    let expected = StreamTokenCustodyProofV1::schema();
+    let exported = crate::build_schemas();
+    let exported: std::collections::BTreeMap<_, _> = exported.iter().collect();
+    for (id, descriptor) in expected.iter() {
+        assert_eq!(
+            exported.get(id).copied(),
+            Some(descriptor),
+            "missing or substituted independent custody descriptor: {}",
+            descriptor.type_name,
+        );
+    }
+    assert!(expected.contains_key::<Option<StreamTokenCustodyRecordProofV1>>());
+    assert!(expected.contains_key::<StreamTokenCustodyRecordProofV1>());
+    assert!(find_missing_schema_references(&expected).is_empty());
+}

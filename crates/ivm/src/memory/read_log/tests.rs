@@ -304,6 +304,13 @@ fn refunds_notify_after_memory_unlocks_on_publication_refusal_and_unwind() {
             memory.install_diagnostic_access_recorder(recorder).unwrap();
         }
         let memory = Arc::new(memory);
+        let registration_layout =
+            iroha_allocation::release::ReleaseRegistration::allocation_layout();
+        let mut registration = iroha_allocation::release::ReleaseRegistration::from_reservation(
+            &mut budget.try_reserve(registration_layout).unwrap(),
+        )
+        .unwrap();
+        assert!(registration.belongs_to(&budget));
         let occupied = budget.reserved_bytes();
         let next = 8 * std::mem::size_of::<AccessRange>();
         budget.set_limit_bytes(occupied + next);
@@ -317,7 +324,7 @@ fn refunds_notify_after_memory_unlocks_on_publication_refusal_and_unwind() {
             held: AtomicBool::new(false),
         });
         let waker = Waker::from(Arc::clone(&probe));
-        let mut future = release.wait_for_release();
+        let mut future = release.wait_for_release(&mut registration);
         assert!(
             Pin::new(&mut future)
                 .poll(&mut Context::from_waker(&waker))
@@ -347,6 +354,9 @@ fn refunds_notify_after_memory_unlocks_on_publication_refusal_and_unwind() {
             if outcome == 0 { 5 } else { 4 }
         );
         drop(memory);
+        assert_eq!(budget.reserved_bytes(), registration_layout.size());
+        drop(future);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }

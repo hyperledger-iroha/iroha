@@ -41,10 +41,14 @@ fn chain() -> (CertifiedTestChain, HashOf<TransactionEntrypoint>) {
     (chain, entry)
 }
 
-fn frame(chain: &CertifiedTestChain, height: u64) -> Arc<SignedBlock> {
+fn frame(chain: &CertifiedTestChain, height: u64) -> iroha_data_model::block::SharedSignedBlock {
     chain
         .kura()
-        .get_block(NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap())
+        .get_block(
+            NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .expect("stored frame")
 }
 
@@ -52,12 +56,12 @@ fn frame(chain: &CertifiedTestChain, height: u64) -> Arc<SignedBlock> {
 fn with_parts(
     frame: &SignedBlock,
     edit: impl FnOnce(&mut BlockHeader, &mut Qc, &mut Vec<u8>),
-) -> Arc<SignedBlock> {
+) -> iroha_data_model::block::SharedSignedBlock {
     let certificate = frame.commit_certificate().expect("certificate");
     let (mut header, mut qc) = decode_certificate(certificate).expect("parts");
     let mut preimage = certificate.result_preimage().to_vec();
     edit(&mut header, &mut qc, &mut preimage);
-    Arc::new(frame.clone().with_commit_certificate(Some(
+    crate::block::reserve_block_for_tests().initialize(frame.clone().with_commit_certificate(Some(
         commit_certificate(&header, &qc, preimage, certificate.availability().to_vec()).unwrap(),
     )))
 }
@@ -171,7 +175,8 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     let (chain, _) = chain();
     let original = frame(&chain, 3);
     // No certificate at all.
-    let bare = Arc::new(original.as_ref().clone().with_commit_certificate(None));
+    let bare = crate::block::reserve_block_for_tests()
+        .initialize(original.as_ref().clone().with_commit_certificate(None));
     assert_eq!(
         read_frame(bare, 3).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -219,14 +224,16 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     // Genesis must carry the result-only certificate.
     let genesis = frame(&chain, 1);
     let certificate = genesis.commit_certificate().unwrap().clone();
-    let headed = Arc::new(genesis.as_ref().clone().with_commit_certificate(Some(
-        CommitCertificate::from_untrusted_parts(
-            vec![1],
-            Vec::new(),
-            certificate.result_preimage().to_vec(),
-            certificate.availability().to_vec(),
-        ),
-    )));
+    let headed = crate::block::reserve_block_for_tests().initialize(
+        genesis.as_ref().clone().with_commit_certificate(Some(
+            CommitCertificate::from_untrusted_parts(
+                vec![1],
+                Vec::new(),
+                certificate.result_preimage().to_vec(),
+                certificate.availability().to_vec(),
+            ),
+        )),
+    );
     assert!(matches!(
         read_frame(headed, 1),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -241,8 +248,9 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).expect("reader");
     let original = frame(&chain, 4);
-    let certify = |frame: Arc<SignedBlock>| reader.check_certificate(frame, 4);
-    certify(Arc::clone(&original)).expect("the stored certificate verifies");
+    let certify =
+        |frame: iroha_data_model::block::SharedSignedBlock| reader.check_certificate(frame, 4);
+    certify(Clone::clone(&original)).expect("the stored certificate verifies");
     // A preimage whose `R` is not the certified one (its executed wire is unchanged).
     let other_result = with_parts(&original, |_, _, preimage| {
         let mut commitment = ExecutionResultCommitment::decode(preimage).unwrap();
@@ -344,14 +352,16 @@ fn certified_reader_rejects_missing_foreign_and_corrupt_signed_availability() {
         other.commit_certificate().unwrap().availability().to_vec(),
         corrupted,
     ] {
-        let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
-            CommitCertificate::from_untrusted_parts(
-                certificate.consensus_header().to_vec(),
-                certificate.commit_qc().to_vec(),
-                certificate.result_preimage().to_vec(),
-                availability,
-            ),
-        )));
+        let changed = crate::block::reserve_block_for_tests().initialize(
+            original.as_ref().clone().with_commit_certificate(Some(
+                CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    certificate.commit_qc().to_vec(),
+                    certificate.result_preimage().to_vec(),
+                    availability,
+                ),
+            )),
+        );
         assert!(
             reader.check_certificate(changed, 3).is_err(),
             "table custody is independently mandatory even under the unchanged valid QC",
@@ -372,8 +382,8 @@ fn two_valid_certificates_of_one_block_give_one_consensus_receipt() {
     assert_ne!(other_qc.signers, qc.signers);
     let other = with_parts(&original, |_, qc, _| *qc = other_qc.clone());
     assert_ne!(other.commit_certificate(), original.commit_certificate());
-    let left = read_frame(Arc::clone(&original), 3).expect("committed read");
-    let right = read_frame(Arc::clone(&other), 3).expect("committed read");
+    let left = read_frame(Clone::clone(&original), 3).expect("committed read");
+    let right = read_frame(Clone::clone(&other), 3).expect("committed read");
     assert_eq!(left.id(), right.id());
     assert_eq!(left.header(), right.header());
     assert_eq!(
@@ -395,17 +405,17 @@ fn two_valid_certificates_of_one_block_give_one_consensus_receipt() {
 }
 
 /// Store authentic history with no live registry or schedule candidates to help the reader.
-fn state_with_history(history: &[Arc<SignedBlock>]) -> State {
+fn state_with_history(history: &[iroha_data_model::block::SharedSignedBlock]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_with_chain_and_network_id_for_testing(
         World::new(),
-        Arc::clone(&kura),
+        Clone::clone(&kura),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),
         iroha_data_model::NetworkId::from_genesis_hash(history[0].hash()),
     );
     for block in history {
-        kura.store_block(Arc::clone(block)).unwrap();
+        kura.store_block(Clone::clone(block)).unwrap();
         state.push_block_hash_for_testing(block.hash());
     }
     state
@@ -424,7 +434,7 @@ fn a_view_of_another_network_is_refused() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_with_chain_and_network_id_for_testing(
         World::new(),
-        Arc::clone(&kura),
+        Clone::clone(&kura),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),
         iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
@@ -518,7 +528,8 @@ fn genesis_signature_is_verified_even_when_its_header_hash_matches_the_view() {
     let mut extra = original.as_ref().clone();
     extra.sign(foreign.private_key(), 1);
     for block in [forged, extra] {
-        let state = state_with_history(&[Arc::new(block)]);
+        let state =
+            state_with_history(&[crate::block::reserve_block_for_tests().initialize(block)]);
         assert!(matches!(
             CertifiedChain::new(&state.view()),
             Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -565,7 +576,8 @@ fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
                 .is_ok()
         );
         assert!(block.validate_proposal_commitments().is_err());
-        let state = state_with_history(&[Arc::new(block)]);
+        let state =
+            state_with_history(&[crate::block::reserve_block_for_tests().initialize(block)]);
         assert!(matches!(
             CertifiedChain::new(&state.view()),
             Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -581,7 +593,7 @@ fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
 fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() {
     let (chain, _) = chain();
     let mut history = vec![frame(&chain, 1)];
-    let mut parent = read_frame(Arc::clone(&history[0]), 1).unwrap();
+    let mut parent = read_frame(Clone::clone(&history[0]), 1).unwrap();
     for height in 2..=3 {
         let original = frame(&chain, height);
         let certificate = original.commit_certificate().unwrap();
@@ -630,7 +642,7 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
                 .unwrap(),
             );
         }
-        let changed = Arc::new(
+        let changed = crate::block::reserve_block_for_tests().initialize(
             original.as_ref().clone().with_commit_certificate(Some(
                 commit_certificate(
                     body.header(),
@@ -641,7 +653,7 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
                 .unwrap(),
             )),
         );
-        parent = read_frame(Arc::clone(&changed), height).unwrap();
+        parent = read_frame(Clone::clone(&changed), height).unwrap();
         history.push(changed);
     }
     let state = state_with_history(&history);
@@ -698,7 +710,14 @@ fn pinned_prefix_uses_the_exact_cut_without_a_world_authority() {
     let hashes = (1..=3)
         .map(|height| frame(&chain, height).hash())
         .collect::<Vec<_>>();
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        chain.kura(),
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     let receipts = reader.walk(1, 3).collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(receipts.len(), 3);
     assert_eq!(receipts[0].verification(), QcVerification::Genesis);
@@ -733,7 +752,14 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
         .map(|height| frame(&chain, height).hash())
         .collect::<Vec<_>>();
     assert_eq!(
-        CertifiedChain::from_pinned(&chain_id, &network, &[], chain.kura()).err(),
+        CertifiedChain::from_pinned(
+            &chain_id,
+            &network,
+            &[],
+            chain.kura(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::NotCommitted { height: 1 }
         ))
@@ -741,14 +767,28 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
     let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"not the pinned block"));
     let foreign = NetworkId::from_genesis_hash(wrong_hash);
     assert_eq!(
-        CertifiedChain::from_pinned(&chain_id, &foreign, &hashes, chain.kura()).err(),
+        CertifiedChain::from_pinned(
+            &chain_id,
+            &foreign,
+            &hashes,
+            chain.kura(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::ForeignGenesis
         ))
     );
     let absent = Kura::blank_kura_for_testing();
     assert_eq!(
-        CertifiedChain::from_pinned(&chain_id, &network, &hashes, &absent).err(),
+        CertifiedChain::from_pinned(
+            &chain_id,
+            &network,
+            &hashes,
+            &absent,
+            &chain.state().ivm_execution_budget(),
+        )
+        .err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::NotInView { height: 1 }
         ))
@@ -756,14 +796,28 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
     let mut changed = hashes.clone();
     changed[0] = wrong_hash;
     assert_eq!(
-        CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).err(),
+        CertifiedChain::from_pinned(
+            &chain_id,
+            &network,
+            &changed,
+            chain.kura(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::NotInView { height: 1 }
         ))
     );
     let mut changed = hashes.clone();
     changed[2] = wrong_hash;
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &changed,
+        chain.kura(),
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     assert_eq!(
         reader.certified(3).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -771,8 +825,14 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
         ))
     );
     let wrong_chain = ChainId::from("another-configured-consensus-instance");
-    let reader =
-        CertifiedChain::from_pinned(&wrong_chain, &network, &hashes, chain.kura()).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &wrong_chain,
+        &network,
+        &hashes,
+        chain.kura(),
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     assert_eq!(
         reader.certified(2).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -783,7 +843,14 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
         .kura()
         .corrupt_canonical_body_for_testing(NonZeroUsize::new(3).unwrap())
         .unwrap();
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        chain.kura(),
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     assert_eq!(
         reader.certified(3).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -799,14 +866,16 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let certificate = genesis.commit_certificate().unwrap();
     let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
     result.execution.world_state_root = Hash::new(b"unsigned pinned genesis execution replacement");
-    let changed = Arc::new(genesis.as_ref().clone().with_commit_certificate(Some(
-        CommitCertificate::from_untrusted_parts(
-            certificate.consensus_header().to_vec(),
-            certificate.commit_qc().to_vec(),
-            result.preimage().unwrap(),
-            certificate.availability().to_vec(),
-        ),
-    )));
+    let changed = crate::block::reserve_block_for_tests().initialize(
+        genesis.as_ref().clone().with_commit_certificate(Some(
+            CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                certificate.commit_qc().to_vec(),
+                result.preimage().unwrap(),
+                certificate.availability().to_vec(),
+            ),
+        )),
+    );
     assert_eq!(changed.hash(), genesis.hash());
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(changed).unwrap();
@@ -814,14 +883,28 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = chain.network_id();
     let hashes = [genesis.hash(), frame(&chain, 2).hash()];
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes[..1], &kura).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes[..1],
+        &kura,
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     let receipt = reader.certified(1).unwrap();
     assert_eq!(receipt.verification(), QcVerification::Genesis);
     assert_eq!(
         receipt.commitment().execution.world_state_root,
         result.execution.world_state_root
     );
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura).unwrap();
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        &kura,
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     assert_eq!(
         reader.certified(2).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -858,7 +941,10 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
     let reads = reader.walk(1, 3).collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(reads[0].verification(), QcVerification::Genesis);
     assert_eq!(reads[2].verification(), QcVerification::Verified);
-    assert!(Arc::ptr_eq(reads[2].block(), &frames[2]));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        reads[2].block(),
+        &frames[2]
+    ));
     assert_eq!(reads[2].commitment(), chain.committed(3).commitment());
     assert_eq!(
         reader.certified(4).err(),
@@ -927,9 +1013,14 @@ fn durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm()
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).unwrap();
     let hashes = view.block_hashes().iter().copied().collect::<Vec<_>>();
-    let pinned =
-        CertifiedChain::from_pinned(view.chain_id(), view.network_id(), &hashes, chain.kura())
-            .unwrap();
+    let pinned = CertifiedChain::from_pinned(
+        view.chain_id(),
+        view.network_id(),
+        &hashes,
+        chain.kura(),
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     reader.certified(2).expect("original State certificate");
     pinned.certified(2).expect("original pinned certificate");
     let path = Kura::canonical_storage_path(&chain.kura().store_root()).join("blocks.data");

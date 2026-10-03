@@ -122,3 +122,6 @@ pub trait FrozenBlockPublication: BlockPublication {
 mod allocation_runtime_tests;
 #[cfg(test)]
 mod allocation_test_support;
+
+#[cfg(test)]
+mod release_test_support;

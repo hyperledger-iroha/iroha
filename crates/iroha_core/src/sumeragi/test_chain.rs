@@ -702,13 +702,15 @@ impl CertifiedTestChain {
                 .certified(height)
                 .map_err(|error| error.to_string())?;
             self.kura
-                .store_block(Arc::clone(original.committed().block()))
+                .store_block(original.committed().block().clone())
                 .map_err(|error| error.to_string())?;
             let (body, commit_qc) = self
                 .committed_body(height)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("original replay frame unavailable at {height}"))?;
-            self.executor.replay(&body, &commit_qc)?;
+            self.executor
+                .replay(&body, &commit_qc)
+                .map_err(|error| error.to_string())?;
             self.tip = (
                 height,
                 original.committed().core_hash(),
@@ -1039,7 +1041,10 @@ impl CertifiedTestChain {
     ) -> SignedBlock {
         let height = self.tip.0 + 1;
         let view = self.state.view();
-        let parent = view.latest_block().expect("the applied parent");
+        let parent = view
+            .latest_block()
+            .expect("completed original State parent read")
+            .expect("the applied parent");
         let scheduled = view
             .world()
             .consensus_schedule()
@@ -1117,7 +1122,10 @@ impl CertifiedTestChain {
             "native proposals require original work"
         );
         let view = self.state.view();
-        let parent = view.latest_block().expect("original parent");
+        let parent = view
+            .latest_block()
+            .expect("completed original State parent read")
+            .expect("original parent");
         let schedule = view
             .world()
             .consensus_schedule()
@@ -2688,15 +2696,12 @@ mod tests {
         let mut prefix = super::super::certified_chain::CertifiedPrefix::new(
             &chain_id,
             network,
-            Arc::clone(genesis.block()),
+            genesis.block().clone(),
         )
         .unwrap();
         chain.commit_at(20_000, Vec::new());
         let successor = chain.committed(2);
-        let (certified, anchor) = prefix
-            .push(Arc::clone(successor.block()))
-            .unwrap()
-            .into_parts();
+        let (certified, anchor) = prefix.push(successor.block().clone()).unwrap().into_parts();
         assert_eq!(certified.core_hash(), successor.core_hash());
         let anchor = anchor.expect("actual H2 certificate authenticates original H1 result");
         assert_eq!(anchor.into_committed().result(), genesis.result());

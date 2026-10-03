@@ -2,10 +2,7 @@
 
 use std::num::NonZeroUsize;
 
-#[cfg(test)]
-use std::sync::Arc;
-
-use iroha_core::{smartcontracts::isi::tx, state::State};
+use iroha_core::{execution_attempt::ExecutionAttemptError, smartcontracts::isi::tx, state::State};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
@@ -17,6 +14,50 @@ fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(message.to_string())
 }
 
+/// Project a local read refusal only at the HTTP boundary, without inventing missing history.
+pub(crate) fn query_attempt_error(
+    error: ExecutionAttemptError<QueryExecutionFail>,
+) -> crate::Error {
+    let query_error = match error {
+        ExecutionAttemptError::Deferred(_) => QueryExecutionFail::CapacityLimit,
+        ExecutionAttemptError::Rejected(error) => error,
+    };
+    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(query_error))
+}
+
+/// Preserve canonical body failures and allocation refusal until the HTTP boundary.
+pub(crate) fn canonical_attempt_error(
+    error: ExecutionAttemptError<iroha_data_model::query::error::CanonicalHistoryError>,
+) -> crate::Error {
+    query_attempt_error(error.map_rejection(QueryExecutionFail::CanonicalHistory))
+}
+
+/// Surface DA hydration pressure as a retryable HTTP refusal, never an empty index.
+pub(crate) fn da_hydration_error(error: iroha_core::state::DaIndexHydrationError) -> crate::Error {
+    match error {
+        iroha_core::state::DaIndexHydrationError::Deferred(original) => {
+            query_attempt_error(ExecutionAttemptError::Deferred(original))
+        }
+        error => crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        )),
+    }
+}
+
+/// Preserve storage errors separately from local allocation refusal at the HTTP boundary.
+pub(crate) fn kura_attempt_error(
+    error: ExecutionAttemptError<iroha_core::kura::Error>,
+) -> crate::Error {
+    match error {
+        ExecutionAttemptError::Deferred(_) => crate::Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::CapacityLimit),
+        ),
+        ExecutionAttemptError::Rejected(error) => crate::Error::Query(
+            iroha_data_model::ValidationFail::InternalError(error.to_string()),
+        ),
+    }
+}
+
 /// Authenticate and bound the whole carrier before projecting any output.
 #[cfg(test)]
 fn read_carrier(
@@ -25,12 +66,12 @@ fn read_carrier(
     hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
-) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
+) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<QueryExecutionFail>> {
     let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
     if carrier.block().hash() != hash {
-        return Err(invalid(
+        return Err(ExecutionAttemptError::Rejected(invalid(
             "native execution differs from its independently selected hash",
-        ));
+        )));
     }
     Ok(carrier.into_block())
 }
@@ -71,7 +112,7 @@ pub(crate) fn exact_external_outcome(
     height: NonZeroUsize,
     hash: HashOf<BlockHeader>,
     target: &HashOf<SignedTransaction>,
-) -> Result<(BlockHeader, Option<bool>), QueryExecutionFail> {
+) -> Result<(BlockHeader, Option<bool>), ExecutionAttemptError<QueryExecutionFail>> {
     let work = crate::routing::app_query_limits().max_fetch_size;
     let mut outcome = None;
     let mut duplicate = false;
@@ -90,9 +131,9 @@ pub(crate) fn exact_external_outcome(
         },
     )?;
     if duplicate {
-        return Err(invalid(
+        return Err(ExecutionAttemptError::Rejected(invalid(
             "signed submission has multiple finalized Network sources",
-        ));
+        )));
     }
     Ok((header, outcome))
 }
@@ -111,6 +152,63 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder, signed::ExecutionStep},
         trigger::DataTriggerStep,
     };
+
+    #[test]
+    fn original_block_proof_refusal_remains_retryable_instead_of_missing_or_corrupt() {
+        use axum::{http::StatusCode, response::IntoResponse as _};
+        use iroha_core::state::{AllocationBudget, BlockProofError};
+
+        let pool = AllocationBudget::new(8);
+        let held = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let deferred = BlockProofError::Deferred(original.into());
+        assert_eq!(
+            crate::map_block_proof_error(deferred)
+                .into_response()
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        assert_eq!(pool.reserved_bytes(), 8);
+        drop(held);
+        let retry = pool.try_reserve_bytes(1).unwrap();
+        drop(retry);
+        assert_eq!(pool.reserved_bytes(), 0);
+
+        let height = std::num::NonZeroU64::new(1).unwrap();
+        assert!(matches!(
+            crate::map_block_proof_error(BlockProofError::BlockNotFound(height)),
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound
+            ))
+        ));
+        assert!(matches!(
+            crate::map_block_proof_error(BlockProofError::Storage {
+                block_height: height,
+                reason: "authenticated source is corrupt".into(),
+            }),
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+        ));
+    }
+
+    #[test]
+    fn original_da_hydration_refusal_remains_retryable_instead_of_an_empty_index() {
+        use axum::response::IntoResponse as _;
+        let pool = iroha_core::state::AllocationBudget::new(8);
+        let _held = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let deferred = iroha_core::state::DaIndexHydrationError::Deferred(original.into());
+        assert_eq!(
+            da_hydration_error(deferred).into_response().status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS
+        );
+        let missing = iroha_core::state::DaIndexHydrationError::MissingBlock {
+            height: std::num::NonZeroU64::new(1).unwrap(),
+        };
+        assert!(matches!(
+            da_hydration_error(missing),
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+        ));
+    }
 
     fn proposal() -> SignedBlock {
         let key = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).unwrap();
@@ -269,7 +367,9 @@ mod tests {
         let height = NonZeroUsize::new(2).unwrap();
         assert!(matches!(
             read_carrier(&state, height, block.hash(), 0, 1),
-            Err(QueryExecutionFail::GasBudgetExceeded)
+            Err(ExecutionAttemptError::Rejected(
+                QueryExecutionFail::GasBudgetExceeded
+            ))
         ));
         assert!(read_carrier(&state, height, block.hash(), 16, 1024 * 1024).is_err());
     }

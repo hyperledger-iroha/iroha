@@ -1,14 +1,18 @@
-//! Private canonical fetch and original CALL/RETURN/STORE/scalar/branch producer ownership.
+//! Private canonical fetch and original call, memory, scalar and control producers.
 //!
 //! One original packet array owns architectural control, operand reads, both
 //! lifecycle roles and protected return-PC state. The same references feed the
 //! lifecycle bank and the private sorted history; no event digest substitutes
 //! for these columns. All fetch choices and instruction activity are private.
-// TODO: Compose descriptor/typed-word/initialization/copyback/store effects and
+// The callable_lookup component joins artifact-derived child descriptors and
+// return operands/first-cell initialization through these original ports.
+// TODO: Compose general typed-word/full-initialization/copyback/memory effects and
 // their dynamic gas between these fixed slots, then initialize and terminate
 // the entire invocation in one masked STARK. This partial dispatcher has no
 // production adapter, verifier registration or complete-State authority.
 
+mod code_words;
+pub(super) mod native_witness;
 mod scalar;
 
 use super::{F, bit, frame_lifecycle, packet, wide};
@@ -19,7 +23,7 @@ use packet::{
 };
 
 /// Qualification geometry only; this is not a complete-program capacity claim.
-const MAX_WORDS: usize = 64;
+pub(super) const MAX_WORDS: usize = 64;
 const FETCH: usize = 0;
 const WORDS: usize = FETCH + MAX_WORDS;
 const CARRIES: usize = WORDS + 10 * 64;
@@ -52,7 +56,7 @@ const PC_READ: usize = 0;
 const GAS_DEBIT: usize = 1;
 const RETURN_REGISTER: usize = 2;
 const RETURN_PROTECTED_PC: usize = 3;
-const STORE_BASE: usize = 4;
+const MEMORY_BASE: usize = 4;
 const STORE_VALUE: usize = 5;
 const CHILD_COUNTER: usize = 6;
 const CHILD_ACTIVE: usize = 7;
@@ -77,8 +81,9 @@ const RUNNING_WRITE: usize = 20;
 pub(super) struct Program {
     contract: PreparedContract,
     first_pc: u32,
-    words: Vec<u32>,
+    words: code_words::CodeWords,
     cycle_limit: u64,
+    callables: super::callable_lookup::Callables,
 }
 impl Program {
     /// Parse only the original prepared artifact, never a caller instruction map.
@@ -99,16 +104,32 @@ impl Program {
             return None;
         }
         first_pc.checked_add(u32::try_from(bytes.len()).ok()?)?;
-        let words = bytes
-            .chunks_exact(4)
-            .map(|part| u32::from_le_bytes(part.try_into().unwrap()))
-            .collect();
+        let words = code_words::CodeWords::new(bytes)?;
+        for instruction in words.iter().copied() {
+            if role(instruction) == Some(Role::Literal)
+                && contract
+                    .scalar_literal(wide::literal_index(instruction) as u16)
+                    .is_none()
+            {
+                return None;
+            }
+        }
+        let callables = super::callable_lookup::Callables::new(&contract, first_pc, &words)?;
         Some(Self {
             contract,
             first_pc,
             words,
             cycle_limit,
+            callables,
         })
+    }
+
+    pub(super) fn callables(&self) -> &super::callable_lookup::Callables {
+        &self.callables
+    }
+
+    pub(super) fn fetch<'a>(&self, row: &'a [F; WIDTH]) -> &'a [F; MAX_WORDS] {
+        row[FETCH..FETCH + MAX_WORDS].try_into().unwrap()
     }
 
     fn code_end(&self) -> u64 {
@@ -178,7 +199,7 @@ impl OriginalPackets {
     /// enclosing fixed adapter owns the global row placement and next-row links.
     pub(super) fn append_history_residues(
         &self,
-        out: &mut Vec<F>,
+        out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
         rows: &[HistoryRow<'_>; PORTS * super::PHASES],
         challenges: &super::permutation::Challenges,
     ) {
@@ -202,8 +223,11 @@ pub(super) struct Decoded<'a> {
     pub(super) child: F,
     pub(super) returning: F,
     pub(super) store: F,
+    pub(super) load: F,
+    pub(super) load_destination: F,
     pub(super) target: [F; 4],
-    pub(super) store_address: [F; 4],
+    pub(super) memory_address: [F; 4],
+    pub(super) destination: &'a [F; packet::WIDTH],
     pub(super) store_value: &'a [F; packet::WIDTH],
     pub(super) child_active: &'a [F; packet::WIDTH],
     pub(super) return_active: &'a [F; packet::WIDTH],
@@ -216,13 +240,18 @@ enum Role {
     Child,
     Return,
     Store,
+    Load,
+    Literal,
     Scalar,
     Branch,
+    Jump,
 }
 fn role(instruction: u32) -> Option<Role> {
     match wide::opcode(instruction) {
         wide::control::JALS => Some(Role::Child),
         wide::control::JAL if wide::rd(instruction) == 1 => Some(Role::Child),
+        wide::control::JAL if wide::rd(instruction) == 0 => Some(Role::Jump),
+        wide::control::JMP => Some(Role::Jump),
         wide::control::JALR
             if wide::rd(instruction) == 0
                 && wide::rs1(instruction) == 1
@@ -231,6 +260,8 @@ fn role(instruction: u32) -> Option<Role> {
             Some(Role::Return)
         }
         wide::memory::STORE64 => Some(Role::Store),
+        wide::memory::LOAD64 => Some(Role::Load),
+        wide::memory::LDI64 => Some(Role::Literal),
         _ if scalar::is_branch(instruction) => Some(Role::Branch),
         _ if scalar::is_supported(instruction) => Some(Role::Scalar),
         _ => None,
@@ -252,7 +283,7 @@ fn constant_limb(value: u64, index: usize) -> F {
 /// Canonical typed source header and zero inactive payloads. Full range/first
 /// state/alias continuity remains in the same shared private history, not here.
 fn header(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: Schedule,
     packets: &OriginalPackets,
     slot: usize,
@@ -303,14 +334,14 @@ fn header(
 }
 
 /// Constrain canonical private fetch, native base debit and one-cycle commit,
-/// exact source registers, CALL fresh-parent state, protected RETURN target and
+/// exact source registers and artifact literals, CALL fresh-parent state, protected RETURN target and
 /// the native bounded return-stack depth transition.
 ///
 /// Successful-only rows force OOG/cycle/encoding guards to accept; no witness
-/// fault selector may erase an effect. Descriptor/typed-word/STORE semantics
+/// fault selector may erase an effect. Descriptor/typed-word/memory semantics
 /// are required consumers of Decoded and remain explicitly unimplemented here.
 fn append_control_residues<'a>(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     program: &Program,
     schedule: Schedule,
     row: &[F; WIDTH],
@@ -341,7 +372,14 @@ fn append_control_residues<'a>(
     let child = select(&|_, w| role(w) == Some(Role::Child));
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
+    let load = select(&|_, w| role(w) == Some(Role::Load));
+    let literal = select(&|_, w| role(w) == Some(Role::Literal));
+    let memory = store.add(load);
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
+    // GETGAS is a successful scalar state transition with the native zero
+    // opcode tariff. Its cycle and register effects remain active at zero gas.
+    let scalar_base_gas =
+        select(&|_, w| role(w) == Some(Role::Scalar) && wide::opcode(w) != wide::system::GETGAS);
     let scalar_extra_gas = select(&|_, w| {
         scalar::is_rotate(w)
             || matches!(
@@ -356,6 +394,7 @@ fn append_control_residues<'a>(
     let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
     let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
+    let jumping = select(&|_, w| role(w) == Some(Role::Jump));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
         out.push(bit(row[FETCH + i]));
@@ -369,8 +408,11 @@ fn append_control_residues<'a>(
         child
             .add(returning)
             .add(store)
+            .add(load)
+            .add(literal)
             .add(scalar)
             .add(branching)
+            .add(jumping)
             .sub(active),
     );
     for value in &row[WORDS..CHILD_INVERSE] {
@@ -429,17 +471,18 @@ fn append_control_residues<'a>(
         active,
         active,
     );
-    // Running is always a real control write, including padded zero-to-zero rows.
+    // Inactive native windows have no state accesses, including running state.
+    // Active instructions still own the exact native running transition.
     header(
         out,
         schedule,
         packets,
         RUNNING_WRITE,
         Space::Owner,
-        F(u64::from(RUNNING_OWNER)),
+        active.mul(F(u64::from(RUNNING_OWNER))),
         F::ZERO,
-        F::ONE,
-        F::ONE,
+        active,
+        active,
     );
     for i in 1..4 {
         out.push(p[RUNNING_WRITE][BEFORE + i]);
@@ -456,9 +499,9 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: two for CALL/RETURN, three for STORE64, one
-        // for scalar arithmetic and conditional branches, plus one for comparisons/rotates
-        // and two for the four multiply variants.
+        // Native base cost: two for CALL/RETURN/direct jumps, three for LOAD64/STORE64, one
+        // for LDI64, scalar arithmetic and conditional branches, plus one for comparisons/rotates
+        // and two for the four multiply variants. GETGAS has zero native cost.
         // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
@@ -468,9 +511,11 @@ fn append_control_residues<'a>(
         let cost = if i == 0 {
             child
                 .add(returning)
+                .add(jumping)
                 .mul(F(2))
-                .add(store.mul(F(3)))
-                .add(scalar)
+                .add(memory.mul(F(3)))
+                .add(literal)
+                .add(scalar_base_gas)
                 .add(scalar_extra_gas)
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)
@@ -529,17 +574,15 @@ fn append_control_residues<'a>(
         out,
         schedule,
         packets,
-        STORE_BASE,
+        MEMORY_BASE,
         Space::Register,
-        weighted(&|_, w| {
-            if role(w) == Some(Role::Store) {
-                F(wide::rd(w) as u64)
-            } else {
-                F::ZERO
-            }
+        weighted(&|_, w| match role(w) {
+            Some(Role::Store) => F(wide::rd(w) as u64),
+            Some(Role::Load) => F(wide::rs1(w) as u64),
+            _ => F::ZERO,
         }),
         F::ZERO,
-        store,
+        memory,
         F::ZERO,
     );
     header(
@@ -560,25 +603,22 @@ fn append_control_residues<'a>(
         F::ZERO,
     );
     out.push(p[RETURN_REGISTER][BEFORE_TAG]);
-    out.push(p[STORE_BASE][BEFORE_TAG]);
-    for (slot, register) in [(STORE_BASE, false), (STORE_VALUE, true)] {
-        let zero = select(&|_, w| {
-            role(w) == Some(Role::Store)
-                && if register {
-                    wide::rs1(w) == 0
-                } else {
-                    wide::rd(w) == 0
-                }
+    out.push(p[MEMORY_BASE][BEFORE_TAG]);
+    for (slot, register) in [(MEMORY_BASE, false), (STORE_VALUE, true)] {
+        let zero = select(&|_, w| match (role(w), register) {
+            (Some(Role::Store), true) | (Some(Role::Load), false) => wide::rs1(w) == 0,
+            (Some(Role::Store), false) => wide::rd(w) == 0,
+            _ => false,
         });
         for field in (BEFORE..BEFORE + 4).chain([BEFORE_TAG]) {
             out.push(zero.mul(p[slot][field]));
         }
     }
     for i in 0..4 {
-        out.push(p[STORE_BASE][BEFORE + i].sub(limb(row, 6, i)));
+        out.push(p[MEMORY_BASE][BEFORE + i].sub(limb(row, 6, i)));
         out.push(p[RETURN_REGISTER][BEFORE + i].sub(limb(row, 8, i)));
         let immediate = weighted(&|_, w| {
-            if role(w) == Some(Role::Store) {
+            if matches!(role(w), Some(Role::Store | Role::Load)) {
                 constant_limb(i64::from(wide::imm8(w)) as u64, i)
             } else {
                 F::ZERO
@@ -753,15 +793,18 @@ fn append_control_residues<'a>(
         let direct_target = weighted(&|n, w| {
             let pc = u64::from(program.first_pc) + n as u64 * 4;
             match role(w) {
-                Some(Role::Child) => {
-                    let delta = if wide::opcode(w) == wide::control::JALS {
-                        i64::from(wide::imm24(w))
-                    } else {
-                        i64::from(wide::imm16(w))
-                    };
+                Some(Role::Child | Role::Jump) => {
+                    let delta =
+                        if matches!(wide::opcode(w), wide::control::JALS | wide::control::JMP) {
+                            i64::from(wide::imm24(w))
+                        } else {
+                            i64::from(wide::imm16(w))
+                        };
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
-                Some(Role::Store | Role::Scalar) => constant_limb(pc + 4, i),
+                Some(Role::Store | Role::Load | Role::Literal | Role::Scalar) => {
+                    constant_limb(pc + 4, i)
+                }
                 Some(Role::Branch) => {
                     // PreparedContract has already checked both successors
                     // against its instruction boundaries. Native branches do
@@ -796,8 +839,11 @@ fn append_control_residues<'a>(
         child,
         returning,
         store,
+        load,
+        load_destination: select(&|_, w| role(w) == Some(Role::Load) && wide::rd(w) != 0),
+        destination: &p[SCALAR_DESTINATION],
         target: core::array::from_fn(|i| p[PC_WRITE][AFTER + i]),
-        store_address: core::array::from_fn(|i| limb(row, 7, i)),
+        memory_address: core::array::from_fn(|i| limb(row, 7, i)),
         store_value: &p[STORE_VALUE],
         child_active: &p[CHILD_ACTIVE],
         return_active: &p[RETURN_ACTIVE],
@@ -807,10 +853,11 @@ fn append_control_residues<'a>(
 }
 
 /// Join the same canonical private fetch/control and scalar/branch register equations.
+/// Direct jumps consume no register operands and leave every lifecycle port inactive.
 /// Every original producer, including all three scalar ports, belongs to the
 /// exhaustive private-history join. No public operand statement is introduced.
 pub(super) fn append_residues<'a>(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     program: &Program,
     schedule: Schedule,
     row: &[F; WIDTH],
@@ -822,4 +869,4 @@ pub(super) fn append_residues<'a>(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

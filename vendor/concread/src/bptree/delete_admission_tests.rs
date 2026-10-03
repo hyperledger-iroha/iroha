@@ -321,25 +321,28 @@ fn removal_caught_callback_clone_and_provider_panics_invalidate_both_parents() {
             .unwrap();
         let mut cp = cw.checkpoint().unwrap();
         let mut up = uw.checkpoint().unwrap();
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = cp.try_remove_with_undo_admitted(&mut up, 7, |d, _| -> Result<Policy, ()> {
-                if fault == 0 {
-                    panic!("callback failed");
-                }
-                let provider = pool.reserve(d)?;
-                if fault == 1 {
-                    pool.panic_clone.store(1);
-                }
-                if fault == 2 {
-                    pool.panic_clone.store(2);
-                }
-                if fault == 3 {
-                    pool.panic_drop.store(true);
-                }
-                Ok(provider)
-            });
-        }))
-        .is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ =
+                    cp.try_remove_with_undo_admitted(&mut up, 7, |d, _| -> Result<Policy, ()> {
+                        if fault == 0 {
+                            panic!("callback failed");
+                        }
+                        let provider = pool.reserve(d)?;
+                        if fault == 1 {
+                            pool.panic_clone.store(1);
+                        }
+                        if fault == 2 {
+                            pool.panic_clone.store(2);
+                        }
+                        if fault == 3 {
+                            pool.panic_drop.store(true);
+                        }
+                        Ok(provider)
+                    });
+            }))
+            .is_err()
+        );
         assert!(catch_unwind(AssertUnwindSafe(|| cp.len())).is_err());
         assert!(catch_unwind(AssertUnwindSafe(|| up.len())).is_err());
         drop((cp, up));
@@ -362,28 +365,33 @@ fn removal_prefailed_parent_invalidates_other_owner_before_admission() {
         let mut uw = undo.try_write_admitted(|d| pool.reserve(d)).unwrap();
         let mut cp = cw.checkpoint().unwrap();
         let mut up = uw.checkpoint().unwrap();
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            if failed_current {
-                let _ = cp.try_insert_admitted(7, 70, |d| {
-                    let p = pool.reserve(d)?;
-                    pool.panic_drop.store(true);
-                    Ok::<_, ()>(p)
-                });
-            } else {
-                let _ = up.try_insert_admitted(7, Some(70), |d| {
-                    let p = pool.reserve(d)?;
-                    pool.panic_drop.store(true);
-                    Ok::<_, ()>(p)
-                });
-            }
-        }))
-        .is_err());
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = cp.try_remove_with_undo_admitted(&mut up, 7, |_, _| -> Result<Policy, ()> {
-                panic!("must not admit prefailed pair")
-            });
-        }))
-        .is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                if failed_current {
+                    let _ = cp.try_insert_admitted(7, 70, |d| {
+                        let p = pool.reserve(d)?;
+                        pool.panic_drop.store(true);
+                        Ok::<_, ()>(p)
+                    });
+                } else {
+                    let _ = up.try_insert_admitted(7, Some(70), |d| {
+                        let p = pool.reserve(d)?;
+                        pool.panic_drop.store(true);
+                        Ok::<_, ()>(p)
+                    });
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ =
+                    cp.try_remove_with_undo_admitted(&mut up, 7, |_, _| -> Result<Policy, ()> {
+                        panic!("must not admit prefailed pair")
+                    });
+            }))
+            .is_err()
+        );
         assert!(catch_unwind(AssertUnwindSafe(|| cp.len())).is_err());
         assert!(catch_unwind(AssertUnwindSafe(|| up.len())).is_err());
         drop((cp, up));

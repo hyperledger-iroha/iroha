@@ -2,6 +2,11 @@
 
 use super::*;
 
+#[cfg(unix)]
+mod borrowed;
+#[cfg(unix)]
+pub use borrowed::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
+
 /// Validated private regular-file metadata from one bounded directory scan.
 ///
 /// This is an inventory observation, not a retained content capability. Only a later
@@ -230,7 +235,7 @@ impl SealedPrivateFile {
     /// # Errors
     /// Refuses an excessive file extent or native metadata failure.
     pub fn len(&self) -> io::Result<u64> {
-        bounded_length(&self.inner, self.maximum)
+        bounded_length(self.inner.file(), self.maximum)
     }
 
     /// Whether the bounded current extent is empty.
@@ -263,8 +268,8 @@ fn byte_ceiling(maximum: usize) -> io::Result<u64> {
     u64::try_from(maximum).map_err(|_| invalid("private file byte ceiling exceeds native extent"))
 }
 
-fn bounded_length(file: &platform::RetainedFile, maximum: u64) -> io::Result<u64> {
-    let length = file.file().metadata()?.len();
+fn bounded_length(file: &File, maximum: u64) -> io::Result<u64> {
+    let length = file.metadata()?.len();
     if length > maximum {
         return Err(invalid(
             "private file extent exceeds the original byte ceiling",
@@ -286,15 +291,12 @@ fn seek_target(position: u64, length: u64, maximum: u64, from: io::SeekFrom) -> 
 
 impl io::Write for PendingPrivateFile {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let length = byte_ceiling(bytes.len())?;
-        if length > self.maximum.saturating_sub(self.position) {
-            return Err(invalid(
-                "private file write exceeds the original byte ceiling",
-            ));
-        }
-        let written = io::Write::write(self.inner.file_mut(), bytes)?;
-        self.position += written as u64;
-        Ok(written)
+        bounded_write(
+            self.inner.file_mut(),
+            self.maximum,
+            &mut self.position,
+            bytes,
+        )
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -304,39 +306,81 @@ impl io::Write for PendingPrivateFile {
 
 impl io::Read for SealedPrivateFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let remaining =
-            usize::try_from(self.maximum.saturating_sub(self.position)).unwrap_or(usize::MAX);
-        let length = bytes.len().min(remaining);
-        let read = io::Read::read(self.inner.file_mut(), &mut bytes[..length])?;
-        self.position += read as u64;
-        Ok(read)
+        bounded_read(
+            self.inner.file_mut(),
+            self.maximum,
+            &mut self.position,
+            bytes,
+        )
     }
 }
 
 impl io::Seek for PendingPrivateFile {
     fn seek(&mut self, from: io::SeekFrom) -> io::Result<u64> {
-        let length = if matches!(from, io::SeekFrom::End(_)) {
-            bounded_length(&self.inner, self.maximum)?
-        } else {
-            0
-        };
-        let target = seek_target(self.position, length, self.maximum, from)?;
-        self.position = io::Seek::seek(self.inner.file_mut(), io::SeekFrom::Start(target))?;
-        Ok(self.position)
+        bounded_seek(
+            self.inner.file_mut(),
+            self.maximum,
+            &mut self.position,
+            from,
+        )
     }
 }
 
 impl io::Seek for SealedPrivateFile {
     fn seek(&mut self, from: io::SeekFrom) -> io::Result<u64> {
-        let length = if matches!(from, io::SeekFrom::End(_)) {
-            self.len()?
-        } else {
-            0
-        };
-        let target = seek_target(self.position, length, self.maximum, from)?;
-        self.position = io::Seek::seek(self.inner.file_mut(), io::SeekFrom::Start(target))?;
-        Ok(self.position)
+        bounded_seek(
+            self.inner.file_mut(),
+            self.maximum,
+            &mut self.position,
+            from,
+        )
     }
+}
+
+fn bounded_write(
+    file: &mut File,
+    maximum: u64,
+    position: &mut u64,
+    bytes: &[u8],
+) -> io::Result<usize> {
+    let length = byte_ceiling(bytes.len())?;
+    if length > maximum.saturating_sub(*position) {
+        return Err(invalid(
+            "private file write exceeds the original byte ceiling",
+        ));
+    }
+    let written = io::Write::write(file, bytes)?;
+    *position += written as u64;
+    Ok(written)
+}
+
+fn bounded_read(
+    file: &mut File,
+    maximum: u64,
+    position: &mut u64,
+    bytes: &mut [u8],
+) -> io::Result<usize> {
+    let remaining = usize::try_from(maximum.saturating_sub(*position)).unwrap_or(usize::MAX);
+    let length = bytes.len().min(remaining);
+    let read = io::Read::read(file, &mut bytes[..length])?;
+    *position += read as u64;
+    Ok(read)
+}
+
+fn bounded_seek(
+    file: &mut File,
+    maximum: u64,
+    position: &mut u64,
+    from: io::SeekFrom,
+) -> io::Result<u64> {
+    let length = if matches!(from, io::SeekFrom::End(_)) {
+        bounded_length(file, maximum)?
+    } else {
+        0
+    };
+    let target = seek_target(*position, length, maximum, from)?;
+    *position = io::Seek::seek(file, io::SeekFrom::Start(target))?;
+    Ok(*position)
 }
 
 #[cfg(test)]

@@ -62,6 +62,10 @@ impl Wake for ProbeActiveOnCapturedIds {
 }
 
 fn standalone_capture(replacement: bool, borrowed_extraction: bool) {
+    let waiter_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
     let set = seeded_set();
     let before = images(&set);
     let ids = set.ids.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -101,7 +105,7 @@ fn standalone_capture(replacement: bool, borrowed_extraction: bool) {
     });
     let waker = Waker::from(Arc::clone(&callback));
     let mut context = Context::from_waker(&waker);
-    let mut released = observation.wait_for_release();
+    let mut released = observation.wait_for_release(&mut registration);
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     // Keep the genuine returned successor through all physical and image checks.
     let captured = if borrowed_extraction {
@@ -228,6 +232,8 @@ fn nested_world_capture(replacement: bool) {
         tip.commit();
     }
     let world = Arc::new(world);
+    let mut registration =
+        crate::unit_test_support::release_registration(world.operation_index_budget());
     let before = images(&world.triggers);
     let before_later = norito::json::to_json(&world.soradns_last_publish_ms).unwrap();
     let ids = world
@@ -272,7 +278,7 @@ fn nested_world_capture(replacement: bool) {
     });
     let waker = Waker::from(Arc::clone(&callback));
     let mut context = Context::from_waker(&waker);
-    let mut released = observation.wait_for_release();
+    let mut released = observation.wait_for_release(&mut registration);
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     // The cfg(test) State helper calls the real restricted capture API and keeps
     // its original DetachedWorld alive while this inspection closure executes.

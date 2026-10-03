@@ -48,7 +48,7 @@ pub(super) fn residues(bank: &[F], sources: Sources<'_>, selectors: [F; 4]) -> V
 
 /// Append the shared equations without allocating a second private residue owner.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     sources: Sources<'_>,
     selectors: [F; 4],

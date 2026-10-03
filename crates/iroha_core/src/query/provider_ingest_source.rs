@@ -61,12 +61,7 @@ pub fn authorize_publisher_source_v1(
     if now_secs == 0 || binding.assignment_revision == 0 {
         return Err(rejected);
     }
-    let finalized_epoch = view
-        .latest_block()
-        .ok_or(rejected)?
-        .header()
-        .creation_time()
-        .as_secs();
+    let finalized_epoch = view.authenticated_query_ledger_time_ms().ok_or(rejected)? / 1_000;
     let now = finalized_epoch.max(now_secs);
     verify_signer_finality_v1(
         view,
@@ -193,12 +188,7 @@ pub fn authorize_provider_source_v1(
         .replication_orders()
         .get(&ReplicationOrderId::new(request.order_id))
         .ok_or(rejected)?;
-    let finalized_secs = view
-        .latest_block()
-        .ok_or(rejected)?
-        .header()
-        .creation_time()
-        .as_secs();
+    let finalized_secs = view.authenticated_query_ledger_time_ms().ok_or(rejected)? / 1_000;
     let now = now_secs.max(finalized_secs);
     if !matches!(pin.status, PinStatus::Approved(_))
         || pin.policy.retention_epoch <= now

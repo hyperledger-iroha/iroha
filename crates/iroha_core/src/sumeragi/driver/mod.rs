@@ -34,8 +34,9 @@
 //!
 //! Production backends: the P2P `Net` and ingress router (`sumeragi::net`), the file record and
 //! body stores (`sumeragi::records`, `sumeragi::bodies`) and the BLS crypto and signer
-//! (`sumeragi::crypto`). TODO(WP5): the Kura block store, the State executor and builder,
-//! `Init` from replay, and the node wiring.
+//! (`sumeragi::crypto`). `sumeragi::node` wires Kura's certified block store, the State
+//! executor and builder, replay-derived `Init`, and the native lane runner. Complete
+//! resource funding and whole-node qualification remain tracked in `specs/sumeragi_goals.md`.
 
 pub mod acquisition;
 mod audit;
@@ -51,6 +52,7 @@ mod payload_worker_tests;
 pub mod persist;
 pub mod serve;
 pub mod traits;
+mod wake;
 pub use node_gate::NodeGate;
 
 #[cfg(test)]
@@ -67,10 +69,15 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
+    task::{Context, Waker},
     thread::JoinHandle,
     time::Duration,
 };
 
+use iroha_allocation::{
+    AllocationRefusal, ChargedBufferError,
+    release::{ReleaseRegistration, ReleaseWait},
+};
 use iroha_sumeragi::{
     Core,
     api::{
@@ -78,7 +85,7 @@ use iroha_sumeragi::{
         LocalParams,
     },
     crypto::{Attestation, AttestationVerifier, Attestor, Crypto, Signer},
-    message::{Evidence, TrafficClass, WireMessage},
+    message::{ByteAdmissionError, Evidence, TrafficClass, WireMessage},
     pacemaker::FRAME_OVERHEAD,
     safety::RecordState,
     types::{
@@ -101,6 +108,7 @@ use self::{
     },
 };
 use super::metrics::InstanceMetrics;
+use wake::ThreadWake;
 
 /// Longest idle wait of the event loop before it re-reads the clock.
 const MAX_IDLE_WAIT_MS: Millis = 1_000;
@@ -295,6 +303,23 @@ fn applied_frame_limits(
     }
 }
 
+/// A startup refusal preserves its original configuration or finite-pool cause.
+#[derive(Debug, thiserror::Error)]
+pub enum KernelStartError {
+    /// The consensus configuration or authenticated startup input is invalid.
+    #[error("sumeragi configuration: {0}")]
+    Config(#[from] ConfigError),
+    /// The original instance pool refused the exact waiter control layout.
+    #[error("sumeragi waiter admission: {0}")]
+    Admission(#[from] iroha_allocation::AllocationRefusal),
+    /// Construction of an already admitted waiter allocation failed locally.
+    #[error("sumeragi waiter allocation: {0}")]
+    Allocation(#[from] iroha_allocation::PrepaidSharedError),
+    /// The fixed peer-slot backing could not be constructed from its original prepaid credit.
+    #[error("sumeragi peer-slot backing: {0}")]
+    Buffer(#[from] iroha_allocation::PrepaidBufferError),
+}
+
 /// The single-threaded, I/O-free heart of a driver instance.
 pub struct Kernel {
     core: Core,
@@ -320,8 +345,9 @@ impl Kernel {
     /// those actions (for observers).
     ///
     /// # Errors
-    /// The core refused the configuration or the startup input.
-    pub fn start(start: KernelStart) -> Result<(Self, Vec<Action>), ConfigError> {
+    /// The core refused its input, or the original pool could not prepay the waiter.
+    pub fn start(start: KernelStart) -> Result<(Self, Vec<Action>), KernelStartError> {
+        let registrations = exec::ExecutionRegistrations::admit(&start.allocation_budget)?;
         let instance = start.init.instance;
         let own = start
             .init
@@ -349,7 +375,7 @@ impl Kernel {
             local: VecDeque::new(),
             barrier: Barrier::new(config.held),
             persist: PersistQueue::new(config.backoff),
-            exec: ExecSched::new(applied, config.backoff),
+            exec: ExecSched::new(applied, config.backoff, registrations),
             serve: ServeSched::new(config.serve),
             out: VecDeque::new(),
             frame_limit: config.frame_limit,
@@ -438,6 +464,8 @@ impl Kernel {
     /// barrier; a newer record of a key supersedes its queued one), executor work to the
     /// scheduler, the rest through the barrier (O1, O2).
     pub fn route(&mut self, actions: Vec<Action>) {
+        self.exec
+            .retain_control_context(self.core.control_work_context());
         for action in actions {
             if let Some(metrics) = self.metrics.as_mut() {
                 metrics.action(self.now, &action);
@@ -501,8 +529,7 @@ impl Kernel {
                 }
             }
         }
-        self.exec
-            .retain_control_round(self.core.control_work_round());
+
         self.collect();
     }
 
@@ -683,12 +710,55 @@ impl Kernel {
     }
 }
 
+/// A completed failure while assembling the exact committed startup prefix.
+#[derive(Debug, thiserror::Error)]
+pub enum StartupHistoryError {
+    /// The original committed reader completed with an I/O or authentication error.
+    #[error("committed startup history at height {height}: {source}")]
+    Read {
+        /// Exact committed height whose original read failed.
+        height: u64,
+        /// Original storage error; local resource refusal is carried separately as Deferred.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The authoritative store reported no entry within its committed prefix.
+    #[error("committed startup history is missing height {height}")]
+    Missing {
+        /// Exact missing committed height.
+        height: u64,
+    },
+}
+
+fn startup_entry(
+    blocks: &(impl BlockStore + ?Sized),
+    height: u64,
+) -> Result<
+    iroha_sumeragi::message::SyncEntry,
+    crate::execution_attempt::ExecutionAttemptError<StartupHistoryError>,
+> {
+    use crate::execution_attempt::ExecutionAttemptError as Attempt;
+    blocks
+        .entry(height)
+        .map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC84")) {
+                return Attempt::Rejected(StartupHistoryError::Read {
+                    height,
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
+                });
+            }
+            error.map_rejection(|source| StartupHistoryError::Read { height, source })
+        })?
+        .ok_or_else(|| Attempt::Rejected(StartupHistoryError::Missing { height }))
+}
+
 /// Assemble the core's startup input (§7.4 Restart) from the block store: the tip (the genesis
 /// block's hash and result at `genesis_height`), the last `W + 2` committed headers, the
 /// records found for every key, the configurations of `t`, `t + 1`, `t + 2` and a fresh nonce.
 ///
 /// # Errors
-/// The block store lacks an entry at or below its height (local corruption).
+/// Original local read refusal remains Deferred. A missing, corrupt or unreadable
+/// committed entry retains its concrete failure and height as a completed error.
 #[allow(clippy::too_many_arguments)] // the startup inputs of §7.4, each from its own source
 pub fn assemble_init(
     blocks: &(impl BlockStore + ?Sized),
@@ -699,7 +769,7 @@ pub fn assemble_init(
     records: Vec<(PublicKey, RecordState, bool)>,
     configs: Vec<(u64, ConfigSlot)>,
     nonce: u64,
-) -> Result<Init, ConfigError> {
+) -> Result<Init, crate::execution_attempt::ExecutionAttemptError<StartupHistoryError>> {
     let t = blocks.height().max(genesis_height);
     let tip = if t == genesis_height {
         CommittedTip {
@@ -710,10 +780,7 @@ pub fn assemble_init(
             commit_qc: None,
         }
     } else {
-        let entry = blocks
-            .entry(t)
-            .map_err(|_| ConfigError::InvalidInit("block store tip read failed"))?
-            .ok_or(ConfigError::InvalidInit("block store tip missing"))?;
+        let entry = startup_entry(blocks, t)?;
         CommittedTip {
             height: t,
             block_hash: entry.commit_qc.block_hash,
@@ -727,10 +794,7 @@ pub fn assemble_init(
         .max(genesis_height + 1);
     let mut recent_headers = Vec::new();
     for height in first..=t {
-        let entry = blocks
-            .entry(height)
-            .map_err(|_| ConfigError::InvalidInit("block store history read failed"))?
-            .ok_or(ConfigError::InvalidInit("block store entry missing"))?;
+        let entry = startup_entry(blocks, height)?;
         recent_headers.push(entry.manifest.header);
     }
     Ok(Init {
@@ -751,6 +815,15 @@ pub enum DriverError {
     /// The core refused its configuration or startup input.
     #[error("sumeragi configuration: {0}")]
     Config(ConfigError),
+    /// Original instance resources cannot admit a required startup control.
+    #[error("sumeragi startup admission: {0}")]
+    Admission(#[from] iroha_allocation::AllocationRefusal),
+    /// An admitted startup control could not be physically allocated.
+    #[error("sumeragi startup allocation: {0}")]
+    Allocation(#[from] iroha_allocation::PrepaidSharedError),
+    /// The fixed peer-slot backing could not be constructed from its original prepaid credit.
+    #[error("sumeragi peer-slot backing: {0}")]
+    Buffer(#[from] iroha_allocation::PrepaidBufferError),
     /// Canonical storage failed; this storage owner cannot start another instance.
     #[error("sumeragi canonical storage is closed; restart is required")]
     StorageClosed,
@@ -765,6 +838,17 @@ pub enum DriverError {
     /// A thread could not be spawned.
     #[error("sumeragi driver thread: {0}")]
     Thread(#[from] std::io::Error),
+}
+
+impl From<KernelStartError> for DriverError {
+    fn from(error: KernelStartError) -> Self {
+        match error {
+            KernelStartError::Config(error) => Self::Config(error),
+            KernelStartError::Admission(error) => Self::Admission(error),
+            KernelStartError::Allocation(error) => Self::Allocation(error),
+            KernelStartError::Buffer(error) => Self::Buffer(error),
+        }
+    }
 }
 
 /// Configuration of one driver instance.
@@ -847,11 +931,25 @@ pub struct DriverStart {
 
 enum Input {
     Done(Completion),
-    Wake,
     Transactions,
     /// A worker thread ended.
     Exited(Worker),
     Stop,
+}
+
+/// Every real input wakes the same original loop control after enqueueing.
+#[derive(Clone)]
+struct DriverInputs {
+    sender: mpsc::Sender<Input>,
+    wake: iroha_allocation::ChargedShared<ThreadWake>,
+}
+
+impl DriverInputs {
+    fn send(&self, input: Input) -> Result<(), mpsc::SendError<Input>> {
+        self.sender.send(input)?;
+        self.wake.notify();
+        Ok(())
+    }
 }
 
 /// One original decoded frame awaiting its remaining semantic-byte admission.
@@ -859,13 +957,114 @@ enum Input {
 struct PendingMessage {
     from: PublicKey,
     message: WireMessage,
+    /// Exact failure of this original owner, including partial byte admission.
+    refusal: ByteAdmissionError,
+    failures: u32,
+    retry_at: Option<Millis>,
+}
+
+/// One reusable, prepaid waiter belongs to this instance's pending frame slot.
+struct PendingAdmission {
+    message: Option<PendingMessage>,
+    registration: ReleaseRegistration,
+    backoff: Backoff,
+}
+
+/// Only a genuine occupied original pool supplies a release-driven retry.
+fn byte_admission_release(error: &ByteAdmissionError) -> Option<&ReleaseWait> {
+    match error {
+        ByteAdmissionError::Buffer(ChargedBufferError::Admission(
+            AllocationRefusal::Capacity { release, .. },
+        ))
+        | ByteAdmissionError::ControlAdmission(AllocationRefusal::Capacity { release, .. }) => {
+            Some(release)
+        }
+        _ => None,
+    }
+}
+
+impl PendingAdmission {
+    fn admit(
+        budget: &iroha_allocation::AllocationBudget,
+        backoff: Backoff,
+    ) -> Result<Self, DriverError> {
+        let mut reservation = budget.try_reserve(ReleaseRegistration::allocation_layout())?;
+        let registration = ReleaseRegistration::from_reservation(&mut reservation)?;
+        Ok(Self {
+            message: None,
+            registration,
+            backoff,
+        })
+    }
+
+    fn arm_source(&mut self, waker: &Waker) {
+        self.registration.cancel();
+        if let Some(release) = self
+            .message
+            .as_ref()
+            .and_then(|pending| byte_admission_release(&pending.refusal))
+            && self
+                .registration
+                .poll_wait(release, &mut Context::from_waker(waker))
+                .is_ready()
+        {
+            // A release between failure and registration still reaches the same loop.
+            waker.wake_by_ref();
+        }
+    }
+
+    fn ready(&mut self, now: Millis, waker: &Waker) -> bool {
+        let Some(pending) = self.message.as_mut() else {
+            return false;
+        };
+        if let Some(release) = byte_admission_release(&pending.refusal) {
+            #[cfg(all(test, sumeragi_core_mutation = "HC77"))]
+            {
+                let _ = (release, waker);
+                return true;
+            }
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC77")))]
+            return self
+                .registration
+                .poll_wait(release, &mut Context::from_waker(waker))
+                .is_ready();
+        }
+        // A source-less refusal starts its first bounded delay at the loop's
+        // actual clock observation, never at a fabricated transport timestamp.
+        let due = pending
+            .retry_at
+            .get_or_insert_with(|| now.saturating_add(self.backoff.delay(pending.failures)));
+        now >= *due
+    }
+
+    fn next_wakeup(&self) -> Millis {
+        self.message.as_ref().map_or(Millis::MAX, |pending| {
+            if byte_admission_release(&pending.refusal).is_some() {
+                Millis::MAX
+            } else {
+                pending.retry_at.unwrap_or(0)
+            }
+        })
+    }
+
+    fn take(&mut self) -> Option<PendingMessage> {
+        self.registration.cancel();
+        self.message.take()
+    }
+}
+
+impl Drop for PendingAdmission {
+    fn drop(&mut self) {
+        // Last-owner retirement also cancels before partial bytes can refund.
+        self.registration.cancel();
+    }
 }
 
 /// State shared between the event loop and the handles.
 struct Shared {
     node_gate: Arc<NodeGate>,
     allocation_budget: iroha_allocation::AllocationBudget,
-    pending_admission: Mutex<Option<PendingMessage>>,
+    pending_admission: Mutex<PendingAdmission>,
     instance: Hash32,
     own: Vec<PublicKey>,
     ingress: Arc<Mutex<Ingress>>,
@@ -873,7 +1072,7 @@ struct Shared {
     frame_limit: usize,
     status: Mutex<Option<CoreStatus>>,
     backlog: Mutex<Backlog>,
-    wake_pending: AtomicBool,
+    wake: iroha_allocation::ChargedShared<ThreadWake>,
     /// The event loop runs.
     alive: AtomicBool,
     /// The thread whose end stopped the instance, if one did.
@@ -883,33 +1082,54 @@ struct Shared {
 }
 
 impl Shared {
-    /// Retry the exact bounded waiting frame once on event-loop progress or its idle timer.
-    fn retry_pending_message(&self) -> bool {
-        let Some(mut slot) = self.pending_admission.try_lock() else {
-            return false;
-        };
-        let Some(pending) = slot.as_mut() else {
-            return false;
-        };
-        if let Err(error) = pending.message.admit_owned_bytes(&self.allocation_budget) {
-            if !error.is_local_refusal() {
-                slot.take();
-            }
-            return false;
-        }
-        let pending = slot
-            .take()
-            .expect("the original pending frame remains installed");
-        drop(slot);
-        let class = pending.message.traffic_class();
-        admit_message(
-            &self.ingress,
-            &self.own,
-            &self.instance,
-            pending.from,
-            pending.message,
-            class,
-        )
+    /// Retry only after this original failure's source releases or its source-less delay expires.
+    fn retry_pending_message(&self, now: Millis) -> bool {
+        self.allocation_budget
+            .with_deferred_refund_notifications(|_| {
+                let Some(mut slot) = self.pending_admission.try_lock() else {
+                    return false;
+                };
+                let waker = self.wake.clone().into_waker();
+                if !slot.ready(now, &waker) {
+                    return false;
+                }
+                let pending = slot.message.as_mut().expect("ready original frame");
+                if let Err(error) = pending.message.admit_owned_bytes(&self.allocation_budget) {
+                    if error.is_local_refusal() {
+                        pending.failures = pending.failures.saturating_add(1);
+                        pending.refusal = error;
+                        pending.retry_at = None;
+                        // Cancel the previous source before arming this exact new one.
+                        slot.arm_source(&waker);
+                        // Set only the source-less deadline from the same observed clock.
+                        let _ = slot.ready(now, &waker);
+                    } else {
+                        let rejected = slot.take();
+                        drop(slot);
+                        drop(rejected);
+                    }
+                    return false;
+                }
+                let pending = slot
+                    .take()
+                    .expect("the original pending frame remains installed");
+                drop(slot);
+                let class = pending.message.traffic_class();
+                admit_message(
+                    &self.ingress,
+                    &self.own,
+                    &self.instance,
+                    pending.from,
+                    pending.message,
+                    class,
+                )
+            })
+    }
+
+    fn pending_message_wakeup(&self) -> Millis {
+        self.pending_admission
+            .try_lock()
+            .map_or(Millis::MAX, |slot| slot.next_wakeup())
     }
 
     fn publish(&self, kernel: &mut Kernel) {
@@ -944,7 +1164,7 @@ fn stop(shared: &Shared, observer: &dyn Observer, worker: Worker) {
 /// Tells the event loop that a worker thread ended, however it ended.
 struct ExitGuard {
     worker: Worker,
-    tx: mpsc::Sender<Input>,
+    tx: DriverInputs,
 }
 
 impl Drop for ExitGuard {
@@ -971,9 +1191,13 @@ impl Drop for LoopGuard {
         }
         self.shared.alive.store(false, Ordering::Release);
         // No partially admitted owner can outlive a stopped instance via a retained handle.
-        let mut pending = self.shared.pending_admission.lock();
-        pending.take();
-        self.shared.ingress.lock().clear();
+        self.shared
+            .allocation_budget
+            .with_deferred_refund_notifications(|_| {
+                let abandoned = self.shared.pending_admission.lock().take();
+                drop(abandoned);
+                self.shared.ingress.lock().clear();
+            });
     }
 }
 
@@ -981,14 +1205,12 @@ impl Drop for LoopGuard {
 #[derive(Clone)]
 pub struct DriverHandle {
     shared: Arc<Shared>,
-    inputs: mpsc::Sender<Input>,
+    inputs: DriverInputs,
 }
 
 impl DriverHandle {
     fn wake(&self) {
-        if !self.shared.wake_pending.swap(true, Ordering::AcqRel) {
-            let _ = self.inputs.send(Input::Wake);
-        }
+        self.shared.wake.notify();
     }
 
     /// Deliver an encoded frame from the authenticated peer `from` (never blocks; bounded,
@@ -1019,44 +1241,66 @@ impl DriverHandle {
         {
             return false;
         }
-        let Some(mut pending) = shared.pending_admission.try_lock() else {
-            return false;
-        };
-        // Serialize with final cleanup: a caller that passed the optimistic check
-        // cannot leave a frame behind after the event loop's owners have retired.
-        if shared.node_gate.is_closed() || !shared.alive.load(Ordering::Acquire) {
-            return false;
-        }
-        if pending.is_some() && !msg.owned_bytes_admitted_to(&shared.allocation_budget) {
-            return false;
-        }
-        if let Err(error) = msg.admit_owned_bytes(&shared.allocation_budget) {
-            if !error.is_local_refusal() {
+        // Admitted evictions may refund the pending frame's own finite pool.
+        // Dispatch those callbacks only after both ingress mutexes are released.
+        let deliver = || {
+            let Some(mut pending) = shared.pending_admission.try_lock() else {
+                return false;
+            };
+            // Serialize with final cleanup: a caller that passed the optimistic check
+            // cannot leave a frame behind after the event loop's owners have retired.
+            if shared.node_gate.is_closed() || !shared.alive.load(Ordering::Acquire) {
                 return false;
             }
-            debug_assert!(
-                pending.is_none(),
-                "completed semantic bytes cannot require allocation"
+            if pending.message.is_some() && !msg.owned_bytes_admitted_to(&shared.allocation_budget)
+            {
+                return false;
+            }
+            if let Err(error) = msg.admit_owned_bytes(&shared.allocation_budget) {
+                if !error.is_local_refusal() {
+                    return false;
+                }
+                debug_assert!(
+                    pending.message.is_none(),
+                    "completed semantic bytes cannot require allocation"
+                );
+                pending.message = Some(PendingMessage {
+                    from,
+                    message: msg,
+                    refusal: error,
+                    failures: 1,
+                    retry_at: None,
+                });
+                pending.arm_source(&shared.wake.clone().into_waker());
+                drop(pending);
+                self.wake();
+                return true;
+            }
+            let class = msg.traffic_class();
+            let queued = admit_message(
+                &shared.ingress,
+                &shared.own,
+                &shared.instance,
+                from,
+                msg,
+                class,
             );
-            *pending = Some(PendingMessage { from, message: msg });
             drop(pending);
-            self.wake();
-            return true;
+            if queued {
+                self.wake();
+            }
+            queued
+        };
+        #[cfg(all(test, sumeragi_core_mutation = "HC80"))]
+        {
+            deliver()
         }
-        let class = msg.traffic_class();
-        let queued = admit_message(
-            &shared.ingress,
-            &shared.own,
-            &shared.instance,
-            from,
-            msg,
-            class,
-        );
-        drop(pending);
-        if queued {
-            self.wake();
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC80")))]
+        {
+            shared
+                .allocation_budget
+                .with_deferred_refund_notifications(|_| deliver())
         }
-        queued
     }
 
     /// An includable transaction arrived (`PayloadReady` after an `EMPTY` build).
@@ -1204,6 +1448,9 @@ where
         if start.node_gate.is_closed() {
             return Err(DriverError::StorageClosed);
         }
+        // Admit the original wake control before any worker can publish a completion.
+        let wake = ThreadWake::admit(&start.allocation_budget)?;
+        let pending_admission = PendingAdmission::admit(&start.allocation_budget, config.backoff)?;
         let instance = start.init.instance;
         let own: Vec<PublicKey> = start
             .init
@@ -1216,14 +1463,14 @@ where
         let shared = Arc::new(Shared {
             node_gate: Arc::clone(&start.node_gate),
             allocation_budget: start.allocation_budget.clone(),
-            pending_admission: Mutex::new(None),
+            pending_admission: Mutex::new(pending_admission),
             instance,
             own,
             ingress: Arc::clone(&ingress),
             frame_limit: usize::try_from(config.frame_limit).unwrap_or(usize::MAX),
             status: Mutex::new(None),
             backlog: Mutex::new(Backlog::default()),
-            wake_pending: AtomicBool::new(false),
+            wake: wake.clone(),
             alive: AtomicBool::new(true),
             stopped: Mutex::new(None),
             metrics: metrics.as_ref().map(|metrics| metrics.series().clone()),
@@ -1232,7 +1479,8 @@ where
             net: Arc::clone(&self.net),
             gate: Arc::clone(&shared.node_gate),
         });
-        let (inputs, rx) = mpsc::channel();
+        let (sender, rx) = mpsc::channel();
+        let inputs = DriverInputs { sender, wake };
         let mut threads = Vec::new();
         let (persist_tx, persist_rx) = mpsc::channel::<(u64, Write)>();
         {
@@ -1331,6 +1579,7 @@ where
             let shared = Arc::clone(&shared);
             threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
+                    shared.wake.bind_current();
                     let _guard = LoopGuard {
                         shared: Arc::clone(&shared),
                         observer: Arc::clone(&observer),
@@ -1362,6 +1611,9 @@ where
                     drop(startup);
                     match kernel {
                         Ok((mut kernel, _)) => {
+                            kernel
+                                .exec
+                                .bind_release_waker(shared.wake.clone().into_waker());
                             if let Some(metrics) = metrics {
                                 kernel.attach_metrics(metrics);
                             }
@@ -1372,7 +1624,7 @@ where
                             }
                         }
                         Err(error) => {
-                            let _ = ready_tx.send(Err(DriverError::Config(error)));
+                            let _ = ready_tx.send(Err(error.into()));
                         }
                     }
                 })?,
@@ -1498,17 +1750,25 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
                 },
             ),
         ),
-        ExecOp::ReceiveApplicationControl { from, message } => {
-            ExecDone::ApplicationControlReceived(
-                catch_unwind(AssertUnwindSafe(|| {
-                    executor.receive_application_control(&from, &message)
-                }))
-                .unwrap_or_else(|_| {
-                    Err(PublicationError::RecoveryRequired(failed(
-                        "receive application control",
-                    )))
-                }),
-            )
+        ExecOp::ReceiveApplicationControl {
+            occurrence,
+            from,
+            message,
+        } => {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                executor.receive_application_control(&from, &message)
+            }))
+            .unwrap_or_else(|_| {
+                Err(PublicationError::RecoveryRequired(failed(
+                    "receive application control",
+                )))
+            });
+            ExecDone::ApplicationControlReceived {
+                occurrence,
+                from,
+                message,
+                result,
+            }
         }
         ExecOp::Build {
             height,
@@ -1641,7 +1901,6 @@ fn run_loop(
         };
         match input {
             Input::Done(completion) => kernel.complete(clock.now(), completion),
-            Input::Wake => shared.wake_pending.store(false, Ordering::Release),
             Input::Transactions => kernel.transactions_available(),
             Input::Exited(worker) => return Err(worker),
             Input::Stop => return Ok(false),
@@ -1649,6 +1908,8 @@ fn run_loop(
         Ok(true)
     };
     loop {
+        // Consume the previous edge before draining inputs and polling release sources.
+        shared.wake.take_pending();
         loop {
             match rx.try_recv() {
                 Ok(input) => {
@@ -1664,7 +1925,7 @@ fn run_loop(
             let Some(_operation) = shared.node_gate.enter() else {
                 return Err(Worker::Loop);
             };
-            shared.retry_pending_message();
+            shared.retry_pending_message(clock.now());
             kernel.poll(clock.now())
         };
         workers.dispatch(operations)?;
@@ -1687,16 +1948,13 @@ fn run_loop(
         shared.publish(&mut kernel);
         let wait = kernel
             .next_wakeup()
+            .min(shared.pending_message_wakeup())
             .saturating_sub(clock.now())
             .min(MAX_IDLE_WAIT_MS);
-        match rx.recv_timeout(Duration::from_millis(wait)) {
-            Ok(input) => {
-                if !absorb(&mut kernel, input)? {
-                    return Ok(());
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        // A producer between the last empty drain and this check leaves a latch.
+        // A producer after it leaves an unpark token, including before park begins.
+        if !shared.wake.take_pending() {
+            std::thread::park_timeout(Duration::from_millis(wait));
         }
     }
 }

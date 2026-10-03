@@ -41,12 +41,12 @@ pub(super) fn outstanding_rewards(
     Ok(outstanding)
 }
 
-/// Prevent ordinary and native debits from spending stake or unpaid rewards.
+/// Prevent debits from spending the sum of public rewards, stake and fee custody.
 pub(crate) fn ensure_public_lane_reserves_after_debit(
     world: &impl WorldReadOnly,
     asset: &AssetId,
     balance_after: &Quantity,
-) -> Result<(), Error> {
+) -> Result<(), Attempt<Error>> {
     let rewards = world
         .public_lane_reward_reserves()
         .get(asset)
@@ -57,10 +57,15 @@ pub(crate) fn ensure_public_lane_reserves_after_debit(
         .get(asset)
         .cloned()
         .unwrap_or_else(Quantity::zero);
-    if balance_after < &quantity_add(rewards, stake)? {
+    let fees = if cfg!(all(test, sumeragi_core_mutation = "HC56")) {
+        Quantity::zero()
+    } else {
+        crate::validation_fee_rewards::reserved_fee_custody(world, asset)?
+    };
+    if balance_after < &quantity_add(quantity_add(rewards, stake)?, fees)? {
         return Err(Error::InvariantViolation(
-            "asset debit would spend reserved public-lane rewards or stake custody".into(),
-        ));
+            "asset debit would spend reserved public-lane rewards, stake custody or fee obligations".into(),
+        ).into());
     }
     Ok(())
 }

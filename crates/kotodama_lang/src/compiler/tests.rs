@@ -1,5 +1,8 @@
 //! Compiler bytecode, source-policy, and access-hint regressions.
 
+#[path = "tests/literal_helpers.rs"]
+mod literal_helpers;
+
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
     COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,

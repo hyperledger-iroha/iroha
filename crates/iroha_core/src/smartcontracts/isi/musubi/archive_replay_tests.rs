@@ -661,8 +661,11 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
         iroha_model_base::chain::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body advertised by archive replay state");
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::try_new(genesis, &state.ivm_execution_budget())
+            .expect("admit signed genesis block control"),
+    )
+    .expect("retain the exact genesis body advertised by archive replay state");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);
@@ -1565,8 +1568,11 @@ fn archive_location_replay_state(world: World) -> State {
         iroha_model_base::chain::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body before advertising committed height");
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::try_new(genesis, &state.ivm_execution_budget())
+            .expect("admit signed genesis block control"),
+    )
+    .expect("retain the exact genesis body before advertising committed height");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);

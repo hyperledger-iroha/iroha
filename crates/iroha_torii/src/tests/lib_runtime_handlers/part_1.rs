@@ -273,7 +273,7 @@ impl ReadinessNode {
             assert_eq!(chain.genesis(), &genesis, "exact original replay source");
             chain.commit_at(20_000, Vec::new());
             for height in 1..=chain.height() {
-                kura.store_block(Arc::clone(chain.committed(height).block()))
+                kura.store_block(chain.committed(height).block().clone())
                     .expect("retain original certified wire for startup replay");
             }
         }
@@ -3431,6 +3431,7 @@ async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue(
 /// The production alias mounts must bind index enumeration to canonical signature authentication.
 #[tokio::test]
 async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() {
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -3452,7 +3453,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    let torii = Torii::new_with_handle(
+    let _torii = Torii::new_with_handle(
         ChainId::from("alias-route-registration-test"),
         signed_query_test_network_id(),
         kiso,
@@ -3478,11 +3479,14 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
         compiled_route_features(),
     )
     .expect("alias catalog is valid");
-    torii.add_alias_routes(&mut builder);
+    Torii::add_alias_routes(&mut builder);
     let (router, manifest) = builder
         .finish()
         .expect("every production alias route must match its authenticated catalog");
-    assert_eq!(manifest.explicit_routes().len(), route_catalog::aliases::ROUTES.len());
+    assert_eq!(
+        manifest.explicit_routes().len(),
+        route_catalog::aliases::ROUTES.len()
+    );
     let index = manifest
         .explicit_routes()
         .iter()

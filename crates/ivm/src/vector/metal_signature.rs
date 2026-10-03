@@ -11,22 +11,6 @@ pub(crate) fn metal_ed25519_verify_batch_into(
     hrams: &[[u8; 32]],
     destination: &mut [bool],
 ) -> bool {
-    metal_ed25519_verify_batch_with_receipt_into(
-        signatures,
-        public_keys,
-        hrams,
-        destination,
-        Some(MetalKernel::Ed25519),
-    )
-}
-
-pub(super) fn metal_ed25519_verify_batch_with_receipt_into(
-    signatures: &[[u8; 64]],
-    public_keys: &[[u8; 32]],
-    hrams: &[[u8; 32]],
-    destination: &mut [bool],
-    receipt: Option<MetalKernel>,
-) -> bool {
     into(
         BatchInput::Prepared {
             signatures,
@@ -34,7 +18,7 @@ pub(super) fn metal_ed25519_verify_batch_with_receipt_into(
             hrams,
         },
         destination,
-        receipt,
+        Some(MetalKernel::Ed25519),
     )
 }
 

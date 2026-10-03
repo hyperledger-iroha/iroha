@@ -29,7 +29,12 @@ impl ClonePlanning<usize, usize> for ScalarPolicy {
 }
 
 #[test]
-fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
+fn acquired_writer_footprint_refusal_retries_same_guard_without_early_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use iroha_allocation::release::ReleaseNotification;
     use std::{
         future::Future,
@@ -41,7 +46,76 @@ fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
     })
     .unwrap();
     let source = ReleaseNotification::default();
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_1);
+    let acquired = source.guard(map.try_acquire_writer().unwrap());
+    let mut demand = None;
+    let (acquired, error) = without_allocations(|| {
+        acquired
+            .try_map_preserving_release(|acquired| {
+                acquired.try_write_admitted_with_footprint(|existing, additional| {
+                    assert!(existing.bytes() > 0 && additional.bytes() > 0);
+                    demand = Some((existing, additional));
+                    Err::<ScalarPolicy, _>(17)
+                })
+            })
+            .err()
+            .expect("same raw guard survives refusal")
+    });
+    assert!(matches!(error, MapAdmissionError::Refused(17)));
+    assert!(without_allocations(|| map.try_acquire_writer()).is_none());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    let writer = acquired
+        .try_map_preserving_release(|acquired| {
+            acquired.try_write_admitted_with_footprint(|existing, additional| {
+                assert_eq!(Some((existing, additional)), demand);
+                Ok::<_, ()>(ScalarPolicy)
+            })
+        })
+        .unwrap_or_else(|_| panic!("retry consumes the retained original raw guard"));
+    assert!(writer.is_empty());
+    assert!(map.try_acquire_writer().is_none());
+    let (owned, release) =
+        without_allocations(|| writer.release_deferred(|writer| writer.detach()));
+    assert!(map.try_acquire_writer().is_some());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    drop(release);
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_ready());
+    assert!(map.read().is_empty());
+    map.try_write_owned(owned)
+        .unwrap_or_else(|_| panic!("original no-edit successor remains attachable"))
+        .commit();
+    assert!(map.read().is_empty());
+}
+
+#[test]
+fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
+    use iroha_allocation::release::ReleaseNotification;
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let map = BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+        Ok::<_, ()>(ScalarPolicy)
+    })
+    .unwrap();
+    let source = ReleaseNotification::default();
+    let mut wait = source
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let acquired = without_allocations(|| map.try_acquire_writer().unwrap());
     let (acquired, (input, error)) = without_allocations(|| {
         source
@@ -77,6 +151,11 @@ fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
 
 #[test]
 fn acquired_admission_busy_poison_and_unwind_preserve_real_custody() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use iroha_allocation::release::ReleaseNotification;
     use std::{
         future::Future,
@@ -89,7 +168,9 @@ fn acquired_admission_busy_poison_and_unwind_preserve_real_custody() {
     .unwrap();
     let source = ReleaseNotification::default();
     let observation = source.observe();
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation
+        .clone()
+        .wait_for_release(&mut release_registration_1);
     let acquired = source.poisoning_guard(map.try_acquire_writer().unwrap());
     assert!(without_allocations(|| map.try_acquire_writer()).is_none());
     assert!(Pin::new(&mut wait)

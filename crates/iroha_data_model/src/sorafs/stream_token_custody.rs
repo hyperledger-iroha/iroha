@@ -9,6 +9,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub mod history;
+/// Independently authenticated native custody presence and absence.
+pub mod proof;
 
 /// Total immutable history capacity per provider, including emergency revocations.
 pub const STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1: u64 = 8_194;

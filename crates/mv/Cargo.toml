@@ -47,6 +47,8 @@ features = ["base-codec"]
 
 [features]
 default = []
+# Read-only physical ownership diagnostics for cross-crate custody regressions.
+test = []
 
 [[test]]
 name = "ebr_allocation_custody"
