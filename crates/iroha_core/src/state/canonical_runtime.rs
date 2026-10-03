@@ -400,8 +400,17 @@ impl State {
         world: &impl WorldReadOnly,
         baseline: &LaneManifestRegistryHandle,
     ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
+        Self::project_canonical_runtime_from_inputs(record, world, baseline, &self.nexus.read())
+    }
+
+    pub(super) fn project_canonical_runtime_from_inputs(
+        record: &SnapshotNexusRuntime,
+        world: &impl WorldReadOnly,
+        baseline: &LaneManifestRegistryHandle,
+        configured: &iroha_config::parameters::actual::Nexus,
+    ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
         let catalog = runtime_catalog_from_world(world)?;
-        let nexus = record.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())?;
+        let nexus = record.nexus_projection_with_catalog(configured, catalog.as_ref())?;
         if let Some(catalog) = &catalog
             && catalog.baseline_manifests_hash
                 != Hash::prehashed(baseline.baseline_consensus_policy_digest())

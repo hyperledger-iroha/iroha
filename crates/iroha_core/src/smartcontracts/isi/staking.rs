@@ -721,7 +721,7 @@ fn materialize_index_quantity(
     let charge = reservation
         .try_split(layout)
         .map_err(|_| EvidencePreparationError::Invariant)?;
-    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC55"))]
+    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC85"))]
     let charge = {
         // Mutation: release the admitted original while the physical quantity lives.
         drop(charge);
@@ -2652,10 +2652,16 @@ impl Execute for ClaimPublicLaneRewards {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let claimant = self.account.clone();
-        let lane_id = self.lane_id;
+        let fee_claim = crate::validation_fee_rewards::prepare_fee_reward_claim(
+            state_transaction,
+            &self.account,
+            self.lane_id,
+            self.claim_plan.fee_claim.as_ref(),
+        )?;
         effects::execute_reward_claim(self, authority, state_transaction)?;
-        crate::validation_fee_rewards::claim_fee_rewards(state_transaction, &claimant, lane_id)?;
+        if let Some(fee_claim) = fee_claim {
+            crate::validation_fee_rewards::claim_fee_rewards(state_transaction, fee_claim)?;
+        }
         Ok(())
     }
 }
@@ -2962,6 +2968,7 @@ fn validate_reward_sink(
         )
     })?;
     let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
+    crate::state::validate_xor_custody_shape(&state_transaction.world, reward_asset)?;
     if reward_asset.account() != &sink_account {
         return Err(Error::InvariantViolation(
             "reward asset owner must match the configured fee sink account".into(),
@@ -2994,8 +3001,14 @@ fn validate_reward_sink(
         .get(reward_asset)
         .cloned()
         .unwrap_or_else(Quantity::zero);
+    let fee_custody =
+        crate::validation_fee_rewards::reserved_fee_custody(&state_transaction.world, reward_asset)
+            .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     let required = quantity_add(
-        quantity_add(committed_rewards, staking_custody)?,
+        quantity_add(
+            quantity_add(committed_rewards, staking_custody)?,
+            fee_custody,
+        )?,
         total_reward.clone(),
     )?;
     if sink_balance.as_ref() < &required {
@@ -3979,6 +3992,7 @@ fn retained_stake_context(
     staker: &AccountId,
 ) -> Result<RetainedStakeContext, Error> {
     let escrow_asset = retained_stake_custody_asset(world, lane_id, validator)?;
+    crate::state::validate_xor_custody_shape(world, &escrow_asset)?;
     Ok(RetainedStakeContext {
         asset_definition: escrow_asset.definition().clone(),
         staker_asset: AssetId::with_scope(
@@ -4099,22 +4113,7 @@ fn ensure_committed_xor_asset(
     world: &impl WorldReadOnly,
     asset: &AssetDefinitionId,
 ) -> Result<(), Attempt<Error>> {
-    let params = world
-        .sumeragi_npos_parameters()
-        .map_err(|error| error.map_rejection(|message| Error::InvariantViolation(message.into())))?
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                "staking requires the committed network XOR asset identity".into(),
-            )
-        })?;
-    if asset != &params.xor_asset_definition_id {
-        return Err((Error::InvariantViolation(
-            "configured staking or reward asset differs from the committed network XOR identity"
-                .into(),
-        ))
-        .into());
-    }
-    Ok(())
+    crate::state::validate_network_xor_asset(world, asset)
 }
 fn resolve_nexus_fee_asset_definition(
     state_transaction: &mut StateTransaction<'_, '_>,

@@ -45,17 +45,39 @@ impl ColumnStateV1 {
         challenges: ZkX509Rfc5280StarkChallengesV1,
         sha_union: &ZkX509ShaUnionCentersV1,
     ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
+        self.step_with_inverse_v1(
+            column,
+            context,
+            last,
+            der_challenges,
+            challenges,
+            sha_union,
+            &mut zero_safe_inverse_v1,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn step_with_inverse_v1(
+        &mut self,
+        column: usize,
+        context: &RowContextV1,
+        last: bool,
+        der_challenges: ZkX509DerStarkChallengesV1,
+        challenges: ZkX509Rfc5280StarkChallengesV1,
+        sha_union: &ZkX509ShaUnionCentersV1,
+        inverse: &mut impl FnMut(F, F) -> (F, F),
+    ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
         let row = &context.base;
         let fixed = &context.fixed;
         if (AUX_NUMERIC_INVERSE..AUX_NUMERIC_ZERO_SUM + numeric::LOOKUP_LANES_V1).contains(&column)
         {
             let offset = column - AUX_NUMERIC_INVERSE;
             let event = numeric_lookup_event_v1(row, fixed);
-            let mut values = numeric_replay::step_v1(
+            let mut values = numeric_replay::step_with_inverse_v1(
                 event,
                 challenges,
                 offset % numeric::LOOKUP_LANES_V1,
                 &mut self.sums,
+                inverse,
             )?;
             let result = values[offset / numeric::LOOKUP_LANES_V1];
             zeroize_fields_v1(&mut values);
@@ -147,14 +169,16 @@ impl ColumnStateV1 {
                         .mul(profile_topology_source_factor_v1(&row, lane, challenges)),
                 );
             let multiplicity = row[BASE_PROFILE_TABLE_MULTIPLICITY];
-            let query_gate = context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::FixedByte);
+            let query_gate = context
+                .family_gate_v1(ZkX509Rfc5280StarkFamilyV1::FixedByte)
+                .add(context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::NameValue));
             let query_factor = profile_byte_factor_v1(&row, lane, challenges);
             let topology_query_gate = row[BASE_PROFILE_TOPOLOGY_QUERY_ACTIVE];
             let topology_query_factor = profile_topology_query_factor_v1(&row, lane, challenges);
-            let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-            let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+            let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+            let (query_zero, query_inverse) = inverse(query_gate, query_factor);
             let (topology_query_zero, topology_query_inverse) =
-                zero_safe_inverse_v1(topology_query_gate, topology_query_factor);
+                inverse(topology_query_gate, topology_query_factor);
             let value = match kind {
                 0 => self.sums[0],
                 1 => table_inverse,
@@ -199,8 +223,8 @@ impl ColumnStateV1 {
                         row[BASE_A],
                     )
                 };
-            let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-            let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+            let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+            let (query_zero, query_inverse) = inverse(query_gate, query_factor);
             let value = match lookup.kind {
                 0 => self.sums[0],
                 1 => table_inverse,
@@ -259,8 +283,8 @@ impl ColumnStateV1 {
                 challenges,
             )
         };
-        let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-        let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+        let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+        let (query_zero, query_inverse) = inverse(query_gate, query_factor);
         let value = match lookup.kind {
             0 => self.sums[0],
             1 => table_inverse,
@@ -331,7 +355,7 @@ impl Drop for OutputGuardV1<'_, '_> {
 
 /// Named resident stack owners; output payload is charged by the caller's existing batch.
 /// No heap scratch, additional field column, or parallel replay task is created.
-pub(super) const fn scratch_payload_bytes_v1() -> usize {
+pub(super) const fn scalar_scratch_payload_bytes_v1() -> usize {
     core::mem::size_of::<RowContextV1>()
         + core::mem::size_of::<[ColumnStateV1; BATCH]>()
         + core::mem::size_of::<OutputGuardV1<'static, 'static>>()
@@ -340,8 +364,33 @@ pub(super) const fn scratch_payload_bytes_v1() -> usize {
         + core::mem::size_of::<[F; 4]>()
 }
 
-/// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
+/// Complete resident scratch for the selected bounded inverse-window route.
+pub(super) const fn scratch_payload_bytes_v1() -> usize {
+    inverse_window::scratch_payload_bytes_v1()
+}
+
+/// Fill the admitted public column span with bounded inverse windows where needed.
 pub(super) fn fill_columns_v1(
+    material: &ZkX509Rfc5280StarkBaseMaterialV1,
+    der_challenges: ZkX509DerStarkChallengesV1,
+    challenges: ZkX509Rfc5280StarkChallengesV1,
+    first: usize,
+    outputs: &mut [&mut [F]],
+    sha_union: &ZkX509ShaUnionCentersV1,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    inverse_window::fill_columns_v1(
+        material,
+        der_challenges,
+        challenges,
+        first,
+        outputs,
+        sha_union,
+    )
+}
+
+/// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
+#[cfg(test)]
+pub(super) fn fill_scalar_columns_for_testing_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
     challenges: ZkX509Rfc5280StarkChallengesV1,
@@ -370,6 +419,7 @@ pub(super) fn fill_columns_v1(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn fill_with_v1(
     rows: usize,
@@ -487,7 +537,26 @@ mod tests {
             );
             assert!(columns.iter().flatten().all(|value| *value == F(91)));
         }
-        assert!(scratch_payload_bytes_v1() < 4096);
+        // This control invokes the scalar oracle above; retain its original bound.
+        assert!(scalar_scratch_payload_bytes_v1() < 4096);
+        // Production additionally owns the fixed 24-pair window, four work cells,
+        // two public cursors, one copied recurrence and one discarded field.
+        let window_owners = (3 * BATCH * 8 + 4) * core::mem::size_of::<F>()
+            + 2 * core::mem::size_of::<usize>()
+            + core::mem::size_of::<ColumnStateV1>()
+            + core::mem::size_of::<F>();
+        assert_eq!(
+            scratch_payload_bytes_v1(),
+            scalar_scratch_payload_bytes_v1() + window_owners
+        );
+        assert_eq!(
+            super::super::zk_x509_rfc_aux_replay_scratch_bytes_v1(),
+            scratch_payload_bytes_v1()
+        );
+        assert!(
+            scratch_payload_bytes_v1()
+                < super::super::super::allocation_payload::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+        );
         assert_eq!(
             core::mem::size_of::<[ColumnStateV1; BATCH]>(),
             8 * 3 * core::mem::size_of::<F>()
@@ -913,3 +982,13 @@ mod tests {
         }
     }
 }
+
+// TODO: Qualify the selected bounded inverse window with the complete current
+// proof/resource gates; surrounding private row construction remains a separate
+// whole-prover side-channel obligation.
+#[path = "rfc5280_inverse_window.rs"]
+mod inverse_window;
+
+#[cfg(test)]
+#[path = "rfc5280_inverse_window_tests.rs"]
+pub(super) mod inverse_window_tests;

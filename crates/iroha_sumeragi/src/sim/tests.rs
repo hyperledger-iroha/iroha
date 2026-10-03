@@ -348,7 +348,33 @@ scenario_test!(f18_floods, "F18", scenarios::f18);
 scenario_test!(f19_poison_payload, "F19", scenarios::f19);
 scenario_test!(f20_cross_instance_replay, "F20", scenarios::f20);
 scenario_test!(f21_divergent_executor, "F21", scenarios::f21);
-scenario_test!(f22_idle_chain, "F22", scenarios::f22);
+/// An idle chain keeps its genesis tip while timers continue within the live-state bound.
+fn assert_idle_chain(world: &World) {
+    assert!(world.oracle.refs.iter().all(|blocks| blocks.is_empty()));
+    for replica in world.honest() {
+        assert_eq!(
+            world.committed(replica),
+            0,
+            "idle replica {replica} committed"
+        );
+        let core = world.replicas[replica]
+            .host
+            .core()
+            .expect("the idle replica remains running");
+        let status = core.status();
+        assert_eq!(status.height, 1);
+        assert_eq!(status.committed_height, 0);
+        assert_eq!(status.applied_height, 0);
+        assert!(status.halted.is_none());
+        assert!(status.footprint.within(&core.footprint_bound()));
+        assert!(world.replicas[replica].bodies.is_empty());
+    }
+}
+
+#[test]
+fn f22_idle_chain() {
+    sweep("F22", scenarios::f22, assert_idle_chain);
+}
 scenario_test!(f23_non_3f1_committees, "F23", scenarios::f23);
 #[test]
 fn f24_record_corruption_and_loss() {
@@ -566,15 +592,14 @@ fn f38_lane_next_to_global() {
 /// F22 over 100 000 retry intervals (flat memory, no idle blocks). Heavy: run with `--release
 /// --ignored`.
 #[test]
-#[ignore = "heavy: 10^5 heights"]
-fn f22_idle_chain_100k_heights() {
-    let world = run(scenarios::f22_heights(0, 100_000)).unwrap_or_else(|e| panic!("{e}"));
-    let height = world.honest().iter().map(|r| world.committed(*r)).min();
+#[ignore = "heavy: 10^5 retry intervals"]
+fn f22_idle_chain_100k_intervals() {
+    let world = run(scenarios::f22_intervals(0, 100_000)).unwrap_or_else(|e| panic!("{e}"));
+    assert_idle_chain(&world);
     eprintln!(
-        "F22 100k: min committed height {height:?}, signatures logged {}",
+        "F22 100k: zero committed idle heights, bounded live state, signatures logged {}",
         world.log.lock().expect("signing log").len()
     );
-    assert!(height.is_some_and(|h| h >= 99_000));
 }
 
 /// `det_l12_tick_ahead_of_flood` (ML12, deferred from the state-machine stage): under an
@@ -813,7 +838,10 @@ std::thread_local! {
 struct Wrapped(FakeHost);
 
 impl Host for Wrapped {
-    fn start(&mut self, start: Start) -> Result<Vec<crate::api::Action>, crate::api::ConfigError> {
+    fn start(
+        &mut self,
+        start: Start,
+    ) -> Result<Vec<crate::api::Action>, Box<dyn std::error::Error>> {
         self.0.start(start)
     }
 

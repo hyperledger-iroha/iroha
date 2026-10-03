@@ -456,7 +456,7 @@ fn append_public_xor_binding(
             .downcast_ref::<Register<AssetDefinition>>()
         {
             if register.object.id == *asset_definition_id {
-                ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                ensure_public_xor_definition(&register.object, asset_definition_id)?;
                 has_asset_definition = true;
             }
             continue;
@@ -471,7 +471,7 @@ fn append_public_xor_binding(
                 }
                 iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
                     if register.object.id == *asset_definition_id {
-                        ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                        ensure_public_xor_definition(&register.object, asset_definition_id)?;
                         has_asset_definition = true;
                     }
                 }
@@ -516,7 +516,7 @@ fn append_public_xor_binding(
         let definition = AssetDefinition::new(
             asset_definition_id.clone(),
             "xor".to_owned(),
-            public_xor_numeric_spec(asset_definition_id),
+            public_xor_numeric_spec(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -534,23 +534,21 @@ fn append_public_xor_binding(
     }
     Ok(builder.build_raw()?.with_consensus_meta()?)
 }
-fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
-    if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
-        NumericSpec::fractional(TAIRA_XOR_SCALE)
-    } else {
-        NumericSpec::default()
-    }
+fn public_xor_numeric_spec() -> NumericSpec {
+    NumericSpec::fractional(TAIRA_XOR_SCALE)
 }
-fn ensure_public_xor_numeric_spec(
+fn ensure_public_xor_definition(
     definition: &NewAssetDefinition,
     asset_definition_id: &AssetDefinitionId,
 ) -> color_eyre::Result<()> {
-    let expected = public_xor_numeric_spec(asset_definition_id);
-    if definition.spec != expected {
+    let expected = public_xor_numeric_spec();
+    if definition.spec != expected
+        || definition.balance_scope_policy != iroha_data_model::asset::AssetBalancePolicy::Global
+    {
         return Err(color_eyre::eyre::eyre!(
-            "public XOR asset `{asset_definition_id}` uses numeric spec {:?}, expected {:?}",
-            definition.spec,
-            expected
+            "public XOR asset `{asset_definition_id}` requires global scope and numeric spec {expected:?}; found scope {:?}, spec {:?}",
+            definition.balance_scope_policy,
+            definition.spec
         ));
     }
     Ok(())
@@ -704,6 +702,93 @@ mod consensus_manifest_tests {
     use super::*;
     use crate::genesis::CompleteTestGenesisBuilder as _;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
+    #[test]
+    fn every_network_xor_is_generated_with_global_scale_nine() {
+        for literal in [
+            TAIRA_XOR_ASSET_DEFINITION_ID,
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+        ] {
+            let xor = AssetDefinitionId::parse_address_literal(literal).unwrap();
+            let manifest = GenesisBuilder::new_without_executor(
+                ChainId::from("canonical-xor-generation"),
+                PathBuf::from("."),
+            )
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters {
+                    xor_asset_definition_id: xor.clone(),
+                    ..Default::default()
+                }
+                .into_custom_parameter(),
+            ))
+            .complete_for_test()
+            .build_raw()
+            .unwrap()
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            let generated = append_public_xor_binding(manifest.clone(), &xor).unwrap();
+            let definition = generated
+                .instructions()
+                .find_map(|instruction| {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<Register<AssetDefinition>>()
+                    {
+                        if register.object.id == xor {
+                            return Some(&register.object);
+                        }
+                    }
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+                        .and_then(|register| match register {
+                            iroha_data_model::isi::register::RegisterBox::AssetDefinition(
+                                register,
+                            ) if register.object.id == xor => Some(&register.object),
+                            _ => None,
+                        })
+                })
+                .expect("generated canonical XOR definition");
+            assert_eq!(definition.spec, NumericSpec::fractional(9));
+            assert_eq!(
+                definition.balance_scope_policy,
+                iroha_data_model::asset::AssetBalancePolicy::Global
+            );
+            for (spec, scope) in [
+                (
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                ),
+                (
+                    NumericSpec::fractional(18),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                ),
+                (
+                    NumericSpec::fractional(9),
+                    iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                ),
+            ] {
+                let incompatible = manifest
+                    .clone()
+                    .into_builder()
+                    .append_instruction(Register::asset_definition(AssetDefinition::new(
+                        xor.clone(),
+                        "XOR",
+                        spec,
+                        scope,
+                        None,
+                    )))
+                    .build_raw()
+                    .unwrap();
+                let error = append_public_xor_binding(incompatible, &xor).unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires global scope and numeric spec"),
+                    "{error}"
+                );
+            }
+        }
+    }
 
     fn load_genesis_source_template_for_test(
         repository_root: &std::path::Path,

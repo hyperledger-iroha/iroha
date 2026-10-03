@@ -379,7 +379,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     let mut roots = Roots::new();
     let transaction = roots.transaction(100, 1);
     let begin = roots.begin(&transaction);
-    // HC57: a valid foreign Begin never authorizes a different signed debit source.
+    // HC87: a valid foreign Begin never authorizes a different signed debit source.
     let thief = roots.participants[0].sign(
         &receiver(),
         [PrepareAmxV1 {
@@ -754,18 +754,20 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
     let genesis_wire = genesis.encode_wire().unwrap();
     let successor_wire = successor.encode_wire().unwrap();
     let budget = global.state().ivm_execution_budget();
-    let authenticated_global_source =
-        |chain: &ChainId, parent, genesis: &[u8], successor: &[u8]| {
-            let before = budget.reserved_bytes();
-            let result =
-                super::authenticated_global_source(chain, parent, genesis, successor, &budget);
-            assert_eq!(
-                budget.reserved_bytes(),
-                before,
-                "every completed source check or refusal must release both original scratch slots"
-            );
-            result
-        };
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let authenticated_global_source = |chain: &ChainId,
+                                       parent,
+                                       genesis: &[u8],
+                                       successor: &[u8]| {
+        let before = budget.reserved_bytes();
+        let result = super::authenticated_global_source(chain, parent, genesis, successor, &budget);
+        assert_eq!(
+            budget.reserved_bytes(),
+            before,
+            "every completed source check or refusal must release its original shared controls and scratch slots"
+        );
+        result
+    };
     let authenticated = authenticated_global_source(
         &chain_id,
         global.network_id(),
@@ -781,12 +783,11 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
     let before = budget.reserved_bytes();
     let original_limit = budget.limit_bytes();
     budget.set_limit_bytes(before);
-    let expected_slot_refusal = match budget.try_reserve(std::alloc::Layout::new::<
-        crate::sumeragi::certified_chain::CertifiedPrefix,
-    >()) {
-        Ok(_) => panic!("the occupied original pool must refuse the prefix slot"),
-        Err(original) => original,
-    };
+    let expected_slot_refusal =
+        match budget.try_reserve(iroha_data_model::block::SharedSignedBlock::allocation_layout()) {
+            Ok(_) => panic!("the occupied original pool must refuse the original block control"),
+            Err(original) => original,
+        };
     let refused_slot = authenticated_global_source(
         &chain_id,
         global.network_id(),
@@ -797,18 +798,20 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
     assert!(
         matches!(&refused_slot, crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
         if reason.allocation_refusal() == Some(&expected_slot_refusal)),
-        "the exact source-prefix slot must retain its original pool refusal: {refused_slot:?}"
+        "the exact source block control must retain its original pool refusal: {refused_slot:?}"
     );
     assert_eq!(budget.reserved_bytes(), before);
     budget.set_limit_bytes(original_limit);
     let prefix_bytes =
         std::alloc::Layout::new::<crate::sumeragi::certified_chain::CertifiedPrefix>().size();
+    let shared_bytes = iroha_data_model::block::SharedSignedBlock::allocation_layout().size();
     let frame_bytes =
         std::alloc::Layout::new::<crate::sumeragi::certified_chain::CommittedBlock>().size();
     let result_bytes = std::alloc::Layout::new::<ExecutionResultCommitment>().size();
     for (prior_slots, requested_slot_bytes) in [
-        (prefix_bytes, frame_bytes),
-        (prefix_bytes + frame_bytes, result_bytes),
+        (shared_bytes, prefix_bytes),
+        (shared_bytes + prefix_bytes, frame_bytes),
+        (shared_bytes + prefix_bytes + frame_bytes, result_bytes),
     ] {
         budget.set_limit_bytes(before + prior_slots);
         let refused_frame = authenticated_global_source(
@@ -841,12 +844,12 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
             }
             rejected => panic!("each physical slot refusal must remain local: {rejected:?}"),
         };
-        let mut released = std::pin::pin!(release.wait_for_release());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(
-            std::future::Future::poll(released.as_mut(), &mut context).is_ready(),
+            registration.poll_wait(&release, &mut context).is_ready(),
             "dropping the failed original slots must wake their exact original result/frame refusal"
         );
+        registration.cancel();
         assert_eq!(budget.reserved_bytes(), before);
         budget.set_limit_bytes(original_limit);
     }

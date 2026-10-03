@@ -32,15 +32,15 @@ fn event(space: Space, generation: u16, index: u32, value: u64, slot: usize) -> 
 }
 
 #[derive(Clone)]
-struct Fixture {
-    schedule: Schedule,
+pub(in super::super) struct Fixture {
+    pub(in super::super) schedule: Schedule,
     selected: F,
     address: [F; 4],
-    ports: [[F; packet::WIDTH]; 12],
-    row: [F; WIDTH],
+    pub(in super::super) ports: [[F; packet::WIDTH]; 12],
+    pub(in super::super) row: [F; WIDTH],
 }
 impl Fixture {
-    fn new(
+    pub(in super::super) fn new(
         selected: bool,
         active: u16,
         address: u64,
@@ -370,6 +370,44 @@ fn private_access_residues_have_bounded_polynomial_degree() {
                 },
             );
             assert!(degree <= 4);
+        }
+    }
+}
+
+#[test]
+fn successful_store_decision_retains_original_generation_and_initialized_region() {
+    let stack = ivm::Memory::STACK_START;
+    let descriptors = [stack, stack + 1024, 128, 144, 256, 272, 128, 144, 256, 272];
+    for active in [0, 3] {
+        for (address, tracked) in [(stack + 8, true), (256, true), (512, false), (128, false)] {
+            let fixture = Fixture::new(true, active, address, 8, true, descriptors, 0);
+            let mut out = Vec::new();
+            let address = core::array::from_fn(|i| F((address >> (16 * i)) & 0xffff));
+            let decision = append_residues(
+                &mut out,
+                fixture.schedule,
+                &fixture.row,
+                Request {
+                    selected: F::ONE,
+                    address: &address,
+                },
+                Ports {
+                    active: &fixture.ports[0],
+                    descriptors: core::array::from_fn(|i| &fixture.ports[i + 1]),
+                    initialized: &fixture.ports[11],
+                },
+            );
+            assert!(out.iter().all(|r| *r == F::ZERO));
+            assert_eq!(decision.active_generation, F(u64::from(active)));
+            assert_eq!(
+                decision.initialized_write,
+                F(u64::from(active != 0 && tracked))
+            );
+            assert_eq!(
+                fixture.ports[11],
+                [F::ZERO; packet::WIDTH],
+                "STORE never requests initialized-read permission"
+            );
         }
     }
 }

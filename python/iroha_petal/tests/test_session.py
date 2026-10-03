@@ -1,16 +1,30 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The scan session: decoding, reassembly, timeouts and statistics."""
+"""The scan session: decoding, tracking, reassembly, timeouts and statistics."""
 
 from __future__ import annotations
 
 import math
 import unittest
 
-from petal_test_support import camera_homography, capture, payload, rendered
+from petal_test_support import (
+    camera_homography,
+    capture,
+    captures_fixture,
+    luma_of,
+    payload,
+    rendered,
+)
 
-from iroha_petal import FINDER_CENTERS, DecodeErrorKind, Luma, ScanLimits, ScanSession
+from iroha_petal import (
+    FINDER_CENTERS,
+    TRACK_WINDOW_MS,
+    DecodeErrorKind,
+    Luma,
+    ScanLimits,
+    ScanSession,
+)
 
 WIDTH, HEIGHT = 640, 480
 
@@ -22,6 +36,40 @@ def camera_frame(data: bytes, kind: int, frame: int, rotation_deg: float = 20.0)
 
 
 class SessionTest(unittest.TestCase):
+    def test_a_steady_camera_is_tracked_after_the_first_frame(self) -> None:
+        data = payload(300, 3)
+        session = ScanSession(ScanLimits())
+        for frame in range(6):
+            outcome = session.push(camera_frame(data, 2, frame, rotation_deg=8.0), frame * 125)
+            self.assertIsNone(outcome.error, f"frame {frame}")
+        stats = session.stats()
+        self.assertEqual(stats.readable, 6)
+        self.assertEqual(stats.tracked, 5, "every frame after the first follows the pose")
+        self.assertEqual(stats.inferred, 0)
+        # a pause longer than the tracking window forces a full search again
+        session.push(camera_frame(data, 2, 6, rotation_deg=8.0), 5 * 125 + TRACK_WINDOW_MS + 1)
+        self.assertEqual(session.stats().tracked, 5)
+        self.assertEqual(session.stats().readable, 7)
+        # a reset forgets the pose as well
+        session.reset()
+        session.push(camera_frame(data, 2, 7, rotation_deg=8.0), 5 * 125 + TRACK_WINDOW_MS + 2)
+        self.assertEqual(session.stats().tracked, 5)
+        self.assertEqual(session.stats().readable, 8)
+
+    def test_a_hidden_corner_blossom_is_counted_and_followed(self) -> None:
+        capture_entry = next(
+            c for c in captures_fixture()["captures"] if c["name"] == "hidden-corner-540p"
+        )
+        image = luma_of(capture_entry)
+        session = ScanSession()
+        outcome = session.push(image, 0)
+        self.assertEqual(outcome.lanes, capture_entry["reference_decoded"])
+        self.assertEqual((session.stats().inferred, session.stats().tracked), (1, 0))
+        # the next frame follows the pose; the blossom is still hidden
+        outcome = session.push(image, 100)
+        self.assertEqual(outcome.lanes, capture_entry["reference_decoded"])
+        self.assertEqual((session.stats().inferred, session.stats().tracked), (2, 1))
+
     def test_a_session_receives_a_payload_from_simulated_captures(self) -> None:
         data = payload(500, 3)
         session = ScanSession(ScanLimits())

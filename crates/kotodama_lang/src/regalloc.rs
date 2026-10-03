@@ -4,7 +4,13 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
 };
-/// Result of register allocation for a function.
+mod rematerialized;
+#[cfg(test)]
+pub(crate) use rematerialized::with_literal_homes;
+
+/// Physical homes of a function's materialized temporaries.
+/// Numeric literal references whose every use reloads the canonical literal
+/// table have no home; their IR and literal validation remain intact.
 #[derive(Debug, PartialEq)]
 pub struct Allocation {
     /// Mapping from IR temporaries to physical registers.
@@ -400,6 +406,8 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
     }
     extend_tuple_intervals(&mut intervals, &tuple_defs);
     let mut interval_list: Vec<Interval> = intervals.values().copied().collect();
+    let rematerialized = rematerialized::numeric_literal_homes(func);
+    interval_list.retain(|interval| !rematerialized.contains(&interval.temp));
     interval_list.sort_by_key(|iv| (iv.start, iv.temp.0));
     interval_list
 }

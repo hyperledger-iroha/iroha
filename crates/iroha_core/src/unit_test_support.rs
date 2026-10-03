@@ -10,6 +10,23 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
     )))
 }
 
+/// Pre-admit one waiter node from the fixture's original finite pool.
+///
+/// Call before saturating that pool or acquiring the physical guard whose release
+/// is observed. This helper allocates no fallback pool and preserves pool identity.
+pub(crate) fn release_registration(
+    budget: &iroha_allocation::AllocationBudget,
+) -> iroha_allocation::release::ReleaseRegistration {
+    use iroha_allocation::release::ReleaseRegistration;
+    let mut reservation = budget
+        .try_reserve(ReleaseRegistration::allocation_layout())
+        .expect("original fixture pool admits its waiter before contention");
+    let registration = ReleaseRegistration::from_reservation(&mut reservation)
+        .expect("the original reservation funds the complete waiter node");
+    assert!(registration.belongs_to(budget));
+    registration
+}
+
 /// Run one exact test in this harness with private process-wide globals.
 ///
 /// Returns `true` in the parent after the child completes exactly once, and

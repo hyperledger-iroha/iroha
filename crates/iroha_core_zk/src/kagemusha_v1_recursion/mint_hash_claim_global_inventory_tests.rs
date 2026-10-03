@@ -1,6 +1,6 @@
 //! Both-Pasta mutation checks for the proof-visible global source carrier.
 
-use ff::{Field as _, WithSmallOrderMulGroup};
+use ff::{Field as _, PrimeField as _, WithSmallOrderMulGroup};
 use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
 use halo2_proofs::{
     dev::{MockProver, VerifyFailure},
@@ -12,6 +12,7 @@ use halo2_proofs::{
 use snark_verifier::loader::halo2::EccInstructions as _;
 
 use super::*;
+use crate::kagemusha_v1_recursion::carrier_binding::KagemushaCarrierCommitmentsV1 as ClaimCarrierCommitmentsV1;
 
 #[path = "mint_hash_claim_inventory_proof_tests.rs"]
 mod proof;

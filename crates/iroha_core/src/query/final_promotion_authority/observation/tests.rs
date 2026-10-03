@@ -16,6 +16,7 @@ use sorafs_manifest::signer::{
 };
 
 mod fixture;
+mod origin_attempt;
 mod recheck_interval;
 mod time_interval;
 use fixture::{DEPLOYMENT, Fixture, NOW, key};

@@ -888,10 +888,17 @@ impl KuraSeed {
             network_id,
             &block_hashes,
             &self.kura,
+            &self.execution_budget,
         )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.validator_committee".to_owned(),
-            message,
+        .map_err(|error| match error {
+            ExecutionAttemptError::Deferred(original) => {
+                StateRestoreError::ExecutionDeferred(original)
+            }
+            ExecutionAttemptError::Rejected(message) => json::Error::InvalidField {
+                field: "world.validator_committee".to_owned(),
+                message,
+            }
+            .into(),
         })?;
         if !block_hashes.is_empty() {
             let previous_world = world.try_block_and_revert(&self.execution_budget)?;
@@ -913,10 +920,17 @@ impl KuraSeed {
                 network_id,
                 &block_hashes[..block_hashes.len() - 1],
                 &self.kura,
+                &self.execution_budget,
             )
-            .map_err(|message| json::Error::InvalidField {
-                field: "world.validator_committee.revert".to_owned(),
-                message,
+            .map_err(|error| match error {
+                ExecutionAttemptError::Deferred(original) => {
+                    StateRestoreError::ExecutionDeferred(original)
+                }
+                ExecutionAttemptError::Rejected(message) => json::Error::InvalidField {
+                    field: "world.validator_committee.revert".to_owned(),
+                    message,
+                }
+                .into(),
             })?;
         }
         world

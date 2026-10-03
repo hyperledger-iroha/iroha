@@ -390,7 +390,7 @@ impl State {
             &[&AccountAlias],
             Option<AccountOriginal<'_>>,
         ) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, Some(authority), budget, |snapshot, world| {
             require_target(snapshot, "world.parameters", WorldStateElementKindV1::Cell, None,
                 hash_value(world.parameters.get())?)?;
@@ -470,7 +470,7 @@ impl State {
             &[&FeeSponsorEnrollment],
             &[&FeeSponsorVault],
         ) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(
             tip,
             Some(authority),

@@ -175,6 +175,7 @@ fn assert_replayed_permission_cache(
     let parent = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("committed permission-cache parent");
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(parent.header().height().get() + 1).expect("next height"),

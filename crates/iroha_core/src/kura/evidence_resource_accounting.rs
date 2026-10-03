@@ -77,6 +77,12 @@ fn evidence_resource_kind(
 
     let by_hash = match directory {
         Some(KAGEMUSHA_MINT_OUTBOX_DIR_NAME) => Some(MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES as u64),
+        Some(KAGEMUSHA_ORDINARY_MINT_OUTBOX_DIR_NAME) => {
+            Some(MAX_KAGEMUSHA_ORDINARY_MINT_OUTBOX_BYTES as u64)
+        }
+        Some(KAGEMUSHA_ORDINARY_MINT_PROGRESS_DIR_NAME) => {
+            Some(MAX_KAGEMUSHA_ORDINARY_MINT_PROGRESS_BYTES as u64)
+        }
         _ => None,
     };
     if let Some(maximum) = by_hash {

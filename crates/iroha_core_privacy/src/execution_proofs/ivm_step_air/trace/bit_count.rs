@@ -3,9 +3,11 @@
 //! Fetch constrains the leading-count selector to a Boolean. Routing the bits
 //! forwards or backwards has degree two; a preceding prefix times the next
 //! zero bit has degree three. Every prefix is uniquely Boolean by induction,
-//! including on unrelated instructions and padding. The segment retains these
-//! equations on every prior opcode; only multiply and division rows select the same
-//! workspace as product digits and disable the prefix equations.
+//! including on unrelated instructions and padding when this prefix owner is
+//! selected. The public segment disables these equations only when multiply or
+//! division owns the workspace as product digits. Private dispatch additionally
+//! gives GCD its bounded radix-four workspace and disables the prefix owner; its
+//! independent digit-range equations still constrain every shared cell.
 
 use super::F;
 
@@ -21,7 +23,12 @@ pub(in super::super) fn witness(bits: &[F], leading: bool) -> [F; WIDTH] {
     })
 }
 
-pub(in super::super) fn append_residues(out: &mut Vec<F>, prefixes: &[F], bits: &[F], leading: F) {
+pub(in super::super) fn append_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    prefixes: &[F],
+    bits: &[F],
+    leading: F,
+) {
     let mut previous = F::ONE;
     for index in 0..WIDTH {
         let bit = F::ONE

@@ -1541,8 +1541,16 @@ mod tests {
         let selected = selected(&f);
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        let mut reservation =
-            Reservation::create(&root.join("reservation"), Arc::clone(&selected), 300).unwrap();
+        // The owner creates its enrollment-specific private child under an existing parent.
+        // An absent parent must still fail without recursively creating provisioning custody.
+        let missing_parent = root.join("reservation");
+        assert!(!missing_parent.exists());
+        assert!(matches!(
+            Reservation::create(&missing_parent, Arc::clone(&selected), 300),
+            Err(Custody)
+        ));
+        assert!(!missing_parent.exists());
+        let mut reservation = Reservation::create(&root, Arc::clone(&selected), 300).unwrap();
         // Derive and genuinely sign the actual random reservation's C with the retained public
         // test Core63 issuer. This is synthetic mathematical custody, never device qualification.
         let carrier = reservation.carrier().unwrap();

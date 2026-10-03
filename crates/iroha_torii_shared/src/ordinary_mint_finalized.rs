@@ -5,6 +5,10 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 /// Sole canonical signed-body target; no ordinary operation is decoded by the OEM status route.
 pub const ORDINARY_MINT_FINALIZED_ROUTE_V1: &str = "/v1/kagemusha/ordinary/top-up/finality";
+/// Distinct read of the immutable background-published full credit and complete finalized
+/// source original. The same sole selector codec is signed under this different exact target;
+/// it is not an alias for the source-only finality route and never performs proof generation.
+pub const ORDINARY_MINT_CREDIT_ROUTE_V1: &str = "/v1/kagemusha/ordinary/top-up/credit";
 /// Finite signed read selector; complete proof and request travel in the response.
 pub const ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1: usize = 16 * 1024;
 
@@ -71,12 +75,14 @@ impl OrdinaryMintFinalizedReadV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     fn selector() -> OrdinaryMintFinalizedReadV1 {
         let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
         OrdinaryMintFinalizedReadV1 {
             version: 1,
-            network_id: NetworkId::from_genesis_hash(Hash::prehashed([8; 32])),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::prehashed([8; 32]),
+            )),
             payer: AccountId::new(key.public_key().clone()),
             operation_id: [1; 32],
             request_original_sha256: [2; 32],

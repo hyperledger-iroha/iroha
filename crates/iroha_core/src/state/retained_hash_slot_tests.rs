@@ -45,6 +45,7 @@ fn retained_hash_slot_keeps_success_refusal_and_callback_unwind_behind_outer_rel
     for replace in [false, true] {
         for failure in 0..3 {
             let hashes = Arc::new(BlockHashes::new(vec![hash(1)]));
+            let mut release_slot_0 = crate::unit_test_support::release_registration(&hashes.budget);
             let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
             let original = detached(&hashes, replace, &[2]);
             let pointer = original.get(0).map(std::ptr::from_ref);
@@ -58,7 +59,7 @@ fn retained_hash_slot_keeps_success_refusal_and_callback_unwind_behind_outer_rel
                 .map()
                 .unwrap()
                 .observe_reader_release()
-                .wait_for_release();
+                .wait_for_release(&mut release_slot_0);
             let waker = Waker::from(Arc::clone(&probe));
             assert!(
                 Pin::new(&mut wait)
@@ -135,6 +136,7 @@ fn retained_hash_slot_keeps_success_refusal_and_callback_unwind_behind_outer_rel
 fn retained_hash_slot_publication_keeps_original_preflight_through_outer_unlock() {
     for replace in [false, true] {
         let hashes = Arc::new(BlockHashes::new(vec![hash(1)]));
+        let mut release_slot_0 = crate::unit_test_support::release_registration(&hashes.budget);
         let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
         let original = detached(&hashes, replace, &[2]);
         let probe = Arc::new(Probe {
@@ -148,7 +150,7 @@ fn retained_hash_slot_publication_keeps_original_preflight_through_outer_unlock(
             .map()
             .unwrap()
             .observe_reader_release()
-            .wait_for_release();
+            .wait_for_release(&mut release_slot_0);
         assert!(
             Pin::new(&mut wait)
                 .poll(&mut Context::from_waker(&waker))

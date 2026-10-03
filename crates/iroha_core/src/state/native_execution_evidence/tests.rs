@@ -11,13 +11,15 @@ fn chain() -> CertifiedTestChain {
     chain.commit_at(3_000, Vec::new());
     chain
 }
-fn frame(chain: &CertifiedTestChain, height: usize) -> SignedBlock {
+fn frame(chain: &CertifiedTestChain, height: usize) -> iroha_data_model::block::SharedSignedBlock {
     chain
         .kura()
-        .get_block(NonZeroUsize::new(height).unwrap())
-        .unwrap()
-        .as_ref()
-        .clone()
+        .get_block(
+            NonZeroUsize::new(height).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original State carrier read")
+        .expect("stored carrier")
 }
 fn projection(chain: &CertifiedTestChain, block: &SignedBlock) -> Vec<u8> {
     let archive = crate::query::native_context_archive::NativeContextArchive::open(
@@ -183,7 +185,9 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
     ));
     assert_eq!(
         chain.state().verified_sumeragi_lane_state().unwrap_err(),
-        format!("required historical native lane state source 2: {missing_source}"),
+        crate::execution_attempt::ExecutionAttemptError::Rejected(format!(
+            "required historical native lane state source 2: {missing_source}"
+        )),
         "the live reader must propagate the original missing-record refusal"
     );
     std::fs::write(&path, &original).unwrap();
@@ -197,13 +201,11 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
     let mut foreign: NativeExecutionProjectionV1 = norito::decode_canonical(&original).unwrap();
     foreign.carrier_hash = frame(&chain, 3).hash();
     std::fs::write(&path, norito::encode_canonical(&foreign).unwrap()).unwrap();
-    assert!(
-        chain
-            .state()
-            .verified_sumeragi_lane_state()
-            .unwrap_err()
-            .contains("carrier identity")
-    );
+    assert!(matches!(
+        chain.state().verified_sumeragi_lane_state().unwrap_err(),
+        crate::execution_attempt::ExecutionAttemptError::Rejected(reason)
+            if reason.contains("carrier identity")
+    ));
     std::fs::write(&path, original).unwrap();
     assert!(
         chain
@@ -228,9 +230,9 @@ fn native_live_capability_requires_completed_successor_anchor() {
     assert!(unanchored.into_current_lanes().is_err());
     let mut anchored = reader(&chain);
     for height in 1..=2 {
-        let block = std::sync::Arc::new(frame(&chain, height));
+        let block = frame(&chain, height);
         let bytes = projection(&chain, &block);
-        anchored.push_shared_height(block, &bytes).unwrap();
+        anchored.push_height(block, &bytes).unwrap();
     }
     assert!(anchored.into_current_lanes().unwrap().lanes.is_empty());
 }
@@ -295,12 +297,12 @@ fn live_receipt_cannot_move_to_an_equivalent_distinct_state_owner() {
 fn authenticated_genesis_callback_requires_actual_successor_and_rejection_poisons_interval() {
     let chain = chain();
     let mut reader = reader(&chain);
-    let genesis = Arc::new(frame(&chain, 1));
-    let next = Arc::new(frame(&chain, 2));
+    let genesis = frame(&chain, 1);
+    let next = frame(&chain, 2);
     assert!(
         reader
             .push_shared_height_with_genesis(
-                Arc::clone(&genesis),
+                genesis.clone(),
                 &projection(&chain, &genesis),
                 |_| panic!("unsigned genesis cannot escape")
             )
@@ -309,7 +311,7 @@ fn authenticated_genesis_callback_requires_actual_successor_and_rejection_poison
     );
     let mut called = false;
     let error = reader
-        .push_shared_height_with_genesis(Arc::clone(&next), &projection(&chain, &next), |receipt| {
+        .push_shared_height_with_genesis(next.clone(), &projection(&chain, &next), |receipt| {
             called = true;
             assert_eq!(receipt.block().hash(), genesis.hash());
             assert_eq!(
@@ -327,7 +329,7 @@ fn authenticated_genesis_callback_requires_actual_successor_and_rejection_poison
     assert!(error.contains("selected original creation rejected"));
     assert!(
         reader
-            .push_shared_height(Arc::clone(&next), &projection(&chain, &next))
+            .push_height(next.clone(), &projection(&chain, &next))
             .unwrap_err()
             .contains("poisoned")
     );

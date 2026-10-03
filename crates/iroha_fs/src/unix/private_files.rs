@@ -75,10 +75,35 @@ impl Directory {
     }
 
     pub(crate) fn create_retained_private(&self, name: &OsStr) -> io::Result<RetainedFile> {
-        self.revalidate()?;
+        RetainedFile::create_private(self.clone(), name.to_owned())
+    }
+
+    pub(crate) fn open_retained_read_only(&self, name: &OsStr) -> io::Result<RetainedFile> {
+        RetainedFile::open_read_only(self.clone(), name.to_owned())
+    }
+
+    pub(crate) fn create_borrowed_private<'a>(
+        &'a self,
+        name: &'a OsStr,
+    ) -> io::Result<RetainedFile<&'a Self, &'a OsStr>> {
+        RetainedFile::create_private(self, name)
+    }
+
+    pub(crate) fn open_borrowed_read_only<'a>(
+        &'a self,
+        name: &'a OsStr,
+    ) -> io::Result<RetainedFile<&'a Self, &'a OsStr>> {
+        RetainedFile::open_read_only(self, name)
+    }
+}
+
+impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
+    fn create_private(directory: D, name: N) -> io::Result<Self> {
+        let parent = directory.borrow();
+        parent.revalidate()?;
         let file = File::from(rustix::fs::openat(
-            &self.current().file,
-            name,
+            &parent.current().file,
+            name.as_ref(),
             OFlags::RDWR
                 | OFlags::CREATE
                 | OFlags::EXCL
@@ -90,9 +115,9 @@ impl Directory {
         // Only this descriptor's exclusively created file may override a restrictive umask.
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
         let before = validate_file(&file, true)?;
-        let retained = RetainedFile {
-            directory: self.clone(),
-            name: name.to_owned(),
+        let retained = Self {
+            directory,
+            name,
             file,
             before,
             private: true,
@@ -102,20 +127,18 @@ impl Directory {
         };
         retained.revalidate()?;
         retained.file.sync_all()?;
-        self.sync()?;
+        retained.directory.borrow().sync()?;
         Ok(retained)
     }
 
-    pub(crate) fn open_retained_read_only(&self, name: &OsStr) -> io::Result<RetainedFile> {
-        let mut file = self.open_retained(name, true, false)?;
+    fn open_read_only(directory: D, name: N) -> io::Result<Self> {
+        let mut file = Self::open(directory, name, true, false)?;
         validate_read_only(&file.file)?;
         file.read_only = true;
         file.revalidate()?;
         Ok(file)
     }
-}
 
-impl RetainedFile {
     pub(crate) fn seal_read_only(mut self) -> io::Result<Self> {
         if self.publication != PublicationAuthority::ExclusiveCreation || !self.writable {
             return Err(denied("only a newly created writer may be sealed"));
@@ -128,12 +151,15 @@ impl RetainedFile {
         self.before = validate_file(&self.file, true)?;
         self.writable = false;
         self.read_only = true;
-        self.directory.sync()?;
+        self.directory.borrow().sync()?;
         self.revalidate()?;
         Ok(self)
     }
 
-    pub(crate) fn publish_new_name(mut self, name: &OsStr) -> io::Result<Self> {
+    pub(crate) fn publish_with_name<M: AsRef<OsStr>>(
+        self,
+        name: M,
+    ) -> io::Result<RetainedFile<D, M>> {
         if self.publication != PublicationAuthority::ExclusiveCreation
             || self.writable
             || !self.read_only
@@ -145,11 +171,10 @@ impl RetainedFile {
         self.revalidate()?;
         let before = self.file.metadata()?;
         publish_new(
-            &self.directory.current().file,
-            self.name.to_str().ok_or_else(changed)?,
-            name,
+            &self.directory.borrow().current().file,
+            self.name.as_ref().to_str().ok_or_else(changed)?,
+            name.as_ref(),
         )?;
-        name.clone_into(&mut self.name);
         let after = validate_file(&self.file, true)?;
         // Rename may change ctime, but must preserve every other recorded content/custody field.
         if before.dev() != after.dev()
@@ -164,10 +189,24 @@ impl RetainedFile {
         {
             return Err(changed());
         }
-        self.before = after;
-        self.publication = PublicationAuthority::None;
-        self.directory.sync()?;
-        self.revalidate()?;
-        Ok(self)
+        let published = RetainedFile {
+            directory: self.directory,
+            name,
+            file: self.file,
+            before: after,
+            private: self.private,
+            writable: self.writable,
+            read_only: self.read_only,
+            publication: PublicationAuthority::None,
+        };
+        published.directory.borrow().sync()?;
+        published.revalidate()?;
+        Ok(published)
+    }
+}
+
+impl RetainedFile {
+    pub(crate) fn publish_new_name(self, name: &OsStr) -> io::Result<Self> {
+        self.publish_with_name(name.to_owned())
     }
 }

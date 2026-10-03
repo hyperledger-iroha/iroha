@@ -4392,6 +4392,7 @@ fn participant_assets_execute_paid_setup_after_signed_genesis_domain_transfer() 
                     .state()
                     .view()
                     .latest_block()
+                    .expect("funded canonical history read")
                     .unwrap()
                     .header()
                     .creation_time();

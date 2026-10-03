@@ -333,7 +333,8 @@ pub(crate) fn validate_committed_progress(
     network: iroha_data_model::NetworkId,
     hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
     kura: &crate::kura::Kura,
-) -> Result<(), String> {
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), Attempt<String>> {
     use crate::sumeragi::{certified_chain::CertifiedChain, schedule::ConsensusSchedule};
     use iroha_data_model::parameter::system::ConsensusMode;
     validate_persisted_progress(world)?;
@@ -361,15 +362,16 @@ pub(crate) fn validate_committed_progress(
         }
         return Ok(());
     }
-    let reader = CertifiedChain::from_pinned(chain_id, &network, hashes, kura)
-        .map_err(|error| error.to_string())?;
+    let reader = CertifiedChain::from_pinned(chain_id, &network, hashes, kura, budget)
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?;
     let mut graph: Option<ConsensusSchedule> = None;
     let mut historical_obligations = std::collections::BTreeMap::new();
     let mut observed = std::collections::BTreeSet::new();
     let mut observed_pulses = 0_usize;
     let mut latest_pulse = None;
     for certified in reader.walk(1, height) {
-        let certified = certified.map_err(|error| error.to_string())?;
+        let certified =
+            certified.map_err(|error| error.map_rejection(|error| error.to_string()))?;
         if let Some(pulse) = &certified.commitment().beacon {
             let slot = (
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network),
@@ -558,6 +560,7 @@ pub(crate) fn validate_committed_progress(
         return Err("committee snapshot contains an uncertified preparation".into());
     }
     validate_retained_staking_obligations(world, &historical_obligations, &live_obligations)
+        .map_err(Into::into)
 }
 
 /// Resolve the incumbent KAGEMUSHA signing authority from the authenticated committed result.

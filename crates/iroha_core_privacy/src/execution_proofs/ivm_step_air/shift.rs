@@ -385,7 +385,7 @@ pub(super) fn bank_residues(bank: &[F], sources: Sources<'_>, kinds: [F; 5]) -> 
 
 /// Append directly into the caller-owned private residual allocation.
 pub(super) fn append_bank_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     sources: Sources<'_>,
     kinds: [F; 5],

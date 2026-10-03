@@ -1,908 +1,927 @@
-//! Request, canonical-frame and original-journal custody controls using public synthetic fixtures.
+//! Custody planning preserves independent inputs, original signatures, fees and once-only dispatch.
 //!
-//! These tests exercise the existing wallet, Manifest and native record owners. Fixture signatures
-//! are generated offline from deterministic public seeds; no node, signer service or live wallet
-//! is contacted, and a structurally checked caller record is never treated as finality evidence.
+//! Fixture records are caller claims; these controls do not authenticate native execution,
+//! provider permission, finality, hardware or operational custody.
 
 use super::*;
-use crate::operations::tests::fixture_config;
+use iroha::http::{HttpTransport, Response, TransportFuture, TransportRequest};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit, TransactionBuilder};
 use sorafs_manifest::signer::{
     custody::{
-        SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyActiveHeadV1,
-        SignerCustodyAuthorityV1, SignerCustodyStatementV1,
+        SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyAuthorityV1,
+        SignerCustodyRecordV1, SignerCustodyStatementV1,
     },
     protocol::SignerKeyAlgorithmV1,
 };
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
 
-const VALIDATED_AT: u64 = 1_500;
-const ORIGINAL_DEADLINE: u64 = 1_900;
-
-struct Fixture {
-    config: Config,
-    provider: ProviderId,
-    policy: SignerCustodyPolicyV1,
-    attester: KeyPair,
+#[derive(Debug, Default)]
+struct Transport {
+    quotes: AtomicUsize,
+    submissions: AtomicUsize,
 }
-
+impl HttpTransport for Transport {
+    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
+        let (status, body) = match request.url.path() {
+            "/v1/node/capabilities" => (
+                200,
+                norito::json::to_vec(&norito::json!({
+                    "data_model_version": (iroha_data_model::DATA_MODEL_VERSION),
+                    "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>()))
+                }))?,
+            ),
+            "/v1/fees/quote" => {
+                self.quotes.fetch_add(1, Ordering::SeqCst);
+                let request: iroha_torii_shared::FeeQuoteRequest =
+                    norito::json::from_slice(&request.body)?;
+                let payload = request.payload;
+                (
+                    200,
+                    norito::json::to_vec(&FeeQuoteResponse {
+                        intent: payload.fee_payment_intent().clone(),
+                        observation: iroha_torii_shared::FeeQuoteObservation {
+                            ledger_time_ms: current_unix_ms()?,
+                            next_block_height: 1,
+                            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        },
+                        components: Vec::new(),
+                        capacities: Vec::new(),
+                        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+                            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(
+                                payload.authority().clone(),
+                            ),
+                            program_revision: None,
+                        },
+                    })?,
+                )
+            }
+            "/v1/pipeline/transactions/status" => {
+                let hash = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "hash")
+                    .unwrap()
+                    .1
+                    .parse::<iroha_crypto::HashOf<SignedTransaction>>()?;
+                let absence = iroha_torii_shared::ErrorEnvelope::new(
+                    iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                    "Missing status.",
+                )
+                .with_details(iroha_torii_shared::ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
+                            &hash, "global",
+                        ),
+                    ),
+                    ..iroha_torii_shared::ErrorDetails::default()
+                });
+                (404, norito::json::to_vec(&absence)?)
+            }
+            path if path == iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path() => {
+                self.submissions.fetch_add(1, Ordering::SeqCst);
+                (503, b"unavailable".to_vec())
+            }
+            path => panic!("unexpected custody HTTP request {path}"),
+        };
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "application/json")
+            .body(body)?)
+    }
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move { self.send_blocking(request) })
+    }
+}
+fn service() -> (AccountService, Arc<Transport>) {
+    let config = super::super::tests::fixture_config();
+    let transport = Arc::new(Transport::default());
+    let client = Client::with_http_transport(config.clone(), transport.clone()).unwrap();
+    (
+        AccountService {
+            config,
+            client,
+            deadline: None,
+        },
+        transport,
+    )
+}
 fn key(seed: u8) -> KeyPair {
-    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-        .expect("deterministic public fixture key")
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
 }
-
-fn fixture() -> Fixture {
-    let config = fixture_config();
-    let provider = ProviderId::new([0x31; 32]);
-    let attester = key(0x43);
+fn configure(config: &Config, now: u64) -> StreamTokenCustodyConfigureRequest {
     let policy = SignerCustodyPolicyV1 {
         binding: SignerCustodyBindingV1 {
             chain_id: config.chain.to_string(),
             network_id: *config.network_id.as_bytes(),
-            runtime_handle: "software://sorafs/stream/primary".into(),
-            key_handle: "software://production/stream/key-1".into(),
+            runtime_handle: "software://stream/primary".into(),
+            key_handle: "software://stream/key".into(),
             service_id: "stream-service".into(),
             administrator_id: "stream-admin".into(),
             role: SignerRoleV1::StreamToken,
             purpose: SignerPurposeBindingV1::StreamToken {
-                provider_id: *provider.as_bytes(),
+                provider_id: [3; 32],
             },
             algorithm: SignerKeyAlgorithmV1::Ed25519,
-            public_key: key(0x42).public_key().clone(),
+            public_key: key(4).public_key().clone(),
             key_revision: 1,
             policy_revision: 1,
-            policy_digest: [0x51; 32],
+            policy_digest: [5; 32],
         },
         attester_authority: SignerCustodyAuthorityV1 {
             service_id: "custody-service".into(),
             administrator_id: "custody-admin".into(),
             key_revision: 1,
             policy_revision: 1,
-            policy_digest: [0x52; 32],
+            policy_digest: [6; 32],
         },
-        attester_public_key: attester.public_key().clone(),
-        active_from_unix_ms: 900,
-        active_until_unix_ms: 3_000,
-        max_validity_ms: 1_000,
-        max_anchor_age_ms: 100,
+        attester_public_key: key(7).public_key().clone(),
+        active_from_unix_ms: now - 1000,
+        active_until_unix_ms: now + 120_000,
+        max_validity_ms: 120_000,
+        max_anchor_age_ms: 60_000,
     };
-    policy
-        .validate()
-        .expect("independent shared custody policy");
-    Fixture {
-        config,
-        provider,
-        policy,
-        attester,
-    }
-}
-
-fn options() -> BoundedTransactionOptions {
-    BoundedTransactionOptions {
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        max_total_fees: BTreeMap::from([(
-            XOR_ASSET_DEFINITION.parse().expect("canonical fixture XOR"),
-            Quantity::from(10_u32),
-        )]),
-        deadline: Instant::now() + Duration::from_secs(60),
-    }
-}
-
-fn configure_request(fixture: &Fixture) -> StreamTokenCustodyConfigureRequest {
     StreamTokenCustodyConfigureRequest {
         selection: StreamTokenCustodySelection {
-            provider_id: fixture.provider,
-            binding: fixture.policy.binding.clone(),
+            provider_id: ProviderId::new([3; 32]),
+            binding: policy.binding.clone(),
             expected_revision: 0,
             expected_digest: [0; 32],
             current: None,
         },
-        policy: fixture.policy.clone(),
-        deadline_unix_ms: ORIGINAL_DEADLINE,
-        options: options(),
+        policy,
+        deadline_unix_ms: now + 50_000,
+        options: BoundedTransactionOptions {
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            max_total_fees: BTreeMap::new(),
+            deadline: Instant::now() + Duration::from_secs(60),
+        },
     }
 }
-
-fn native_record(
-    fixture: &Fixture,
-    state: &SignerCustodyControlStateV1,
-) -> StreamTokenCustodyControlRecordV1 {
-    let configure = MutateSorafsStreamTokenCustody {
-        provider_id: fixture.provider,
-        expected_revision: 0,
-        expected_digest: [0; 32],
-        action: SorafsStreamTokenCustodyActionV1::Configure(
-            encode_bounded(&fixture.policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)
-                .expect("exact policy request frame"),
-        ),
-    };
-    StreamTokenCustodyControlRecordV1 {
-        provider_id: fixture.provider,
+fn enroll(config: &Config, now: u64) -> StreamTokenCustodyEnrollRequest {
+    let request = configure(config, now);
+    let state = configure_signer_custody_policy_v1(None, request.policy.clone()).unwrap();
+    let record = StreamTokenCustodyControlRecordV1 {
+        provider_id: request.selection.provider_id,
         revision: 1,
         predecessor_digest: [0; 32],
-        request_digest:
-            iroha_data_model::sorafs::stream_token_custody::stream_token_custody_request_digest_v1(
-                &configure,
-                &fixture.config.account,
-            )
-            .expect("actual authority-bound native request digest"),
-        execution_height: 10,
+        request_digest: [8; 32],
+        execution_height: 1,
         ordinal: 0,
-        recorded_at_unix_ms: 900,
-        authority: fixture.config.account.clone(),
-        control_state: encode_bounded(state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)
-            .expect("shared control frame"),
+        recorded_at_unix_ms: now - 10,
+        authority: config.account.clone(),
+        control_state: norito::encode_canonical(&state).unwrap(),
         active_enrollment: None,
-    }
-}
-
-fn configured_selection(fixture: &Fixture) -> StreamTokenCustodySelection {
-    let state = configure_signer_custody_policy_v1(None, fixture.policy.clone())
-        .expect("actual initial shared transition");
-    let record = native_record(fixture, &state);
-    StreamTokenCustodySelection {
-        provider_id: fixture.provider,
-        binding: fixture.policy.binding.clone(),
-        expected_revision: record.revision,
-        expected_digest: record
-            .canonical_digest()
-            .expect("native predecessor digest"),
-        current: Some(record),
-    }
-}
-
-fn refresh_digest(selection: &mut StreamTokenCustodySelection) {
-    selection.expected_digest = selection
-        .current
-        .as_ref()
-        .expect("selected predecessor")
-        .canonical_digest()
-        .expect("bounded native predecessor digest");
-}
-
-fn attest(statement: SignerCustodyStatementV1, attester: &KeyPair) -> Vec<u8> {
-    let payload = statement
-        .signing_payload()
-        .expect("shared canonical signing payload");
-    let signature = Signature::try_new(attester.private_key(), &payload)
-        .expect("offline synthetic attestation");
-    encode_bounded(
-        &SignerCustodyRecordV1 {
-            statement,
-            attestation: signature
-                .payload()
-                .try_into()
-                .expect("Ed25519 signature size"),
-        },
-        SIGNER_CUSTODY_MAX_BYTES_V1,
-    )
-    .expect("canonical enrollment")
-}
-
-fn enroll_request(fixture: &Fixture) -> StreamTokenCustodyEnrollRequest {
-    let selection = configured_selection(fixture);
+    };
+    let digest = record.canonical_digest().unwrap();
     let anchor = SignerCustodyAnchorV1 {
-        height: 12,
-        block_hash: [0x62; 32],
-        state_digest: selection.expected_digest,
+        height: 2,
+        block_hash: [9; 32],
+        state_digest: digest,
     };
     let statement = SignerCustodyStatementV1 {
         magic: SIGNER_CUSTODY_MAGIC_V1,
         version: SIGNER_CUSTODY_VERSION_V1,
-        binding: fixture.policy.binding.clone(),
-        authority: fixture.policy.attester_authority.clone(),
+        binding: request.policy.binding.clone(),
+        authority: request.policy.attester_authority.clone(),
         anchor,
         sequence: 1,
         predecessor_digest: [0; 32],
-        issued_at_unix_ms: 1_000,
-        expires_at_unix_ms: 2_000,
-        evidence_digest: [0x63; 32],
+        issued_at_unix_ms: now - 1,
+        expires_at_unix_ms: now + 100_000,
+        evidence_digest: [10; 32],
         revoked: false,
     };
+    let attestation: [u8; 64] =
+        Signature::new(key(7).private_key(), &statement.signing_payload().unwrap())
+            .payload()
+            .try_into()
+            .unwrap();
     StreamTokenCustodyEnrollRequest {
-        selection,
+        selection: StreamTokenCustodySelection {
+            expected_revision: 1,
+            expected_digest: digest,
+            current: Some(record),
+            ..request.selection
+        },
         anchor,
-        anchor_observed_at_unix_ms: 1_450,
+        anchor_observed_at_unix_ms: now,
         issued_at_unix_ms: statement.issued_at_unix_ms,
         expires_at_unix_ms: statement.expires_at_unix_ms,
-        enrollment: attest(statement, &fixture.attester),
-        deadline_unix_ms: ORIGINAL_DEADLINE,
-        options: options(),
+        enrollment: norito::encode_canonical(&SignerCustodyRecordV1 {
+            statement,
+            attestation,
+        })
+        .unwrap(),
+        deadline_unix_ms: request.deadline_unix_ms,
+        options: request.options,
     }
 }
 
-fn journal(
-    config: &Config,
-    plan: &Plan,
-    options: &BoundedTransactionOptions,
-) -> TransactionJournal {
-    let mut terms = BoundedTerms::new(options).expect("actual bounded fee owner");
-    terms.deadline_ms = plan.deadline_unix_ms;
-    let bytes = encode_bounded(plan, MAX_PLAN_BYTES).expect("original plan");
-    let operation = match &plan.action {
-        Action::Configure(_) => NativeOperation::StreamTokenCustodyConfigure { plan: bytes, terms },
-        Action::Enroll { .. } => NativeOperation::StreamTokenCustodyEnroll { plan: bytes, terms },
-    };
-    let mut builder = TransactionBuilder::new(
-        config.network_id,
-        config.account.clone(),
-        options.fee_payment.clone(),
-    )
-    .with_instructions(
-        operation
-            .instructions(config)
-            .expect("actual planned instructions"),
+#[test]
+fn configure_and_enroll_retain_one_canonical_instruction_and_exact_original_wire() {
+    let (service, transport) = service();
+    let now = current_unix_ms().unwrap();
+    let configure = configure(&service.config, now);
+    let enroll = enroll(&service.config, now);
+    let root = tempfile::tempdir().unwrap();
+    let configured = root.path().join("configure");
+    let enrolled = root.path().join("enroll");
+    service
+        .prepare_stream_token_custody_configure(&configure, &configured)
+        .unwrap();
+    service
+        .prepare_stream_token_custody_enroll(&enroll, &enrolled)
+        .unwrap();
+    let configured_transaction = service
+        .verify_stream_token_custody_configure_journal(&configured, &configure)
+        .unwrap();
+    let enrolled_transaction = service
+        .verify_stream_token_custody_enroll_journal(&enrolled, &enroll)
+        .unwrap();
+    for (path, returned) in [
+        (&configured, configured_transaction),
+        (&enrolled, enrolled_transaction),
+    ] {
+        let record: TransactionJournal = Journal::open(path).unwrap().read_operation().unwrap();
+        let transaction = record.verify(&service.config).unwrap();
+        assert_eq!(returned.encode_versioned(), transaction.encode_versioned());
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            panic!("native operation")
+        };
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0]
+                .as_any()
+                .is::<MutateSorafsStreamTokenCustody>()
+        );
+        assert!(record.deadline_ms <= configure.deadline_unix_ms);
+        assert!(transaction.attachments().is_none() && transaction.multisig_signatures().is_none());
+        assert!(service.submit(path, record.operation.kind()).is_err());
+        assert!(service.resume(path, record.operation.kind()).is_err());
+    }
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 2);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+    assert!(
+        service
+            .prepare_stream_token_custody_configure(&configure, &configured)
+            .is_err()
     );
-    builder.set_creation_time(Duration::from_millis(plan.validated_at_unix_ms));
-    builder.set_ttl(Duration::from_millis(
-        plan.deadline_unix_ms - plan.validated_at_unix_ms,
-    ));
-    let signed = builder
-        .try_sign(config.key_pair.private_key())
-        .expect("offline public wallet fixture signature");
-    let quote = FeeQuoteResponse {
-        intent: options.fee_payment.clone(),
-        observation: iroha_torii_shared::FeeQuoteObservation {
-            ledger_time_ms: plan.validated_at_unix_ms,
-            next_block_height: 13,
-            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-        },
-        components: Vec::new(),
-        capacities: Vec::new(),
-        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
-            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(config.account.clone()),
-            program_revision: None,
-        },
-    };
-    let record = TransactionJournal {
-        schema: "iroha.wallet.native-transaction.v1".into(),
-        torii_url: config.torii_api_url.to_string(),
-        chain_id: config.chain.to_string(),
-        network_id: config.network_id,
-        chain_discriminant: config.account_chain_discriminant,
-        account_id: config.account.clone(),
-        operation,
-        requested_fee: options.fee_payment.clone(),
-        quote,
-        transaction_hash: signed.hash().to_string(),
-        signed_transaction_hex: hex::encode(signed.encode_versioned()),
-        deadline_ms: transaction_deadline(&signed).expect("original transaction expiry"),
-    };
-    record
-        .verify(config)
-        .expect("complete original signed journal");
-    record
 }
 
 #[test]
-fn first_configuration_emits_exact_native_target_absent_cas_and_shared_policy() {
-    let fixture = fixture();
-    let request = configure_request(&fixture);
-    let plan = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
+fn independently_selected_cas_binding_interval_and_attester_cannot_be_substituted() {
+    let (service, transport) = service();
+    let now = current_unix_ms().unwrap();
+    let request = enroll(&service.config, now);
+    let mut variants = Vec::new();
+    let mut changed = request.clone();
+    changed.selection.expected_revision += 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.expected_digest[0] ^= 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.issued_at_unix_ms += 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.anchor.block_hash[0] ^= 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.binding.network_id[0] ^= 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.enrollment.push(0);
+    variants.push(changed);
+    let mut changed = request.clone();
+    let mut signed: SignerCustodyRecordV1 =
+        decode_bounded(&changed.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
+    signed.attestation[0] ^= 1;
+    changed.enrollment = norito::encode_canonical(&signed).unwrap();
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.deadline_unix_ms = request.expires_at_unix_ms + 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.enrollment = vec![0; SIGNER_CUSTODY_MAX_BYTES_V1 + 1];
+    variants.push(changed);
+    let root = tempfile::tempdir().unwrap();
+    for (index, changed) in variants.iter().enumerate() {
+        let path = root.path().join(index.to_string());
+        assert!(
+            service
+                .prepare_stream_token_custody_enroll(changed, &path)
+                .is_err()
+        );
+        assert!(!path.exists());
+    }
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
+    let (service, transport) = service();
+    let now = current_unix_ms().unwrap();
+    let configure = configure(&service.config, now);
+    let mut enroll = enroll(&service.config, now);
+    let root = tempfile::tempdir().unwrap();
+    let configured = root.path().join("configure");
+    let enrolled = root.path().join("enroll");
+    service
+        .prepare_stream_token_custody_configure(&configure, &configured)
         .unwrap();
+    service
+        .prepare_stream_token_custody_enroll(&enroll, &enrolled)
+        .unwrap();
+    let before = std::fs::read(enrolled.join("operation.json")).unwrap();
+    let mut changed = enroll.clone();
+    changed.deadline_unix_ms += 1;
+    assert!(
+        service
+            .submit_stream_token_custody_enroll(&enrolled, &changed)
+            .is_err()
+    );
+    let mut changed = enroll.clone();
+    changed
+        .options
+        .max_total_fees
+        .insert(XOR_ASSET_DEFINITION.parse().unwrap(), Quantity::from(1u32));
+    assert!(
+        service
+            .verify_stream_token_custody_enroll_journal(&enrolled, &changed)
+            .is_err()
+    );
+    assert!(
+        service
+            .submit_stream_token_custody_enroll(&enrolled, &changed)
+            .is_err()
+    );
+    let mut changed = configure.clone();
+    changed.options.fee_payment =
+        FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(99));
+    assert!(
+        service
+            .verify_stream_token_custody_configure_journal(&configured, &changed)
+            .is_err()
+    );
+    assert!(
+        service
+            .submit_stream_token_custody_configure(&configured, &changed)
+            .is_err()
+    );
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .submit_stream_token_custody_configure(&configured, &configure)
+                .unwrap()
+                .status,
+            OperationStatus::Pending
+        );
+        assert_eq!(
+            service
+                .submit_stream_token_custody_enroll(&enrolled, &enroll)
+                .unwrap()
+                .status,
+            OperationStatus::Pending
+        );
+    }
+    assert_eq!(
+        service
+            .resume_stream_token_custody_configure(&configured, &configure)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        service
+            .resume_stream_token_custody_enroll(&enrolled, &enroll)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 2);
+    enroll.options.deadline = Instant::now() + Duration::from_secs(60);
+    service
+        .verify_stream_token_custody_enroll_journal(&enrolled, &enroll)
+        .unwrap();
+    assert_eq!(
+        service
+            .resume_stream_token_custody_enroll(&enrolled, &enroll)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        std::fs::read(enrolled.join("operation.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn bounded_fee_comparison_rejects_changed_assets_or_amounts_and_excessive_cardinality() {
+    let (service, transport) = service();
+    let mut request = configure(&service.config, current_unix_ms().unwrap());
+    let asset: AssetDefinitionId = XOR_ASSET_DEFINITION.parse().unwrap();
+    request
+        .options
+        .max_total_fees
+        .insert(asset.clone(), Quantity::from(1u32));
+    let terms = BoundedTerms::new(&request.options).unwrap();
+    assert!(terms.matches_options(&request.options).unwrap());
+    request
+        .options
+        .max_total_fees
+        .insert(asset.clone(), Quantity::from(2u32));
+    assert!(!terms.matches_options(&request.options).unwrap());
+    request.options.max_total_fees.clear();
+    assert!(!terms.matches_options(&request.options).unwrap());
+    for value in 1..=17u8 {
+        let mut bytes = [value; 16];
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        request.options.max_total_fees.insert(
+            AssetDefinitionId::from_uuid_bytes(bytes).unwrap(),
+            Quantity::from(1u32),
+        );
+    }
+    assert!(validate_options(&request.options).is_err());
+    request.options.max_total_fees.clear();
+    request.options.deadline = Instant::now() - Duration::from_secs(1);
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        service
+            .prepare_stream_token_custody_configure(&request, &root.path().join("expired"))
+            .is_err()
+    );
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn configure_rejects_unbounded_utc_authorization_and_role_key_as_manager() {
+    let (service, transport) = service();
+    let root = tempfile::tempdir().unwrap();
+    let mut request = configure(&service.config, current_unix_ms().unwrap());
+    request.deadline_unix_ms = u64::MAX;
+    assert!(
+        service
+            .prepare_stream_token_custody_configure(&request, &root.path().join("unbounded"))
+            .is_err()
+    );
+    let mut request = configure(&service.config, current_unix_ms().unwrap());
+    request.policy.binding.public_key = service.config.key_pair.public_key().clone();
+    request.selection.binding = request.policy.binding.clone();
+    assert!(
+        service
+            .prepare_stream_token_custody_configure(&request, &root.path().join("manager"))
+            .is_err()
+    );
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn historical_plan_validation_does_not_renew_an_expired_utc_interval() {
+    let (service, _) = service();
+    let now = current_unix_ms().unwrap();
+    let request = enroll(&service.config, now - 200_000);
+    let expected = CustodyExpectation::Enroll(&request);
+    let plan = expected.plan(now - 200_000).unwrap();
+    let bytes = encode_bounded(&plan, MAX_PLAN_BYTES).unwrap();
+    assert!(
+        instructions(
+            &service.config,
+            &bytes,
+            NativeOperationKind::StreamTokenCustodyEnroll,
+            request.deadline_unix_ms
+        )
+        .is_ok()
+    );
+    assert!(
+        instructions(
+            &service.config,
+            &bytes,
+            NativeOperationKind::StreamTokenCustodyConfigure,
+            request.deadline_unix_ms
+        )
+        .is_err()
+    );
+    assert!(
+        instructions(
+            &service.config,
+            &bytes,
+            NativeOperationKind::StreamTokenCustodyEnroll,
+            now + 1
+        )
+        .is_err()
+    );
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        service
+            .prepare_stream_token_custody_enroll(&request, &root.path().join("expired"))
+            .is_err()
+    );
+}
+
+#[test]
+fn enrollment_rejects_revoked_roles_and_replaced_attester_even_with_consistent_cas() {
+    let (service, transport) = service();
+    let now = current_unix_ms().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    for case in 0..3 {
+        let mut request = enroll(&service.config, now);
+        let native = request.selection.current.as_mut().unwrap();
+        let mut state: SignerCustodyControlStateV1 =
+            decode_bounded(&native.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap();
+        match case {
+            0 => state.signer_revoked = true,
+            1 => state.attester_revoked = true,
+            _ => state.policy.attester_public_key = key(11).public_key().clone(),
+        }
+        native.control_state = norito::encode_canonical(&state).unwrap();
+        request.selection.expected_digest = native.canonical_digest().unwrap();
+        request.anchor.state_digest = request.selection.expected_digest;
+        let mut signed: SignerCustodyRecordV1 =
+            decode_bounded(&request.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
+        signed.statement.anchor = request.anchor;
+        signed.attestation = Signature::new(
+            key(7).private_key(),
+            &signed.statement.signing_payload().unwrap(),
+        )
+        .payload()
+        .try_into()
+        .unwrap();
+        request.enrollment = norito::encode_canonical(&signed).unwrap();
+        assert!(
+            service
+                .prepare_stream_token_custody_enroll(&request, &root.path().join(case.to_string()))
+                .is_err()
+        );
+    }
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+}
+
+fn test_key(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
+}
+
+fn fixture() -> (Config, SignerCustodyPolicyV1) {
+    let config = super::super::tests::fixture_config();
+    // Canonical public labels exercise the real grammar; deterministic keys and
+    // caller claims below remain disposable test material, not qualified custody.
+    let policy = SignerCustodyPolicyV1 {
+        binding: SignerCustodyBindingV1 {
+            chain_id: config.chain.to_string(),
+            network_id: *config.network_id.as_bytes(),
+            runtime_handle: "hsm://stream/primary".into(),
+            key_handle: "pkcs11:stream/key-1".into(),
+            service_id: "stream-service".into(),
+            administrator_id: "stream-admin".into(),
+            role: SignerRoleV1::StreamToken,
+            purpose: SignerPurposeBindingV1::StreamToken {
+                provider_id: [3; 32],
+            },
+            algorithm: SignerKeyAlgorithmV1::Ed25519,
+            public_key: test_key(4).public_key().clone(),
+            key_revision: 1,
+            policy_revision: 1,
+            policy_digest: [5; 32],
+        },
+        attester_authority: SignerCustodyAuthorityV1 {
+            service_id: "custody-service".into(),
+            administrator_id: "custody-admin".into(),
+            key_revision: 1,
+            policy_revision: 1,
+            policy_digest: [6; 32],
+        },
+        attester_public_key: test_key(7).public_key().clone(),
+        active_from_unix_ms: 100,
+        active_until_unix_ms: 5_000,
+        max_validity_ms: 2_000,
+        max_anchor_age_ms: 1_000,
+    };
+    policy.validate().unwrap();
+    (config, policy)
+}
+
+fn absent_selection(policy: &SignerCustodyPolicyV1) -> StreamTokenCustodySelection {
+    StreamTokenCustodySelection {
+        provider_id: ProviderId::new([3; 32]),
+        binding: policy.binding.clone(),
+        expected_revision: 0,
+        expected_digest: [0; 32],
+        current: None,
+    }
+}
+
+fn configure_plan(policy: SignerCustodyPolicyV1) -> Plan {
+    Plan {
+        selection: absent_selection(&policy),
+        action: Action::Configure(policy),
+        validated_at_unix_ms: 1_000,
+        deadline_unix_ms: 2_000,
+    }
+}
+
+fn enrolled_request_plan(config: &Config, policy: SignerCustodyPolicyV1, revoked: bool) -> Plan {
+    let mut state = configure_signer_custody_policy_v1(None, policy.clone()).unwrap();
+    state.signer_revoked = revoked;
+    let record = StreamTokenCustodyControlRecordV1 {
+        provider_id: ProviderId::new([3; 32]),
+        revision: 1,
+        predecessor_digest: [0; 32],
+        request_digest: [8; 32],
+        execution_height: 10,
+        ordinal: 0,
+        recorded_at_unix_ms: 800,
+        authority: config.account.clone(),
+        control_state: encode_bounded(&state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap(),
+        active_enrollment: None,
+    };
+    let digest = record.canonical_digest().unwrap();
+    let anchor = SignerCustodyAnchorV1 {
+        height: 10,
+        block_hash: [9; 32],
+        state_digest: digest,
+    };
+    let statement = SignerCustodyStatementV1 {
+        magic: SIGNER_CUSTODY_MAGIC_V1,
+        version: SIGNER_CUSTODY_VERSION_V1,
+        binding: policy.binding.clone(),
+        authority: policy.attester_authority.clone(),
+        anchor,
+        sequence: 1,
+        predecessor_digest: [0; 32],
+        issued_at_unix_ms: 900,
+        expires_at_unix_ms: 2_000,
+        evidence_digest: [10; 32],
+        revoked: false,
+    };
+    let signature = Signature::try_new(
+        test_key(7).private_key(),
+        &statement.signing_payload().unwrap(),
+    )
+    .unwrap();
+    let signed = SignerCustodyRecordV1 {
+        statement,
+        attestation: signature.payload().try_into().unwrap(),
+    };
+    Plan {
+        selection: StreamTokenCustodySelection {
+            provider_id: ProviderId::new([3; 32]),
+            binding: policy.binding,
+            expected_revision: 1,
+            expected_digest: digest,
+            current: Some(record),
+        },
+        action: Action::Enroll {
+            anchor,
+            anchor_observed_at_unix_ms: 950,
+            issued_at_unix_ms: 900,
+            expires_at_unix_ms: 2_000,
+            enrollment: encode_bounded(&signed, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap(),
+        },
+        validated_at_unix_ms: 1_000,
+        deadline_unix_ms: 1_900,
+    }
+}
+
+#[test]
+fn configure_plan_retains_exact_instruction_canonical_bytes_purpose_and_deadline() {
+    let (config, policy) = fixture();
+    for change in [
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.binding.runtime_handle = "hsm://stream/test-only".into();
+        },
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.binding.key_handle = "pkcs11:stream/test-only".into();
+        },
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.binding.service_id = "test-stream-service".into();
+        },
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.binding.administrator_id = "test-stream-admin".into();
+        },
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.attester_authority.service_id = "test-custody-service".into();
+        },
+        |policy: &mut SignerCustodyPolicyV1| {
+            policy.attester_authority.administrator_id = "test-custody-admin".into();
+        },
+    ] {
+        let mut malformed = policy.clone();
+        change(&mut malformed);
+        assert!(malformed.validate().is_err());
+    }
+    let plan = configure_plan(policy.clone());
     let expected: InstructionBox = MutateSorafsStreamTokenCustody {
-        provider_id: fixture.provider,
+        provider_id: ProviderId::new([3; 32]),
         expected_revision: 0,
         expected_digest: [0; 32],
         action: SorafsStreamTokenCustodyActionV1::Configure(
-            encode_bounded(&request.policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap(),
+            norito::encode_canonical(&policy).unwrap(),
         ),
     }
     .into();
-    assert_eq!(plan.instruction(&fixture.config).unwrap(), expected);
-    let state = configure_signer_custody_policy_v1(None, request.policy).unwrap();
-    assert_eq!(state.next_sequence, 1);
-    assert_eq!(state.predecessor_digest, [0; 32]);
-    assert!(state.active_head.is_none());
-}
-
-#[test]
-fn configuration_retains_exact_predecessor_cas_and_shared_generation_rules() {
-    let fixture = fixture();
-    let mut request = configure_request(&fixture);
-    request.selection = configured_selection(&fixture);
-    let unchanged = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
-    assert!(unchanged.instruction(&fixture.config).is_err());
-    request.policy.binding.policy_revision += 1;
-    request.policy.binding.policy_digest = [0x71; 32];
-    request.selection.binding = request.policy.binding.clone();
-    let plan = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
-    let expected: InstructionBox = MutateSorafsStreamTokenCustody {
-        provider_id: fixture.provider,
-        expected_revision: request.selection.expected_revision,
-        expected_digest: request.selection.expected_digest,
-        action: SorafsStreamTokenCustodyActionV1::Configure(
-            encode_bounded(&request.policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap(),
-        ),
-    }
-    .into();
-    assert_eq!(plan.instruction(&fixture.config).unwrap(), expected);
-    request.policy.binding.policy_revision = 0;
-    request.selection.binding = request.policy.binding.clone();
-    assert!(
-        CustodyExpectation::Configure(&request)
-            .plan(VALIDATED_AT)
-            .unwrap()
-            .instruction(&fixture.config)
-            .is_err()
-    );
-}
-
-#[test]
-fn selection_rejects_network_provider_purpose_revision_and_absent_cas_substitution() {
-    let fixture = fixture();
-    let original = configure_request(&fixture).selection;
-    let mutations: [fn(&mut StreamTokenCustodySelection); 7] = [
-        |value| value.binding.chain_id = "another-chain".into(),
-        |value| value.binding.network_id = [0x72; 32],
-        |value| value.provider_id = ProviderId::new([0x73; 32]),
-        |value| {
-            value.binding.role = SignerRoleV1::Promotion;
-            value.binding.purpose = SignerPurposeBindingV1::NativeOrPromotion;
-        },
-        |value| value.expected_revision = STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1,
-        |value| value.expected_revision = 1,
-        |value| value.expected_digest = [0x74; 32],
-    ];
-    assert!(original.validate(&fixture.config).unwrap().is_none());
-    for (index, mutate) in mutations.into_iter().enumerate() {
-        let mut value = original.clone();
-        mutate(&mut value);
-        assert!(
-            value.validate(&fixture.config).is_err(),
-            "target mutation {index}"
-        );
-    }
-}
-
-#[test]
-fn predecessor_requires_digest_and_native_provenance_even_after_rehashing() {
-    let fixture = fixture();
-    let original = configured_selection(&fixture);
-    assert!(original.validate(&fixture.config).unwrap().is_some());
-    let mut substituted = original.clone();
-    substituted.current.as_mut().unwrap().ordinal += 1;
-    assert!(
-        substituted.validate(&fixture.config).is_err(),
-        "exact original digest"
-    );
-    let mutations: [fn(&mut StreamTokenCustodyControlRecordV1); 8] = [
-        |record| record.provider_id = ProviderId::new([0x75; 32]),
-        |record| record.revision = 0,
-        |record| record.revision = 2,
-        |record| record.predecessor_digest = [0x76; 32],
-        |record| record.request_digest = [0; 32],
-        |record| record.execution_height = 0,
-        |record| record.recorded_at_unix_ms = 0,
-        |record| record.recorded_at_unix_ms = u64::MAX,
-    ];
-    for (index, mutate) in mutations.into_iter().enumerate() {
-        let mut value = original.clone();
-        mutate(value.current.as_mut().unwrap());
-        refresh_digest(&mut value);
-        assert!(
-            value.validate(&fixture.config).is_err(),
-            "provenance mutation {index}"
-        );
-    }
-}
-
-#[test]
-fn predecessor_rejects_corrupt_control_and_another_provider_scope() {
-    let fixture = fixture();
-    let mut corrupt = configured_selection(&fixture);
-    corrupt.current.as_mut().unwrap().control_state[0] ^= 1;
-    refresh_digest(&mut corrupt);
-    assert!(corrupt.validate(&fixture.config).is_err());
-    let mut substituted = configured_selection(&fixture);
-    let mut state = substituted.validate(&fixture.config).unwrap().unwrap();
-    state.policy.binding.purpose = SignerPurposeBindingV1::StreamToken {
-        provider_id: [0x77; 32],
-    };
-    state.validate().unwrap();
-    substituted.current.as_mut().unwrap().control_state =
-        encode_bounded(&state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap();
-    refresh_digest(&mut substituted);
-    assert!(substituted.validate(&fixture.config).is_err());
-    assert!(current_policy(&configure_request(&fixture).selection).is_err());
-}
-
-#[test]
-fn signer_attester_and_manager_are_independently_bound() {
-    let fixture = fixture();
-    let request = configure_request(&fixture);
-    let plan = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
-    assert!(plan.instruction(&fixture.config).is_ok());
-    for manager in [key(0x42), key(0x43)] {
-        let mut config = fixture.config.clone();
-        config.account = AccountId::new(manager.public_key().clone());
-        config.key_pair = manager;
-        assert!(
-            plan.instruction(&config).is_err(),
-            "manager cannot hold either custody key"
-        );
-    }
-    let mut self_attested = request.clone();
-    self_attested.policy.attester_public_key = self_attested.policy.binding.public_key.clone();
-    assert!(
-        CustodyExpectation::Configure(&self_attested)
-            .plan(VALIDATED_AT)
-            .unwrap()
-            .instruction(&fixture.config)
-            .is_err()
-    );
-    let mut shared_identity = request;
-    shared_identity.policy.attester_authority.administrator_id =
-        shared_identity.policy.binding.service_id.clone();
-    assert!(
-        CustodyExpectation::Configure(&shared_identity)
-            .plan(VALIDATED_AT)
-            .unwrap()
-            .instruction(&fixture.config)
-            .is_err()
-    );
-}
-
-#[test]
-fn enrollment_emits_original_signed_frame_and_exact_configured_cas() {
-    let fixture = fixture();
-    let request = enroll_request(&fixture);
-    let plan = CustodyExpectation::Enroll(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
-    let expected: InstructionBox = MutateSorafsStreamTokenCustody {
-        provider_id: request.selection.provider_id,
-        expected_revision: request.selection.expected_revision,
-        expected_digest: request.selection.expected_digest,
-        action: SorafsStreamTokenCustodyActionV1::Enroll(request.enrollment.clone()),
-    }
-    .into();
-    assert_eq!(plan.instruction(&fixture.config).unwrap(), expected);
-    let original: SignerCustodyRecordV1 =
-        decode_bounded(&request.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
-    assert_eq!(original.statement.anchor, request.anchor);
-    assert_eq!(original.statement.binding, request.selection.binding);
-    assert_eq!(
-        original.statement.issued_at_unix_ms,
-        request.issued_at_unix_ms
-    );
-    assert_eq!(
-        original.statement.expires_at_unix_ms,
-        request.expires_at_unix_ms
-    );
-}
-
-#[test]
-fn enrollment_rejects_substituted_original_interval_anchor_and_predecessor() {
-    let fixture = fixture();
-    let original = enroll_request(&fixture);
-    let mutations: [fn(&mut StreamTokenCustodyEnrollRequest); 8] = [
-        |request| request.issued_at_unix_ms += 1,
-        |request| request.expires_at_unix_ms -= 1,
-        |request| request.anchor.block_hash = [0x78; 32],
-        |request| request.anchor.state_digest = [0x79; 32],
-        |request| request.anchor.height = 9,
-        |request| request.anchor_observed_at_unix_ms = 1_399,
-        |request| request.deadline_unix_ms = request.expires_at_unix_ms + 1,
-        |request| request.selection.current = None,
-    ];
-    for (index, mutate) in mutations.into_iter().enumerate() {
-        let mut request = original.clone();
-        mutate(&mut request);
-        assert!(
-            CustodyExpectation::Enroll(&request)
-                .plan(VALIDATED_AT)
-                .unwrap()
-                .instruction(&fixture.config)
-                .is_err(),
-            "enrollment input mutation {index}"
-        );
-    }
-}
-
-#[test]
-fn enrollment_uses_independent_signature_binding_sequence_and_revocation_checks() {
-    let fixture = fixture();
-    let original = enroll_request(&fixture);
-    let signed: SignerCustodyRecordV1 =
-        decode_bounded(&original.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
-    let mut invalid_signature = original.clone();
-    let mut corrupted = signed.clone();
-    corrupted.attestation[0] ^= 1;
-    invalid_signature.enrollment = encode_bounded(&corrupted, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
-    assert!(
-        CustodyExpectation::Enroll(&invalid_signature)
-            .plan(VALIDATED_AT)
-            .unwrap()
-            .instruction(&fixture.config)
-            .is_err()
-    );
-    let mut wrong_attester = original.clone();
-    wrong_attester.enrollment = attest(signed.statement.clone(), &key(0x44));
-    assert!(
-        CustodyExpectation::Enroll(&wrong_attester)
-            .plan(VALIDATED_AT)
-            .unwrap()
-            .instruction(&fixture.config)
-            .is_err()
-    );
-    let mutations: [fn(&mut SignerCustodyStatementV1); 2] = [
-        |statement: &mut SignerCustodyStatementV1| {
-            statement.binding.public_key = key(0x45).public_key().clone()
-        },
-        |statement: &mut SignerCustodyStatementV1| {
-            statement.sequence = 2;
-            statement.predecessor_digest = [0x7a; 32];
-        },
-    ];
-    for mutation in mutations {
-        let mut request = original.clone();
-        let mut statement = signed.statement.clone();
-        mutation(&mut statement);
-        request.enrollment = attest(statement, &fixture.attester);
-        assert!(
-            CustodyExpectation::Enroll(&request)
-                .plan(VALIDATED_AT)
-                .unwrap()
-                .instruction(&fixture.config)
-                .is_err()
-        );
-    }
-    for signer_revoked in [true, false] {
-        let mut request = original.clone();
-        let mut state = request
-            .selection
-            .validate(&fixture.config)
-            .unwrap()
-            .unwrap();
-        state.signer_revoked = signer_revoked;
-        state.attester_revoked = !signer_revoked;
-        request.selection.current.as_mut().unwrap().control_state =
-            encode_bounded(&state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap();
-        refresh_digest(&mut request.selection);
-        request.anchor.state_digest = request.selection.expected_digest;
-        let mut statement = signed.statement.clone();
-        statement.anchor = request.anchor;
-        request.enrollment = attest(statement, &fixture.attester);
-        assert!(
-            CustodyExpectation::Enroll(&request)
-                .plan(VALIDATED_AT)
-                .unwrap()
-                .instruction(&fixture.config)
-                .is_err()
-        );
-    }
-}
-
-#[test]
-fn retained_active_enrollment_must_match_the_shared_control_head() {
-    let fixture = fixture();
-    let request = enroll_request(&fixture);
-    let original: SignerCustodyRecordV1 =
-        decode_bounded(&request.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
-    let mut state = request
-        .selection
-        .validate(&fixture.config)
-        .unwrap()
-        .unwrap();
-    let digest = original.canonical_digest().unwrap();
-    state.next_sequence = 2;
-    state.predecessor_digest = digest;
-    state.active_head = Some(SignerCustodyActiveHeadV1 {
-        record_digest: digest,
-        sequence: original.statement.sequence,
-        approved_anchor: original.statement.anchor,
-        key_revision: original.statement.binding.key_revision,
-        policy_revision: original.statement.binding.policy_revision,
-        policy_digest: original.statement.binding.policy_digest,
-    });
-    state.validate().unwrap();
-    let mut selection = request.selection;
-    let record = selection.current.as_mut().unwrap();
-    record.revision = 2;
-    record.predecessor_digest = selection.expected_digest;
-    record.control_state = encode_bounded(&state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).unwrap();
-    record.active_enrollment = Some(request.enrollment);
-    selection.expected_revision = 2;
-    refresh_digest(&mut selection);
-    selection.validate(&fixture.config).unwrap();
-    let mut missing = selection.clone();
-    missing.current.as_mut().unwrap().active_enrollment = None;
-    refresh_digest(&mut missing);
-    assert!(missing.validate(&fixture.config).is_err());
-    let mut substituted = selection;
-    let mut statement = original.statement;
-    statement.evidence_digest = [0x7b; 32];
-    substituted.current.as_mut().unwrap().active_enrollment =
-        Some(attest(statement, &fixture.attester));
-    refresh_digest(&mut substituted);
-    assert!(substituted.validate(&fixture.config).is_err());
-}
-
-#[test]
-fn canonical_frames_admit_exact_bound_and_refuse_empty_corrupt_trailing_or_alternate_bytes() {
-    let fixture = fixture();
-    let canonical = norito::encode_canonical(&fixture.policy).unwrap();
-    assert_eq!(
-        encode_bounded(&fixture.policy, canonical.len()).unwrap(),
-        canonical
-    );
-    assert_eq!(
-        decode_bounded::<SignerCustodyPolicyV1>(&canonical, canonical.len()).unwrap(),
-        fixture.policy
-    );
-    assert!(encode_bounded(&fixture.policy, canonical.len() - 1).is_err());
-    assert!(decode_bounded::<SignerCustodyPolicyV1>(&canonical, canonical.len() - 1).is_err());
-    assert!(
-        decode_bounded::<SignerCustodyPolicyV1>(&[], SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1).is_err()
-    );
-    let mut corrupt = canonical.clone();
-    corrupt[0] ^= 1;
-    assert!(
-        decode_bounded::<SignerCustodyPolicyV1>(&corrupt, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)
-            .is_err()
-    );
-    let mut trailing = canonical.clone();
-    trailing.push(0);
-    assert!(
-        decode_bounded::<SignerCustodyPolicyV1>(&trailing, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)
-            .is_err()
-    );
-    let alternate = {
-        let _ambient = norito::core::DecodeFlagsGuard::enter(
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
-        );
-        assert_eq!(
-            encode_bounded(&fixture.policy, canonical.len()).unwrap(),
-            canonical
-        );
-        norito::core::to_bytes(&fixture.policy).unwrap()
-    };
-    assert_ne!(alternate, canonical);
-    assert!(
-        decode_bounded::<SignerCustodyPolicyV1>(&alternate, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)
-            .is_err()
-    );
-}
-
-#[test]
-fn caller_frames_and_fee_containers_are_bounded_before_plan_cloning() {
-    let fixture = fixture();
-    let mut enroll = enroll_request(&fixture);
-    enroll.enrollment.clear();
-    assert!(
-        CustodyExpectation::Enroll(&enroll)
-            .plan(VALIDATED_AT)
-            .is_err()
-    );
-    enroll.enrollment = vec![0; SIGNER_CUSTODY_MAX_BYTES_V1 + 1];
-    assert!(
-        CustodyExpectation::Enroll(&enroll)
-            .plan(VALIDATED_AT)
-            .is_err()
-    );
-    let mut selection = configured_selection(&fixture);
-    selection.current.as_mut().unwrap().control_state =
-        vec![0; SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1 + 1];
-    assert!(selection.admit().is_err());
-    let mut selection = configured_selection(&fixture);
-    selection.current.as_mut().unwrap().active_enrollment =
-        Some(vec![0; SIGNER_CUSTODY_MAX_BYTES_V1 + 1]);
-    assert!(selection.admit().is_err());
-    let mut selection = configure_request(&fixture).selection;
-    selection.binding.key_handle = "x".repeat(SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1);
-    assert!(selection.admit().is_err());
-    let mut invalid = options();
-    invalid
-        .max_total_fees
-        .values_mut()
-        .for_each(|maximum| *maximum = Quantity::from(0_u32));
-    assert!(validate_options(&invalid).is_err());
-    let mut invalid = options();
-    let limit = FeeChargeLimit::new(
-        FeeChargeKind::Nexus,
-        XOR_ASSET_DEFINITION.parse().unwrap(),
-        Quantity::from(1_u32),
-    );
-    invalid.fee_payment = FeePaymentIntent::authority(vec![limit; 17], None);
-    assert!(validate_options(&invalid).is_err());
-}
-
-#[test]
-fn instruction_recovery_preserves_original_deadline_and_operation_purpose() {
-    let fixture = fixture();
-    let request = configure_request(&fixture);
-    let mut plan = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
+    assert_eq!(plan.instruction(&config).unwrap(), expected);
     let bytes = encode_bounded(&plan, MAX_PLAN_BYTES).unwrap();
-    let kind = NativeOperationKind::StreamTokenCustodyConfigure;
+    let decoded: Plan = decode_bounded(&bytes, MAX_PLAN_BYTES).unwrap();
+    assert_eq!(encode_bounded(&decoded, MAX_PLAN_BYTES).unwrap(), bytes);
     assert_eq!(
-        instructions(&fixture.config, &bytes, kind, ORIGINAL_DEADLINE).unwrap(),
-        vec![plan.instruction(&fixture.config).unwrap()]
+        instructions(
+            &config,
+            &bytes,
+            NativeOperationKind::StreamTokenCustodyConfigure,
+            1_999
+        )
+        .unwrap(),
+        vec![expected]
     );
-    assert!(instructions(&fixture.config, &bytes, kind, ORIGINAL_DEADLINE - 1).is_ok());
-    assert!(instructions(&fixture.config, &bytes, kind, ORIGINAL_DEADLINE + 1).is_err());
-    assert!(instructions(&fixture.config, &bytes, kind, VALIDATED_AT).is_err());
+    for deadline in [0, 1_000, 2_001] {
+        assert!(
+            instructions(
+                &config,
+                &bytes,
+                NativeOperationKind::StreamTokenCustodyConfigure,
+                deadline
+            )
+            .is_err()
+        );
+    }
     assert!(
         instructions(
-            &fixture.config,
+            &config,
             &bytes,
             NativeOperationKind::StreamTokenCustodyEnroll,
-            ORIGINAL_DEADLINE
+            1_999
         )
         .is_err()
     );
-    assert!(
-        instructions(
-            &fixture.config,
-            &bytes,
-            NativeOperationKind::Transfer,
-            ORIGINAL_DEADLINE
-        )
-        .is_err()
-    );
-    plan.validated_at_unix_ms = 0;
-    assert!(plan.instruction(&fixture.config).is_err());
-    plan.validated_at_unix_ms = ORIGINAL_DEADLINE;
-    assert!(plan.instruction(&fixture.config).is_err());
-    assert!(
-        instructions(
-            &fixture.config,
-            &vec![0; MAX_PLAN_BYTES + 1],
-            kind,
-            ORIGINAL_DEADLINE
-        )
-        .is_err()
-    );
+    assert!(decode_bounded::<Plan>(&bytes[..bytes.len() - 1], MAX_PLAN_BYTES).is_err());
+    let mut appended = bytes.clone();
+    appended.push(0);
+    assert!(decode_bounded::<Plan>(&appended, MAX_PLAN_BYTES).is_err());
+    assert!(decode_bounded::<Plan>(&bytes, bytes.len() - 1).is_err());
 }
 
 #[test]
-fn original_signed_configure_journal_survives_expiry_and_rejects_request_or_fee_substitution() {
-    let fixture = fixture();
-    let _profile = ChainDiscriminantGuard::enter(fixture.config.account_chain_discriminant);
-    let request = configure_request(&fixture);
-    let expected = CustodyExpectation::Configure(&request);
-    let plan = expected.plan(VALIDATED_AT).unwrap();
-    let record = journal(&fixture.config, &plan, &request.options);
-    expected.verify(&record).unwrap();
-    assert!(transaction_expired(&record.verify(&fixture.config).unwrap()).unwrap());
-    let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("original-configure");
-    let retained = Journal::create_prepared(&path, &record).unwrap();
-    let recovered: TransactionJournal = retained.read_operation().unwrap();
-    assert_eq!(recovered.deadline_ms, ORIGINAL_DEADLINE);
-    assert_eq!(
-        recovered.signed_transaction_hex,
-        record.signed_transaction_hex
-    );
-    assert_eq!(recovered.transaction_hash, record.transaction_hash);
-    recovered.verify(&fixture.config).unwrap();
-    expected.verify(&recovered).unwrap();
-    let mut changed = request.clone();
-    changed.deadline_unix_ms += 1;
-    assert!(
-        CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed = request.clone();
-    changed.selection.expected_digest = [0x7c; 32];
-    assert!(
-        CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed = request.clone();
-    *changed.options.max_total_fees.values_mut().next().unwrap() = Quantity::from(11_u32);
-    assert!(
-        CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed = request.clone();
-    changed.options.fee_payment =
-        FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(1));
-    assert!(
-        CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed_record = recovered;
-    let NativeOperation::StreamTokenCustodyConfigure { plan, terms } = changed_record.operation
-    else {
-        panic!("configure purpose retained");
+fn target_rejects_foreign_provider_network_revision_and_coherent_predecessor_claims() {
+    let (config, policy) = fixture();
+    let plan = enrolled_request_plan(&config, policy.clone(), false);
+    plan.selection.validate(&config).unwrap();
+    let changes: &[fn(&mut StreamTokenCustodySelection)] = &[
+        |s| s.provider_id = ProviderId::new([11; 32]),
+        |s| s.binding.network_id = [12; 32],
+        |s| s.expected_revision += 1,
+        |s| s.expected_digest[0] ^= 1,
+        |s| {
+            let record = s.current.as_mut().unwrap();
+            record.execution_height = 0;
+            s.expected_digest = record.canonical_digest().unwrap();
+        },
+        |s| {
+            let record = s.current.as_mut().unwrap();
+            record.request_digest = [0; 32];
+            s.expected_digest = record.canonical_digest().unwrap();
+        },
+        |s| {
+            let record = s.current.as_mut().unwrap();
+            record.predecessor_digest = [13; 32];
+            s.expected_digest = record.canonical_digest().unwrap();
+        },
+    ];
+    for change in changes {
+        let mut changed = plan.selection.clone();
+        change(&mut changed);
+        assert!(changed.validate(&config).is_err());
+    }
+    let mut absent = absent_selection(&policy);
+    absent.expected_digest = [1; 32];
+    assert!(absent.validate(&config).is_err());
+    let mut absent = absent_selection(&policy);
+    absent.expected_revision = 1;
+    assert!(absent.validate(&config).is_err());
+    let mut oversized = plan.selection.clone();
+    oversized
+        .current
+        .as_mut()
+        .unwrap()
+        .control_state
+        .resize(SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1 + 1, 0);
+    assert!(oversized.admit().is_err());
+}
+
+#[test]
+fn manager_must_remain_independent_of_both_selected_keys() {
+    let (config, policy) = fixture();
+    configure_plan(policy.clone()).instruction(&config).unwrap();
+    for key in [test_key(4), test_key(7)] {
+        let mut other = config.clone();
+        other.key_pair = key;
+        assert!(configure_plan(policy.clone()).instruction(&other).is_err());
+    }
+    let mut changed = configure_plan(policy);
+    changed.selection.binding.key_revision += 1;
+    assert!(changed.instruction(&config).is_err());
+}
+
+#[test]
+fn enrollment_uses_real_signature_and_exact_original_anchor_interval_and_revocation() {
+    let (config, policy) = fixture();
+    let plan = enrolled_request_plan(&config, policy.clone(), false);
+    let Action::Enroll { enrollment, .. } = &plan.action else {
+        unreachable!()
     };
-    changed_record.operation = NativeOperation::StreamTokenCustodyEnroll { plan, terms };
-    assert!(expected.verify(&changed_record).is_err());
-    assert!(changed_record.verify(&fixture.config).is_err());
+    let expected: InstructionBox = MutateSorafsStreamTokenCustody {
+        provider_id: plan.selection.provider_id,
+        expected_revision: 1,
+        expected_digest: plan.selection.expected_digest,
+        action: SorafsStreamTokenCustodyActionV1::Enroll(enrollment.clone()),
+    }
+    .into();
+    assert_eq!(plan.instruction(&config).unwrap(), expected);
+    for index in 0..5 {
+        let mut changed = plan.clone();
+        let Action::Enroll {
+            anchor,
+            anchor_observed_at_unix_ms,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            enrollment,
+        } = &mut changed.action
+        else {
+            unreachable!()
+        };
+        match index {
+            0 => anchor.block_hash[0] ^= 1,
+            1 => *anchor_observed_at_unix_ms = 1_001,
+            2 => *issued_at_unix_ms += 1,
+            3 => *expires_at_unix_ms -= 1,
+            _ => {
+                let mut signed: SignerCustodyRecordV1 =
+                    decode_bounded(enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
+                signed.attestation[0] ^= 1;
+                *enrollment = encode_bounded(&signed, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
+            }
+        }
+        assert!(changed.instruction(&config).is_err());
+    }
+    let mut changed = plan.clone();
+    changed.deadline_unix_ms = 2_001;
+    assert!(changed.instruction(&config).is_err());
+    assert!(
+        enrolled_request_plan(&config, policy, true)
+            .instruction(&config)
+            .is_err(),
+        "coherently signed new anchor cannot replace current revocation"
+    );
 }
 
 #[test]
-fn original_signed_enrollment_journal_rejects_renewed_interval_and_substituted_attestation() {
-    let fixture = fixture();
-    let _profile = ChainDiscriminantGuard::enter(fixture.config.account_chain_discriminant);
-    let request = enroll_request(&fixture);
-    let expected = CustodyExpectation::Enroll(&request);
-    let plan = expected.plan(VALIDATED_AT).unwrap();
-    let record = journal(&fixture.config, &plan, &request.options);
-    expected.verify(&record).unwrap();
-    let bytes = norito::json::to_vec(&record).unwrap();
-    let recovered: TransactionJournal = norito::json::from_slice(&bytes).unwrap();
-    expected.verify(&recovered).unwrap();
-    recovered.verify(&fixture.config).unwrap();
-    let mut changed = request.clone();
-    changed.expires_at_unix_ms += 1;
-    assert!(
-        CustodyExpectation::Enroll(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed = request;
-    let mut enrollment: SignerCustodyRecordV1 =
-        decode_bounded(&changed.enrollment, SIGNER_CUSTODY_MAX_BYTES_V1).unwrap();
-    enrollment.statement.evidence_digest = [0x7d; 32];
-    changed.enrollment = attest(enrollment.statement, &fixture.attester);
-    assert!(
-        CustodyExpectation::Enroll(&changed)
-            .verify(&recovered)
-            .is_err()
-    );
-    let mut changed_record = recovered;
-    let NativeOperation::StreamTokenCustodyEnroll { terms, .. } = &mut changed_record.operation
-    else {
-        panic!("enrollment purpose retained");
+fn fee_and_enrollment_bounds_are_checked_before_request_cloning() {
+    let (_, policy) = fixture();
+    let options = BoundedTransactionOptions {
+        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        max_total_fees: BTreeMap::new(),
+        deadline: Instant::now() + Duration::from_secs(10),
     };
-    terms.deadline_ms += 1;
-    assert!(changed_record.verify(&fixture.config).is_err());
-}
-
-#[test]
-fn declared_custody_plan_frame_recovers_original_instruction_and_rejects_other_owners() {
-    let fixture = fixture();
-    let request = configure_request(&fixture);
-    let plan = CustodyExpectation::Configure(&request)
-        .plan(VALIDATED_AT)
-        .unwrap();
-    let frame = encode_bounded(&plan, MAX_PLAN_BYTES).unwrap();
-    let header = norito::core::Header::read(frame.as_slice()).unwrap();
-    assert_eq!(
-        header.schema,
-        norito::core::schema_hash_for_name("iroha_wallet::operations::stream_token_custody::Plan")
-    );
-    let recovered: Plan = decode_bounded(&frame, MAX_PLAN_BYTES).unwrap();
-    assert_eq!(encode_bounded(&recovered, MAX_PLAN_BYTES).unwrap(), frame);
-    assert_eq!(recovered.validated_at_unix_ms, VALIDATED_AT);
-    assert_eq!(recovered.deadline_unix_ms, ORIGINAL_DEADLINE);
-    assert_eq!(
-        recovered.instruction(&fixture.config).unwrap(),
-        plan.instruction(&fixture.config).unwrap()
-    );
-    let selection_frame = encode_bounded(&plan.selection, MAX_PLAN_BYTES).unwrap();
-    let selection_header = norito::core::Header::read(selection_frame.as_slice()).unwrap();
-    assert_eq!(
-        selection_header.schema,
-        norito::core::schema_hash_for_name("iroha_wallet::operations::StreamTokenCustodySelection")
-    );
-    let action_frame = encode_bounded(&plan.action, MAX_PLAN_BYTES).unwrap();
-    let action_header = norito::core::Header::read(action_frame.as_slice()).unwrap();
-    assert_eq!(
-        action_header.schema,
-        norito::core::schema_hash_for_name(
-            "iroha_wallet::operations::stream_token_custody::Action"
-        )
-    );
-    assert_ne!(header.schema, selection_header.schema);
-    assert_ne!(header.schema, action_header.schema);
-    assert!(decode_bounded::<Plan>(&selection_frame, MAX_PLAN_BYTES).is_err());
-    assert!(decode_bounded::<Plan>(&action_frame, MAX_PLAN_BYTES).is_err());
-    assert!(decode_bounded::<StreamTokenCustodySelection>(&frame, MAX_PLAN_BYTES).is_err());
+    validate_options(&options).unwrap();
+    let mut request = StreamTokenCustodyConfigureRequest {
+        selection: absent_selection(&policy),
+        policy,
+        deadline_unix_ms: 2_000,
+        options,
+    };
+    let asset: AssetDefinitionId = XOR_ASSET_DEFINITION.parse().unwrap();
+    request
+        .options
+        .max_total_fees
+        .insert(asset, Quantity::zero());
+    assert!(CustodyExpectation::Configure(&request).plan(1_000).is_err());
+    request.options.max_total_fees.clear();
+    CustodyExpectation::Configure(&request).plan(1_000).unwrap();
+    let mut enroll = StreamTokenCustodyEnrollRequest {
+        selection: request.selection,
+        anchor: SignerCustodyAnchorV1 {
+            height: 10,
+            block_hash: [9; 32],
+            state_digest: [10; 32],
+        },
+        anchor_observed_at_unix_ms: 950,
+        issued_at_unix_ms: 900,
+        expires_at_unix_ms: 2_000,
+        enrollment: Vec::new(),
+        deadline_unix_ms: 1_900,
+        options: request.options,
+    };
+    assert!(CustodyExpectation::Enroll(&enroll).plan(1_000).is_err());
+    enroll.enrollment.resize(SIGNER_CUSTODY_MAX_BYTES_V1 + 1, 0);
+    assert!(CustodyExpectation::Enroll(&enroll).plan(1_000).is_err());
 }

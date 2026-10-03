@@ -662,6 +662,32 @@ impl crate::state::StateBlock<'_> {
     }
 }
 
+/// A cold World-root check retains local acquisition refusal separately from invalid content.
+#[derive(Debug, thiserror::Error)]
+pub enum WorldStateVerificationError {
+    /// The complete original World overlay could not be acquired.
+    /// Busy and capacity errors retain their exact original release observations.
+    #[error("World root verification acquisition: {0}")]
+    Acquisition(#[source] mv::storage::AdmittedStorageError),
+    /// A canonical value could not be encoded or the authority inventory was invalid.
+    #[error("World root verification capture: {0}")]
+    Capture(String),
+    /// The stored accumulator does not describe the complete committed World.
+    #[error(
+        "stored World state root {stored_root} ({stored_entries} entries) differs from the complete World's {captured_root} ({captured_entries} entries)"
+    )]
+    Mismatch {
+        /// Root asserted by the stored accumulator.
+        stored_root: Hash,
+        /// Number of entries asserted by the stored accumulator.
+        stored_entries: u64,
+        /// Root independently captured from the complete committed World.
+        captured_root: Hash,
+        /// Number of entries independently captured from the complete committed World.
+        captured_entries: u64,
+    },
+}
+
 impl crate::state::State {
     /// Check the stored World state accumulator against a cold capture of the complete
     /// committed World, in `O(N)` (startup after replay, and any restored World before use).
@@ -670,25 +696,38 @@ impl crate::state::State {
     /// # Errors
     /// The stored accumulator differs from the World it claims to commit, the World cannot be
     /// acquired or a value cannot be encoded.
-    pub(crate) fn verify_world_state_accumulator(&self) -> Result<Hash, String> {
+    pub(crate) fn verify_world_state_accumulator(
+        &self,
+    ) -> Result<Hash, WorldStateVerificationError> {
         // The value every reader of the committed World sees.
         let stored = self.view().world.state_accumulator.get().clone();
         let block = self
             .world
             .try_block(&self.ivm_execution_budget())
-            .map_err(|error| error.to_string())?;
-        let captured = WorldStateAccumulator::capture(&block)?;
+            .map_err(|error| {
+                if cfg!(all(test, sumeragi_core_mutation = "HC82")) {
+                    WorldStateVerificationError::Capture(error.to_string())
+                } else {
+                    WorldStateVerificationError::Acquisition(error)
+                }
+            })?;
+        let captured =
+            WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
         if stored != captured {
-            return Err(format!(
-                "stored World state root {} ({} entries) differs from the complete World's {} \
-                 ({} entries)",
-                stored.root()?,
-                stored.entries(),
-                captured.root()?,
-                captured.entries()
-            ));
+            return Err(WorldStateVerificationError::Mismatch {
+                stored_root: stored
+                    .root()
+                    .map_err(WorldStateVerificationError::Capture)?,
+                stored_entries: stored.entries(),
+                captured_root: captured
+                    .root()
+                    .map_err(WorldStateVerificationError::Capture)?,
+                captured_entries: captured.entries(),
+            });
         }
-        captured.root()
+        captured
+            .root()
+            .map_err(WorldStateVerificationError::Capture)
     }
 }
 
@@ -698,7 +737,7 @@ mod tests;
 
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
-pub use world_state_snapshot::ProviderAdmissionSnapshotOriginalsV1;
+pub use world_state_snapshot::{ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError};
 
 #[path = "world_state_cut.rs"]
 pub(crate) mod world_state_cut;

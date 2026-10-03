@@ -67,7 +67,6 @@ pub use outgoing_driver::{
     KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
     KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
 };
-use sha2::{Digest as _, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
@@ -1077,6 +1076,8 @@ impl OrdinaryBackend {
             return Err(Error::Rejected);
         }
         if phase == 15 {
+            use sha2::{Digest as _, Sha256};
+
             let ticket =
                 u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
             let index =
@@ -2588,37 +2589,6 @@ mod tests {
         );
         assert!(possession_call(&b, h, 14, vec![ft]).is_err());
         assert!(b.owner.lock().unwrap().financial.is_some());
-        {
-            let mut owner = b.owner.lock().unwrap();
-            owner.financial = None;
-            owner.retail = None;
-            owner.possession = None;
-            owner.attempt = None;
-            owner.reservation = None;
-        }
-        let recovered = IntegrityRecovery::open_completed_native_custody_if_present(
-            &b.path,
-            Arc::clone(&b.source.selected),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            recovered.completed_financial_enrollment_original().unwrap(),
-            certificate.canonical_bytes().unwrap()
-        );
-        assert!(recovered.retained_integrity_catalog().unwrap().is_empty());
-        assert_eq!(
-            recovered.completed_retail_recovery_fields().unwrap()[0],
-            vec![3]
-        );
-        assert!(
-            IntegrityRecovery::open_completed_native_custody_if_present(
-                &b.path,
-                Arc::clone(&b.source.selected)
-            )
-            .is_err()
-        );
-        drop(recovered);
 
         assert_eq!(
             b.invoke(h, Method::PreparedAppOperationApproval, &[]),
@@ -2695,6 +2665,41 @@ mod tests {
             }
         }
         assert!(b.owner.lock().unwrap().financial.is_some());
+        assert!(b.owner.lock().unwrap().bootstrap.is_none());
+        // Exercise absent-bootstrap refusals above while the actual financial owner
+        // remains retained, then release it before testing exclusive durable recovery.
+        {
+            let mut owner = b.owner.lock().unwrap();
+            owner.financial = None;
+            owner.retail = None;
+            owner.possession = None;
+            owner.attempt = None;
+            owner.reservation = None;
+        }
+        let recovered = IntegrityRecovery::open_completed_native_custody_if_present(
+            &b.path,
+            Arc::clone(&b.source.selected),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            recovered.completed_financial_enrollment_original().unwrap(),
+            certificate.canonical_bytes().unwrap()
+        );
+        assert!(recovered.retained_integrity_catalog().unwrap().is_empty());
+        assert_eq!(
+            recovered.completed_retail_recovery_fields().unwrap()[0],
+            vec![3]
+        );
+        assert!(
+            IntegrityRecovery::open_completed_native_custody_if_present(
+                &b.path,
+                Arc::clone(&b.source.selected)
+            )
+            .is_err()
+        );
+        drop(recovered);
+        assert!(b.owner.lock().unwrap().financial.is_none());
         assert!(b.owner.lock().unwrap().bootstrap.is_none());
         assert_eq!(
             b.invoke(h, Method::InitialEnrollment, &[]),

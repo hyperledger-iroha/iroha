@@ -22,7 +22,7 @@ use crate::kagemusha_v1_state::{
     DigestV1, KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
 };
 use iroha_data_model::kagemusha::*;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use zeroize::Zeroize as _;
 
 /// Borrow public operands for one actual incoming State proof. This type carries no authority.
@@ -56,15 +56,6 @@ pub(crate) struct GeneratedOrdinaryIncomingCandidateOriginalsV1 {
     checkpoint_original: Vec<u8>,
 }
 impl GeneratedOrdinaryIncomingCandidateOriginalsV1 {
-    pub(crate) fn candidate(&self) -> &KagemushaAuthenticatedOrdinaryIncomingCandidateV1 {
-        &self.candidate
-    }
-    pub(crate) fn generated_state_proof(&self) -> &KagemushaGeneratedRecursiveStateProofV1 {
-        &self.generated
-    }
-    pub(crate) fn private_checkpoint_original(&self) -> &[u8] {
-        &self.checkpoint_original
-    }
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -324,9 +315,9 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         result.ok_or_else(|| proving_error("ordinary incoming complete witness was not lent"))?
     }
 
-    fn bind_incoming_witness<'a, 'owner: 'a>(
+    fn bind_incoming_witness<'a>(
         &'a self,
-        selection: &'a KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'owner>,
+        selection: &'a KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_>,
         guard: &KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1,
         secret: &[u8; 32],
         opening: &'a KagemushaCreditOpeningV1,

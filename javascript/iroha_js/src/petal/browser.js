@@ -298,7 +298,12 @@ function defaultCanvas(width, height) {
  * Takes a `MediaStream` or an `HTMLVideoElement`, grabs frames with
  * `requestVideoFrameCallback` (falling back to `requestAnimationFrame`),
  * downsizes each to at most `maxSide` pixels on the long side on an offscreen
- * canvas, converts it to Rec. 601 luma and feeds a {@link PetalScanSession}.
+ * canvas, converts it to Rec. 601 luma and feeds a {@link PetalScanSession},
+ * which follows the code from frame to frame once it decoded and reads it
+ * with one corner blossom hidden. `onProgress` receives each frame's outcome
+ * and the session's counters: `stats.tracked` counts frames read by tracking,
+ * and `stats.inferred` grows while a corner blossom is hidden (a hint such as
+ * "one corner blossom is hidden" helps the user uncover it).
  *
  * The scanner does not change the camera's settings; set the stream up like
  * this (evidence: `specs/petal_stream.md` section 8, "Scanner guidance"):
@@ -319,7 +324,7 @@ export class PetalCameraScanner {
   /**
    * @param {{video?: HTMLVideoElement, stream?: MediaStream, session?: PetalScanSession,
    *   limits?: object, maxSide?: number, stopOnComplete?: boolean,
-   *   onProgress?: (outcome: object) => void, onComplete?: (completed: object) => void,
+   *   onProgress?: (outcome: object, stats: object) => void, onComplete?: (completed: object) => void,
    *   onError?: (error: unknown) => void,
    *   createCanvas?: (width: number, height: number) => {width: number, height: number, getContext: Function},
    *   requestAnimationFrame?: (callback: (time: number) => void) => unknown,
@@ -498,7 +503,7 @@ export class PetalCameraScanner {
     rgbaToLumaInto(pixels.data, width, height, width * 4, this._luma.data);
     const outcome = this._session.push(this._luma, this._now());
     if (typeof this._onProgress === "function") {
-      this._onProgress(outcome);
+      this._onProgress(outcome, this._session.stats());
     }
     if (outcome.completed !== null) {
       if (this._stopOnComplete) {

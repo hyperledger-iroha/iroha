@@ -24,7 +24,6 @@ use sorafs_manifest::signer::{
     },
     protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
 };
-use std::sync::Arc;
 
 pub(super) const DEPLOYMENT: &str = "promotion-primary";
 pub(super) fn key(seed: u8) -> KeyPair {
@@ -157,7 +156,13 @@ pub(super) fn transact(
     let header = signed.header().clone();
     state
         .kura()
-        .store_block(Arc::new(signed))
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                signed,
+                &state.ivm_execution_budget(),
+            )
+            .expect("admit original fixture block control"),
+        )
         .expect("fixture committed block");
     state.push_block_hash_for_testing(hash);
     state.update_latest_block_header_cache_for_tests(header);

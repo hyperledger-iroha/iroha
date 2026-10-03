@@ -280,3 +280,72 @@ fn native_signed_envelope_owner_uses_the_same_exact_complete_frame_ceiling() {
         );
     }
 }
+
+#[test]
+fn native_signed_envelope_rejects_genuinely_signed_genesis_and_missing_lifetime() {
+    use crate::query::final_promotion_account_custody::observation::final_promotion_native_signed_entry_frame_v1;
+    let original = payload(0);
+    let mut genesis = original.clone();
+    genesis.domain = TransactionDomain::Genesis;
+    let genesis = TransactionBuilder::from_genesis_payload(genesis)
+        .unwrap()
+        .try_sign(key(4).private_key())
+        .unwrap();
+    let mut missing_ttl = TransactionBuilder::from_payload(original).unwrap();
+    missing_ttl.set_ttl(Duration::ZERO);
+    let signature =
+        Signature::try_new(key(4).private_key(), &missing_ttl.payload_hash_bytes()).unwrap();
+    let missing_ttl = missing_ttl.build_with_signature(signature);
+    assert!(genesis.network_id().is_none());
+    assert!(missing_ttl.network_id().is_some());
+    assert!(missing_ttl.time_to_live().is_none());
+    for signed in [genesis, missing_ttl] {
+        signed.verify_signature().unwrap();
+        assert_eq!(
+            native_signed_transaction_frame_attempt_v1(&signed),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                Error::Transaction
+            ))
+        );
+        assert_eq!(
+            final_promotion_native_signed_entry_frame_v1(&TransactionEntrypoint::External(signed)),
+            Err(FinalPromotionAccountObservationErrorV1::Transaction)
+        );
+    }
+}
+
+#[test]
+fn borrowed_signed_frame_preserves_canonical_bytes_and_original_resource_refusal() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let TransactionEntrypoint::External(signed) = real_entry(&payload(0)) else {
+        unreachable!()
+    };
+    let original = signed.clone();
+    let expected =
+        norito::encode_canonical(&TransactionEntrypoint::External(signed.clone())).unwrap();
+    assert_eq!(
+        native_signed_transaction_frame_attempt_v1(&signed).unwrap(),
+        expected
+    );
+    assert_eq!(signed, original);
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    assert!(matches!(
+        norito::core::with_decode_limits_scope(limits, || {
+            native_signed_transaction_frame_attempt_v1(&signed)
+        }),
+        Err(ExecutionAttemptError::Deferred(_))
+    ));
+    let signed_frame_len = norito::canonical_frame_len(&signed).unwrap();
+    let limits =
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, signed_frame_len, 128);
+    assert!(
+        matches!(
+            norito::core::with_decode_limits_scope(limits, || {
+                native_signed_transaction_frame_attempt_v1(&signed)
+            }),
+            Err(ExecutionAttemptError::Deferred(_))
+        ),
+        "owned signed-frame decoding retains the encoding scope's cumulative debit"
+    );
+    assert_eq!(signed, original);
+}

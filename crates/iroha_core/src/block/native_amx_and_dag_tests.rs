@@ -70,7 +70,7 @@ pub fn committed_and_valid_block_hashes_are_equal() {
     let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
     let committed_block = valid_block
         .clone()
-        .commit(&topology)
+        .commit(&topology, crate::block::reserve_block_for_tests())
         .unpack(|_| {})
         .unwrap();
     assert_eq!(valid_block.as_ref().hash(), committed_block.as_ref().hash())
@@ -210,7 +210,14 @@ fn canonical_output_repeat_validation_is_deterministic() {
     // Replay the same signed inputs against an unchanged predecessor and compare
     // the complete canonical outputs, including each transaction result.
     let new_block = BlockBuilder::new(acc.clone())
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     assert!(
@@ -233,7 +240,14 @@ fn canonical_output_repeat_validation_is_deterministic() {
     );
     drop(sb);
     let new_block2 = BlockBuilder::new(acc)
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let replay: SignedBlock = new_block2.into();

@@ -25,7 +25,6 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_sumeragi::availability::recommended_data_availability_layout;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
@@ -64,8 +63,8 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     assert_eq!(callable.entry_pc, entrypoint.entry_pc);
     assert_ne!(callable.entry_pc, 0, "raw entry must not dispatch main");
     assert!(callable.validate());
-    assert!(callable.argument_words.is_empty());
-    assert_eq!(callable.result_words, vec![ivm::call::CallWordV1::Unit]);
+    assert_eq!(callable.arguments, ivm::call::CallSchemaV1::empty());
+    assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
 
     // Preserve all remaining compiler sections while removing only the
     // authenticated callable descriptor; admission must reject that omission.

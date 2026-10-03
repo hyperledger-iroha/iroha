@@ -1635,7 +1635,7 @@ mod json_tests {
                 let mut visits = 0;
                 let result = id.visit_json_key_text_checked(|_| {
                     visits += 1;
-                    Err(failure)
+                    Err(failure.clone())
                 });
                 assert_eq!(result, Err(failure));
                 assert_eq!(visits, 1, "stop on the first visitor failure");

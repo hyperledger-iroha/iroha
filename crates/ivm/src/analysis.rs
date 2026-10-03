@@ -21,20 +21,22 @@
 //! # }
 //! ```
 use crate::{
-    VMError, encoding,
-    instruction::wide,
-    ivm_cache::{DecodedOp, IvmCache},
-    metadata::ProgramMetadata,
+    VMError, encoding, instruction::wide, ivm_cache::DecodedOp, metadata::ProgramMetadata,
     prepared::PreparedContract,
 };
-use core::convert::TryFrom as _;
-use iroha_model_base::{name::Name, state_path::StatePath};
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    error::Error,
-    fmt,
-    num::NonZeroUsize,
-};
+mod aggregate;
+mod static_state;
+mod static_state_keys;
+mod static_state_literals;
+mod static_state_workspace;
+mod syscall_scan;
+mod syscall_usage;
+use static_state_keys::Descriptor as StaticKeyDescriptor;
+pub use static_state_keys::StaticStateKeys;
+use static_state_literals::LiteralSource;
+use std::{error::Error, fmt, num::NonZeroUsize};
+pub use syscall_scan::{prepared_syscall_numbers, program_syscall_numbers};
+pub use syscall_usage::SyscallUsages;
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///
 /// `complete` is true only when every reachable durable-state syscall receives one canonical,
@@ -43,9 +45,9 @@ use std::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StaticStateAccessAnalysis {
     /// Canonical scheduler keys read by the selected entrypoint scope.
-    pub read_keys: BTreeSet<String>,
+    pub read_keys: StaticStateKeys,
     /// Canonical scheduler keys written by the selected entrypoint scope.
-    pub write_keys: BTreeSet<String>,
+    pub write_keys: StaticStateKeys,
     /// Whether the selected bytecode scope reaches a state-read syscall.
     pub has_state_reads: bool,
     /// Whether the selected bytecode scope reaches a state-write syscall.
@@ -205,7 +207,7 @@ pub struct MemoryAccesses {
     pub store128: u64,
 }
 /// Syscall usage summary sorted by syscall number.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyscallUsage {
     pub number: u32,
     pub count: u64,
@@ -217,13 +219,25 @@ pub struct ProgramAnalysis {
     pub instruction_count: usize,
     pub registers: RegisterUsage,
     pub memory: MemoryAccesses,
-    pub syscalls: Vec<SyscallUsage>,
+    pub syscalls: SyscallUsages,
 }
 /// Errors emitted by [`analyze_program`].
 #[derive(Debug)]
 pub enum ProgramAnalysisError {
     Metadata(VMError),
     Decode(VMError),
+}
+impl ProgramAnalysisError {
+    /// Recover the original VM error, including a local allocation retry owner.
+    ///
+    /// Callers must classify local resource refusals before formatting an analysis
+    /// diagnostic or turning it into a deterministic program rejection.
+    #[must_use]
+    pub fn into_vm_error(self) -> VMError {
+        match self {
+            Self::Metadata(error) | Self::Decode(error) => error,
+        }
+    }
 }
 impl fmt::Display for ProgramAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -244,21 +258,62 @@ impl Error for ProgramAnalysisError {
         }
     }
 }
-/// Decode the program contained in `bytes` and return aggregate read/write and
-/// syscall usage information.
-pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-    let parsed = ProgramMetadata::parse(bytes).map_err(ProgramAnalysisError::Metadata)?;
-    let code = &bytes[parsed.code_offset..];
-    let decoded = IvmCache::decode_stream(code).map_err(ProgramAnalysisError::Decode)?;
-    Ok(analyze_decoded(parsed.metadata, decoded.as_ref()))
-}
-/// Return aggregate usage information from an already prepared contract.
+/// Inspect a local diagnostic program and return aggregate usage information.
+/// State execution uses [`analyze_program_with_memory_budget`] for allocation custody.
 ///
-/// This path reuses the validated metadata and decoded instruction stream, so
-/// admission caches do not parse or predecode the artifact a second time.
-#[must_use]
-pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
-    analyze_decoded(contract.metadata().clone(), contract.decoded().as_ref())
+/// # Errors
+/// Returns canonical decode errors or local allocation refusal.
+pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_program_in(bytes, None)
+}
+/// Analyze a program with exact syscall scratch and output allocations funded by its owner.
+/// The original pool remains attached to the shared result through every borrower.
+///
+/// # Errors
+/// Preserves canonical metadata/instruction errors and original local allocation refusals.
+pub fn analyze_program_with_memory_budget(
+    bytes: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_program_in(bytes, Some(budget))
+}
+fn analyze_program_in(
+    bytes: &[u8],
+    budget: Option<&iroha_allocation::AllocationBudget>,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    let (metadata, decoded) = syscall_scan::parsed_stream(bytes)?;
+    aggregate::analyze(metadata, || decoded.iter(), budget).map_err(ProgramAnalysisError::Decode)
+}
+/// Inspect a prepared contract for local diagnostics using its validated instructions.
+/// State execution uses [`analyze_prepared_with_memory_budget`] for allocation custody.
+///
+/// # Errors
+/// Returns a local refusal if exact analysis scratch or output cannot be allocated.
+pub fn analyze_prepared(
+    contract: &PreparedContract,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_prepared_in(contract, None)
+}
+/// Analyze prepared instructions using the executing State's original allocation pool.
+///
+/// # Errors
+/// Returns the original local allocation refusal; no guest gas or validity changes.
+pub fn analyze_prepared_with_memory_budget(
+    contract: &PreparedContract,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_prepared_in(contract, Some(budget))
+}
+fn analyze_prepared_in(
+    contract: &PreparedContract,
+    budget: Option<&iroha_allocation::AllocationBudget>,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    aggregate::analyze(
+        contract.metadata().clone(),
+        || contract.decoded().iter().copied(),
+        budget,
+    )
+    .map_err(ProgramAnalysisError::Decode)
 }
 /// Prove exact durable-state targets from a prepared contract's authenticated
 /// literal table and reachable bytecode.
@@ -267,119 +322,22 @@ pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
 /// union of every embedded entrypoint. The proof is deliberately narrow: state targets hidden
 /// behind a call, computed at runtime, or merged from ambiguous paths make the result incomplete.
 /// This lets scheduler metadata improve precision without becoming a security authority.
+/// Instruction facts, the bounded work queue, symbolic key scratch and immutable result keys
+/// use the caller's original allocation pool. Result clones retain one original shared owner.
+/// Missing selectors or an unprovable control-flow shape return `Ok(None)`.
+///
+/// # Errors
+/// Returns original local allocation refusal before constructing traversal or result backing.
+/// Scheduler callers must decline exact hints on refusal and retain conservative fences.
 #[must_use]
 pub fn analyze_prepared_static_state_accesses(
     contract: &PreparedContract,
     entrypoint: Option<&str>,
-) -> Option<StaticStateAccessAnalysis> {
-    let roots = match entrypoint {
-        Some(name) => vec![contract.entrypoint_descriptor(name)?.entry_pc],
-        None => contract
-            .contract_interface()
-            .entrypoints
-            .iter()
-            .map(|descriptor| descriptor.entry_pc)
-            .collect::<Vec<_>>(),
-    };
-    if roots.is_empty() {
-        return None;
-    }
-    let decoded = contract.decoded();
-    let literal_names = authenticated_literal_names(contract);
-    let literal_state_paths = authenticated_literal_state_paths(contract);
-    let literal_pointer_envelopes = authenticated_literal_pointer_envelopes(contract);
-    let literal_norito_payloads = authenticated_literal_norito_payloads(contract);
-    let mut incoming = BTreeMap::<u64, StaticStateFacts>::new();
-    let mut pending = VecDeque::new();
-    for &root in &roots {
-        if !contract.is_instruction_boundary(root) {
-            return None;
-        }
-        match incoming.entry(root) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(StaticStateFacts::entrypoint());
-                pending.push_back(root);
-            }
-            std::collections::btree_map::Entry::Occupied(_) => {}
-        }
-    }
-    let mut result = StaticStateAccessAnalysis {
-        complete: true,
-        ..StaticStateAccessAnalysis::default()
-    };
-    while let Some(pc) = pending.pop_front() {
-        let index = decoded.binary_search_by_key(&pc, |op| op.pc).ok()?;
-        let op = decoded.get(index)?;
-        let mut outgoing = incoming.get(&pc)?.clone();
-        transfer_static_state_facts(
-            op,
-            &literal_names,
-            &literal_state_paths,
-            &literal_pointer_envelopes,
-            &literal_norito_payloads,
-            &mut outgoing,
-            &mut result,
-        );
-        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(op) {
-            // A general indirect edge has no authenticated target in the
-            // prepared control-flow graph. Treat the proof as incomplete even
-            // when the visible instruction itself is not a durable-state
-            // syscall: otherwise a JR/JALR target could hide an unaccounted
-            // state access while the scheduler accepts an exact access set.
-            //
-            // Prepared contracts are always executed with strict return
-            // integrity. Under that runtime policy the one canonical return
-            // encoding below can only target the protected call stack (or the
-            // validated outer-return sentinel), so it is a terminal edge rather
-            // than an unauthenticated computed jump. This exception is enforced
-            // by `IVM::load_prepared`'s protected return stack.
-            result.complete = false;
-        }
-        let successors = contract.control_flow_successors(pc)?;
-        let call_edges = direct_call_edges(op);
-        // Production Kotodama entrypoints are authenticated two-instruction
-        // thunks (`call body; halt`). Crossing that compiler-owned boundary is
-        // still direct entrypoint code; calls made by the body remain
-        // conservative helper edges.
-        let entrypoint_wrapper_call = call_edges.is_some_and(|(_, return_pc)| {
-            roots.contains(&pc)
-                && decoded
-                    .binary_search_by_key(&return_pc, |candidate| candidate.pc)
-                    .ok()
-                    .and_then(|index| decoded.get(index))
-                    .is_some_and(|candidate| wide::opcode(candidate.inst) == wide::control::HALT)
-        });
-        for successor in successors.iter().copied() {
-            let mut successor_facts = outgoing.clone();
-            if let Some((call_target, return_pc)) = call_edges {
-                if successor == call_target && !entrypoint_wrapper_call {
-                    // Even when a helper's path is literal, keep helper-hidden
-                    // state access conservative.
-                    successor_facts.direct = false;
-                }
-                if successor == return_pc {
-                    // A callee may overwrite any caller-visible register, so a
-                    // literal loaded before the call is not proof of a later state
-                    // target. The caller can recover exactness by loading a fresh
-                    // authenticated literal after the call.
-                    successor_facts.clear();
-                }
-            }
-            match incoming.entry(successor) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(successor_facts);
-                    pending.push_back(successor);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    if entry.get_mut().merge_from(&successor_facts) {
-                        pending.push_back(successor);
-                    }
-                }
-            }
-        }
-    }
-    Some(result)
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<Option<StaticStateAccessAnalysis>, VMError> {
+    static_state::analyze(contract, entrypoint, budget)
 }
+
 fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let offset_words = match wide::opcode(op.inst) {
         wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::imm16(op.inst)),
@@ -399,88 +357,6 @@ fn is_protected_contract_return(op: &DecodedOp) -> bool {
         && wide::rs1(op.inst) == 1
         && wide::imm8(op.inst) == 0
 }
-fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String>> {
-    contract
-        .literal_table()
-        .entries()
-        .iter()
-        .map(|literal| match literal {
-            crate::ivm::DecodedLiteral::Pointer(pointer) => {
-                authenticated_literal_name(contract, *pointer)
-            }
-            crate::ivm::DecodedLiteral::I64(_) => None,
-        })
-        .collect()
-}
-fn authenticated_literal_state_paths(contract: &PreparedContract) -> Vec<Option<String>> {
-    contract
-        .literal_table()
-        .entries()
-        .iter()
-        .map(|literal| match literal {
-            crate::ivm::DecodedLiteral::Pointer(pointer) => {
-                authenticated_literal_state_path(contract, *pointer)
-            }
-            crate::ivm::DecodedLiteral::I64(_) => None,
-        })
-        .collect()
-}
-fn authenticated_literal_pointer_envelopes(contract: &PreparedContract) -> Vec<Option<String>> {
-    contract
-        .literal_table()
-        .entries()
-        .iter()
-        .map(|literal| match literal {
-            crate::ivm::DecodedLiteral::Pointer(pointer) => {
-                authenticated_literal_tlv_bytes(contract, *pointer).map(hex::encode)
-            }
-            crate::ivm::DecodedLiteral::I64(_) => None,
-        })
-        .collect()
-}
-fn authenticated_literal_norito_payloads(contract: &PreparedContract) -> Vec<Option<String>> {
-    contract
-        .literal_table()
-        .entries()
-        .iter()
-        .map(|literal| match literal {
-            crate::ivm::DecodedLiteral::Pointer(pointer) => {
-                let bytes = authenticated_literal_tlv_bytes(contract, *pointer)?;
-                let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
-                (tlv.type_id == crate::pointer_abi::PointerType::NoritoBytes)
-                    .then(|| hex::encode(tlv.payload))
-            }
-            crate::ivm::DecodedLiteral::I64(_) => None,
-        })
-        .collect()
-}
-fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Option<String> {
-    let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
-    let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
-    if tlv.type_id != crate::pointer_abi::PointerType::Name {
-        return None;
-    }
-    let name: Name = norito::decode_canonical(tlv.payload).ok()?;
-    if crate::host::state_path_name_payload_len(&name).ok()?
-        > crate::syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
-    {
-        return None;
-    }
-    Some(name.to_string())
-}
-fn authenticated_literal_state_path(contract: &PreparedContract, pointer: u64) -> Option<String> {
-    let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
-    let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
-    if tlv.type_id != crate::pointer_abi::PointerType::NoritoBytes {
-        return None;
-    }
-    if tlv.payload.len() > crate::syscalls::STATE_MAX_PATH_FRAME_BYTES {
-        return None;
-    }
-    let path: StatePath = norito::decode_canonical(tlv.payload).ok()?;
-    crate::host::validate_state_path(&path).ok()?;
-    Some(path.to_string())
-}
 fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
     let start = contract
         .header_len()
@@ -499,35 +375,26 @@ fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) ->
 }
 fn transfer_static_state_facts(
     op: &DecodedOp,
-    literal_names: &[Option<String>],
-    literal_state_paths: &[Option<String>],
-    literal_pointer_envelopes: &[Option<String>],
-    literal_norito_payloads: &[Option<String>],
+    literals: &impl LiteralSource,
     facts: &mut StaticStateFacts,
     result: &mut StaticStateAccessAnalysis,
-) {
+) -> Option<StaticKeyDescriptor> {
     let opcode = wide::opcode(op.inst);
     match opcode {
         wide::memory::LDLIT => {
             let destination = wide::rd(op.inst);
             let index = wide::literal_index(op.inst);
             facts.clear_register(destination);
-            facts.names[destination] = literal_names
-                .get(index)
-                .and_then(Option::as_ref)
-                .and_then(|_| u16::try_from(index).ok());
-            facts.paths[destination] = literal_state_paths
-                .get(index)
-                .and_then(Option::as_ref)
+            facts.names[destination] = literals.name(index).and_then(|_| u16::try_from(index).ok());
+            facts.paths[destination] = literals
+                .path(index)
                 .and_then(|_| u16::try_from(index).ok())
                 .map(StaticStatePath::Literal);
-            facts.pointer_literals[destination] = literal_pointer_envelopes
-                .get(index)
-                .and_then(Option::as_ref)
+            facts.pointer_literals[destination] = literals
+                .envelope(index)
                 .and_then(|_| u16::try_from(index).ok());
-            facts.norito_keys[destination] = literal_norito_payloads
-                .get(index)
-                .and_then(Option::as_ref)
+            facts.norito_keys[destination] = literals
+                .payload(index)
                 .and_then(|_| u16::try_from(index).ok())
                 .map(StaticNoritoKey::LiteralPayload);
         }
@@ -586,27 +453,11 @@ fn transfer_static_state_facts(
         }
         wide::system::SCALL => {
             let number = u32::from(wide::imm8(op.inst) as u8);
-            transfer_static_state_syscall(
-                number,
-                literal_names,
-                literal_state_paths,
-                literal_pointer_envelopes,
-                literal_norito_payloads,
-                facts,
-                result,
-            );
+            return transfer_static_state_syscall(number, literals, facts, result);
         }
         wide::system::SYSTEM => {
             let number = encoding::wide::decode_syscallx(op.inst);
-            transfer_static_state_syscall(
-                number,
-                literal_names,
-                literal_state_paths,
-                literal_pointer_envelopes,
-                literal_norito_payloads,
-                facts,
-                result,
-            );
+            return transfer_static_state_syscall(number, literals, facts, result);
         }
         _ => {
             // A narrow whitelist is intentional. Any unmodelled register or
@@ -614,26 +465,24 @@ fn transfer_static_state_facts(
             facts.clear();
         }
     }
+    None
 }
 fn transfer_static_state_syscall(
     number: u32,
-    literal_names: &[Option<String>],
-    literal_state_paths: &[Option<String>],
-    literal_pointer_envelopes: &[Option<String>],
-    literal_norito_payloads: &[Option<String>],
+    literals: &impl LiteralSource,
     facts: &mut StaticStateFacts,
     result: &mut StaticStateAccessAnalysis,
-) {
+) -> Option<StaticKeyDescriptor> {
     if number == crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV {
         facts.mark_content_mutable(10);
-        return;
+        return None;
     }
     if number == crate::syscalls::SYSCALL_POINTER_TO_NORITO {
         let pointer_literal = facts.pointer_literals[10];
         facts.clear_register(10);
         facts.norito_keys[10] = pointer_literal.map(StaticNoritoKey::PointerEnvelope);
         facts.mark_content_mutable(10);
-        return;
+        return None;
     }
     if number == crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO {
         let path = match (facts.names[10], facts.norito_keys[11]) {
@@ -643,14 +492,14 @@ fn transfer_static_state_syscall(
         facts.clear_register(10);
         facts.paths[10] = path;
         facts.mark_content_mutable(10);
-        return;
+        return None;
     }
     if number == crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME {
         let path = facts.names[10].map(StaticStatePath::FromName);
         facts.clear_register(10);
         facts.paths[10] = path;
         facts.mark_content_mutable(10);
-        return;
+        return None;
     }
     if matches!(
         number,
@@ -659,7 +508,7 @@ fn transfer_static_state_syscall(
             | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
     ) {
         facts.clear_register(10);
-        return;
+        return None;
     }
     let access = crate::syscalls::syscall_access(number);
     if matches!(
@@ -671,74 +520,23 @@ fn transfer_static_state_syscall(
             crate::syscalls::SyscallAccess::StateWrite => result.has_state_writes = true,
             _ => unreachable!("state access was matched above"),
         }
-        let key = facts.paths[10]
-            .and_then(|path| match path {
-                StaticStatePath::Literal(index) => literal_state_paths
-                    .get(usize::from(index))
-                    .and_then(Option::as_deref)
-                    .map(ToOwned::to_owned),
-                StaticStatePath::FromName(index) => literal_names
-                    .get(usize::from(index))
-                    .and_then(Option::as_deref)
-                    .map(ToOwned::to_owned),
-                StaticStatePath::MapChild { base, key } => {
-                    let base = literal_names
-                        .get(usize::from(base))
-                        .and_then(Option::as_deref)?;
-                    let key = match key {
-                        StaticNoritoKey::PointerEnvelope(index) => literal_pointer_envelopes
-                            .get(usize::from(index))
-                            .and_then(Option::as_deref)?,
-                        StaticNoritoKey::LiteralPayload(index) => literal_norito_payloads
-                            .get(usize::from(index))
-                            .and_then(Option::as_deref)?,
-                    };
-                    Some(format!("{base}/{key}"))
-                }
-            })
-            .and_then(|name| {
-                if !matches!(
-                    number,
-                    crate::syscalls::SYSCALL_STATE_COUNT | crate::syscalls::SYSCALL_STATE_SCAN
-                ) {
-                    return Some(format!("state:{name}"));
-                }
-                // Scheduler wildcard interning is keyed by the map's first
-                // path segment. A scan rooted at a concrete map entry (or any
-                // deeper path) cannot be represented exactly as
-                // `state:{name}[*]`: that nested wildcard would not conflict
-                // with the concrete entry key. Keep only a declared-style
-                // bare map base exact and fail closed for nested scan roots.
-                (!name.contains('/')).then(|| format!("state:{name}[*]"))
-            });
-        if facts.direct {
-            if let Some(key) = key {
-                match access {
-                    crate::syscalls::SyscallAccess::StateRead => {
-                        result.read_keys.insert(key);
-                    }
-                    crate::syscalls::SyscallAccess::StateWrite => {
-                        result.write_keys.insert(key);
-                    }
-                    _ => unreachable!("state access was matched above"),
-                }
-            } else {
+        let key = facts.paths[10].and_then(|path| StaticKeyDescriptor::new(path, number, literals));
+        let exact = if facts.direct {
+            if key.is_none() {
                 result.complete = false;
             }
+            key
         } else {
             result.complete = false;
-        }
+            None
+        };
+        facts.clear();
+        return exact;
     }
     // Host calls may publish output pointers or otherwise change the calling
     // convention. A later exact target must establish fresh literal evidence.
     facts.clear();
-}
-fn analyze_decoded(metadata: ProgramMetadata, decoded: &[DecodedOp]) -> ProgramAnalysis {
-    let mut builder = ProgramAnalysisBuilder::new(metadata);
-    for op in decoded {
-        builder.visit(op);
-    }
-    builder.finish()
+    None
 }
 /// Default execution budgets for atomic multi-dataspace execution (NX-17).
 #[derive(Debug, Clone)]
@@ -833,232 +631,76 @@ pub fn enforce_amx_budget(
         estimated_group_ns: group_estimated_ns,
     })
 }
-struct ProgramAnalysisBuilder {
-    metadata: ProgramMetadata,
-    registers: RegisterUsage,
-    memory: MemoryAccesses,
-    instruction_count: usize,
-    syscall_table: BTreeMap<u32, u64>,
-}
-impl ProgramAnalysisBuilder {
-    fn new(metadata: ProgramMetadata) -> Self {
-        Self {
-            metadata,
-            registers: RegisterUsage::default(),
-            memory: MemoryAccesses::default(),
-            instruction_count: 0,
-            syscall_table: BTreeMap::new(),
-        }
-    }
-    fn finish(self) -> ProgramAnalysis {
-        let syscalls = self
-            .syscall_table
-            .into_iter()
-            .map(|(number, count)| SyscallUsage { number, count })
-            .collect();
-        ProgramAnalysis {
-            metadata: self.metadata,
-            instruction_count: self.instruction_count,
-            registers: self.registers,
-            memory: self.memory,
-            syscalls,
-        }
-    }
-    fn visit(&mut self, op: &DecodedOp) {
-        self.instruction_count += 1;
-        let opcode = wide::opcode(op.inst);
-        match opcode {
-            // ALU operations with two explicit sources.
-            wide::arithmetic::ADD
-            | wide::arithmetic::SUB
-            | wide::arithmetic::AND
-            | wide::arithmetic::OR
-            | wide::arithmetic::XOR
-            | wide::arithmetic::SLL
-            | wide::arithmetic::SRL
-            | wide::arithmetic::SRA
-            | wide::arithmetic::SLT
-            | wide::arithmetic::SLTU
-            | wide::arithmetic::CMOV
-            | wide::arithmetic::SEQ
-            | wide::arithmetic::SNE
-            | wide::arithmetic::MUL
-            | wide::arithmetic::MULH
-            | wide::arithmetic::MULHU
-            | wide::arithmetic::MULHSU
-            | wide::arithmetic::DIV
-            | wide::arithmetic::DIVU
-            | wide::arithmetic::REM
-            | wide::arithmetic::REMU
-            | wide::arithmetic::ROTL
-            | wide::arithmetic::ROTR
-            | wide::arithmetic::MIN
-            | wide::arithmetic::MAX
-            | wide::arithmetic::DIV_CEIL
-            | wide::arithmetic::GCD
-            | wide::arithmetic::MEAN => {
-                self.two_src_one_dst(op.inst);
-            }
-            // Unary ALU operations.
-            wide::arithmetic::NOT
-            | wide::arithmetic::NEG
-            | wide::arithmetic::POPCNT
-            | wide::arithmetic::CLZ
-            | wide::arithmetic::CTZ
-            | wide::arithmetic::ABS
-            | wide::arithmetic::ISQRT => {
-                self.one_src_one_dst(op.inst);
-            }
-            // Immediate ALU operations.
-            wide::arithmetic::ADDI
-            | wide::arithmetic::ANDI
-            | wide::arithmetic::ORI
-            | wide::arithmetic::XORI
-            | wide::arithmetic::CMOVI
-            | wide::arithmetic::ROTL_IMM
-            | wide::arithmetic::ROTR_IMM => {
-                self.one_src_one_dst(op.inst);
-            }
-            // Memory access instructions.
-            wide::memory::LOAD64 => {
-                self.memory.load64 += 1;
-                let (_, dest, base, _) = encoding::wide::decode_mem(op.inst);
-                self.write(dest);
-                self.read(base);
-            }
-            wide::memory::STORE64 => {
-                self.memory.store64 += 1;
-                let (_, base, value, _) = encoding::wide::decode_mem(op.inst);
-                self.read(base);
-                self.read(value);
-            }
-            wide::memory::LOAD128 => {
-                self.memory.load128 += 1;
-                let (_, rd_lo, base, rd_hi) = encoding::wide::decode_load128(op.inst);
-                self.write(rd_lo);
-                self.write(rd_hi);
-                self.read(base);
-            }
-            wide::memory::STORE128 => {
-                self.memory.store128 += 1;
-                let (_, base, rs_lo, rs_hi) = encoding::wide::decode_store128(op.inst);
-                self.read(base);
-                self.read(rs_lo);
-                self.read(rs_hi);
-            }
-            wide::memory::LDLIT | wide::memory::LDI64 => {
-                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.write(rd);
-            }
-            // Control flow.
-            wide::control::BEQ
-            | wide::control::BNE
-            | wide::control::BLT
-            | wide::control::BGE
-            | wide::control::BLTU
-            | wide::control::BGEU => {
-                let rs1 = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                let rs2 = u8::try_from(wide::rs1(op.inst)).expect("register index fits in u8");
-                self.read(rs1);
-                self.read(rs2);
-            }
-            wide::control::JR => {
-                let rs = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.read(rs);
-            }
-            wide::control::JALR => {
-                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                let rs = u8::try_from(wide::rs1(op.inst)).expect("register index fits in u8");
-                self.write(rd);
-                self.read(rs);
-            }
-            wide::control::JAL => {
-                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.write(rd);
-            }
-            wide::control::JALS => self.write(1u8),
-            wide::control::JMP | wide::control::HALT => {}
-            // System helpers.
-            wide::system::GETGAS => {
-                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.write(rd);
-            }
-            wide::system::SCALL => {
-                let number = u32::from(wide::imm8(op.inst).to_ne_bytes()[0]);
-                *self.syscall_table.entry(number).or_default() += 1;
-            }
-            wide::system::SYSTEM => {
-                let number = crate::encoding::wide::decode_syscallx(op.inst);
-                *self.syscall_table.entry(number).or_default() += 1;
-            }
-            // Vector configuration.
-            wide::crypto::SETVL => {
-                // SETVL carries its lane count in the rs2/immediate field; it
-                // does not consume a vector or scalar register operand.
-            }
-            wide::crypto::PARBEGIN | wide::crypto::PAREND => {}
-            wide::crypto::POSEIDON2 => self.two_src_one_dst(op.inst),
-            wide::crypto::POSEIDON6 => {
-                let rd = Self::reg(wide::rd(op.inst));
-                self.write(rd);
-                if let Some((_, rs_base)) = crate::encoding::wide::decode_poseidon6(op.inst) {
-                    for offset in 0..wide::crypto::POSEIDON6_INPUTS {
-                        self.read(usize::from(rs_base) + offset);
-                    }
-                }
-            }
-            // All remaining opcodes (crypto, ISO20022, ZK, vector ALU, etc.)
-            // follow the canonical rd/rs1/rs2 layout.
-            _ => {
-                self.two_src_one_dst(op.inst);
-            }
-        }
-    }
-    fn two_src_one_dst(&mut self, inst: u32) {
-        let rd = Self::reg(wide::rd(inst));
-        let rs1 = Self::reg(wide::rs1(inst));
-        let rs2 = Self::reg(wide::rs2(inst));
-        self.write(rd);
-        self.read(rs1);
-        self.read(rs2);
-    }
-    fn one_src_one_dst(&mut self, inst: u32) {
-        let rd = Self::reg(wide::rd(inst));
-        let rs = Self::reg(wide::rs1(inst));
-        self.write(rd);
-        self.read(rs);
-    }
-    fn read<R>(&mut self, reg: R)
-    where
-        R: Into<usize>,
-    {
-        let idx = reg.into();
-        debug_assert!(idx < self.registers.reads.len());
-        self.registers.reads[idx] = self.registers.reads[idx].saturating_add(1);
-    }
-    fn write<R>(&mut self, reg: R)
-    where
-        R: Into<usize>,
-    {
-        let idx = reg.into();
-        debug_assert!(idx < self.registers.writes.len());
-        self.registers.writes[idx] = self.registers.writes[idx].saturating_add(1);
-    }
-    fn reg(index: usize) -> u8 {
-        u8::try_from(index).expect("register index fits in u8")
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{encoding::wide as wide_enc, instruction::wide};
+
+    #[test]
+    fn analysis_error_keeps_the_original_allocation_owner_and_vm_failure() {
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        for original in [
+            VMError::AllocationDeferred(refusal),
+            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable),
+            VMError::InvalidMetadata,
+            VMError::DecodeError,
+        ] {
+            for metadata in [false, true] {
+                let error = if metadata {
+                    ProgramAnalysisError::Metadata(original.clone())
+                } else {
+                    ProgramAnalysisError::Decode(original.clone())
+                };
+                assert_eq!(error.into_vm_error(), original);
+            }
+        }
+        drop(occupied);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn analysis_borrowed_scan_matches_owned_instruction_analysis() {
+        let bytes = build_program(&[wide_enc::encode_halt()]);
+        let parsed = ProgramMetadata::parse(&bytes).unwrap();
+        let decoded =
+            crate::ivm_cache::IvmCache::decode_stream(&bytes[parsed.code_offset..]).unwrap();
+        let analysis = analyze_program(&bytes).unwrap();
+        let owned = aggregate::analyze(parsed.metadata, || decoded.iter().copied(), None).unwrap();
+        assert_eq!(analysis.metadata.encode(), owned.metadata.encode());
+        assert_eq!(analysis.instruction_count, owned.instruction_count);
+        assert_eq!(analysis.registers, owned.registers);
+        assert_eq!(analysis.memory, owned.memory);
+        assert_eq!(analysis.syscalls, owned.syscalls);
+        assert_eq!(analysis.instruction_count, 1);
+    }
+
+    #[test]
+    fn analysis_canonical_metadata_refusal_is_local_and_retryable() {
+        let bytes = kotodama_lang::compiler::Compiler::new()
+            .compile_source("seiyaku Analysis { view fn main() -> bool { true } }")
+            .unwrap();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || analyze_program(&bytes),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ProgramAnalysisError::Metadata(_)));
+        assert_eq!(
+            error.into_vm_error(),
+            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::ActiveMemoryCapacity,)
+        );
+        assert!(analyze_program(&bytes).unwrap().instruction_count > 0);
+    }
+
     fn base_analysis(instruction_count: usize) -> ProgramAnalysis {
         ProgramAnalysis {
             metadata: ProgramMetadata::default(),
             instruction_count,
             registers: RegisterUsage::default(),
             memory: MemoryAccesses::default(),
-            syscalls: Vec::new(),
+            syscalls: SyscallUsages::default(),
         }
     }
     fn build_program(words: &[u32]) -> Vec<u8> {
@@ -1081,8 +723,13 @@ seiyaku StaticMapAnalysis {
             .expect("compile literal StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
             .expect("prepare literal StateMap access");
-        let analysis = analyze_prepared_static_state_accesses(&prepared, Some("write_one"))
-            .expect("analyze literal StateMap access");
+        let analysis = analyze_prepared_static_state_accesses(
+            &prepared,
+            Some("write_one"),
+            &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("fund static-state workspace")
+        .expect("analyze literal StateMap access");
         let descriptor = manifest
             .entrypoints
             .as_deref()
@@ -1095,8 +742,12 @@ seiyaku StaticMapAnalysis {
         assert!(analysis.complete);
         assert!(analysis.has_state_writes);
         assert_eq!(
-            analysis.write_keys,
-            descriptor.write_keys.iter().cloned().collect()
+            analysis.write_keys.iter().collect::<Vec<_>>(),
+            descriptor
+                .write_keys
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
         );
     }
     #[test]
@@ -1113,8 +764,13 @@ seiyaku HelperMapAnalysis {
             .expect("compile helper-hidden StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
             .expect("prepare helper-hidden StateMap access");
-        let analysis = analyze_prepared_static_state_accesses(&prepared, Some("helper_write"))
-            .expect("analyze helper-hidden StateMap access");
+        let analysis = analyze_prepared_static_state_accesses(
+            &prepared,
+            Some("helper_write"),
+            &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("fund static-state workspace")
+        .expect("analyze helper-hidden StateMap access");
         assert!(analysis.has_state_writes);
         assert!(!analysis.complete);
         assert!(analysis.write_keys.is_empty());
@@ -1141,10 +797,10 @@ seiyaku IndirectStateAnalysis {
             .find(|op| op.pc == entry_pc)
             .expect("entrypoint instruction");
         entry.inst = wide_enc::encode_rr(wide::control::JALR, 0, 2, 0);
-        let control_flow = crate::prepared::PreparedControlFlow::from_decoded(&decoded)
+        let control_flow = crate::prepared::PreparedControlFlow::from_decoded(&decoded, None)
             .expect("build adversarial indirect control flow");
-        let adversarial =
-            crate::prepared::PreparedContract::from_parts(crate::prepared::PreparedContractParts {
+        let adversarial = crate::prepared::PreparedContract::from_parts(
+            crate::prepared::PreparedContractParts {
                 artifact: prepared.shared_artifact(),
                 metadata: prepared.metadata().clone(),
                 manifest: prepared.manifest().clone(),
@@ -1158,10 +814,17 @@ seiyaku IndirectStateAnalysis {
                 ),
                 prepared_program: prepared.prepared_program().clone(),
                 control_flow,
-            })
-            .expect("construct analyzer-only adversarial contract");
-        let analysis = analyze_prepared_static_state_accesses(&adversarial, Some("run"))
-            .expect("analyze indirect control flow");
+            },
+            None,
+        )
+        .expect("construct analyzer-only adversarial contract");
+        let analysis = analyze_prepared_static_state_accesses(
+            &adversarial,
+            Some("run"),
+            &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("fund static-state workspace")
+        .expect("analyze indirect control flow");
         assert!(!analysis.complete);
         assert!(!analysis.has_state_reads);
         assert!(!analysis.has_state_writes);
@@ -1186,10 +849,12 @@ seiyaku IndirectStateAnalysis {
     }
     #[test]
     fn static_state_analysis_invalidates_host_paths_across_unbounded_stores() {
-        let literal_names = vec![Some("Counters".to_owned())];
-        let literal_state_paths = vec![None];
-        let literal_pointer_envelopes = vec![None];
-        let literal_norito_payloads = vec![Some("00".to_owned())];
+        let literals = static_state_literals::TestLiterals {
+            names: &[Some("Counters")],
+            paths: &[],
+            envelopes: &[],
+            payloads: &[Some(&[0])],
+        };
         let stores = [
             wide_enc::encode_store(wide::memory::STORE64, 2, 3, 0),
             wide_enc::encode_store128(wide::memory::STORE128, 2, 3, 4),
@@ -1202,31 +867,22 @@ seiyaku IndirectStateAnalysis {
                 complete: true,
                 ..StaticStateAccessAnalysis::default()
             };
-            transfer_static_state_syscall(
+            let _ = transfer_static_state_syscall(
                 crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
-                &literal_names,
-                &literal_state_paths,
-                &literal_pointer_envelopes,
-                &literal_norito_payloads,
+                &literals,
                 &mut facts,
                 &mut analysis,
             );
             assert!(facts.content_may_be_mutable[10]);
-            transfer_static_state_facts(
+            let _ = transfer_static_state_facts(
                 &DecodedOp { pc: 0, inst: store },
-                &literal_names,
-                &literal_state_paths,
-                &literal_pointer_envelopes,
-                &literal_norito_payloads,
+                &literals,
                 &mut facts,
                 &mut analysis,
             );
-            transfer_static_state_syscall(
+            let _ = transfer_static_state_syscall(
                 crate::syscalls::SYSCALL_STATE_SET,
-                &literal_names,
-                &literal_state_paths,
-                &literal_pointer_envelopes,
-                &literal_norito_payloads,
+                &literals,
                 &mut facts,
                 &mut analysis,
             );
@@ -1237,22 +893,21 @@ seiyaku IndirectStateAnalysis {
     }
     #[test]
     fn static_state_analysis_rejects_legacy_name_carrier() {
-        let literal_names = vec![Some("legacy".to_owned())];
-        let literal_state_paths = vec![None];
-        let literal_pointer_envelopes = vec![None];
-        let literal_norito_payloads = vec![None];
+        let literals = static_state_literals::TestLiterals {
+            names: &[Some("legacy")],
+            paths: &[],
+            envelopes: &[],
+            payloads: &[],
+        };
         let mut facts = StaticStateFacts::entrypoint();
         facts.names[10] = Some(0);
         let mut analysis = StaticStateAccessAnalysis {
             complete: true,
             ..StaticStateAccessAnalysis::default()
         };
-        transfer_static_state_syscall(
+        let _ = transfer_static_state_syscall(
             crate::syscalls::SYSCALL_STATE_SET,
-            &literal_names,
-            &literal_state_paths,
-            &literal_pointer_envelopes,
-            &literal_norito_payloads,
+            &literals,
             &mut facts,
             &mut analysis,
         );
@@ -1262,10 +917,12 @@ seiyaku IndirectStateAnalysis {
     }
     #[test]
     fn static_state_analysis_rejects_nested_scan_wildcard_claim() {
-        let literal_names = vec![None];
-        let literal_state_paths = vec![Some("Counters/00".to_owned())];
-        let literal_pointer_envelopes = vec![None];
-        let literal_norito_payloads = vec![None];
+        let literals = static_state_literals::TestLiterals {
+            names: &[],
+            paths: &[Some("Counters/00")],
+            envelopes: &[],
+            payloads: &[],
+        };
         for syscall in [
             crate::syscalls::SYSCALL_STATE_COUNT,
             crate::syscalls::SYSCALL_STATE_SCAN,
@@ -1276,15 +933,7 @@ seiyaku IndirectStateAnalysis {
                 complete: true,
                 ..StaticStateAccessAnalysis::default()
             };
-            transfer_static_state_syscall(
-                syscall,
-                &literal_names,
-                &literal_state_paths,
-                &literal_pointer_envelopes,
-                &literal_norito_payloads,
-                &mut facts,
-                &mut analysis,
-            );
+            let _ = transfer_static_state_syscall(syscall, &literals, &mut facts, &mut analysis);
             assert!(analysis.has_state_reads);
             assert!(!analysis.complete);
             assert!(analysis.read_keys.is_empty());
@@ -1325,8 +974,8 @@ seiyaku IndirectStateAnalysis {
         let program = build_program(&words);
         let report = analyze_program(&program).expect("analysis succeeds");
         assert_eq!(
-            report.syscalls,
-            vec![SyscallUsage {
+            &*report.syscalls,
+            &[SyscallUsage {
                 number: syscall,
                 count: 1
             }]

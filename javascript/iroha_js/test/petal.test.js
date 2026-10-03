@@ -18,7 +18,9 @@ import {
   PETAL_LAYOUT,
   PETAL_PALETTE,
   PETAL_STREAM,
+  PETAL_TRACK_WINDOW_MS,
   PetalCameraScanner,
+  PetalDecodedFrame,
   PetalError,
   PetalFountainDecoder,
   PetalFrameCells,
@@ -43,11 +45,13 @@ import {
   encodeLane,
   finderLit,
   firstAtomId,
+  followFinder,
   generateTemplates,
   isBeaconFrame,
   labelComponents,
   laneWhitening,
   locate,
+  locateCandidates,
   maskWords,
   mix32,
   observedCells,
@@ -58,15 +62,19 @@ import {
   petalScanSize,
   renderPetalFrame,
   selectQuad,
+  selectTriple,
   slotCenter,
   slotRoles,
   splitPayload,
   splitSlot,
   tileCenter,
   tileMatchError,
+  trackPetalFrame,
 } from "../src/petal.js";
 import {
   decodeWithErasures,
+  hypotheses,
+  maskScore,
   patchLevels,
   readTileLanes,
   readTiles,
@@ -76,6 +84,7 @@ import {
   samplePatches,
   tileWords,
 } from "../src/petal/decode.js";
+import { completeTriple, strongFinders } from "../src/petal/locate.js";
 
 const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v1.json", import.meta.url);
 const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v1.json", import.meta.url);
@@ -1044,6 +1053,116 @@ test("the largest candidates win when clutter precedes them", () => {
 
 test("a blank image has no finders", () => {
   assert.equal(locate(new PetalLuma(200, 200)), null);
+  assert.deepEqual(locateCandidates(new PetalLuma(200, 200)), []);
+});
+
+test("three finders forming a corner infer the fourth", () => {
+  const blob = (x, y) => ({ x, y, size: 60 });
+  // top-left, top-right and bottom-left of a slightly rotated square, plus clutter
+  const finders = [blob(100, 110), blob(540, 90), blob(120, 550)];
+  for (let i = 0; i < 5; i += 1) finders.push({ x: 300 + 10 * i, y: 300, size: 14 });
+  const triple = selectTriple(finders);
+  const fourth = triple.corners[triple.inferred];
+  assert.ok(Math.abs(fourth.x - 560) < 1e-9 && Math.abs(fourth.y - 530) < 1e-9, JSON.stringify(fourth));
+  assert.equal(triple.inferred, 2, "the inferred corner is bottom-right in clockwise order");
+  assert.equal(fourth.size, 60, "the inferred corner has the mean size of the three");
+  // three blossoms in a row are no corner, and neither are fewer than three
+  assert.equal(selectTriple([blob(0, 0), blob(440, 0), blob(880, 0)]), null);
+  assert.equal(selectTriple([blob(100, 110), blob(540, 90)]), null);
+  assert.throws(() => selectTriple(null), TypeError);
+});
+
+test("a smaller blob at the inferred corner completes the quad", () => {
+  const blob = (x, y, size) => ({ x, y, size });
+  // steep tilt: the far finder is under 0.55 of the largest, but it is where the fourth corner
+  // belongs
+  const finders = [blob(100, 100, 64), blob(540, 100, 60), blob(100, 540, 62), blob(520, 515, 30)];
+  const strong = strongFinders(finders);
+  assert.equal(strong.length, 3);
+  const triple = selectTriple(strong);
+  const full = completeTriple(finders, triple.corners, triple.inferred);
+  assert.ok(full.some((f) => Math.abs(f.x - 520) < 1e-9 && Math.abs(f.y - 515) < 1e-9));
+  // a blob further than 0.3 legs from the parallelogram point does not complete it
+  const far = [...finders.slice(0, 3), blob(420, 420, 30)];
+  assert.equal(completeTriple(far, triple.corners, triple.inferred), null);
+});
+
+/** The 512-pixel locator test render. */
+function locatorFrame() {
+  const encoder = new PetalStreamEncoder(new Uint8Array(200).fill(9), 1);
+  return renderLuma(encoder.cells(1), 512, 2);
+}
+
+test("a hidden blossom yields an inferred candidate", () => {
+  const luma = locatorFrame();
+  // the candidates of a clean render start with its four seen finders
+  const clean = locateCandidates(luma);
+  assert.equal(clean[0].inferred, null);
+  assert.deepEqual(clean[0].corners, locate(luma));
+  // paint over the bottom-left blossom (centre 36, 476 at this size)
+  for (let y = 420; y < 512; y += 1) luma.data.fill(0, y * 512, y * 512 + 92);
+  const candidates = locateCandidates(luma);
+  const inferred = candidates.find((set) => set.inferred !== null);
+  assert.ok(inferred !== undefined, "an inferred candidate");
+  assert.equal(candidates.indexOf(inferred), candidates.length - 1, "the inferred candidate comes last");
+  const corner = inferred.corners[inferred.inferred];
+  assert.ok(Math.abs(corner.x - 36) < 4 && Math.abs(corner.y - 476) < 4, JSON.stringify(corner));
+});
+
+/** A canvas-sized image with finder (lit) and reference-canvas (dark) levels painted where they are sampled. */
+function levelCard(levels) {
+  const data = new Uint8Array(1024 * 1024);
+  const paint = (cx, cy, radius, value) => {
+    for (let y = cy - radius; y <= cy + radius; y += 1) {
+      for (let x = cx - radius; x <= cx + radius; x += 1) data[y * 1024 + x] = value;
+    }
+  };
+  [[72, 72], [952, 72], [952, 952], [72, 952]].forEach(([cx, cy], corner) => {
+    const [lit, dark] = levels[corner];
+    const sx = cx < 512 ? 1 : -1;
+    const sy = cy < 512 ? 1 : -1;
+    paint(cx, cy, 30, lit);
+    paint(cx + sx * 100, cy, 12, dark);
+    paint(cx, cy + sy * 100, 12, dark);
+  });
+  return new PetalLuma(1024, 1024, data);
+}
+
+test("an inferred corner needs contrast too", () => {
+  const identity = Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);
+  // even light: the hidden corner (3) gets levels between the others'
+  const even = referenceLevels(levelCard([[230, 30], [220, 25], [210, 20], [0, 0]]), identity, 3);
+  assert.ok(even !== null && even.lit[3] - even.dark[3] >= 12);
+  // the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
+  const uneven = levelCard([[60, 45], [250, 20], [200, 185], [0, 0]]);
+  assert.equal(referenceLevels(uneven, identity, 3), null);
+  // with every corner seen, the same light is fine
+  const seen = levelCard([[60, 45], [250, 20], [200, 185], [240, 20]]);
+  assert.ok(referenceLevels(seen, identity) !== null);
+});
+
+test("following finds a moved blossom and refuses a lost one", () => {
+  const luma = locatorFrame();
+  const found = followFinder(luma, { x: 48, y: 27, size: 60 });
+  assert.ok(Math.abs(found.x - 36) < 1.5 && Math.abs(found.y - 36) < 1.5, JSON.stringify(found));
+  assert.equal(found.size, 60);
+  // nothing bright near the centre of the canvas corner gap
+  assert.equal(followFinder(luma, { x: 140, y: 36, size: 30 }), null);
+  // a blossom that moved further than 0.75 diameters is refused (here: found, but too far)
+  assert.equal(followFinder(luma, { x: 36 + 70, y: 36, size: 60 }), null);
+  // degenerate expectations do not crash
+  assert.equal(followFinder(luma, { x: Number.NaN, y: 36, size: 60 }), null);
+  assert.equal(followFinder(luma, { x: -1e9, y: 1e9, size: 60 }), null);
+  for (const [x, y, size] of [
+    [1e300, 36, 60],
+    [-1e300, -1e300, 60],
+    [36, Number.POSITIVE_INFINITY, 60],
+    [36, 36, Number.NaN],
+  ]) {
+    assert.equal(followFinder(luma, { x, y, size }), null);
+  }
+  // a huge disc just covers the whole image
+  followFinder(luma, { x: 36, y: 36, size: 1e300 });
 });
 
 // ---------------------------------------------------------------- frame decoder
@@ -1327,22 +1446,231 @@ test("garbage images never crash or decode", () => {
     const data = Uint8Array.from({ length: w * h }, (_, i) => Math.floor((Math.floor(i / w) * 255) / h));
     assert.throws(() => decodePetalFrame(new PetalLuma(w, h, data)), PetalError);
   }
-  // NaN and infinite poses behave as in the reference: no crash, no lanes
+  // NaN and infinite poses behave as in the reference: no crash, and the non-finite levels they
+  // produce are refused
   const noisy = new PetalLuma(320, 240, payload(320 * 240, 5));
   const lanes = [
     [0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1e300, 0, 0, 0, 1e300, 0, 0, 0, 1e-300],
     [Number.NaN, 0, 0, 0, 1, 0, 0, 0, 1],
   ].map((m) => decodePetalFrameAt(noisy, m)?.lanesOk() ?? null);
-  assert.deepEqual(lanes, [0, null, 0]);
+  assert.deepEqual(lanes, [null, null, null]);
 });
 
-test("a valid code with a missing finder is not misread", () => {
-  const { luma } = decodeSetup(2);
+test("random blob scenes never crash or yield lanes", () => {
+  // Scenes with several random bright ellipses (some finder-sized) on noise: exercises the
+  // locator, quad and corner selection, the inferred-corner search and the homography on
+  // degenerate layouts.
+  const rng = new PetalXorshift32(2024);
+  for (let scene = 0; scene < 60; scene += 1) {
+    const w = 160 + (rng.nextU32() % 400);
+    const h = 120 + (rng.nextU32() % 300);
+    const data = new Uint8Array(w * h);
+    for (let index = 0; index < w * h; index += 1) data[index] = rng.nextU32() % 40;
+    const blobs = 3 + (rng.nextU32() % 8);
+    for (let blob = 0; blob < blobs; blob += 1) {
+      const cx = rng.nextU32() % w;
+      const cy = rng.nextU32() % h;
+      const rx = 6 + (rng.nextU32() % 40);
+      const ry = 6 + (rng.nextU32() % 40);
+      for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+          const dx = (x - cx) / rx;
+          const dy = (y - cy) / ry;
+          if (dx * dx + dy * dy <= 1) data[y * w + x] = 230;
+        }
+      }
+    }
+    // a lucky layout may locate finders but cannot yield lanes
+    try {
+      assert.equal(decodePetalFrame(new PetalLuma(w, h, data)).lanesOk(), 0, `scene ${scene} produced lane data from blobs`);
+    } catch (error) {
+      assert.ok(error instanceof PetalError, `scene ${scene}: ${error}`);
+    }
+  }
+});
+
+test("a large hidden region never reads wrong data", () => {
+  // the whole bottom-right quarter is gone: rings and tiles with it
+  const { encoder, luma } = decodeSetup(2);
   const n = luma.width;
-  const data = luma.data.slice();
-  for (let y = (n * 3) / 4; y < n; y += 1) for (let x = (n * 3) / 4; x < n; x += 1) data[y * n + x] = 0;
-  assert.throws(() => decodePetalFrame(new PetalLuma(n, n, data)), PetalError);
+  for (let y = (n * 3) / 4; y < n; y += 1) luma.data.fill(0, y * n + (n * 3) / 4, (y + 1) * n);
+  const truth = encoder.laneData(2);
+  let decoded = null;
+  try {
+    decoded = decodePetalFrame(luma);
+  } catch (error) {
+    assert.ok(error instanceof PetalError);
+  }
+  if (decoded !== null) {
+    for (const lane of ["p", "k", "d"]) {
+      if (decoded[lane] !== null) assert.deepEqual(decoded[lane].data, truth[lane], `lane ${lane}`);
+    }
+  }
+});
+
+/** A 768-pixel render of frame `frameNo` with the blossom of canonical corner `corner` painted over. */
+function hiddenBlossom(frameNo, corner) {
+  const { encoder, luma } = decodeSetup(frameNo);
+  const n = luma.width;
+  const scale = n / PETAL_LAYOUT.canvas;
+  const [fx, fy] = PETAL_LAYOUT.finderCenters[corner];
+  const cx = fx * scale;
+  const cy = fy * scale;
+  const radius = 75 * scale;
+  for (let y = 0; y < n; y += 1) {
+    for (let x = 0; x < n; x += 1) {
+      const dx = x + 0.5 - cx;
+      const dy = y + 0.5 - cy;
+      if (dx * dx + dy * dy <= radius * radius) luma.data[y * n + x] = 0;
+    }
+  }
+  return { encoder, luma };
+}
+
+test("a hidden blossom is inferred and every lane still reads", () => {
+  for (let corner = 0; corner < 4; corner += 1) {
+    const { encoder, luma } = hiddenBlossom(2, corner);
+    const decoded = decodePetalFrame(luma);
+    const { p, k, d } = encoder.laneData(2);
+    assert.equal(decoded.inferredCorner, corner, `corner ${corner}`);
+    assert.deepEqual([decoded.rotation, decoded.mirrored], [0, false], `corner ${corner}`);
+    assert.deepEqual(decoded.p?.data, p, `corner ${corner} lane P`);
+    assert.deepEqual(decoded.k?.data, k, `corner ${corner} lane K`);
+    assert.deepEqual(decoded.d?.data, d, `corner ${corner} lane D`);
+    // the diagnostics extrapolate the hidden corner's levels like the decoder; without the
+    // inferred corner the missing blossom has no contrast and there are no levels at all
+    assert.ok(tileMatchError(luma, decoded) < 0.5, `corner ${corner}`);
+    assert.ok(observedCells(luma, decoded) !== null);
+    assert.equal(tileMatchError(luma, { homography: decoded.homography }), null);
+  }
+  const { luma } = hiddenBlossom(2, 0);
+  const decoded = decodePetalFrame(luma);
+  assert.throws(() => tileMatchError(luma, { homography: decoded.homography, inferredCorner: 4 }), TypeError);
+});
+
+test("the inferred corner is reported in code coordinates when mirrored", () => {
+  // hide the top-right blossom of the code, then mirror the picture: the hidden blossom appears
+  // top-left in the image but is still corner 1 of the code
+  const { encoder, luma } = hiddenBlossom(3, 1);
+  const decoded = decodePetalFrame(transformLuma(luma, (x, y, n) => [n - 1 - x, y]));
+  assert.ok(decoded.mirrored);
+  assert.equal(decoded.inferredCorner, 1);
+  assert.deepEqual(decoded.d.data, encoder.laneData(3).d);
+});
+
+test("the tian mask tells the quarter turns apart", () => {
+  const { luma } = decodeSetup(5);
+  const quad = locate(luma);
+  const byRotation = [-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE];
+  for (const { rotation, mirrored, m } of hypotheses(quad, true)) {
+    const score = maskScore(luma, m, referenceLevels(luma, m));
+    if (!mirrored) byRotation[rotation] = score;
+  }
+  // upright wins clearly over the three other quarter turns
+  for (let rotation = 1; rotation < 4; rotation += 1) {
+    assert.ok(byRotation[0] > byRotation[rotation] + 0.1, byRotation.join(", "));
+  }
+});
+
+/** Shifts a luma image by whole pixels, filling with black. */
+function shifted(image, dx, dy) {
+  const { width, height } = image;
+  const out = new PetalLuma(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sx = x - dx;
+      const sy = y - dy;
+      if (sx >= 0 && sy >= 0 && sx < width && sy < height) out.data[y * width + x] = image.data[sy * width + sx];
+    }
+  }
+  return out;
+}
+
+/** Places a luma image in the middle of a larger black frame. */
+function padded(image, pad) {
+  const width = image.width + 2 * pad;
+  const out = new PetalLuma(width, image.height + 2 * pad);
+  for (let y = 0; y < image.height; y += 1) {
+    out.data.set(image.data.subarray(y * image.width, (y + 1) * image.width), (y + pad) * width + pad);
+  }
+  return out;
+}
+
+test("tracking follows a small movement and gives up on a jump", () => {
+  const { encoder, luma: render } = decodeSetup(6);
+  const luma = padded(render, 100);
+  const first = decodePetalFrame(luma);
+  const { p, k, d } = encoder.laneData(6);
+  const followed = trackPetalFrame(shifted(luma, 9, -6), first);
+  assert.ok(followed !== null, "tracks a 9 px move");
+  assert.deepEqual([followed.p?.data, followed.k?.data, followed.d?.data], [p, k, d]);
+  assert.equal(followed.inferredCorner, null);
+  assert.deepEqual([followed.rotation, followed.mirrored], [first.rotation, first.mirrored]);
+  // more than a finder diameter: tracking refuses, a full decode is needed
+  const jumped = shifted(luma, 95, 0);
+  assert.equal(trackPetalFrame(jumped, first), null);
+  assert.ok(decodePetalFrame(jumped).lanesOk() > 0);
+  // unusable images and foreign previous frames
+  assert.equal(trackPetalFrame(new PetalLuma(47, 400), first), null);
+  assert.equal(trackPetalFrame(luma, first, { maxPixels: 1000 }), null);
+  assert.throws(() => trackPetalFrame(luma, { homography: first.homography }), TypeError);
+  assert.throws(() => trackPetalFrame({ width: 64, height: 64, data: [] }, first), TypeError);
+});
+
+test("tracking survives a blossom that disappears", () => {
+  const { luma } = decodeSetup(4);
+  const first = decodePetalFrame(luma);
+  // the same code, slightly moved, now with the bottom-left blossom covered
+  const { encoder, luma: covered } = hiddenBlossom(4, 3);
+  const followed = trackPetalFrame(shifted(covered, -5, 4), first);
+  assert.ok(followed !== null, "tracks with three blossoms");
+  assert.equal(followed.inferredCorner, 3);
+  assert.deepEqual(followed.d.data, encoder.laneData(4).d);
+});
+
+test("a blossom that reappears is seen again", () => {
+  const { luma: covered } = hiddenBlossom(4, 3);
+  const first = decodePetalFrame(covered);
+  assert.equal(first.inferredCorner, 3);
+  // the thumb moves away and the hand moves a little
+  const { encoder, luma } = decodeSetup(4);
+  const followed = trackPetalFrame(shifted(luma, 4, -3), first);
+  assert.ok(followed !== null, "tracks");
+  assert.equal(followed.inferredCorner, null);
+  assert.deepEqual(followed.d.data, encoder.laneData(4).d);
+  // still covered: still inferred
+  const still = trackPetalFrame(shifted(covered, 4, -3), first);
+  assert.ok(still !== null, "tracks");
+  assert.equal(still.inferredCorner, 3);
+});
+
+test("broken poses are refused without crashing", () => {
+  const { luma } = decodeSetup(4);
+  const previous = decodePetalFrame(luma);
+  const nonFinite = [
+    new Array(9).fill(Number.NaN),
+    [Number.POSITIVE_INFINITY, 0, 0, 0, 1, 0, 0, 0, 1],
+  ];
+  for (const broken of nonFinite) {
+    assert.equal(decodePetalFrameAt(luma, broken), null);
+  }
+  // the last one makes every finder far larger than the image
+  const huge = [50, 0, 0, 0, 50, 0, 0, 0, 1];
+  for (const broken of [...nonFinite, huge]) {
+    for (const inferred of [null, 2]) {
+      const frame = new PetalDecodedFrame(
+        new PetalHomography(broken),
+        previous.rotation,
+        previous.mirrored,
+        previous.p,
+        previous.k,
+        previous.d,
+        inferred,
+      );
+      assert.equal(trackPetalFrame(luma, frame), null, `${broken.join(",")} inferred ${inferred}`);
+    }
+  }
 });
 
 // ---------------------------------------------------------------- tile reads
@@ -1828,6 +2156,44 @@ test("a session receives a payload from simulated captures", () => {
   assert.ok(stats.frames >= stats.located && stats.located >= stats.readable);
 });
 
+test("a steady camera is tracked after the first frame", () => {
+  const encoder = new PetalStreamEncoder(payload(300, 3), 2);
+  const shoot = (frame) =>
+    cameraCapture(renderLuma(encoder.cells(frame), 512, 2), { width: 640, height: 480, rotationDeg: 8, seed: frame + 1 });
+  const session = new PetalScanSession();
+  for (let frame = 0; frame < 6; frame += 1) {
+    const outcome = session.push(shoot(frame), frame * 125);
+    assert.equal(outcome.error, null, `frame ${frame}`);
+  }
+  let stats = session.stats();
+  assert.equal(stats.readable, 6);
+  assert.equal(stats.tracked, 5, "every frame after the first follows the pose");
+  assert.equal(stats.inferred, 0);
+  // a pause longer than the tracking window forces a full search again
+  session.push(shoot(6), 5 * 125 + PETAL_TRACK_WINDOW_MS + 1);
+  stats = session.stats();
+  assert.deepEqual([stats.tracked, stats.readable], [5, 7]);
+  // so does a reset, which forgets the pose
+  session.reset();
+  session.push(shoot(7), 5 * 125 + PETAL_TRACK_WINDOW_MS + 100);
+  stats = session.stats();
+  assert.deepEqual([stats.tracked, stats.readable], [5, 8]);
+  assert.equal(PETAL_TRACK_WINDOW_MS, 500);
+});
+
+test("a session counts frames read with a hidden corner and keeps tracking through one", () => {
+  const session = new PetalScanSession();
+  const { luma } = decodeSetup(4);
+  assert.equal(session.push(luma, 0).lanes, "PKD");
+  // a thumb arrives over the bottom-left blossom: tracked, with the corner inferred
+  const outcome = session.push(hiddenBlossom(4, 3).luma, 100);
+  assert.equal(outcome.lanes, "PKD");
+  assert.deepEqual([session.stats().tracked, session.stats().inferred], [1, 1]);
+  // a frame without a code keeps the pose, and an unreadable frame is not tracked
+  assert.equal(session.push(new PetalLuma(768, 768), 200).error, "no_finders");
+  assert.deepEqual([session.stats().tracked, session.stats().readable], [1, 2]);
+});
+
 test("idle sessions forget partial streams", () => {
   const encoder = new PetalStreamEncoder(payload(4000, 3), 1);
   const session = new PetalScanSession({ idleTimeoutMs: 1000 });
@@ -2003,8 +2369,8 @@ test("fixture: streams encode identically and reassemble", () => {
 
 const captureFixture = JSON.parse(readFileSync(CAPTURE_FIXTURE, "utf8"));
 
-function captureLuma(entry) {
-  const data = new Uint8Array(inflateSync(Buffer.from(entry.luma_zlib_base64, "base64")));
+function captureLuma(entry, key = "luma_zlib_base64") {
+  const data = new Uint8Array(inflateSync(Buffer.from(entry[key], "base64")));
   return new PetalLuma(entry.width, entry.height, data);
 }
 
@@ -2032,11 +2398,60 @@ test("golden captures decode as recorded", (t) => {
     // the decoder follows the reference step by step, so under V8 it reads
     // exactly the lanes the reference read
     assert.equal(lanes, capture.reference_decoded, `${capture.name}: lanes differ from the reference`);
+    assert.equal(decoded.inferredCorner, capture.inferred_corner, `${capture.name}: inferred corner`);
     t.diagnostic(`${capture.name} ${capture.width}x${capture.height}: lanes ${lanes} in ${elapsed.toFixed(1)} ms`);
     decoded.feed(assembler);
   }
   // captures of different frames of the same stream accumulate in one assembler
   assert.ok(assembler.progress().atomsReceived > 10);
+});
+
+test("golden tracks follow the pose into the next frame", (t) => {
+  assert.ok(captureFixture.tracks.length >= 2, "the fixture holds the tracking pairs");
+  for (const pair of captureFixture.tracks) {
+    const previous = decodePetalFrame(captureLuma(pair, "from_luma_zlib_base64"));
+    const next = captureLuma(pair, "to_luma_zlib_base64");
+    const started = performance.now();
+    const followed = trackPetalFrame(next, previous);
+    const elapsed = performance.now() - started;
+    assert.ok(followed !== null, `${pair.name}: tracking lost the code`);
+    let lanes = "";
+    for (const [letter, lane, expected] of [
+      ["P", followed.p, pair.p_data],
+      ["K", followed.k, pair.k_data],
+      ["D", followed.d, pair.d_data],
+    ]) {
+      if (lane !== null) {
+        assert.equal(hex(lane.data), expected, `${pair.name}: lane ${letter} data`);
+        lanes += letter;
+      } else {
+        assert.ok(!pair.must_track.includes(letter), `${pair.name}: lane ${letter} lost`);
+      }
+    }
+    assert.equal(lanes, pair.reference_tracked, `${pair.name}: lanes differ from the reference`);
+    assert.equal(followed.inferredCorner, pair.inferred_corner, `${pair.name}: inferred corner`);
+    assert.deepEqual([followed.rotation, followed.mirrored], [previous.rotation, previous.mirrored]);
+    t.diagnostic(`${pair.name}: tracked lanes ${lanes} in ${elapsed.toFixed(1)} ms`);
+    // a scan session that saw the first frame reads the second by tracking
+    const session = new PetalScanSession();
+    session.push(captureLuma(pair, "from_luma_zlib_base64"), 0);
+    const outcome = session.push(next, 125);
+    assert.equal(outcome.lanes, pair.reference_tracked, pair.name);
+    assert.equal(session.stats().tracked, 1, pair.name);
+    assert.equal(session.stats().inferred, pair.inferred_corner === null ? 0 : 1, pair.name);
+  }
+});
+
+test("the fixture holds the inferred-corner captures", () => {
+  const inferred = captureFixture.captures.filter((capture) => capture.inferred_corner !== null);
+  assert.deepEqual(
+    inferred.map((capture) => [capture.name, capture.inferred_corner]),
+    [
+      ["hidden-corner-540p", 3],
+      ["cut-corner-720p", 2],
+    ],
+  );
+  for (const capture of captureFixture.captures) assert.ok("inferred_corner" in capture, capture.name);
 });
 
 /** The captures of bad lighting: only the normalised tile read gets their tile lanes. */
@@ -2110,6 +2525,7 @@ test("a scan session reads the recorded lanes of every golden capture", () => {
     const stats = session.stats();
     const counted = ["P", "K", "D"].map((lane) => (capture.reference_decoded.includes(lane) ? 1 : 0));
     assert.deepEqual([stats.laneP, stats.laneK, stats.laneD], counted, capture.name);
+    assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], capture.name);
   }
 });
 
@@ -2232,11 +2648,15 @@ test("the camera scanner reads a stream from video frames", async () => {
   const canvas = { width: 0, height: 0, getContext: (kind, settings) => (kind === "2d" && settings.willReadFrequently ? context : null) };
   let completed = null;
   const outcomes = [];
+  const counters = [];
   let clock = 0;
   const scanner = new PetalCameraScanner({
     video,
     createCanvas: (width, height) => Object.assign(canvas, { width, height }),
-    onProgress: (outcome) => outcomes.push(outcome),
+    onProgress: (outcome, stats) => {
+      outcomes.push(outcome);
+      counters.push(stats);
+    },
     onComplete: (result) => {
       completed = result;
     },
@@ -2256,6 +2676,11 @@ test("the camera scanner reads a stream from video frames", async () => {
   assert.deepEqual(drawn[0], [0, 0, 320, 320]);
   assert.ok(outcomes.every((outcome) => outcome.error === null));
   assert.ok(scanner.session.stats().readable >= 1);
+  // the progress callback sees the session's counters: after the first frame the code is tracked
+  assert.deepEqual(counters.at(-1), scanner.session.stats());
+  assert.equal(counters[0].tracked, 0);
+  assert.equal(counters.at(-1).tracked, counters.length - 1);
+  assert.equal(counters.at(-1).inferred, 0);
 });
 
 test("the camera scanner downsizes large frames and tolerates frames without data", async () => {
@@ -2359,7 +2784,8 @@ test("the declarations type-check a strict browser consumer", () => {
         "import {",
         "  PETAL_LANES, PetalCameraScanner, PetalDecodedFrame, PetalError, PetalLuma, PetalScanSession, PetalStreamEncoder,",
         "  PetalStreamPlayer, decodePetalFrame, drawPetalFrame, encodeLane, petalDrawList, renderPetalFrame,",
-        "  type PetalCompleted, type PetalDecodeErrorCode, type PetalScanOutcome,",
+        "  PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
+        "  type PetalCompleted, type PetalDecodeErrorCode, type PetalScanOutcome, type PetalScanStats,",
         `} from ${JSON.stringify(declaration)};`,
         "declare const canvas: HTMLCanvasElement;",
         "declare const video: HTMLVideoElement;",
@@ -2371,7 +2797,7 @@ test("the declarations type-check a strict browser consumer", () => {
         "player.start();",
         "const scanner = new PetalCameraScanner({",
         "  video, stream, maxSide: 960, createCanvas: (width, height) => new OffscreenCanvas(width, height),",
-        "  onProgress: (outcome: PetalScanOutcome) => void outcome.progress.rank,",
+        "  onProgress: (outcome: PetalScanOutcome, stats: PetalScanStats) => void (outcome.progress.rank + stats.tracked + stats.inferred),",
         "  onComplete: (completed: PetalCompleted) => void completed.payload.byteLength,",
         "});",
         "void scanner.start();",
@@ -2379,8 +2805,12 @@ test("the declarations type-check a strict browser consumer", () => {
         "const luma = PetalLuma.fromImageData(new ImageData(image.data, image.width, image.height));",
         "if (luma !== null) {",
         "  try {",
-        "    const lanes: number = decodePetalFrame(luma, { tryMirrored: false }).lanesOk();",
-        "    void lanes;",
+        "    const frame = decodePetalFrame(luma, { tryMirrored: false });",
+        "    const lanes: number = frame.lanesOk();",
+        "    const corner: number | null = frame.inferredCorner;",
+        "    const next = trackPetalFrame(luma, frame);",
+        "    const sets = locateCandidates(luma).filter((set) => set.inferred !== null).length;",
+        "    void lanes; void corner; void next?.inferredCorner; void sets; void PETAL_TRACK_WINDOW_MS;",
         "  } catch (error) {",
         "    if (error instanceof PetalError) { const code: string = error.code; void code; }",
         "  }",

@@ -6,8 +6,12 @@
 //! native fee accounting and runs before any deferred group executes.
 
 use crate::{
-    smartcontracts::isi::multisig::live_proposal_instructions_for_approval,
-    state::StateTransaction, tx::TransactionRejectionReason,
+    execution_attempt::ExecutionAttemptError as Attempt,
+    smartcontracts::isi::multisig::{
+        live_proposal_instructions_for_approval, multisig_instruction_decode_attempt,
+    },
+    state::StateTransaction,
+    tx::TransactionRejectionReason,
 };
 use core::fmt;
 use iroha_data_model::{
@@ -36,6 +40,7 @@ enum OpaqueDeferredAuthorityError {
         instructions_hash_hex: String,
     },
     ProposalDepthExceeded,
+    ProposalReadFailed(String),
 }
 
 impl fmt::Display for OpaqueDeferredAuthorityError {
@@ -63,6 +68,9 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
                 f,
                 "opaque deferred proposal graph exceeds the maximum traversal depth"
             ),
+            Self::ProposalReadFailed(reason) => {
+                write!(f, "live multisig proposal read failed: {reason}")
+            }
         }
     }
 }
@@ -78,19 +86,42 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 pub(crate) fn reject_opaque_deferred_authority(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), TransactionRejectionReason> {
-    let mut visited = std::collections::BTreeSet::new();
-    for instructions in instruction_groups.values() {
-        reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve| {
-            live_proposal_instructions_for_approval(state_transaction, approve)
-        })
-        .map_err(|error| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "deferred execution authority rejected transaction: {error}"
-            )))
-        })?;
+) -> Result<(), Attempt<TransactionRejectionReason>> {
+    reject_opaque_instruction_authority(
+        instruction_groups
+            .values()
+            .flat_map(|instructions| instructions.iter()),
+        state_transaction,
+    )
+    .map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))
+}
+
+/// Validate the actual effects produced by an opaque host or verified replay.
+///
+/// Borrow the original ordered effects so every consumption boundary applies the
+/// same recursive signed-plan rule before executing its first instruction.
+///
+/// # Errors
+/// Rejects nested committee or monetary staking instructions, unresolved live
+/// multisig approvals, and proposal graphs exceeding the traversal bound.
+pub(crate) fn reject_opaque_instruction_authority<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Attempt<ValidationFail>> {
+    if cfg!(all(test, sumeragi_core_mutation = "HC66")) {
+        return Ok(());
     }
-    Ok(())
+    let mut visited = std::collections::BTreeSet::new();
+    reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve| {
+        live_proposal_instructions_for_approval(state_transaction, approve)
+    })
+    .map_err(|error| {
+        error.map_rejection(|error| {
+            ValidationFail::NotPermitted(format!(
+                "deferred execution authority rejected transaction: {error}"
+            ))
+        })
+    })
 }
 
 /// Monetary staking instructions whose exact plan must be signed.
@@ -144,36 +175,51 @@ fn reject_opaque_committee_operation(
     Ok(())
 }
 
-fn reject_opaque_committee_operations_with<F>(
-    instructions: &[InstructionBox],
+fn reject_opaque_committee_operations_with<'a, F>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
     visited: &mut std::collections::BTreeSet<String>,
     depth: usize,
     resolve: &mut F,
-) -> Result<(), OpaqueDeferredAuthorityError>
+) -> Result<(), Attempt<OpaqueDeferredAuthorityError>>
 where
-    F: FnMut(&MultisigApprove) -> Option<(AccountId, Vec<InstructionBox>)>,
+    F: FnMut(
+        &MultisigApprove,
+    ) -> Result<Option<(AccountId, Vec<InstructionBox>)>, Attempt<ValidationFail>>,
 {
     if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {
-        return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded);
+        return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());
     }
-    for (index, instruction) in instructions.iter().enumerate() {
+    for (index, instruction) in instructions.into_iter().enumerate() {
         reject_opaque_committee_operation(instruction, index)?;
-        if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
+        let multisig = match MultisigInstructionBox::try_from(instruction) {
+            Ok(multisig) => Some(multisig),
+            Err(error) => match multisig_instruction_decode_attempt(error, |_| ()) {
+                Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason)),
+                Attempt::Rejected(()) => None,
+            },
+        };
+        if let Some(multisig) = multisig {
             match multisig {
                 MultisigInstructionBox::Propose(proposal) => {
                     reject_opaque_committee_operations_with(
-                        &proposal.instructions,
+                        proposal.instructions.iter(),
                         visited,
                         depth + 1,
                         resolve,
                     )?;
                 }
                 MultisigInstructionBox::Approve(approval) => {
-                    let Some((authority, instructions)) = resolve(&approval) else {
+                    let Some((authority, instructions)) = resolve(&approval).map_err(|error| {
+                        error.map_rejection(|error| {
+                            OpaqueDeferredAuthorityError::ProposalReadFailed(error.to_string())
+                        })
+                    })?
+                    else {
                         return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval {
                             account_id: approval.account.to_string(),
                             instructions_hash_hex: hex::encode(approval.instructions_hash.as_ref()),
-                        });
+                        }
+                        .into());
                     };
                     let identity = format!(
                         "{}:{}",
@@ -182,7 +228,7 @@ where
                     );
                     if visited.insert(identity) {
                         reject_opaque_committee_operations_with(
-                            &instructions,
+                            instructions.iter(),
                             visited,
                             depth + 1,
                             resolve,
@@ -201,11 +247,16 @@ where
         };
         match register.object.action().executable() {
             Executable::Instructions(nested) => {
-                reject_opaque_committee_operations_with(nested, visited, depth + 1, resolve)?;
+                reject_opaque_committee_operations_with(
+                    nested.iter(),
+                    visited,
+                    depth + 1,
+                    resolve,
+                )?;
             }
             Executable::IvmProved(proved) => {
                 reject_opaque_committee_operations_with(
-                    &proved.overlay,
+                    proved.overlay.iter(),
                     visited,
                     depth + 1,
                     resolve,
@@ -282,12 +333,13 @@ mod tests {
                 &[instruction],
                 &mut std::collections::BTreeSet::new(),
                 0,
-                &mut |_| None,
+                &mut |_| Ok(None),
             ),
             Err(OpaqueDeferredAuthorityError::StakingOperation {
                 instruction_index: 0,
                 instruction_wire_id: "iroha.instruction.v1::staking::RecordPublicLaneRewards",
-            })
+            }
+            .into())
         );
     }
 }

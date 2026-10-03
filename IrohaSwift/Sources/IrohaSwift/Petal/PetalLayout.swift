@@ -211,7 +211,9 @@ public enum PetalLayout {
     /// The value is computed in single precision exactly like the reference
     /// (`f32` trigonometry) and widened to `Double`.
     public static func slotCenter(ring: Int, slot: Int) -> PetalPoint {
-        let tau = 2 * Float.pi
+        // Rust `f32::consts::TAU` is 2π rounded to nearest (0x40C90FDB);
+        // `2 * Float.pi` is one ulp smaller because `Float.pi` rounds toward zero.
+        let tau = Float(2 * Double.pi)
         let theta = tau * Float(slot) / Float(ringSlots[ring])
         let radius = Float(ringRadii[ring])
         let x: Float = 512 + radius * cos(theta)

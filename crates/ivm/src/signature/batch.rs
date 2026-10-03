@@ -7,6 +7,7 @@ use super::{Ed25519BatchItem, SignatureScheme, verify_signature};
 #[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal"), test))]
 #[derive(Clone, Copy)]
 pub(crate) enum BatchInput<'a, 'message> {
+    #[cfg(any(feature = "cuda", test))]
     Prepared {
         signatures: &'a [[u8; 64]],
         public_keys: &'a [[u8; 32]],
@@ -19,6 +20,7 @@ pub(crate) enum BatchInput<'a, 'message> {
 impl BatchInput<'_, '_> {
     pub(crate) fn checked_len(self) -> Option<usize> {
         match self {
+            #[cfg(any(feature = "cuda", test))]
             Self::Prepared {
                 signatures,
                 public_keys,
@@ -26,24 +28,28 @@ impl BatchInput<'_, '_> {
             } if signatures.len() == public_keys.len() && signatures.len() == hrams.len() => {
                 Some(signatures.len())
             }
+            #[cfg(any(feature = "cuda", test))]
             Self::Prepared { .. } => None,
             Self::Items(items) => Some(items.len()),
         }
     }
     pub(crate) fn signature(self, index: usize) -> [u8; 64] {
         match self {
+            #[cfg(any(feature = "cuda", test))]
             Self::Prepared { signatures, .. } => signatures[index],
             Self::Items(items) => items[index].signature,
         }
     }
     pub(crate) fn public_key(self, index: usize) -> [u8; 32] {
         match self {
+            #[cfg(any(feature = "cuda", test))]
             Self::Prepared { public_keys, .. } => public_keys[index],
             Self::Items(items) => items[index].public_key,
         }
     }
     pub(crate) fn hram(self, index: usize) -> [u8; 32] {
         match self {
+            #[cfg(any(feature = "cuda", test))]
             Self::Prepared { hrams, .. } => hrams[index],
             Self::Items(items) => {
                 let item = &items[index];
@@ -76,7 +82,7 @@ impl BatchInput<'_, '_> {
     }
 }
 
-fn cpu_into(items: &[Ed25519BatchItem<'_>], destination: &mut [bool]) {
+pub(crate) fn cpu_batch_into(items: &[Ed25519BatchItem<'_>], destination: &mut [bool]) {
     for (item, output) in items.iter().zip(destination) {
         *output = verify_signature(
             SignatureScheme::Ed25519,
@@ -100,7 +106,7 @@ fn with_fallback(
     }
     // Every element is recomputed from the original input, even if a refusing
     // backend happened to touch some destination slots before returning.
-    cpu_into(items, destination);
+    cpu_batch_into(items, destination);
     true
 }
 
@@ -114,12 +120,7 @@ pub fn verify_ed25519_batch_items_into(
 ) -> bool {
     with_fallback(items, destination, |destination| {
         #[cfg(all(target_os = "macos", feature = "metal"))]
-        if crate::vector::select_metal_batch(crate::vector::MetalBatchWork::Ed25519, items.len())
-            .and_then(|selected| {
-                selected.run(|| crate::vector::metal_ed25519_items_into(items, destination))
-            })
-            .unwrap_or(false)
-        {
+        if crate::vector::metal_ed25519_auto_into(items, destination) {
             return true;
         }
         #[cfg(feature = "cuda")]
@@ -141,6 +142,15 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     #[test]
+    fn default_item_is_inert_and_shared_cpu_traversal_initializes_every_slot() {
+        let items = [Ed25519BatchItem::default(); 2];
+        assert!(items.iter().all(|item| item.message.is_empty()));
+        let mut output = [true; 2];
+        cpu_batch_into(&items, &mut output);
+        assert_eq!(output, [false; 2]);
+    }
+
+    #[test]
     fn malformed_destination_and_empty_batch_do_not_attempt_acceleration() {
         assert!(with_fallback(&[], &mut [], |_| panic!("empty attempt")));
         let mut output = [true];
@@ -159,7 +169,7 @@ mod tests {
             signature: key.sign(message).to_bytes(),
             public_key: key.verifying_key().to_bytes(),
         };
-        let mut bad = item.clone();
+        let mut bad = item;
         bad.message = b"different";
         let items = [item, bad];
         let mut output = [false, true];

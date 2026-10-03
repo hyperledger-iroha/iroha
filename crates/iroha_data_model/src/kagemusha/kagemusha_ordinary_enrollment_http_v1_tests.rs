@@ -401,9 +401,11 @@ fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
         // First release: each full original and explicit null are mandatory; old2-field refuses.
         for key in [
             "wallet",
+            "signed_preparation_base64",
             "raw_admission_original_base64",
             "platform_original_base64",
             "core_possession_original_base64",
+            "app_certificate_base64",
             "selected_integrity",
         ] {
             let missing = mutate(&json, |v| {
@@ -415,7 +417,7 @@ fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
         }
         for (key, limit) in [
             ("raw_admission_original_base64", 315usize),
-            ("platform_original_base64", 131073),
+            ("platform_original_base64", 131_073),
             ("core_possession_original_base64", 5121),
             ("app_certificate_base64", 16385),
         ] {
@@ -465,4 +467,48 @@ fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
             );
         }
     }
+}
+
+#[test]
+fn selected_integrity_public_carrier_roundtrips_complete_original_pair_without_start_authority() {
+    let f = Fixture::android_with_integrity();
+    let (challenge, lease) = f.integrity_refresh_originals();
+    let challenge_original = challenge.to_transport_bytes().unwrap();
+    let lease_original = lease.canonical_bytes().unwrap();
+    let pair = KagemushaOrdinaryStartIntegrityHttpV1 {
+        challenge: STANDARD.encode(&challenge_original),
+        lease: STANDARD.encode(&lease_original),
+    };
+    let binary = norito::encode_canonical(&pair).unwrap();
+    let decoded: KagemushaOrdinaryStartIntegrityHttpV1 = norito::decode_canonical_with_limits(
+        &binary,
+        norito::canonical_decode_limits(binary.len()),
+    )
+    .unwrap();
+    assert_eq!(decoded, pair);
+    assert_eq!(
+        STANDARD.decode(&decoded.challenge).unwrap(),
+        challenge_original
+    );
+    assert_eq!(STANDARD.decode(&decoded.lease).unwrap(), lease_original);
+    let json_original = json::to_vec(&pair).unwrap();
+    assert_eq!(
+        json::from_slice::<KagemushaOrdinaryStartIntegrityHttpV1>(&json_original).unwrap(),
+        pair
+    );
+    let unknown = mutate(&json_original, |value| {
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("current_authority".into(), Value::Bool(true));
+    });
+    assert!(json::from_slice::<KagemushaOrdinaryStartIntegrityHttpV1>(&unknown).is_err());
+    // A decoded refresh pair remains DATA. It cannot enter the initial Start ceremony.
+    let mut initial = start_originals(&f);
+    initial.selected_integrity = Some(pair);
+    assert!(
+        KagemushaOrdinaryEnrollmentHttpRequestV1::Start(initial)
+            .canonical_bytes()
+            .is_err()
+    );
 }

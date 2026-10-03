@@ -170,7 +170,8 @@ impl MusubiPublicationAuthenticatedProviderReadbackV1 {
         self.finalized_reader
             .validate_current_readback_target(&query, &request.location, request.provider)
             .map_err(|error| match error {
-                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
+                | MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(_) => {
                     MusubiPublicationServiceBackendErrorV1::Retryable
                 }
                 MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {

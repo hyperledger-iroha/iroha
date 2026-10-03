@@ -62,15 +62,37 @@ public struct KagemushaOrdinaryCashApprovalProjectionV1: Sendable {
     try requireProjection(.monetaryTransition, nativeSigningBytes, nativeFinancialSubject, binding)
   }
 
+  /// Distinct incoming purpose2 DATA projection; no Native signing holder is constructed.
+  public static func requireIncomingPreparation(nativeSigningBytes: Data, nativeFinancialSubject: Data,
+    binding: KagemushaOrdinaryCashApprovalOriginalBindingV1) throws -> Self {
+    let value = try requireProjection(.prepareTransition, nativeSigningBytes, nativeFinancialSubject, binding)
+    let w = [UInt8](value.originalW)
+    guard [UInt8(1), 3].contains(value.operationTag),
+      unsigned64(w, at: 317) - unsigned64(w, at: 309) <= 10_000 else {
+      throw invalid("incoming preparation operation or interval")
+    }
+    return value
+  }
+
+  /// Distinct incoming purpose1 DATA projection with both complete candidate/body selectors.
+  public static func requireIncomingTerminal(nativeSigningBytes: Data, nativeFinancialSubject: Data,
+    binding: KagemushaOrdinaryCashApprovalOriginalBindingV1) throws -> Self {
+    try requireProjection(.monetaryTransition, nativeSigningBytes, nativeFinancialSubject, binding,
+      ordinaryIncomingTerminal: true)
+  }
+
   // Actual Rust model fixtures precede ordinary credential authentication. Their
   // independent enrollment/S markers may differ. Production callers require binding.
   static func requireModelMessageShape(_ purpose: KagemushaOrdinaryCashApprovalPurposeV1,
     nativeSigningBytes: Data, nativeFinancialSubject: Data) throws -> Self {
-    try requireProjection(purpose, nativeSigningBytes, nativeFinancialSubject, nil)
+    let operation = nativeFinancialSubject.dropFirst(331).first
+    return try requireProjection(purpose, nativeSigningBytes, nativeFinancialSubject, nil,
+      ordinaryIncomingTerminal: purpose == .monetaryTransition && (operation == 1 || operation == 3))
   }
 
   private static func requireProjection(_ purpose: KagemushaOrdinaryCashApprovalPurposeV1,
-    _ wOriginal: Data, _ sOriginal: Data, _ binding: KagemushaOrdinaryCashApprovalOriginalBindingV1?) throws -> Self {
+    _ wOriginal: Data, _ sOriginal: Data, _ binding: KagemushaOrdinaryCashApprovalOriginalBindingV1?,
+    ordinaryIncomingTerminal: Bool = false) throws -> Self {
     let w = [UInt8](wOriginal), s = [UInt8](sOriginal)
     guard w.count == 325, s.count == 460 else { throw invalid("message width") }
     try requireFrame(w, domain: "iroha:kagemusha:v1:app-operation-approval\0", bodyLength: 275)
@@ -90,8 +112,11 @@ public struct KagemushaOrdinaryCashApprovalProjectionV1: Sendable {
     case .prepareTransition:
       guard !candidate, !terminal else { throw invalid("preparation terminal commitment") }
     case .monetaryTransition:
-      let outgoing = s[331] == 2 || s[331] == 4
-      guard candidate == outgoing, terminal == outgoing else { throw invalid("terminal operation commitment") }
+      guard !ordinaryIncomingTerminal || s[331] == 1 || s[331] == 3 else {
+        throw invalid("incoming terminal operation")
+      }
+      let commitmentsRequired = ordinaryIncomingTerminal || s[331] == 2 || s[331] == 4
+      guard candidate == commitmentsRequired, terminal == commitmentsRequired else { throw invalid("terminal operation commitment") }
     }
     guard (0..<8).allSatisfy({ present(w, at: 53 + $0 * 32) }) else { throw invalid("approval identity") }
     let issued = unsigned64(w, at: 309), expires = unsigned64(w, at: 317)

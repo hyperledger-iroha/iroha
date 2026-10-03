@@ -7,24 +7,23 @@ use mv::storage::History;
 ///
 /// Each touched record touches its old and new buckets, even when membership is
 /// unchanged. Buckets are derived from complete images so untouched members of a
-/// touched bucket remain present when the latest block is replaced.
+/// touched bucket remain present when the latest block is replaced. A missing
+/// optional projection contributes no bucket in that image.
 pub(super) fn grouped<K: mv::Key, V: mv::Value, B: mv::Key>(
     history: &History<'_, K, V>,
-    bucket: impl Fn(&K, &V) -> B,
+    bucket: impl Fn(&K, &V) -> Option<B>,
 ) -> Storage<B, BTreeSet<K>> {
     let mut current = BTreeMap::<B, BTreeSet<K>>::new();
     for (key, value) in history.current().iter() {
-        current
-            .entry(bucket(key, value))
-            .or_default()
-            .insert(key.clone());
+        if let Some(bucket) = bucket(key, value) {
+            current.entry(bucket).or_default().insert(key.clone());
+        }
     }
     let mut previous = BTreeMap::<B, BTreeSet<K>>::new();
     for (key, value) in history.iter_before_block() {
-        previous
-            .entry(bucket(key, value))
-            .or_default()
-            .insert(key.clone());
+        if let Some(bucket) = bucket(key, value) {
+            previous.entry(bucket).or_default().insert(key.clone());
+        }
     }
     let mut touched = BTreeSet::new();
     for (key, prior) in history.revert_map().iter() {
@@ -32,7 +31,9 @@ pub(super) fn grouped<K: mv::Key, V: mv::Value, B: mv::Key>(
             .into_iter()
             .flatten()
         {
-            touched.insert(bucket(key, value));
+            if let Some(bucket) = bucket(key, value) {
+                touched.insert(bucket);
+            }
         }
     }
     let undo = touched

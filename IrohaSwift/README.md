@@ -712,6 +712,14 @@ analyzer.attach(to: videoDataOutput)
   read against the light and dark levels of the finders; a lane that stays
   unreadable is read again with every patch normalised by its own contrast, so
   over-exposure, veiling light, glare and shadows cancel out.
+- When a thumb, a glare or the edge of the frame hides one corner blossom,
+  three blossoms that form a corner still locate the code: the fourth corner is
+  inferred, refined against the dotted rings and reported as
+  `PetalDecodedFrame.inferredCorner` (0 top-left, 1 top-right, 2 bottom-right,
+  3 bottom-left of the upright code). After a frame decodes, the session reads
+  the next frames with `PetalDecoder.track(_:previous:)`, which follows the
+  blossoms from the last pose (at most 500 ms old) instead of searching the
+  whole image; `PetalScanStats.tracked` and `.inferred` count both.
 - `PetalRenderer` is the pixel-exact reference software renderer;
   `PetalDrawList` describes a frame for vector backends and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
@@ -2528,7 +2536,9 @@ canonical Swift package always requires the real ABI25 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, and peer rebinding. Its Rust-authored fixture is
+monetary plans, bounded reward claims with an explicit optional fee-custody
+payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records and noncanonical quantity decimals. This structural codec
+truncated records, retired reward-plan layouts, invalid fee custody and
+noncanonical quantity decimals. This structural codec
 does not verify signatures, custody, or committee activation.

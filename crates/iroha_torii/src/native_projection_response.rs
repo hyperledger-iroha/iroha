@@ -2,12 +2,65 @@
 
 use super::*;
 use iroha_allocation::AllocationBudget;
+use iroha_core::{
+    state::StateReadOnly,
+    sumeragi::certified_chain::{CertifiedChain, CommittedBlock, QcVerification},
+};
+use iroha_data_model::sumeragi::finality::NativeFinalityLimits;
 use norito::json::{BoundedJsonError, JsonWriteSink};
 
 pub(crate) fn capacity() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
     ))
+}
+
+// One current-cut acquisition under the request's unchanged decode and source allowance.
+pub(crate) fn current_global_tip(
+    view: &impl StateReadOnly,
+    height: u64,
+    limits: NativeFinalityLimits,
+    unavailable: fn() -> Error,
+) -> Result<CommittedBlock, Error> {
+    limits.validate().map_err(|_| capacity())?;
+    if iroha_core::sumeragi::lanes::routing::committed_root_scope(view.world())
+        != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    {
+        return Err(unavailable());
+    }
+    if height < 2 || u64::try_from(view.height()).ok() != Some(height) {
+        return Err(unavailable());
+    }
+    let index = usize::try_from(height)
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .ok_or_else(unavailable)?;
+    let mut frames_left = limits.block_count as u64;
+    let mut bytes_left = limits.journal_bytes as u64;
+    let mut admit = |frames: u64, bytes: u64| {
+        use iroha_data_model::query::error::QueryExecutionFail;
+        if bytes > limits.block_bytes as u64 {
+            return Err(QueryExecutionFail::GasBudgetExceeded);
+        }
+        let next_frames = frames_left
+            .checked_sub(frames)
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        let next_bytes = bytes_left
+            .checked_sub(bytes)
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        frames_left = next_frames;
+        bytes_left = next_bytes;
+        Ok(())
+    };
+    let query_error = |error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error));
+    let chain = CertifiedChain::new_with_source_admission(view, &mut admit).map_err(query_error)?;
+    let certified = chain
+        .certified_from_execution(index, &mut admit)
+        .map_err(query_error)?;
+    if certified.verification() != QcVerification::Verified {
+        return Err(unavailable());
+    }
+    Ok(certified.into_committed())
 }
 
 pub(crate) struct EncodedBody {

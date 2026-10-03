@@ -9,6 +9,9 @@
 
 use super::{F, bit, packet, wide};
 
+mod payload;
+pub(super) use payload::payload_limb;
+
 /// Sixteen private-mask bits and two canonical zero-test inverses.
 /// The zero/full flags are derived polynomials, not extra witness columns.
 pub(super) const WIDTH: usize = 18;
@@ -120,31 +123,17 @@ pub(super) fn append_residues(
 ) {
     use packet::*;
     let start = out.len();
-    out.extend(row[..16].iter().copied().map(bit));
-    let mask = row[..16]
-        .iter()
-        .enumerate()
-        .fold(F::ZERO, |sum, (i, x)| sum.add(x.mul(F(1 << i))));
-    out.push(read[BEFORE_TAG].sub(mask));
     let selected = phase.selected_bits();
     let count = row[selected.clone()].iter().copied().fold(F::ZERO, F::add);
-    // For x != 0, x * flag = 0 forces inverse = 1/x. For x = 0,
-    // flag is exactly one and flag * inverse = 0 forces inverse = 0.
-    // The derived flags are quadratic; all residuals remain degree at most
-    // four, including enabled * private in the native tag-write ports.
-    let full_difference = count.sub(F(selected.len() as u64));
-    let zero = F::ONE.sub(count.mul(row[ZERO_INVERSE]));
-    let full = F::ONE.sub(full_difference.mul(row[FULL_INVERSE]));
-    out.push(bit(zero));
-    out.push(bit(full));
-    for (value, flag, inverse) in [
-        (count, zero, row[ZERO_INVERSE]),
-        (full_difference, full, row[FULL_INVERSE]),
-    ] {
-        out.push(value.mul(flag));
-        out.push(value.mul(inverse).sub(F::ONE.sub(flag)));
-        out.push(flag.mul(inverse));
-    }
+    let (zero, full) = mask_flags(
+        out,
+        row[..16].try_into().unwrap(),
+        read[BEFORE_TAG],
+        count,
+        F(selected.len() as u64),
+        row[ZERO_INVERSE],
+        row[FULL_INVERSE],
+    );
     let private = full.mul(F(u64::from(phase.stack)));
     let commit = zero.add(private);
     header(
@@ -195,7 +184,7 @@ pub(super) fn append_residues(
             let expected = if limb >= 4 {
                 F::ZERO
             } else if slot < 2 {
-                read[BEFORE + half * 4 + limb]
+                payload_limb(read[BEFORE + limb], read[BEFORE + 4 + limb], F(half as u64))
             } else {
                 write[BEFORE + limb]
             };
@@ -247,6 +236,39 @@ pub(super) fn append_residues(
     out.push(control[COMMIT].sub(commit));
     out.push(control[PRIVACY_TRAP].sub(F::ONE.sub(commit)));
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
+}
+
+/// Shared exact private-byte range and canonical zero/full-count equations.
+/// The enclosing original-owner bank must constrain the selected count itself.
+pub(super) fn mask_flags(
+    out: &mut Vec<F>,
+    bits: &[F; 16],
+    original_mask: F,
+    count: F,
+    length: F,
+    zero_inverse: F,
+    full_inverse: F,
+) -> (F, F) {
+    out.extend(bits.iter().copied().map(bit));
+    let mask = bits
+        .iter()
+        .enumerate()
+        .fold(F::ZERO, |sum, (i, x)| sum.add(x.mul(F(1 << i))));
+    out.push(original_mask.sub(mask));
+    let full_difference = count.sub(length);
+    let zero = F::ONE.sub(count.mul(zero_inverse));
+    let full = F::ONE.sub(full_difference.mul(full_inverse));
+    out.push(bit(zero));
+    out.push(bit(full));
+    for (value, flag, inverse) in [
+        (count, zero, zero_inverse),
+        (full_difference, full, full_inverse),
+    ] {
+        out.push(value.mul(flag));
+        out.push(value.mul(inverse).sub(F::ONE.sub(flag)));
+        out.push(flag.mul(inverse));
+    }
+    (zero, full)
 }
 
 fn header(

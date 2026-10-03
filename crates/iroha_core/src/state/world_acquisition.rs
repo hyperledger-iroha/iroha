@@ -20,7 +20,7 @@ pub(super) use original_control::{
     original_cell,
 };
 
-/// Acquisition adapters retain the actual native slots; only the fixed policy is fallible.
+/// Acquisition adapters retain actual slots and forward physical or policy refusal.
 pub(super) trait WorldFieldAcquisition {
     type Block;
     fn try_initialize(&mut self, mode: BlockMode) -> Result<(), AdmittedStorageError>;
@@ -45,6 +45,35 @@ impl<A: BlockAcquisition> WorldFieldAcquisition for OrdinaryAcquisition<A> {
         self.0.into_block()
     }
 }
+/// Cells retain their original partial pair on nonblocking acquisition refusal.
+pub(super) struct CellAcquisition<
+    'a,
+    V: mv::Value,
+    C: Send + Sync + 'static = concread::ebrcell::Untracked,
+>(pub(super) mv::cell::BlockAcquisitionSlot<'a, V, C>);
+impl<'a, V: mv::Value, C: Send + Sync + 'static> WorldFieldAcquisition
+    for CellAcquisition<'a, V, C>
+{
+    type Block = mv::cell::Block<'a, V, C>;
+    fn try_initialize(&mut self, mode: BlockMode) -> Result<(), AdmittedStorageError> {
+        #[cfg(all(test, sumeragi_core_mutation = "HC71"))]
+        {
+            self.0.initialize(mode);
+            return Ok(());
+        }
+        self.0.try_initialize(mode)
+    }
+    fn release(&mut self) {
+        self.0.release();
+    }
+    fn take_block(&mut self) -> Self::Block {
+        self.0.take_block()
+    }
+    fn into_block(self) -> Self::Block {
+        self.0.into_block()
+    }
+}
+
 pub(super) struct OperationAcquisition<'a>(
     pub(super)  mv::storage::BlockAcquisitionSlot<
         'a,

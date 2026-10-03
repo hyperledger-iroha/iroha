@@ -55,6 +55,11 @@ This is the `IQ` envelope's little-endian `u16` registry. The numeric meanings
 mirror the KAGEMUSHA V1 peer protocol, but this outer QR tag is distinct from
 the one-byte kind field inside an `IPM1` message.
 
+> **Superseded KAGEMUSHA kinds (2026-10-03).** Kinds 1 to 3 name the retired
+> exchange. The [single implementation draft](kagemusha_single_design_proposal.md)
+> §§5 and 8 define the messages this carrier moves; the kind table is replaced
+> together with the implementing change. The frame format below is unchanged.
+
 ## 3. Frame (`QrStreamFrame`)
 
 Each frame is encoded as:

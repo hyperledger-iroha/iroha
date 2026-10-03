@@ -211,16 +211,7 @@ pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
 pub(crate) use generation::production_prover::GeneratedOrdinaryCashReservationOriginalsV1;
-pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
-    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
-};
-pub(crate) use generation::production_prover::{
-    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
-    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1,
-    KagemushaRetainedOrdinaryOutgoingAuxiliariesV1, generate_ordinary_outgoing_candidate_v1,
-    readmit_retained_ordinary_outgoing_candidate_v1,
-};
+pub(crate) use generation::production_prover::generate_ordinary_incoming_candidate_v1;
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
@@ -228,6 +219,9 @@ pub use generation::production_prover::{
     KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1, KagemushaProductionProverV1,
     KagemushaProductionTerminalProofV1, KagemushaRetainedOrdinaryBootstrapAuxiliariesV1,
     register_kagemusha_native_outgoing_witness_source_v1,
+};
+pub(crate) use generation::production_prover::{
+    generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
 };
 #[cfg(test)]
 pub use generation::{
@@ -281,6 +275,10 @@ pub use generation::{
     prove_kagemusha_mint_authority_rotation_from_checkpoint_v1, prove_kagemusha_mint_authority_v1,
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_platform_credential_hash_claim_v1,
+};
+pub use generation::{
+    KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+    prove_ordinary_finalized_mint_from_checkpoint_v1, verify_ordinary_finalized_mint_credit_v1,
 };
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::{

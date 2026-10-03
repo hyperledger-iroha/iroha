@@ -3,8 +3,8 @@
 //! This facade has no default, untracked constructor, weak reference, or raw
 //! escape. Nested payload allocations remain separately owned obligations.
 
-use super::{AllocationCharge, AllocationReservation, InsufficientReservation};
-use crate::shared::Shared;
+use super::{AllocationBudget, AllocationCharge, AllocationReservation, InsufficientReservation};
+use crate::shared::{Reserved, Shared};
 use std::{alloc::Layout, fmt, ops::Deref};
 
 /// Immutable shared allocation retaining its original exact prepaid charge.
@@ -15,6 +15,17 @@ use std::{alloc::Layout, fmt, ops::Deref};
 /// If payload destruction panics, the existing underlying protocol conservatively
 /// retains that credit; it never reports incomplete reclamation as available.
 pub struct ChargedShared<T>(Shared<T, AllocationCharge>);
+
+/// Exact prepaid shared shell reserved before consuming an original payload.
+/// Dropping an unused shell frees its allocation before returning the original credit.
+pub struct ReservedChargedShared<T>(Reserved<T, AllocationCharge>);
+
+impl<T> ReservedChargedShared<T> {
+    /// Move the original payload into its already allocated shell without allocating.
+    pub fn initialize(self, value: T) -> ChargedShared<T> {
+        ChargedShared(self.0.initialize(value))
+    }
+}
 
 /// Local failure before a complete shared allocation can be returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +64,31 @@ impl<T> ChargedShared<T> {
     /// This is nonzero even for a zero-sized payload; it includes reference custody.
     pub fn allocation_layout() -> Layout {
         Shared::<T, AllocationCharge>::layout()
+    }
+
+    /// Reserve the exact physical shell before entering a consuming transition.
+    ///
+    /// # Errors
+    /// A short parent remains unchanged; physical refusal releases only the split credit.
+    pub fn reserve_from(
+        reservation: &mut AllocationReservation,
+    ) -> Result<ReservedChargedShared<T>, PrepaidSharedError> {
+        let charge = reservation
+            .try_split(Self::allocation_layout())
+            .map_err(PrepaidSharedError::Reservation)?;
+        Reserved::try_new(charge)
+            .map(ReservedChargedShared)
+            .map_err(|(charge, error)| {
+                drop(charge);
+                PrepaidSharedError::Allocator {
+                    requested_bytes: error.layout().size(),
+                }
+            })
+    }
+
+    /// Whether this exact shared control allocation belongs to the supplied pool.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.0.charge().belongs_to(budget)
     }
 
     /// Split this exact layout from the original parent before allocating it.
@@ -94,6 +130,14 @@ impl<T> ChargedShared<T> {
     /// Whether two handles retain exactly the same original control allocation.
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
         Shared::ptr_eq(&left.0, &right.0)
+    }
+}
+
+impl<T: crate::shared::SharedWake> ChargedShared<T> {
+    /// Move this exact charged reference into an allocation-free runtime waker.
+    /// Clones and callbacks retain the same allocation through its final owner.
+    pub fn into_waker(self) -> std::task::Waker {
+        self.0.into_waker()
     }
 }
 

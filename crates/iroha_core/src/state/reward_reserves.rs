@@ -21,6 +21,7 @@ pub(super) fn validate_public_lane_reward_reserves(
         }
     }
     for (key, record) in world.public_lane_rewards().iter() {
+        validate_xor_custody_shape(world, &record.asset).map_err(|error| error.to_string())?;
         if !public_lane_reward_record_matches_key(key, record) {
             return Err("reward reserve source contains a noncanonical reward record".to_owned());
         }
@@ -107,15 +108,17 @@ pub(super) fn registered_custody_world_for_test(
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::{Mint, Register};
 
+    let npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+    assert_eq!(
+        asset.definition(),
+        &npos.xor_asset_definition_id,
+        "positive custody fixtures use canonical network XOR"
+    );
     {
         let mut parameters = world.parameters.block();
-        parameters.get_mut().set_parameter(Parameter::Custom(
-            iroha_data_model::parameter::system::SumeragiNposParameters {
-                xor_asset_definition_id: asset.definition().clone(),
-                ..Default::default()
-            }
-            .into_custom_parameter(),
-        ));
+        parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         parameters.commit();
     }
     let state = State::new(
@@ -127,9 +130,10 @@ pub(super) fn registered_custody_world_for_test(
         let header = BlockHeader::new(std::num::NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-        Register::asset_definition(AssetDefinition::numeric(
+        Register::asset_definition(AssetDefinition::new(
             asset.definition().clone(),
             "Custody reserve",
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         ))
@@ -157,10 +161,8 @@ mod tests {
     fn fixture() -> (World, AssetId) {
         let mut world = World::new();
         let asset = AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("rewards", "universal").expect("domain"),
-                "xor".parse().expect("name"),
-            ),
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
             ALICE_ID.clone(),
         );
         for account in [ALICE_ID.clone(), BOB_ID.clone()] {
@@ -237,6 +239,86 @@ mod tests {
     }
 
     #[test]
+    fn reward_reserves_reject_wrong_xor_scope_and_precision() {
+        use iroha_data_model::asset::{AssetBalancePolicy, AssetBalanceScope};
+        use iroha_primitives::numeric::NumericSpec;
+        let (world, asset) = fixture();
+        validate_public_lane_reward_reserves(&world.view()).unwrap();
+        for (spec, scope) in [
+            (NumericSpec::default(), AssetBalancePolicy::Global),
+            (NumericSpec::fractional(18), AssetBalancePolicy::Global),
+            (
+                NumericSpec::fractional(9),
+                AssetBalancePolicy::DataspaceRestricted,
+            ),
+        ] {
+            let mut block = world.block();
+            let definition = block.asset_definitions.get_mut(asset.definition()).unwrap();
+            definition.spec = spec;
+            definition.balance_scope_policy = scope;
+            let error = validate_public_lane_reward_reserves(&block).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+        }
+        let mut block = world.block();
+        block
+            .public_lane_rewards
+            .get_mut(&(LaneId::SINGLE, 0))
+            .unwrap()
+            .asset = AssetId::with_scope(
+            asset.definition().clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+        assert!(
+            validate_public_lane_reward_reserves(&block)
+                .unwrap_err()
+                .to_string()
+                .contains("exact global XOR custody")
+        );
+    }
+
+    #[test]
+    fn reward_reserves_snapshot_rejects_wrong_precision_in_both_cuts() {
+        use iroha_primitives::numeric::NumericSpec;
+        for invalid_previous in [false, true] {
+            let (world, asset) = fixture();
+            if invalid_previous {
+                let mut definitions = world.asset_definitions.block();
+                definitions.get_mut(asset.definition()).unwrap().spec = NumericSpec::fractional(18);
+                definitions.commit();
+            }
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            );
+            {
+                let mut block = state.world.block();
+                block
+                    .asset_definitions
+                    .get_mut(asset.definition())
+                    .unwrap()
+                    .spec = NumericSpec::fractional(if invalid_previous { 9 } else { 18 });
+                block.commit();
+            }
+            let error = restore(json::to_value(&state).unwrap())
+                .err()
+                .expect("wrong-precision reward XOR must reject");
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn processed_reward_cursor_preserves_unpaid_source_accrual_backing() {
         let (mut world, asset) = fixture();
         world.public_lane_reward_claims.insert(
@@ -277,8 +359,14 @@ mod tests {
         {
             let mut parameters = world.parameters.block();
             parameters.get_mut().set_parameter(Parameter::Custom(
-                iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                    .into_custom_parameter(),
+                iroha_data_model::parameter::system::SumeragiNposParameters {
+                    xor_asset_definition_id: AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("rewards", "universal").unwrap(),
+                        "wrong_currency".parse().unwrap(),
+                    ),
+                    ..Default::default()
+                }
+                .into_custom_parameter(),
             ));
             parameters.commit();
         }

@@ -235,6 +235,9 @@ fn read_bound_high_water(
     let (network_id, pin_authority) = outbox.owner_binding();
     let record = read_current(pin_authority)
         .map_err(|error| match error {
+            MusubiPublicationPinOutboxHighWaterReadErrorV1::Deferred(error) => {
+                MusubiPinIntentOutboxErrorV1::Deferred(error)
+            }
             MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead => {
                 MusubiPinIntentOutboxErrorV1::LocallyAhead
             }

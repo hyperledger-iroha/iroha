@@ -62,9 +62,15 @@ macro_rules! schema_types {
             iroha_data_model::private_dataspace::PrivateDataspaceRecordProof,
             iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace,
             iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace,
+            // Native publication recovery checks retain authority-wide absence and exact row presence.
+            iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1,
+            iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1,
             iroha_data_model::smart_contract::ContractArtifactId,
             // Current finalized provider authority and signed discovery material.
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
+            iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
+            iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1,
+            iroha_data_model::sorafs::reserve::history::ReserveStateV1,
             iroha_data_model::sorafs::provider_admission::discovery::account_read::RegisteredAccountReadV1,
             iroha_data_model::sorafs::stream_token_custody::history::StreamTokenCustodyControlIndexV1,
             iroha_data_model::sns::lease::SnsLeaseProofV1,
@@ -261,6 +267,7 @@ mod tests {
     use iroha_schema::{MetaMap, Metadata};
     mod final_promotion;
     mod final_promotion_account_custody;
+    mod musubi;
     mod privacy_qualification;
     mod private_dataspace;
     mod sorafs_publication;

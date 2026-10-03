@@ -115,6 +115,10 @@ const KAGEMUSHA_RELEASE_ACTIVATE_FIXTURE = JSON.parse(readFileSync(
   new URL("../../../fixtures/governance/kagemusha_verifier_release_activate_v1.json", import.meta.url),
   "utf8",
 ));
+const KAGEMUSHA_RELEASE_RETIRE_FIXTURE = JSON.parse(readFileSync(
+  new URL("../../../fixtures/governance/kagemusha_verifier_release_retire_v1.json", import.meta.url),
+  "utf8",
+));
 
 function exactNoritoFrame(payload, schemaHashHex, { flags = 0x02, padding = 0 } = {}) {
   const body = Buffer.from(payload);
@@ -439,7 +443,7 @@ test("timed-OVN corpus transitions preflight one through 32 records per chunk", 
   }
 });
 
-test("attempt drafts admit all thirteen exact proposal wire variants", () => {
+test("attempt drafts admit all fourteen exact proposal wire variants", () => {
   const proposals = parliamentProposalFixtures();
   assert.deepEqual(
     proposals.map((proposal) => (
@@ -459,6 +463,7 @@ test("attempt drafts admit all thirteen exact proposal wire variants", () => {
       "KagemushaVerifierPolicyInstall",
       "KagemushaVerifierReleaseInstall",
       "KagemushaVerifierReleaseActivate",
+    "KagemushaVerifierReleaseRetire",
     ],
   );
   const musubi = buildParliamentAttemptDraftRequestV1(proposals[5], 1).proposal;
@@ -561,6 +566,7 @@ test("Parliament declarations expose the closed wire union and tuple newtypes", 
   assert.match(proposalDeclarations, /kind: "KagemushaVerifierPolicyInstall";/u);
   assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseInstall";/u);
   assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseActivate";/u);
+  assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseRetire";/u);
   assert.doesNotMatch(proposalDeclarations, /payload: Record<string, unknown>/u);
 });
 
@@ -631,6 +637,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.action.future = null; },
     (proposal) => { proposal.payload.authority_policy.future = null; },
     (proposal) => { proposal.payload.manifest.future = null; },
+    (proposal) => { proposal.payload.expected_predecessor.future = null; },
     (proposal) => { proposal.payload.expected_predecessor.future = null; },
   ];
   const fixtures = parliamentProposalFixtures();
@@ -878,8 +885,12 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
       /governance_attempt_sequence differs/u,
     ],
     [
-      (response) => { response.certificate.risk_tier = { tier: "Emergency" }; },
+      (response) => { response.certificate.risk_tier = { tier: "Emergency", details: null }; },
       /risk_tier differs/u,
+    ],
+    [
+      (response) => { response.certificate.risk_tier = { tier: "Emergency" }; },
+      /certificate\.risk_tier contains unknown, aliased, or missing fields/u,
     ],
     [
       (response) => { response.certificate.policy_version = 2; },
@@ -1047,8 +1058,12 @@ test("attempt read rejects malformed hidden-ballot retry, corpus, tally, and out
       /tally/u,
     ],
     [
-      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected", details: null }; },
       /approving aggregate outcome/u,
+    ],
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+      /ballot\.outcome contains unknown, aliased, or missing fields/u,
     ],
   ];
   for (const [mutate, expected] of mutations) {
@@ -1290,6 +1305,7 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     "KagemushaVerifierPolicyInstall",
     "KagemushaVerifierReleaseInstall",
     "KagemushaVerifierReleaseActivate",
+    "KagemushaVerifierReleaseRetire",
   ]);
 
   const malformed = structuredClone(parliamentProposalFixtures()[0]);
@@ -1492,6 +1508,7 @@ function parliamentProposalFixtures() {
     },
     structuredClone(KAGEMUSHA_RELEASE_INSTALL_FIXTURE),
     structuredClone(KAGEMUSHA_RELEASE_ACTIVATE_FIXTURE),
+    structuredClone(KAGEMUSHA_RELEASE_RETIRE_FIXTURE),
   ];
 }
 
@@ -1983,3 +2000,37 @@ function stateFrame() {
   header.writeBigUInt64LE(crc64Xz(payload), 31);
   return Buffer.concat([header, payload]);
 }
+
+
+test("retirement admits the authentic unused standby and defensively owns its predecessor", () => {
+  const original = structuredClone(KAGEMUSHA_RELEASE_RETIRE_FIXTURE);
+  const parsed = buildParliamentAttemptDraftRequestV1(original, 0).proposal;
+  assert.deepEqual(new Set(parsed.payload.expected_predecessor.releases.map((row) => row.status)), new Set([1, 2, 3]));
+  const selected = [...parsed.payload.standby_release_id];
+  original.payload.standby_release_id[0] ^= 1;
+  original.payload.expected_predecessor.releases[0].status = 2;
+  assert.deepEqual(parsed.payload.standby_release_id, selected);
+  assert.deepEqual(parsed.payload.expected_predecessor, KAGEMUSHA_RELEASE_RETIRE_FIXTURE.payload.expected_predecessor);
+});
+
+test("retirement rejects missing, active, historical and malformed complete predecessors", () => {
+  const mutations = [
+    (p) => { delete p.standby_release_id; },
+    (p) => { p.retired_alias = true; },
+    (p) => { p.standby_release_id = Array(31).fill(1); },
+    (p) => { p.standby_release_id = Array(32).fill(0); },
+    (p) => { p.standby_release_id = p.expected_predecessor.releases.find((row) => row.status === 1).release_id; },
+    (p) => { p.standby_release_id = p.expected_predecessor.releases.find((row) => row.status === 3).release_id; },
+    (p) => { p.expected_predecessor.authority_policy = null; },
+    (p) => { p.expected_predecessor.active_release_id = null; },
+    (p) => { p.expected_predecessor.releases.reverse(); },
+    (p) => { p.expected_predecessor.releases.push(structuredClone(p.expected_predecessor.releases.at(-1))); },
+    (p) => { p.expected_predecessor.releases[0].profile_digest = Array(32).fill(0); },
+    (p) => { p.expected_predecessor.releases = p.expected_predecessor.releases.filter((row) => row.status !== 2); },
+  ];
+  for (const mutate of mutations) {
+    const proposal = structuredClone(KAGEMUSHA_RELEASE_RETIRE_FIXTURE);
+    mutate(proposal.payload);
+    assert.throws(() => buildParliamentAttemptDraftRequestV1(proposal, 0), TypeError);
+  }
+});

@@ -51,10 +51,7 @@ pub(crate) use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
-    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
-    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
-    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 mod ordinary_native_clock;
@@ -92,12 +89,9 @@ pub use ordinary_app_identity::{
     KagemushaPreparedOrdinaryAppEnrollmentV1, KagemushaPreparedOrdinaryFiHttpProofV1,
 };
 pub(crate) use ordinary_app_identity::{
-    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
-    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
-    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
-    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -5037,10 +5031,7 @@ pub use hardware_evidence_bootstrap::{
 };
 
 mod ordinary_incoming_preview;
-pub(crate) use ordinary_incoming_preview::{
-    OrdinaryIncomingMathSourceV1, OrdinaryIncomingPreviewV1, derive_ordinary_incoming_preview_v1,
-    ordinary_incoming_receive_lifecycle_binding_v1,
-};
+pub(crate) use ordinary_incoming_preview::ordinary_incoming_receive_lifecycle_binding_v1;
 
 /// Sole data-only semantic digest of an ordinary incoming financial edge.
 /// This exposes the existing maintained formula, without admitting a State or Native owner.

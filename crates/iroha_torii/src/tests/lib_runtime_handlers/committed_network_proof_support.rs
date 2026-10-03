@@ -4,7 +4,7 @@
 
 fn committed_network_proof_app_for_test() -> (
     SharedAppState,
-    Arc<SignedBlock>,
+    iroha_data_model::block::SharedSignedBlock,
     iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
 ) {
     use iroha_core::{

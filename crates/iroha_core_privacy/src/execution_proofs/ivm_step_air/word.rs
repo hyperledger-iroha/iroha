@@ -33,7 +33,10 @@ impl<'a> Sources<'a> {
         self.bits(operand)[63]
     }
 
-    pub(super) fn append_residues(self, out: &mut Vec<F>) {
+    pub(super) fn append_residues(
+        self,
+        out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    ) {
         out.extend(self.0.iter().copied().map(bit));
     }
 }

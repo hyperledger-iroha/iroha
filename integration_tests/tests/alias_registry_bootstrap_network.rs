@@ -1497,17 +1497,57 @@ impl AnchorView for RetainedHistory {
                 .hash(),
         )
     }
-    fn creation_time_ms(&self, height: u64) -> Option<u64> {
-        let index = usize::try_from(height).ok()?.checked_sub(1)?;
-        u64::try_from(
-            decode_framed_signed_block(self.blocks.get(index)?)
-                .ok()?
-                .header()
-                .creation_time()
-                .as_millis(),
-        )
-        .ok()
+    fn creation_time_ms(
+        &self,
+        height: u64,
+    ) -> Result<Option<u64>, iroha_core::execution_attempt::ExecutionAttemptError<std::io::Error>>
+    {
+        let Some(index) = usize::try_from(height)
+            .ok()
+            .and_then(|height| height.checked_sub(1))
+        else {
+            return Ok(None);
+        };
+        let Some(wire) = self.blocks.get(index) else {
+            return Ok(None);
+        };
+        let block = decode_framed_signed_block(wire)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let timestamp = u64::try_from(block.header().creation_time().as_millis())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        Ok(Some(timestamp))
     }
+}
+
+#[test]
+fn retained_anchor_time_distinguishes_absent_frames_from_invalid_retained_bytes() {
+    let empty = RetainedHistory { blocks: Vec::new() };
+    assert_eq!(empty.creation_time_ms(0).unwrap(), None);
+    assert_eq!(empty.creation_time_ms(1).unwrap(), None);
+    let malformed = RetainedHistory {
+        blocks: vec![vec![0xff]],
+    };
+    let error = malformed
+        .creation_time_ms(1)
+        .expect_err("invalid retained bytes are not an absent anchor");
+    assert!(
+        matches!(error, iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error)
+        if error.kind() == std::io::ErrorKind::InvalidData)
+    );
+    let key = KeyPair::try_from_seed(vec![0x46; 32], Algorithm::Ed25519).unwrap();
+    let block = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+        NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        7,
+        0,
+    ))
+    .build_with_signature(0, key.private_key());
+    let retained = RetainedHistory {
+        blocks: vec![block.encode_wire().unwrap()],
+    };
+    assert_eq!(retained.creation_time_ms(1).unwrap(), Some(7));
+    assert_eq!(retained.creation_time_ms(2).unwrap(), None);
 }
 
 // This schedule is derived only from the independently verified global execution history.
@@ -1784,10 +1824,17 @@ fn authenticate_retained_history(
         "original signed genesis changed"
     );
     let states = native_lane_states(retained)?;
-    let mut verifier = CertifiedPrefix::new(chain_id, network, Arc::new(stored_genesis))?;
+    // One bounded offline verification owns the shared controls for its retained prefix.
+    let budget = AllocationBudget::new(usize::try_from(MAX_EVIDENCE_BYTES)?);
+    let stored_genesis =
+        iroha_data_model::block::SharedSignedBlock::try_new(stored_genesis, &budget)
+            .map_err(|(_, error)| error)?;
+    let mut verifier = CertifiedPrefix::new(chain_id, network, stored_genesis)?;
     for (index, wire) in retained.blocks.iter().enumerate().skip(1) {
         let block = decode_framed_signed_block(wire)?;
-        let (certified, anchored_genesis) = verifier.push(Arc::new(block.clone()))?.into_parts();
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
+        let (certified, anchored_genesis) = verifier.push(block.clone())?.into_parts();
         let committed = certified.committed();
         let context = &committed.commitment().schedule.current;
         ensure!(
@@ -1808,7 +1855,11 @@ fn authenticate_retained_history(
                 .is_some_and(|qc| qc.signers.count_ones() == BPNG_MIN_QUORUM as usize),
             "native CommitQC must carry exactly three of four equal votes"
         );
-        let executed_wire = block.with_commit_certificate(None).encode_wire()?;
+        let executed_wire = block
+            .as_ref()
+            .clone()
+            .with_commit_certificate(None)
+            .encode_wire()?;
         let execution = &committed.commitment().execution;
         ensure!(
             execution.executed_block_wire_len == u64::try_from(executed_wire.len())?

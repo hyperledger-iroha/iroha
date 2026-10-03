@@ -17269,6 +17269,23 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "KagemushaVerifierReleaseRetire",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -17722,6 +17739,35 @@
           "manifest",
           "receipt",
           "attestation"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1": {
+        "additionalProperties": false,
+        "description": "Exact Parliament retirement of one never-activated standby verifier release. Native admission checks the full original registry, signer policy, network and bonded operator; only the certified due State compare-and-set can remove that row. Active and historically active releases remain retained.",
+        "properties": {
+          "expected_predecessor": {
+            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
+          },
+          "network_id": {
+            "description": "Canonical checked genesis hash; native admission verifies checksum and byte-for-byte rendering.",
+            "maxLength": 74,
+            "minLength": 74,
+            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            "type": "string"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "standby_release_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          }
+        },
+        "required": [
+          "proposal_operator",
+          "network_id",
+          "expected_predecessor",
+          "standby_release_id"
         ],
         "type": "object"
       },
@@ -35145,6 +35191,56 @@
         ],
         "type": "object"
       },
+      "PublicLaneFeeRewardClaimV1": {
+        "additionalProperties": false,
+        "description": "Exact consent to one reserved network-XOR fee reward claim. Execution authenticates the lifecycle, current beneficiary revision, global custody assets, complete positive credit and next receipt sequence.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "beneficiary_id": {
+            "type": "string"
+          },
+          "beneficiary_revision": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "destination_asset": {
+            "type": "string"
+          },
+          "expected_claim_sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle_seal": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "source_asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lifecycle_seal",
+          "beneficiary_id",
+          "beneficiary_revision",
+          "source_asset",
+          "destination_asset",
+          "amount",
+          "expected_claim_sequence"
+        ],
+        "type": "object"
+      },
       "PublicLaneManifestValidatorRecord": {
         "additionalProperties": false,
         "description": "Manifest-backed validator authority projected when the lane has no staking-ledger validator rows.",
@@ -35834,6 +35930,17 @@
               }
             ]
           },
+          "fee_claim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact independently accrued fee reward payment, or explicit null for no fee reward effects. This field must be present before signing."
+          },
           "network_scope": {
             "$ref": "#/components/schemas/PublicLaneMonetaryScopeV1"
           },
@@ -35863,7 +35970,8 @@
           "valid_until_height",
           "expected_state",
           "records",
-          "sources"
+          "sources",
+          "fee_claim"
         ],
         "type": "object"
       },

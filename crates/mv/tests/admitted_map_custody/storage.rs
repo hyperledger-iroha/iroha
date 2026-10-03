@@ -417,6 +417,7 @@ fn actual_storage_refund_wake_reenters_only_after_both_original_writers_release(
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     reset();
     let budget = AllocationBudget::new(8 << 20);
+    let mut registration = crate::release_test_support::registration(&budget);
     let counters = Arc::new(Counters::default());
     let _context = PolicyContext::new(&counters);
     let storage = Arc::new(NativeStorage::try_new_admitted(budget.clone()).unwrap());
@@ -451,9 +452,8 @@ fn actual_storage_refund_wake_reenters_only_after_both_original_writers_release(
         else {
             panic!("original pool is full");
         };
-        let mut pending = Box::pin(release.wait_for_release());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
-        wait = Some(pending);
+        assert!(registration.poll_wait(&release, &mut context).is_pending());
+        wait = Some(release);
         without_allocations(|| {
             drop(old);
             assert!(RECORDS[id].freed.load(SeqCst));
@@ -469,16 +469,16 @@ fn actual_storage_refund_wake_reenters_only_after_both_original_writers_release(
     assert_eq!(wake.wakes.load(SeqCst), 1);
     assert!(wake.entered.load(SeqCst));
     assert!(
-        wait.as_mut()
-            .unwrap()
-            .as_mut()
-            .poll(&mut context)
+        registration
+            .poll_wait(wait.as_ref().unwrap(), &mut context)
             .is_ready()
     );
     marker(storage.view().get(&7), 0x62);
     drop((wait, waker, wake));
     without_allocations(|| drop(storage));
     reclaimed_since(0);
+    registration.cancel();
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

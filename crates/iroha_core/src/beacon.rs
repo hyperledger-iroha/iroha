@@ -19,6 +19,7 @@ pub mod seat_readiness;
 
 mod dkg_local_seat;
 mod dkg_private_exchange;
+mod session_owner;
 mod validation;
 pub use dkg_local_seat::LocalGlobalThresholdBeaconDkgSeatV1;
 pub use dkg_private_exchange::{
@@ -40,8 +41,9 @@ use iroha_crypto::{
     threshold_bls::{
         AdaptiveThresholdBlsParameters, AdaptiveThresholdBlsPublicTranscript,
         AdaptiveThresholdBlsSecretShare, BeaconPurpose, DasRenDealerCommitment,
-        DasRenPartialSignature, ThresholdBlsError, ThresholdBlsPublicKey, ThresholdBlsSession,
-        ThresholdBlsSignature, ValidatedDealerCommitment,
+        DasRenPartialSignature, THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1, ThresholdBlsError,
+        ThresholdBlsPublicKey, ThresholdBlsSession, ThresholdBlsSignature,
+        ValidatedDealerCommitment,
     },
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -79,8 +81,10 @@ use zeroize::Zeroizing;
 #[doc(hidden)]
 pub mod parliament_test_network_signer;
 
-use iroha_data_model::sumeragi_finality::GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1;
 pub use iroha_data_model::sumeragi_finality::global_threshold_beacon_npos_successor_seed_v1;
+use iroha_data_model::sumeragi_finality::{
+    GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1, GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1,
+};
 pub use iroha_data_model::sumeragi_finality::{
     global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
 };
@@ -330,8 +334,8 @@ pub fn verify_global_threshold_beacon_dkg_recipient_key_v1(
 ) -> Result<(), GlobalThresholdBeaconError> {
     validate_participant(session, key.recipient_index)?;
     if key.validator.public_key().algorithm() != Algorithm::BlsNormal
-        || iroha_crypto::hybrid::HybridPublicKey::from_bytes(
-            key.x25519_public_key,
+        || iroha_crypto::hybrid::HybridPublicKey::validate_bytes(
+            &key.x25519_public_key,
             &key.mlkem768_public_key,
         )
         .is_err()
@@ -368,8 +372,8 @@ pub fn verify_global_threshold_beacon_dkg_encrypted_share_v1(
         || edge.delivery_height < session.commitments_end_height
         || edge.delivery_height >= session.deliveries_end_height
         || edge.encrypted_share.len() != 12 + 96 + 16
-        || iroha_crypto::hybrid::HybridKemCiphertext::from_parts(
-            edge.ephemeral_x25519_public_key,
+        || iroha_crypto::hybrid::HybridKemCiphertext::validate_parts(
+            &edge.ephemeral_x25519_public_key,
             &edge.mlkem768_ciphertext,
         )
         .is_err()
@@ -1469,9 +1473,7 @@ fn reconstruct_adaptive_beacon_transcript<E>(
     )?;
     // Shape validation has already authenticated the complete, strictly ordered
     // dealer set. Keep one verified coefficient graph and borrow it directly.
-    use iroha_crypto::threshold_bls::{
-        AdaptiveThresholdBlsPublicShare, DasRenCoefficientCommitment,
-    };
+    use iroha_crypto::threshold_bls::DasRenCoefficientCommitment;
     let count = public_dkg.dealer_commitments.len();
     admit(count * core::mem::size_of::<ValidatedDealerCommitment<BeaconPurpose>>())
         .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
@@ -1484,13 +1486,7 @@ fn reconstruct_adaptive_beacon_transcript<E>(
         .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
         validated_dealers.push(verify_adaptive_dealer(&parameters, commitment)?);
     }
-    admit(
-        usize::from(record.committee_size)
-            * core::mem::size_of::<AdaptiveThresholdBlsPublicShare<BeaconPurpose>>(),
-    )
-    .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
-    admit(public_dkg.qualified_dealers.len() * core::mem::size_of::<u16>())
-        .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
+    // The finalized index and public-share collections are inline and own no heap backing.
     let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
         &parameters,
         &validated_dealers,
@@ -2074,22 +2070,28 @@ fn adaptive_partial_signature_from_dto_v1(
     )?)
 }
 
+// The global threshold-beacon profile fixes n = 3f + 1 <= 31 and t = f + 1.
+// These bounds follow the crypto profile, not the larger generic lane committee bound.
+const GLOBAL_BEACON_PARTIAL_SLOTS: usize = THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 as usize;
+const GLOBAL_BEACON_MAX_THRESHOLD: usize = (GLOBAL_BEACON_PARTIAL_SLOTS - 1) / 3 + 1;
+
 /// Session- and pulse-bound reducer for adaptive threshold-beacon partials.
 ///
 /// Only proof-verified partial signatures enter this reducer. Signer indices are
-/// kept in a canonical ordered map, retransmissions of the same signature share
+/// kept in fixed canonical seat slots, retransmissions of the same signature share
 /// are idempotent even when their zero-knowledge proof uses fresh randomness,
 /// and a second distinct signature share from one signer fails closed as
-/// equivocation. Final
-/// reconstruction uses the lexicographically first threshold of signer indices;
-/// the final BLS signature and seed are nevertheless unique for every valid
+/// equivocation. Payload storage, admitted partials and reconstruction selection
+/// are bounded inline; transcript ownership and cryptographic scratch still require
+/// their own allocation admission. Final reconstruction uses the lexicographically
+/// first threshold of signer indices; the final BLS signature and seed are unique for every valid
 /// threshold subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalThresholdBeaconPulseAggregatorV1 {
     session: ValidatedGlobalThresholdBeaconSessionV1,
     pulse: FinalizedGlobalThresholdBeaconPulseV1,
-    payload: Vec<u8>,
-    partials: BTreeMap<u16, DasRenPartialSignature<BeaconPurpose>>,
+    payload: [u8; GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1],
+    partials: [Option<DasRenPartialSignature<BeaconPurpose>>; GLOBAL_BEACON_PARTIAL_SLOTS],
 }
 
 impl GlobalThresholdBeaconPulseAggregatorV1 {
@@ -2106,6 +2108,13 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
         context: GlobalThresholdBeaconPulseContextV1,
     ) -> Result<Self, GlobalThresholdBeaconError> {
         session.ensure_adaptive_protocol_ready()?;
+        let crypto_session = session.transcript.session();
+        if usize::from(crypto_session.committee_size()) > GLOBAL_BEACON_PARTIAL_SLOTS {
+            return Err(ThresholdBlsError::InvalidCommitteeSize.into());
+        }
+        if !(1..=GLOBAL_BEACON_MAX_THRESHOLD).contains(&usize::from(crypto_session.threshold())) {
+            return Err(ThresholdBlsError::InvalidThreshold.into());
+        }
         context
             .validate()
             .map_err(|_| GlobalThresholdBeaconError::PulseContextMismatch)?;
@@ -2138,7 +2147,7 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
             session,
             pulse,
             payload,
-            partials: BTreeMap::new(),
+            partials: [None; GLOBAL_BEACON_PARTIAL_SLOTS],
         })
     }
 
@@ -2157,7 +2166,7 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
     /// Return the number of distinct proof-verified signer shares admitted.
     #[must_use]
     pub fn verified_partial_count(&self) -> usize {
-        self.partials.len()
+        self.partials.iter().flatten().count()
     }
 
     /// Verify and admit one authenticated partial-signature DTO.
@@ -2171,15 +2180,26 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
         if partial.session_id != self.pulse.session_id {
             return Err(GlobalThresholdBeaconError::SessionMismatch);
         }
+        if !(1..=self.session.transcript.session().committee_size()).contains(&partial.signer_index)
+        {
+            return Err(ThresholdBlsError::InvalidParticipantIndex.into());
+        }
         let partial = adaptive_partial_signature_from_dto_v1(&partial)?;
+        // HC59: a well-formed point is not an authenticated share. No seat slot
+        // changes until its complete session/payload representation proof passes.
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC59")))]
         self.session
             .transcript
             .verify_partial_signature(&self.payload, &partial)?;
-        match self.partials.get(&partial.index()) {
+        let slot = self
+            .partials
+            .get_mut(usize::from(partial.index() - 1))
+            .ok_or(ThresholdBlsError::InvalidParticipantIndex)?;
+        match slot {
             Some(previous) if previous.sigma_bytes() == partial.sigma_bytes() => Ok(false),
             Some(_) => Err(GlobalThresholdBeaconError::PartialSignatureEquivocation),
             None => {
-                self.partials.insert(partial.index(), partial);
+                *slot = Some(partial);
                 Ok(true)
             }
         }
@@ -2190,19 +2210,33 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
         &self,
     ) -> Result<FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconError> {
         let threshold = usize::from(self.session.transcript.session().threshold());
-        if self.partials.len() < threshold {
+        if self.verified_partial_count() < threshold {
             return Err(GlobalThresholdBeaconError::InsufficientPartialSignatures);
         }
-        let canonical_subset = self
+        let first = self
             .partials
-            .values()
-            .take(threshold)
+            .iter()
+            .flatten()
+            .next()
             .copied()
-            .collect::<Vec<_>>();
+            .ok_or(GlobalThresholdBeaconError::InsufficientPartialSignatures)?;
+        // Seed the bounded scratch with an actual verified share. Only the fully
+        // overwritten threshold prefix enters interpolation; there are no inert
+        // cryptographic placeholders or heap-backed reconstruction subsets.
+        let mut canonical_subset = [first; GLOBAL_BEACON_MAX_THRESHOLD];
+        let canonical_subset = canonical_subset
+            .get_mut(..threshold)
+            .ok_or(ThresholdBlsError::InvalidThreshold)?;
+        for (target, partial) in canonical_subset
+            .iter_mut()
+            .zip(self.partials.iter().flatten())
+        {
+            *target = *partial;
+        }
         let signature = self
             .session
             .transcript
-            .combine_partial_signatures(&self.payload, &canonical_subset)?;
+            .combine_partial_signatures(&self.payload, canonical_subset)?;
         let mut pulse = self.pulse;
         pulse.signature = *signature.as_bytes();
         pulse.seed = self
@@ -2268,8 +2302,9 @@ fn validate_global_threshold_beacon_session_binding_v1(
 
 /// Validate a session while charging its verifier-owned heap buffers to its caller.
 ///
-/// Admission precedes each exact preimage, hybrid-key copy and reconstructed
-/// transcript backing. The caller retains its original resource owner and must
+/// Admission precedes each exact preimage and reconstructed
+/// dealer/coefficient backing. Finalized indices and public shares are inline.
+/// The caller retains its original resource owner and must
 /// include the already decoded input in that owner's allowance. No new scope,
 /// allowance or signature cache is installed by this function.
 ///

@@ -718,6 +718,7 @@ where
     }
     /// Return the exact queued-job, compression-block, and per-lane row
     /// geometry used by the authenticated composite-circuit capacity check.
+    #[cfg(test)]
     pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
         self.capacity_profile_for_lanes::<PASTA_SHA256_LANES_V1>()
     }
@@ -755,6 +756,7 @@ where
         Ok((self.jobs.len(), blocks, required))
     }
     /// Conservative per-lane capacity bound for authenticated usable rows.
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
         self.validate_capacity_for_lanes::<PASTA_SHA256_LANES_V1>(usable_rows)
     }

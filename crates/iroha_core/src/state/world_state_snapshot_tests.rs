@@ -12,6 +12,37 @@ use iroha_model_base::domain::DomainId;
 use std::cell::Cell;
 
 #[test]
+fn snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer() {
+    let (chain, asset) = asset_chain();
+    let state = chain.state();
+    let tip = chain.committed(chain.height());
+    let budget = state.ivm_execution_budget();
+    let initial_bytes = budget.reserved_bytes();
+    let original = state.latest_block_header.write();
+    let expected = state.latest_block_header.try_read_or_wait().err().unwrap();
+    let called = Cell::new(false);
+    let result = state.with_native_world_state_snapshot_v1(&tip, &asset, &budget, |_, _, _, _| {
+        called.set(true);
+        Ok(())
+    });
+    let Err(WorldStateSnapshotError::View(StateViewError::Busy(actual))) = result else {
+        panic!("snapshot must retain the original physical reader refusal");
+    };
+    assert_eq!(actual, expected);
+    assert!(!called.get());
+    assert_eq!(budget.reserved_bytes(), initial_bytes);
+    drop(original);
+    state
+        .with_native_world_state_snapshot_v1(&tip, &asset, &budget, |_, _, _, _| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap();
+    assert!(called.get());
+    assert_eq!(budget.reserved_bytes(), initial_bytes);
+}
+
+#[test]
 fn provider_snapshot_publishes_original_current_heads_and_refuses_an_obsolete_cut() {
     use crate::smartcontracts::isi::sorafs_provider_admission::test_fixture::{
         NOW, ProviderAdmissionTestFixtureV1,
@@ -555,7 +586,7 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
         })
         .unwrap_err();
     assert!(callback_entered.get());
-    assert!(error.contains("generation changed"), "{error}");
+    assert!(error.to_string().contains("generation changed"), "{error}");
     assert_eq!(budget.reserved_bytes(), 0);
     // Advancing publication cannot grant the old journal authority over a new generation.
     let error = state
@@ -564,7 +595,10 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
             Ok(())
         })
         .unwrap_err();
-    assert!(error.contains("another certified generation"), "{error}");
+    assert!(
+        error.to_string().contains("another certified generation"),
+        "{error}"
+    );
     assert!(!called.get());
     {
         let mut publication = state.state_view_publication();
@@ -749,7 +783,7 @@ fn publisher_requires_original_capture_after_snapshot_restore_or_raw_commit() {
             },
         )
         .unwrap_err();
-    assert!(error.contains("requires native replay"));
+    assert!(error.to_string().contains("requires native replay"));
     assert!(!called.get());
 }
 
@@ -935,7 +969,10 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
             },
         )
         .unwrap_err();
-    assert!(error.contains("CanReadAllLedgerData"), "{error}");
+    assert!(
+        error.to_string().contains("CanReadAllLedgerData"),
+        "{error}"
+    );
     assert!(
         !called.get(),
         "registered genesis identity does not imply a read root"
@@ -973,7 +1010,7 @@ fn names_publisher_refuses_retired_cut_and_callback_generation_change() {
         })
         .unwrap_err();
     assert!(called.get());
-    assert!(error.contains("generation changed"), "{error}");
+    assert!(error.to_string().contains("generation changed"), "{error}");
     assert_eq!(budget.reserved_bytes(), 0);
     chain.commit_at(3_000, Vec::new());
     called.set(false);

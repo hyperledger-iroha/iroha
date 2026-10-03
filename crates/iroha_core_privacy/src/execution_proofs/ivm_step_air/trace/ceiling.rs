@@ -9,10 +9,10 @@ use super::{F, absolute, division, word};
 
 pub(super) const CONSTRAINTS: usize = 10;
 const NONZERO: usize = 40;
-const INVERSE: usize = 41;
+pub(in super::super) const INVERSE: usize = 41;
 const INCREMENT: usize = 42;
 
-pub(super) fn witness(quotient: &[F]) -> [F; absolute::WIDTH] {
+pub(in super::super) fn witness(quotient: &[F]) -> [F; absolute::WIDTH] {
     let mut bank = [F::ZERO; absolute::WIDTH];
     let delta = quotient[division::REMAINDER + 4..division::REMAINDER + 36]
         .iter()
@@ -36,7 +36,12 @@ pub(super) fn witness(quotient: &[F]) -> [F; absolute::WIDTH] {
     bank
 }
 
-pub(super) fn append_residues(out: &mut Vec<F>, bank: &[F], quotient: &[F], active: F) {
+pub(in super::super) fn append_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    bank: &[F],
+    quotient: &[F],
+    active: F,
+) {
     let initial = out.len();
     // This sum is in 0..=96: a nonzero 64-bit remainder cannot alias field zero.
     let delta = quotient[division::REMAINDER + 4..division::REMAINDER + 36]

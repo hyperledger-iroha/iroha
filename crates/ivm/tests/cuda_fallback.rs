@@ -3,7 +3,8 @@
 #![cfg(not(feature = "cuda"))]
 #[test]
 fn cuda_helpers_fall_back_when_disabled() {
-    assert_eq!(ivm::cuda_completed_dispatches(), 0);
+    assert_eq!(ivm::cuda_completion_snapshot(0), Ok(None));
+    assert_eq!(ivm::cuda_completion_snapshot(usize::MAX), Ok(None));
     // Poseidon helpers return None without CUDA.
     assert!(ivm::poseidon2_cuda(0, 0).is_none());
     assert!(ivm::poseidon2_cuda_many_into(&[], &mut []));

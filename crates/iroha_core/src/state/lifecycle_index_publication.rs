@@ -8,6 +8,15 @@ use crate::publication_rwlock::DeferredPublicationRwLock;
 pub(super) struct LaneLifecycleReleases<'state> {
     pub(super) hashes: Option<iroha_allocation::release::DeferredReleaseBatch>,
     pub(super) membership: iroha_allocation::release::DeferredReleaseBatch,
+    pub(super) world: view_acquisition::WorldReadReleases,
+    pub(super) prepared_cache: DeferredPublicationRwLock<'state, PreparedContractCache>,
+    pub(super) crypto:
+        DeferredPublicationRwLock<'state, Arc<iroha_config::parameters::actual::Crypto>>,
+    pub(super) nexus: DeferredPublicationRwLock<'state, iroha_config::parameters::actual::Nexus>,
+    pub(super) verifier: DeferredPublicationRwLock<
+        'state,
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
+    >,
     pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
     pub(super) manifests: DeferredPublicationRwLock<'state, LaneManifestRegistryHandle>,
     pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistryHandle>,
@@ -25,6 +34,11 @@ impl<'state> LaneLifecycleReleases<'state> {
         Self {
             hashes: state.block_hashes.reader_release_batch(),
             membership: state.transactions.reader_release_batch(),
+            world: view_acquisition::WorldReadReleases::new(&state.world),
+            prepared_cache: state.pipeline_ivm_prepared_cache.defer_notifications(),
+            crypto: state.crypto.defer_notifications(),
+            nexus: state.nexus.defer_notifications(),
+            verifier: state.kagemusha_v1_runtime_verifier.defer_notifications(),
             header: state.latest_block_header.defer_notifications(),
             manifests: state.lane_manifests.defer_notifications(),
             privacy: state.lane_privacy_registry.defer_notifications(),
@@ -48,7 +62,12 @@ impl State {
         if path.as_os_str().is_empty() {
             return;
         }
-        let lane_config = self.nexus_ownership_projection().lane_config.clone();
+        let lane_config = self
+            .canonical_runtime
+            .view()
+            .nexus_projection(&releases.nexus.read())
+            .expect("persisted canonical runtime must be valid")
+            .lane_config;
         let snapshot =
             DaShardCursorJournal::from_index(&lane_config, &releases.shard_cursors.read(), &path);
         if let Err(err) = snapshot.persist() {

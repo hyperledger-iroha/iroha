@@ -50,6 +50,8 @@ const REQUIRED_OUTPUTS = [
   "kotodamaCompiler/index.js",
   "kotodamaCompiler/browser.js",
   "kotodamaCompiler/client.js",
+  "kotodamaCompiler/embeddedCallSchema.js",
+  "kotodamaCompiler/embeddedNorito.js",
   "kotodamaCompiler/nativeBridge.js",
   "kotodamaCompiler/normalize.js",
 ];

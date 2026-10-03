@@ -37,12 +37,17 @@ pub use encoder::Encoder;
 mod encode_frames;
 mod encode_writers;
 mod fixed_frame;
+mod nominal_text;
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
 pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
 pub use fixed_frame::FixedFrameLayout;
+pub use nominal_text::{NominalText, borrow_canonical_text, borrow_text_payload};
+mod decode_attempt;
+pub(crate) use decode_attempt::classify_decode_attempt;
+pub use decode_attempt::{DecodeAttemptError, DecodeAttemptErrorKind, ScopedDecodeResourceError};
 mod byte_sequence;
 #[doc(hidden)]
 pub use byte_sequence::decode_byte_element_sequence_into;
@@ -456,10 +461,12 @@ struct DecodeBudgetLayer {
 }
 impl DecodeBudgetLayer {
     fn new(limits: DecodeLimits) -> Self {
-        Self {
+        let layer = Self {
             limits,
             counters: Arc::new(DecodeBudgetCounters::default()),
-        }
+        };
+        decode_attempt::note_fresh_budget(&layer.counters);
+        layer
     }
 }
 #[derive(Clone)]
@@ -543,6 +550,9 @@ pub fn decode_limits_active() -> bool {
 /// owner or a release notification.
 #[doc(hidden)]
 pub fn decode_error_matches_active_limits(error: &Error) -> bool {
+    if let Error::ScopedDecodeResource(origin) = error {
+        return origin.matches_enclosing_scope();
+    }
     DECODE_BUDGET_LAYERS.with(|slot| {
         slot.borrow().iter().any(|layer| {
             let limits = layer.budget.limits;
@@ -602,14 +612,18 @@ impl DecodeDepthGuard {
                 context: "decode budget",
             })?;
         DECODE_BUDGET_LAYERS.with(|slot| {
-            for layer in slot.borrow().iter() {
+            let layers = slot.borrow();
+            for (index, layer) in decode_attempt::layers_in_order(&layers) {
                 let relative_depth = depth.saturating_sub(layer.base_depth);
                 if relative_depth > layer.budget.limits.max_nesting_depth() {
-                    return Err(Error::NestingDepthExceeded {
-                        depth: relative_depth,
-                        limit: layer.budget.limits.max_nesting_depth(),
-                        context: "decode budget",
-                    });
+                    return Err(decode_attempt::budget_error(
+                        index,
+                        Error::NestingDepthExceeded {
+                            depth: relative_depth,
+                            limit: layer.budget.limits.max_nesting_depth(),
+                            context: "decode budget",
+                        },
+                    ));
                 }
             }
             Ok(())
@@ -690,18 +704,24 @@ pub fn with_decode_limits_scope<T>(limits: DecodeLimits, decode: impl FnOnce() -
 pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
         let layers = slot.borrow();
-        for layer in layers.iter() {
+        for (index, layer) in decode_attempt::layers_in_order(&layers) {
             let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
             if length > limit {
-                return Err(Error::SequenceLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::SequenceLengthExceeded { length, limit },
+                ));
             }
         }
-        for layer in layers.iter() {
+        for (index, layer) in decode_attempt::layers_in_order(&layers) {
             let limit = limit_to_u64(layer.budget.limits.max_total_elements());
             if let Err(attempted) =
                 charge_atomic_budget(&layer.budget.counters.total_elements, length, limit)
             {
-                return Err(Error::TotalElementsExceeded { attempted, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::TotalElementsExceeded { attempted, limit },
+                ));
             }
         }
         Ok(())
@@ -714,10 +734,14 @@ pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
 #[inline]
 pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+        let layers = slot.borrow();
+        for (index, layer) in decode_attempt::layers_in_order(&layers) {
             let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
             if length > limit {
-                return Err(Error::SequenceLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::SequenceLengthExceeded { length, limit },
+                ));
             }
         }
         Ok(())
@@ -731,10 +755,14 @@ pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
 #[inline]
 fn check_decode_field_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+        let layers = slot.borrow();
+        for (index, layer) in decode_attempt::layers_in_order(&layers) {
             let limit = limit_to_u64(layer.budget.limits.max_field_bytes());
             if length > limit {
-                return Err(Error::FieldLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::FieldLengthExceeded { length, limit },
+                ));
             }
         }
         Ok(())
@@ -747,12 +775,16 @@ pub fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
 }
 fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+        let layers = slot.borrow();
+        for (index, layer) in decode_attempt::layers_in_order(&layers) {
             let limit = limit_to_u64(layer.budget.limits.max_total_allocated_bytes());
             if let Err(attempted) =
                 charge_atomic_budget(&layer.budget.counters.total_allocated_bytes, length, limit)
             {
-                return Err(Error::TotalAllocationExceeded { attempted, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::TotalAllocationExceeded { attempted, limit },
+                ));
             }
         }
         Ok(())
@@ -3207,6 +3239,9 @@ pub enum Error {
         /// Maximum cumulative byte count.
         limit: u64,
     },
+    /// Original decode-budget refusal with private, non-wire admission provenance.
+    #[error(transparent)]
+    ScopedDecodeResource(ScopedDecodeResourceError),
     /// A fallible raw allocation failed.
     #[error("failed to allocate {bytes} bytes while decoding")]
     AllocationFailed {
@@ -3422,6 +3457,7 @@ impl Error {
             Self::TotalAllocationExceeded { attempted, limit } => {
                 DecodeResourceError::TotalAllocationExceeded { attempted, limit }
             }
+            Self::ScopedDecodeResource(ref origin) => origin.resource(),
             Self::AllocationFailed { bytes } => DecodeResourceError::AllocationFailed { bytes },
             Self::NestingDepthExceeded {
                 depth,

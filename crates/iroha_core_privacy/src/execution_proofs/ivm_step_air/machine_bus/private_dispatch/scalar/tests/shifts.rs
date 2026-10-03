@@ -76,7 +76,7 @@ fn checked_native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, 
     (program, fixture)
 }
 
-fn capture_program(
+pub(super) fn capture_program(
     program: Program,
     inputs: &[(usize, u64, bool)],
     gas: u64,

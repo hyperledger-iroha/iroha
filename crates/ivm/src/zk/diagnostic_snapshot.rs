@@ -79,7 +79,7 @@ pub struct DiagnosticRegisterEvent<'a> {
     pub value: u64,
     /// Observed privacy tag.
     pub tag: bool,
-    /// Borrowed leaf-to-root siblings.
+    /// Borrowed leaf-to-root siblings, checked against the canonical depth of eight.
     pub path: &'a [[u8; 32]],
     /// Borrowed root bytes.
     pub root: &'a [u8; 32],

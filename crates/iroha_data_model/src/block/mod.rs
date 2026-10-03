@@ -68,6 +68,7 @@ pub(crate) mod output_test_support;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 mod proposal;
+mod shared;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
@@ -80,6 +81,7 @@ pub use execution_context::{
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
+pub use shared::{ReservedSharedSignedBlock, SharedBlockAdmissionError, SharedSignedBlock};
 #[model]
 mod model {
     use super::*;
@@ -361,7 +363,13 @@ impl SignedBlock {
         limits
             .validate_outputs(self.execution_outputs())
             .map_err(SetExecutionOutputsError::InvalidLimits)?;
-        let frame_len = norito::canonical_frame_len(self.without_commit_certificate().as_ref())
+        let candidate = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: self.result.as_ref().map(OutputFieldRef),
+            commit_certificate: None,
+        };
+        let frame_len = norito::canonical_frame_len(&candidate)
             .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
         let actual = u64::try_from(frame_len)
             .ok()
@@ -690,17 +698,6 @@ impl SignedBlock {
         self.result = None;
         self.commit_certificate = None;
         Ok(self)
-    }
-    /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
-    /// an owned copy with the certificate cleared.
-    fn without_commit_certificate(&self) -> Cow<'_, Self> {
-        if self.commit_certificate.is_none() {
-            Cow::Borrowed(self)
-        } else {
-            let mut block = self.clone();
-            block.commit_certificate = None;
-            Cow::Owned(block)
-        }
     }
     /// Sumeragi finality proof attached to this committed block, if any.
     #[inline]
@@ -1118,7 +1115,7 @@ pub mod stream {
         codec::{Decode, Encode},
         core::{Error as NoritoError, SerializePayload},
     };
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::num::NonZeroU64;
     #[model]
     mod model {
         use super::*;
@@ -1162,7 +1159,10 @@ pub mod stream {
     /// without requiring an additional clone of the block data.
     #[derive(Debug, Clone)]
     #[repr(transparent)]
-    pub struct BlockMessageSend(pub Arc<SignedBlock>);
+    pub struct BlockMessageSend(pub SharedSignedBlock);
+
+    #[derive(Encode)]
+    struct BorrowedBlockMessage<'a>(OutputFieldRef<'a, SignedBlock>);
     impl norito::NoritoSchema for BlockMessageSend {
         fn nominal_name() -> String {
             "iroha_data_model::block::stream::BlockMessageSend".to_owned()
@@ -1174,8 +1174,8 @@ pub mod stream {
 
     impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
-            // Serialize as a BlockMessage wrapper to keep schema and layout consistent
-            let msg = BlockMessage(self.0.as_ref().clone());
+            // The sole BlockMessage layout, borrowed from the original funded graph.
+            let msg = BorrowedBlockMessage(OutputFieldRef(self.0.as_ref()));
             SerializePayload::serialize(&msg, writer)
         }
     }

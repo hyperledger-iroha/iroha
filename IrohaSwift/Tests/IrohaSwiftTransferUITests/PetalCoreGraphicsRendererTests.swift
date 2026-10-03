@@ -4,6 +4,11 @@ import IrohaSwift
 @testable import IrohaSwiftTransferUI
 import SwiftUI
 import XCTest
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// The CoreGraphics renderer and the SwiftUI player must draw frames the
 /// Petal decoder reads back exactly.
@@ -88,21 +93,55 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
         XCTAssertEqual(PetalStreamView.frameNumber(elapsed: 1, framesPerSecond: .nan), 8)
     }
 
+    /// Render the actual SwiftUI hierarchy on every supported Apple deployment target.
+    @MainActor
+    private func hostedImage<Content: View>(of view: Content) throws -> CGImage {
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: 640)
+        #if canImport(AppKit)
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = bounds
+        hostingView.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: bounds))
+        hostingView.cacheDisplay(in: bounds, to: bitmap)
+        return try XCTUnwrap(bitmap.cgImage)
+        #elseif canImport(UIKit)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: bounds)
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        controller.view.frame = bounds
+        controller.view.layoutIfNeeded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: bounds.size, format: format).image { _ in
+            XCTAssertTrue(controller.view.drawHierarchy(in: bounds, afterScreenUpdates: true))
+        }
+        return try XCTUnwrap(image.cgImage)
+        #else
+        #error("The SwiftUI renderer test requires a supported Apple hosting API")
+        #endif
+    }
+
     @MainActor
     func testSwiftUIFrameViewRendersADecodableFrame() throws {
-        guard #available(macOS 13.0, iOS 16.0, *) else {
-            throw XCTSkip("ImageRenderer needs macOS 13 or iOS 16")
-        }
         let encoder = try PetalStreamEncoder(payload: Self.payload, kind: 2)
         let view = PetalFrameView(cells: encoder.cells(frame: 8)).frame(width: 640, height: 640)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 1
-        let image = try XCTUnwrap(renderer.cgImage)
-        let decoded = try PetalDecoder.decode(try luma(of: image))
+        // Hosting renders on the package's macOS 12 / iOS 15 deployment targets.
+        // Where available, also retain the independent ImageRenderer assertions.
+        var images = [("hosted SwiftUI hierarchy", try hostedImage(of: view))]
+        if #available(macOS 13.0, iOS 16.0, *) {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            images.append(("ImageRenderer", try XCTUnwrap(renderer.cgImage)))
+        }
         let expected = encoder.laneData(frame: 8)
-        XCTAssertEqual(decoded.p?.data, expected.p)
-        XCTAssertEqual(decoded.d?.data, expected.d)
-        XCTAssertEqual(decoded.beacon?.meta, encoder.meta)
+        for (name, image) in images {
+            let decoded = try PetalDecoder.decode(try luma(of: image))
+            XCTAssertEqual(decoded.p?.data, expected.p, name)
+            XCTAssertEqual(decoded.d?.data, expected.d, name)
+            XCTAssertEqual(decoded.beacon?.meta, encoder.meta, name)
+        }
         _ = PetalStreamView(encoder: encoder, framesPerSecond: 10)
     }
 }

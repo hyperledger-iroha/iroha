@@ -1,8 +1,15 @@
 // The receive-side object an app holds while its camera is open.
+//
+// After a frame decodes, the next frames are first read by tracking the code
+// from its last pose, which skips the finder search; a full decode runs when
+// tracking fails or the last pose is older than `TRACK_WINDOW_MS`.
 
-import { DEFAULT_DECODE_OPTIONS, decodeFrameResult, resolveDecodeOptions } from "./decode.js";
+import { DEFAULT_DECODE_OPTIONS, decodeFrameResult, resolveDecodeOptions, trackFrame } from "./decode.js";
 import { DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_PENDING_ATOMS, PetalStreamAssembler } from "./stream.js";
 import { requireIndex } from "./support.js";
+
+/** How long a decoded pose stays usable for tracking the next frames, in milliseconds. */
+export const TRACK_WINDOW_MS = 500;
 
 /** Default limits of a scan session. */
 export const DEFAULT_SCAN_LIMITS = Object.freeze({
@@ -54,10 +61,12 @@ export class PetalScanSession {
   constructor(limits) {
     this._limits = resolveScanLimits(limits);
     this._assembler = new PetalStreamAssembler(this._limits.assembler);
-    this._stats = { frames: 0, located: 0, readable: 0, laneP: 0, laneK: 0, laneD: 0 };
+    this._stats = { frames: 0, located: 0, readable: 0, laneP: 0, laneK: 0, laneD: 0, tracked: 0, inferred: 0 };
     this._startedMs = null;
     this._progressMs = 0;
     this._lastRank = 0;
+    /** The last frame that decoded and when, for tracking: `{frame, atMs}` or `null`. */
+    this._lastPose = null;
   }
 
   /** The limits in force. */
@@ -68,7 +77,10 @@ export class PetalScanSession {
   /**
    * Diagnostic counters: camera frames offered (`frames`), frames in which a
    * code was located, whether or not a lane could be read (`located`), frames
-   * in which at least one lane decoded (`readable`) and per-lane successes.
+   * in which at least one lane decoded (`readable`), per-lane successes,
+   * frames read by tracking the previous pose instead of a full search
+   * (`tracked`) and frames read with one corner finder hidden and inferred
+   * (`inferred`).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -79,15 +91,20 @@ export class PetalScanSession {
     return this._assembler.progress();
   }
 
-  /** Drops all partial state. */
+  /** Drops all partial state, including the pose used for tracking. */
   reset() {
     this._assembler.reset();
     this._startedMs = null;
     this._lastRank = 0;
+    this._lastPose = null;
   }
 
   /**
    * Offers one camera luma plane captured at monotonic time `nowMs`.
+   *
+   * When the last frame that decoded is at most `TRACK_WINDOW_MS` old, the
+   * code is first followed from its pose (no finder search); a full decode
+   * runs when that fails.
    *
    * @returns {{error: string | null, lanes: string, progress: object,
    *   completed: {meta: object, payload: Uint8Array} | null}}
@@ -110,12 +127,24 @@ export class PetalScanSession {
       this.reset();
     }
     this._stats.frames += 1;
-    const result = decodeFrameResult(image, limits.decode);
+    const pose = this._lastPose;
+    const tracked =
+      pose !== null && Math.max(nowMs - pose.atMs, 0) <= TRACK_WINDOW_MS
+        ? trackFrame(image, pose.frame, limits.decode)
+        : null;
+    if (tracked !== null) {
+      this._stats.tracked += 1;
+    }
+    const result = tracked !== null ? { frame: tracked } : decodeFrameResult(image, limits.decode);
     let error = null;
     let lanes = "";
     if (result.error !== undefined) {
       error = result.error;
     } else {
+      if (result.frame.inferredCorner !== null) {
+        this._stats.inferred += 1;
+      }
+      this._lastPose = { frame: result.frame, atMs: nowMs };
       lanes = this._absorb(result.frame);
     }
     // A code that was found but could not be read (`no_orientation`) still

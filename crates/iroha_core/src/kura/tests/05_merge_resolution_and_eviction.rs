@@ -126,7 +126,7 @@ fn append_block_batch_persists_all_blocks() {
     let mut prev_hash = None;
     let mut blocks = Vec::new();
     for _ in 0..3 {
-        let block: Arc<SignedBlock> = Arc::new(
+        let block: iroha_data_model::block::SharedSignedBlock = share_storage_fixture(
             ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
                 header.set_prev_block_hash(prev_hash);
             })
@@ -149,8 +149,9 @@ fn append_block_batch_sidecars_block_when_inline_budget_exceeded() {
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
     let leader = checked_keypair();
-    let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
-    let block2: Arc<SignedBlock> = Arc::new(
+    let block1: iroha_data_model::block::SharedSignedBlock =
+        share_storage_fixture(ValidBlock::new_dummy(leader.private_key()).into());
+    let block2: iroha_data_model::block::SharedSignedBlock = share_storage_fixture(
         ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
             header.set_prev_block_hash(Some(block1.hash()));
         })
@@ -190,12 +191,12 @@ fn append_block_batch_sidecars_block_when_inline_budget_exceeded() {
     );
 }
 /// Two independently certified successors over the same original signed genesis.
-fn native_rewrite_branch_fixture() -> [Arc<SignedBlock>; 3] {
+fn native_rewrite_branch_fixture() -> [iroha_data_model::block::SharedSignedBlock; 3] {
     let mut original = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
         .expect("original signed genesis");
-    let block1 = Arc::clone(original.committed(1).block());
+    let block1 = (original.committed(1).block()).clone();
     original.commit(Vec::new());
-    let block2 = Arc::clone(original.committed(2).block());
+    let block2 = (original.committed(2).block()).clone();
     let mut alternative = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
         .expect("same original signed genesis");
     assert_eq!(alternative.genesis().hash(), block1.hash());
@@ -205,7 +206,7 @@ fn native_rewrite_branch_fixture() -> [Arc<SignedBlock>; 3] {
         .checked_add(1)
         .expect("fixture time has room for a distinct successor");
     alternative.commit_at(replacement_time, Vec::new());
-    let replacement = Arc::clone(alternative.committed(2).block());
+    let replacement = (alternative.committed(2).block()).clone();
     assert_ne!(block2.hash(), replacement.hash());
     [block1, block2, replacement]
 }
@@ -415,8 +416,9 @@ fn append_block_batch_at_rewrites_tail() {
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
     let leader = checked_keypair();
-    let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
-    let block2: Arc<SignedBlock> = Arc::new(
+    let block1: iroha_data_model::block::SharedSignedBlock =
+        share_storage_fixture(ValidBlock::new_dummy(leader.private_key()).into());
+    let block2: iroha_data_model::block::SharedSignedBlock = share_storage_fixture(
         ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
             header.set_prev_block_hash(Some(block1.hash()));
         })
@@ -425,7 +427,7 @@ fn append_block_batch_at_rewrites_tail() {
     block_store
         .append_block_batch(&[block1.clone(), block2.clone()])
         .unwrap();
-    let replacement: Arc<SignedBlock> = Arc::new(
+    let replacement: iroha_data_model::block::SharedSignedBlock = share_storage_fixture(
         ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
             header.set_prev_block_hash(Some(block1.hash()));
             header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -508,12 +510,24 @@ fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
         block_count,
         "strict init should load all appended blocks"
     );
-    let first = kura.get_block(height).expect("block available");
+    let first = kura
+        .get_block(
+            height,
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("completed structural storage read")
+        .expect("block available");
     let second = kura
-        .get_block(height)
+        .get_block(
+            height,
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("completed structural storage read")
         .expect("same original wire available");
     assert_eq!(first.encode_wire().unwrap(), second.encode_wire().unwrap());
-    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(!iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &first, &second
+    ));
     assert!(
         kura.block_data
             .lock()
@@ -575,7 +589,12 @@ fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
     );
     for height in 1..=block_count.0 {
         let height = NonZeroUsize::new(height).expect("non-zero height");
-        kura.get_block(height).expect("block loads from disk");
+        kura.get_block(
+            height,
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("completed structural storage read")
+        .expect("block loads from disk");
     }
     assert!(
         kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
@@ -670,8 +689,14 @@ fn get_block_returns_none_when_data_missing() {
     let data_path = primary_blocks_dir(&temp_dir).join(DATA_FILE_NAME);
     std::fs::remove_file(&data_path).unwrap();
     assert!(
-        kura.get_block(nonzero!(2_usize)).is_none(),
-        "expected missing block to yield None"
+        matches!(
+            kura.get_block(
+                nonzero!(2_usize),
+                &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+            ),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+        ),
+        "a missing committed data file is a storage error"
     );
 }
 #[test]

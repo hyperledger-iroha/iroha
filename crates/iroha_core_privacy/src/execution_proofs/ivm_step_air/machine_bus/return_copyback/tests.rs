@@ -361,7 +361,7 @@ fn original_return_scan_and_copyback_residues_have_degree_three() {
             [142; 32],
             [WIDTH + 6 * packet::WIDTH, 0, 0, 0, 0],
             8,
-            4,
+            3,
             |row, _, _, _, _| {
                 let packet = |i: usize| {
                     row[WIDTH + i * packet::WIDTH..WIDTH + (i + 1) * packet::WIDTH]
@@ -447,10 +447,12 @@ impl OperandFixture {
             &mut output,
             self.schedule,
             &self.scan.row,
-            ReturnedCallable {
-                entry_pc: &self.entry,
-                result_words: self.count,
-            },
+            &super::super::callable_lookup::SelectedCallable::unbound_diagnostic(
+                self.entry,
+                F::ZERO,
+                F::ZERO,
+                self.count,
+            ),
             OperandPorts {
                 active: &self.scan.packets[0],
                 packets: core::array::from_fn(|i| &self.packets[i]),
@@ -527,10 +529,12 @@ fn return_operand_join_has_degree_two_over_all_original_columns() {
                 &mut output,
                 OperandSchedule::new(7, [20, 21, 22, 23, 24]).unwrap(),
                 row[..WIDTH].try_into().unwrap(),
-                ReturnedCallable {
-                    entry_pc: row[WIDTH..WIDTH + 4].try_into().unwrap(),
-                    result_words: row[WIDTH + 4],
-                },
+                &super::super::callable_lookup::SelectedCallable::unbound_diagnostic(
+                    row[WIDTH..WIDTH + 4].try_into().unwrap(),
+                    F::ZERO,
+                    F::ZERO,
+                    row[WIDTH + 4],
+                ),
                 OperandPorts {
                     active: packet(0),
                     packets: core::array::from_fn(|i| packet(i + 1)),
@@ -736,4 +740,37 @@ fn copyback_witness_tail_uses_its_own_width_and_constrains_all_four_activity_bit
             assert!(!invalid.accepts(), "tail column {index}");
         }
     }
+}
+
+/// One fixed scan-cell witness; this helper provides no invocation authority.
+pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_witness(
+    selected: bool,
+    words: u64,
+    parent: u16,
+    start: u64,
+    offset: usize,
+    child_mask: u16,
+    parent_mask: u16,
+) -> ([F; WIDTH], [[F; packet::WIDTH]; 6]) {
+    let mut fixture = Fixture::build(
+        selected,
+        start,
+        start + words * 8,
+        parent,
+        offset,
+        child_mask,
+        parent_mask,
+    );
+    if selected {
+        set_bits(&mut fixture.row[ACTIVE..PARENT], 3);
+        fixture.row[ACTIVE_INVERSE] = F(3).inv().unwrap();
+        fixture.packets[0][packet::BEFORE] = F(3);
+        for packet in &mut fixture.packets {
+            if packet[packet::GENERATION] == F(7) {
+                packet[packet::GENERATION] = F(3);
+                packet[packet::KEY] = packet[packet::KEY].sub(F(4 << 32));
+            }
+        }
+    }
+    (fixture.row, fixture.packets)
 }

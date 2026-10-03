@@ -1086,7 +1086,7 @@ pub mod isi {
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .unwrap()
         }
@@ -2173,7 +2173,7 @@ pub mod query {
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .unwrap()
         }

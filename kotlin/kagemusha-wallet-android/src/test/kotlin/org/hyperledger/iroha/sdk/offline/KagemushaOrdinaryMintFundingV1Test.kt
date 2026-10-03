@@ -10,11 +10,11 @@ class KagemushaOrdinaryMintFundingV1Test {
   assertTrue(providers.hasNext(),"The actual wallet funding provider must be packaged")
   val provider=providers.next()
   assertFalse(providers.hasNext(),"The wallet must package exactly one funding provider")
-  assertEquals(KagemushaOrdinaryMintFundingNativeProviderV1::class.java,provider.javaClass)
+  assertEquals<Class<*>>(KagemushaOrdinaryMintFundingNativeProviderV1::class.java,provider.javaClass)
   assertSame(loader,provider.javaClass.classLoader)
   val funding=provider.fundingEndpoint()
   assertSame(KagemushaOrdinaryRuntimeJniV1,funding)
-  assertSame(funding,provider.completedMetadataEndpoint())
+  assertSame<Any>(funding,provider.completedMetadataEndpoint())
  }
  private class Native(var stage:Int=0):OrdinaryMintFundingWorkflowNativeV1 {
   val phases=mutableListOf<Int>();var closed=false;var approvals=0;var proofCalls=0;var current=true;var final=false

@@ -1,6 +1,6 @@
 //! Micro-benchmark for a single SHA-256 compression round.
-//! Compares the auto-accelerated path (Metal/CUDA/ARMv8 SHA2 → scalar)
-//! vs a pure scalar reference implementation embedded in the bench.
+//! Compares automatic qualified CPU SHA2/SHA-NI dispatch with a scalar reference.
+//! A single block stays below the GPU transfer/launch threshold.
 use criterion::Criterion;
 fn iv_init_state() -> [u32; 8] {
     [

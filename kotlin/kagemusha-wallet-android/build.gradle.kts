@@ -97,6 +97,7 @@ dependencies {
     api(project(":client-android"))
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
+    testImplementation(libs.coroutines.core.jvm)
     testImplementation(libs.junit.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)

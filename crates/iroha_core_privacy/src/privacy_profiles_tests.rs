@@ -567,18 +567,18 @@ mod tests {
             // and the corresponding exact native proof descriptors.
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "b00b724769457ed4cc6640b8246bfb8e9a8c2dde5010882ec8d3d7730cac61ba".to_owned(),
-                    "99f257e4b6217fcef2472438bb031847df6f943bfc07db7943f99553a8800123".to_owned(),
-                    "db1fec434a430dab7014e9c8f14139d0835083865f3575e27c2033737217ae92".to_owned(),
+                    "b0c21b543f231dbf44462c66a59259bbcac43ad560d5c83b7bd0a138de5c1660".to_owned(),
+                    "3f5cb64afd9758719b46a2a3b855dcb19384014cd50c213eff5335b1cfdddcf7".to_owned(),
+                    "22fa8b0543dec76865723cbe079d510eb05d75e47e0a0e3dba2205166c9357c5".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
-                    "bd98d6356de6f2ec3cb67ac5f66aad6a79a47cf56e357c9dedfa0172e7939b19".to_owned(),
+                    "3a7a880faf2b32775c1d0db22fef3543fadeddc3db8bcad21e4e3df0f87ae09e".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
-                    "31beb12e9a6eb02355375b0b91af88aaf1183cf659a8851f478e2d4f88e3f8f6".to_owned(),
-                    "667c838c011e61eaaca1508a1b7539b6010208eaca3c6c0ad78ee9fd0142ee7d".to_owned(),
-                    "2637d6dd033db92774ca67b5ebcaf7d366dafffe0876b5cad15ccf880369f7b0".to_owned(),
+                    "42e04aa67d09764cd49fe28d60e4ca9d6fafbbda622478386241afc930814018".to_owned(),
+                    "48c3e48e3bb822548a815c67996a1b94810e4cc41c73eb50d61af8e09f68bafe".to_owned(),
+                    "62b1ccc68615391c90f4e375b4e61ccf5d4bbce4bd5ef3077a4707c6628b6d6b".to_owned(),
                     "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
-                    "f8f79f31be11929172b8acd1132038c6c2f3cfaeea0b663955ad19f1c4437eba".to_owned(),
+                    "aa2bcf7c8ffa58aeca8b1f84c96b75e405b10695e3b3084c70ec0c7e4ffee121".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };

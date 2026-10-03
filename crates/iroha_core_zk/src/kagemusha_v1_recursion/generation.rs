@@ -94,6 +94,13 @@ pub(crate) mod ordinary_guard_generation;
 #[path = "ordinary_mint_generation.rs"]
 pub(crate) mod ordinary_mint_generation;
 
+#[path = "ordinary_finalized_mint_generation.rs"]
+mod ordinary_finalized_mint_generation;
+pub use ordinary_finalized_mint_generation::{
+    KagemushaGeneratedOrdinaryFinalizedMintCreditV1,
+    prove_ordinary_finalized_mint_from_checkpoint_v1, verify_ordinary_finalized_mint_credit_v1,
+};
+
 #[path = "ordinary_cash_terminal_generation.rs"]
 pub(super) mod ordinary_cash_terminal_generation;
 
@@ -262,7 +269,7 @@ use super::{
     KagemushaMemoryArtifactResolverV1, KagemushaPastaParityV1,
 };
 use super::{
-    composite::{KagemushaRecursiveStateWitnessV1, build_kagemusha_recursive_state_pair_v1},
+    composite::KagemushaRecursiveStateWitnessV1,
     transport_decider::{
         KagemushaTransportDeciderParityWitnessV1, KagemushaTransportDeciderWitnessV1,
         build_kagemusha_transport_decider_pair_v1,
@@ -3416,7 +3423,7 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
 pub fn prove_kagemusha_recursive_state_hash_claim_v1(
     eq: &KagemushaLoadedEqMintHashArtifactsV1,
     ep: &KagemushaLoadedEpMintHashArtifactsV1,
-    mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
     prove_kagemusha_recursive_state_hash_claim_v1_with_construction(
@@ -10063,6 +10070,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ordinary_qualification_wallet_identity_roundtrips_as_canonical_multisig() {
+        use iroha_data_model::account::AccountId;
+
+        let sender = ordinary_qualification_wallet_account_v1(62);
+        let receiver = ordinary_qualification_wallet_account_v1(63);
+        assert_eq!(sender, ordinary_qualification_wallet_account_v1(62));
+        assert_ne!(sender, receiver);
+        assert!(sender.try_signatory().is_none());
+        let policy = sender
+            .multisig_policy()
+            .expect("multisig qualification wallet");
+        assert_eq!(policy.threshold(), 1);
+        assert_eq!(policy.members().len(), 1);
+        assert_eq!(
+            AccountId::parse_encoded(&sender.to_string()).unwrap(),
+            sender
+        );
+        let bytes = norito::encode_canonical(&sender).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<AccountId>(&bytes).unwrap(),
+            sender
+        );
+    }
+
+    #[test]
     fn terminal_hash_protocol_pins_reject_every_substituted_or_absent_role() {
         let authenticated = [[1; 32], [2; 32], [3; 32], [4; 32]];
         validate_terminal_hash_protocol_pins_v1(authenticated, authenticated)
@@ -11065,12 +11097,20 @@ mod mint_transport_tests;
 mod lookup_recovery_tests;
 
 #[cfg(test)]
+#[path = "ordinary_zero_bootstrap_fixture.rs"]
+mod ordinary_zero_bootstrap_fixture;
+
+#[cfg(test)]
 #[path = "ordinary_zero_bootstrap_qualification_tests.rs"]
 mod ordinary_zero_bootstrap_qualification_tests;
 
 #[cfg(test)]
 #[path = "ordinary_mint_genuine_qualification_tests.rs"]
 mod ordinary_mint_genuine_qualification_tests;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_mint_public_artifact_tests.rs"]
+mod ordinary_mint_public_artifact_tests;
 
 #[cfg(all(test, unix))]
 #[path = "ordinary_active_state_bootstrap.rs"]
@@ -11092,6 +11132,7 @@ mod ordinary_active_send_terminal;
 #[path = "ordinary_active_receive_state_tests.rs"]
 mod ordinary_active_receive_state;
 
+/// Domainless canonical wallet identity shared by the mathematical qualification graph.
 #[cfg(test)]
 pub(super) fn ordinary_qualification_wallet_account_v1(
     seed: u8,

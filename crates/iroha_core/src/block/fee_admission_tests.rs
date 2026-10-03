@@ -65,7 +65,11 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -185,7 +189,11 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
@@ -318,7 +326,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -494,7 +506,11 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
             .execute(&payer_id, setup_tx)
             .expect("register data trigger");
     });
-    let setup_signed = state.view().latest_block().expect("original genesis");
+    let setup_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -686,7 +702,11 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         header.set_height(nonzero!(1_u64));
     });
     let _previous: SignedBlock = previous.into();
-    let previous = state.view().latest_block().expect("original genesis");
+    let previous = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
         .chain(1, Some(&previous))
@@ -805,7 +825,11 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
                 .execute(&authority, setup_tx)
                 .expect("register by-call trigger");
         });
-        let setup_signed = state.view().latest_block().expect("original genesis");
+        let setup_signed = state
+            .view()
+            .latest_block()
+            .expect("original block read attempt")
+            .expect("original genesis");
 
         let execute_instruction = InstructionBox::from(ExecuteTrigger::new(trigger_id));
         let expected_base_gas =
@@ -951,7 +975,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1093,7 +1121,11 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1227,7 +1259,11 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1411,7 +1447,11 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1584,7 +1624,11 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("tx_sequence").expect("metadata key"),
@@ -2070,7 +2114,11 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
     let flag_key: Name = "fee_trigger_flag".parse().unwrap();
     let event_key: Name = "fee_trigger_event".parse().unwrap();
@@ -2221,7 +2269,14 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
     )
     .expect("admission should accept transaction shape");
     let unverified_block = BlockBuilder::new(vec![tx])
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
     let (mut state_block, state_block_recorder) =

@@ -144,3 +144,49 @@ fn original_order_operation_identity_and_full_source_are_committed() {
         assert_ne!(digest, execution_effects_digest_v1(&changed).unwrap());
     }
 }
+
+#[test]
+fn retirement_codec_commits_exact_incarnation_and_distinct_lifecycle_presence_key() {
+    let asset = balance().asset;
+    let retirement = FastpqExecutionEffectKindV1::Retire(asset.clone());
+    let bytes = norito::encode_canonical(&retirement).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<FastpqExecutionEffectKindV1>(&bytes).unwrap(),
+        retirement
+    );
+    let lifecycle = FastpqExecutionQuantityKeyV1::Lifecycle(asset.clone());
+    let lifecycle_bytes = norito::encode_canonical(&lifecycle).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<FastpqExecutionQuantityKeyV1>(&lifecycle_bytes).unwrap(),
+        lifecycle
+    );
+    let key = execution_quantity_key_v1(&lifecycle).unwrap();
+    assert_ne!(
+        key,
+        execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Supply(asset.clone())).unwrap()
+    );
+    assert_ne!(
+        key,
+        execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Balance(balance())).unwrap()
+    );
+    let mut next = asset;
+    next.incarnation =
+        AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"new original registration").into())
+            .unwrap();
+    assert_ne!(
+        key,
+        execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Lifecycle(next.clone())).unwrap()
+    );
+    assert_ne!(
+        bytes,
+        norito::encode_canonical(&FastpqExecutionEffectKindV1::Retire(next)).unwrap()
+    );
+    let mut tape = effects();
+    tape.effects[0].kind = retirement;
+    let digest = execution_effects_digest_v1(&tape).unwrap();
+    tape.effects[0].authorization_context = Hash::new(b"other original domain argument");
+    assert_ne!(digest, execution_effects_digest_v1(&tape).unwrap());
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(norito::decode_canonical::<FastpqExecutionEffectKindV1>(&trailing).is_err());
+}

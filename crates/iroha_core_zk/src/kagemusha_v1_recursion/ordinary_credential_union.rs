@@ -1,17 +1,17 @@
 //! Fixed None/Some Integrity and Android/Apple original credential topology.
 //!
 //! Both canonical option frames are reconstructed from the same assigned semantic bytes before
-//! a constrained option selector chooses the SHA. No witness-specific framing enters a key.
+//! a constrained option selector chooses bytes and length for one bounded SHA. No witness-specific framing enters a key.
 
 use super::{
     guard_bundle::assign_bytes,
     ordinary_app_guard_binding::{
-        OrdinaryCredentialOriginalCellsV1, reconstruct_ordinary_credential_original_v1,
+        OrdinaryCredentialOriginalCellsV1, assemble_ordinary_credential_original_v1,
     },
 };
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
-    pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 use halo2_base::{
     AssignedValue,
@@ -171,22 +171,6 @@ pub(super) fn assign_ordinary_credential_union_v1<F: KagemushaPoseidonFieldV1>(
     })
 }
 
-pub(super) fn select_ordinary_digest_v1<F: KagemushaPoseidonFieldV1>(
-    builder: &mut BaseCircuitBuilder<F>,
-    bit: AssignedValue<F>,
-    yes: &[PastaSha256ByteV1<F>; 32],
-    no: &[PastaSha256ByteV1<F>; 32],
-) -> [PastaSha256ByteV1<F>; 32] {
-    let range = builder.range_chip();
-    let ctx = builder.main(0);
-    core::array::from_fn(|i| {
-        let selected = range
-            .gate()
-            .select(ctx, yes[i].quantum_cell(), no[i].quantum_cell(), bit);
-        PastaSha256ByteV1::range_checked(ctx, &range, selected)
-    })
-}
-
 /// Compute both model-owned canonical frames, including their CRCs and full issuer originals.
 /// `full` is a caller-fixed relation choice, never a witness-selected circuit construction branch.
 pub(super) fn reconstruct_ordinary_credential_union_v1<F: KagemushaPoseidonFieldV1>(
@@ -227,16 +211,77 @@ pub(super) fn reconstruct_ordinary_credential_union_v1<F: KagemushaPoseidonField
     };
     let mut none_cells = union.cells.clone();
     none_cells.play_integrity_fields = None;
-    let no = reconstruct_ordinary_credential_original_v1(builder, jobs, &none_layout, &none_cells)?;
-    let yes =
-        reconstruct_ordinary_credential_original_v1(builder, jobs, &some_layout, &union.cells)?;
-    Ok(select_ordinary_digest_v1(
-        builder,
-        union.integrity,
-        &yes,
-        &no,
-    ))
+    let no = assemble_ordinary_credential_original_v1(builder, &none_layout, &none_cells)?;
+    let yes = assemble_ordinary_credential_original_v1(builder, &some_layout, &union.cells)?;
+    hash_selected_credential_original_v1(builder, jobs, union.integrity, &yes, &no)
 }
+
+/// Fixed union: select all constrained original bytes, exact framing length and zero tail.
+/// Both model layouts were already reconstructed; no witness-selected host branch is used.
+fn select_credential_original_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    selector: AssignedValue<F>,
+    yes: &[PastaSha256ByteV1<F>],
+    no: &[PastaSha256ByteV1<F>],
+) -> Result<super::canonical_preimage::stream::KagemushaBoundedByteStreamV1<F>, String> {
+    let range = builder.range_chip();
+    let ctx = builder.main(0);
+    let gate = range.gate();
+    gate.assert_bit(ctx, selector);
+    let length = gate.select(
+        ctx,
+        Constant(F::from(yes.len() as u64)),
+        Constant(F::from(no.len() as u64)),
+        selector,
+    );
+    let bytes = (0..yes.len().max(no.len()))
+        .map(|index| {
+            let yes = yes
+                .get(index)
+                .map_or(Constant(F::ZERO), |b| b.quantum_cell());
+            let no = no
+                .get(index)
+                .map_or(Constant(F::ZERO), |b| b.quantum_cell());
+            let selected = gate.select(ctx, yes, no, selector);
+            PastaSha256ByteV1::range_checked(ctx, &range, selected)
+        })
+        .collect();
+    super::canonical_preimage::stream::KagemushaBoundedByteStreamV1::constrain(
+        ctx, &range, bytes, length,
+    )
+}
+
+fn hash_selected_credential_original_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    selector: AssignedValue<F>,
+    yes: &[PastaSha256ByteV1<F>],
+    no: &[PastaSha256ByteV1<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let stream = select_credential_original_v1(builder, selector, yes, no)?;
+    let range = builder.range_chip();
+    let ctx = builder.main(0);
+    let words =
+        jobs.digest_bounded_constrained(ctx, &range, stream.bytes(), stream.actual_len())?;
+    let mut bytes = Vec::with_capacity(32);
+    for word in words {
+        let bits = PastaSha256BitV1::decompose(ctx, range.gate(), word, 32);
+        for offset in [24, 16, 8, 0] {
+            bytes.push(PastaSha256ByteV1::from_bits_le(
+                ctx,
+                range.gate(),
+                &bits[offset..offset + 8],
+            ));
+        }
+    }
+    bytes
+        .try_into()
+        .map_err(|_| "ordinary credential selected digest width".into())
+}
+
+#[cfg(test)]
+#[path = "ordinary_credential_union_stream_tests.rs"]
+mod stream_tests;
 
 #[cfg(test)]
 mod tests {
@@ -287,6 +332,10 @@ mod tests {
         builder.calculate_params(Some(9));
         let params = builder.config_params;
         let (job_count, compression_blocks, required_rows) = jobs.capacity_profile().unwrap();
+        assert_eq!(
+            job_count, 2,
+            "one bounded job per Ed-only/full original, unchanged across all option/platform variants"
+        );
         (
             params.num_advice_per_phase,
             params.num_lookup_advice_per_phase,

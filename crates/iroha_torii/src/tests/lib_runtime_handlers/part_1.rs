@@ -273,7 +273,7 @@ impl ReadinessNode {
             assert_eq!(chain.genesis(), &genesis, "exact original replay source");
             chain.commit_at(20_000, Vec::new());
             for height in 1..=chain.height() {
-                kura.store_block(Arc::clone(chain.committed(height).block()))
+                kura.store_block(chain.committed(height).block().clone())
                     .expect("retain original certified wire for startup replay");
             }
         }
@@ -3574,6 +3574,7 @@ async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue(
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() {
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();

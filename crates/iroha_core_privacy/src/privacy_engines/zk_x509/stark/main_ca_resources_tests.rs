@@ -223,12 +223,12 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
         let cache = plan.quotient_cache_plan_v1(&layout, *registration).unwrap();
         let cached = (cache.base_columns + cache.aux_columns) as u64;
         if segment.adapter == SegmentAdapterIdV1::P256Arithmetic {
-            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (205, 72));
-            assert_eq!((cache.base_columns, cache.aux_columns), (195, 72));
+            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (211, 72));
+            assert_eq!((cache.base_columns, cache.aux_columns), (211, 72));
         }
         if segment.base_width == 285 && segment.aux_width == 280 {
-            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (28, 0));
-            assert_eq!((cache.base_columns, cache.aux_columns), (18, 0));
+            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (26, 0));
+            assert_eq!((cache.base_columns, cache.aux_columns), (16, 0));
         }
         let ordinary_cached = (ordinary.base_columns + ordinary.aux_columns) as u64;
         assert!(cache.base_columns <= segment.base_width);
@@ -262,11 +262,11 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     assert_eq!(native_cells, 2_116_723_200);
     assert_eq!(masked_cells, 2_127_275_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(ordinary_cached_columns, 3_400);
-    assert_eq!(changed, 6);
-    // Five arithmetic registrations and RFC each lose ten cache columns;
-    // their four stripes add60*(4-1)=180 real native inverse transforms.
-    assert_eq!(cached_columns, 3_340);
-    assert_eq!(native_iffts, 7_692);
-    assert_eq!(native_butterflies, 29_386_060_288);
+    assert_eq!(ordinary_cached_columns, 3_428);
+    assert_eq!(changed, 1);
+    // The five arithmetic registrations retain all their columns. Only RFC
+    // loses ten cache columns, adding 10 * (4 - 1) = 30 native IFFTs.
+    assert_eq!(cached_columns, 3_418);
+    assert_eq!(native_iffts, 7_458);
+    assert_eq!(native_butterflies, 28_220_568_064);
 }

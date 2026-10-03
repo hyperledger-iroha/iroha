@@ -218,6 +218,8 @@ enum StateExit {
 fn assert_state_exit_releases_all_original_writers(exit: StateExit) {
     let (state, proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let mut parameters = Some(
         state
@@ -246,10 +248,10 @@ fn assert_state_exit_releases_all_original_writers(exit: StateExit) {
             assert!(!membership_wait.is_poisoned());
             let callback = membership_probe_callback(&state, membership);
             let waker = Waker::from(Arc::clone(&callback));
-            let mut future = wait.clone().wait_for_release();
+            let future = wait.clone();
             assert!(
-                Pin::new(&mut future)
-                    .poll(&mut Context::from_waker(&waker))
+                registration
+                    .poll_wait(&future, &mut Context::from_waker(&waker))
                     .is_pending()
             );
             assert_eq!(callback.observations(), [0; 5]);
@@ -297,12 +299,12 @@ fn assert_state_exit_releases_all_original_writers(exit: StateExit) {
         }
     }
     assert_eq!(stages.load(Ordering::SeqCst), 1);
-    let (parameters, wait, refused, membership_wait, callback, mut future) =
+    let (parameters, wait, refused, membership_wait, callback, future) =
         observed.expect("the actual original State writers were observed");
     let waker = Waker::from(Arc::clone(&callback));
     assert!(
-        Pin::new(&mut future)
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&future, &mut Context::from_waker(&waker))
             .is_ready()
     );
     // Actual std Cell poison survives unwind; parking_lot membership stays healthy.
@@ -348,6 +350,8 @@ fn pristine_stage_panic_releases_healthy_membership_before_world_notification() 
 fn acquired_runtime_result_drop_releases_membership_before_world_notification() {
     let (state, _proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let parameters = state
         .world
@@ -366,7 +370,7 @@ fn acquired_runtime_result_drop_releases_membership_before_world_notification() 
     assert!(!membership_wait.is_poisoned());
     let callback = membership_probe_callback(&state, membership);
     let waker = Waker::from(Arc::clone(&callback));
-    let mut future = wait.clone().wait_for_release();
+    let mut future = wait.clone().wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))
@@ -405,6 +409,8 @@ fn runtime_index_snapshots_notify_before_acquiring_original_writers() {
     for replacement in [false, true] {
         let (state, _proposal) = fixture();
         let state: Arc<State> = Arc::from(state);
+        let mut registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let membership = membership_probe_before_stage(&state);
         let callback = membership_probe_callback(&state, membership);
         let waker = Waker::from(Arc::clone(&callback));
@@ -415,7 +421,7 @@ fn runtime_index_snapshots_notify_before_acquiring_original_writers() {
         let held = state.lane_manifests.read();
         let wait = state.lane_manifests.try_write_or_wait().err().unwrap();
         let original_release = held.release_deferred();
-        let mut future = Box::pin(wait.wait_for_release());
+        let mut future = Box::pin(wait.wait_for_release(&mut registration));
         assert!(future.as_mut().poll(&mut context).is_pending());
         let acquired = state.acquire_canonical_runtime_block(replacement).unwrap();
         assert!(future.as_mut().poll(&mut context).is_ready());

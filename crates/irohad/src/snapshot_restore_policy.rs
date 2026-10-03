@@ -89,8 +89,15 @@ mod tests {
 
     #[test]
     fn classification_borrows_raw_failure_and_preserves_original_release_observation() {
+        use iroha_allocation::release::ReleaseRegistration;
         for kind in 0..5 {
-            let budget = AllocationBudget::new(1);
+            let registration_bytes = ReleaseRegistration::allocation_layout().size();
+            let budget = AllocationBudget::new(1 + registration_bytes);
+            let mut prepaid = budget
+                .try_reserve(ReleaseRegistration::allocation_layout())
+                .unwrap();
+            let mut registration = ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+            drop(prepaid);
             let occupied = budget.try_reserve_bytes(1).unwrap();
             let refusal = budget.try_reserve_bytes(1).unwrap_err();
             let error = match kind {
@@ -136,8 +143,11 @@ mod tests {
             else {
                 panic!("classification must preserve the raw original capacity refusal");
             };
-            assert_eq!((*requested_bytes, *reserved_bytes, *limit_bytes), (1, 1, 1));
-            let mut wait = pin!(release.clone().wait_for_release());
+            assert_eq!(
+                (*requested_bytes, *reserved_bytes, *limit_bytes),
+                (1, 1 + registration_bytes, 1 + registration_bytes)
+            );
+            let mut wait = pin!(release.clone().wait_for_release(&mut registration));
             let mut context = Context::from_waker(Waker::noop());
             assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
             let unrelated = AllocationBudget::new(1);

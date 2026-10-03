@@ -6,7 +6,6 @@
 //! its completed invariant failure.
 
 use super::*;
-use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_model_base::error::ParseError;
 
 /// Check the complete binding before borrowing its existing lifecycle.

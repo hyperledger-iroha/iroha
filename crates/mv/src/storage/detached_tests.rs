@@ -361,6 +361,12 @@ fn detached_values_outlive_the_storage_without_a_reader_pin() {
 
 #[test]
 fn capture_and_abort_release_both_writers_before_native_wake_even_on_unwind() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         task::{Context, Wake, Waker},
@@ -408,8 +414,18 @@ fn capture_and_abort_release_both_writers_before_native_wake_even_on_unwind() {
             });
             let waker = Waker::from(Arc::clone(&probe));
             let mut context = Context::from_waker(&waker);
-            let mut current = std::pin::pin!(storage.blocks_released.observe().wait_for_release());
-            let mut undo = std::pin::pin!(storage.revert_released.observe().wait_for_release());
+            let mut current = std::pin::pin!(
+                storage
+                    .blocks_released
+                    .observe()
+                    .wait_for_release(&mut release_registration_1)
+            );
+            let mut undo = std::pin::pin!(
+                storage
+                    .revert_released
+                    .observe()
+                    .wait_for_release(&mut release_registration_2)
+            );
             assert!(current.as_mut().poll(&mut context).is_pending());
             assert!(undo.as_mut().poll(&mut context).is_pending());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

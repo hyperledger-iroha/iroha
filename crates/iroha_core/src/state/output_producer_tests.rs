@@ -108,6 +108,7 @@ fn output_fixture_parent_time(state: &State) -> u64 {
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .expect("original output genesis")
             .header()
             .creation_time()
@@ -126,7 +127,10 @@ fn output_fixture_input_time(state: &State) -> std::time::Duration {
 
 fn output_fixture_header(state: &State) -> BlockHeader {
     let view = state.view();
-    let parent = view.latest_block().expect("original output genesis");
+    let parent = view
+        .latest_block()
+        .expect("completed original State read")
+        .expect("original output genesis");
     BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(parent.hash()),
@@ -147,6 +151,7 @@ fn output_fixture_setup(
     let header = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("original output parent")
         .header();
     recorded_component_block(state, header)
@@ -497,7 +502,10 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
-    let budget = iroha_allocation::AllocationBudget::new(8);
+    let budget = iroha_allocation::AllocationBudget::new(
+        8 + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let occupied = budget.try_reserve_bytes(8).unwrap();
     let refusal = budget.try_reserve_bytes(1).unwrap_err();
     let state = state(16_384);
@@ -536,7 +544,7 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
     else {
         panic!("original release observation must survive rollback");
     };
-    let mut release = release.clone().wait_for_release();
+    let mut release = release.clone().wait_for_release(&mut registration);
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(Arc::clone(&wakes));
     let mut context = Context::from_waker(&waker);

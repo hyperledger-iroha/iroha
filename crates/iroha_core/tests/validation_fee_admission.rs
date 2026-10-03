@@ -142,8 +142,8 @@ fn payout_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-admission-test".to_owned(),
@@ -220,8 +220,8 @@ fn pool_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePool".to_owned(),
         compiler_fingerprint: "validation-fee-pool-admission-test".to_owned(),
@@ -1359,7 +1359,7 @@ fn signed_assessment_cannot_be_repurposed_for_another_amount_or_charge() {
 
 #[test]
 fn concurrent_reviewed_retail_payments_and_replay_do_not_double_spend_inclusion() {
-    let (state, user, key, recipient, treasury, asset) = test_state();
+    let (mut state, user, key, recipient, treasury, asset) = test_state();
     let policy = validation_fee_policy(&state, asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(&state, &user, &key, policy);
     {
@@ -1376,7 +1376,7 @@ fn concurrent_reviewed_retail_payments_and_replay_do_not_double_spend_inclusion(
         )
         .parse()
         .unwrap();
-        let mut store = state.world.smart_contract_state.block();
+        let mut store = state.world.smart_contract_state_mut_for_testing().block();
         store.insert(storage_key, norito::to_bytes(&record).unwrap());
         store.commit();
     }

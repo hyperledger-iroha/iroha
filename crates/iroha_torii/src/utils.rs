@@ -1343,6 +1343,7 @@ where
                     norito::json::BoundedJsonError::Unsupported
                     | norito::json::BoundedJsonError::AllocationFailed
                     | norito::json::BoundedJsonError::DecodeResource(_)
+                    | norito::json::BoundedJsonError::ScopedDecodeResource(_)
                     | norito::json::BoundedJsonError::LengthMismatch => {
                         BoundedResponseEncodeError::Serialization
                     }

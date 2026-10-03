@@ -16,6 +16,21 @@ public struct PetalFinder: Equatable, Sendable {
     }
 }
 
+/// One plausible set of corner finders for a frame.
+public struct PetalFinderSet: Equatable, Sendable {
+    /// The four corners, clockwise from the one nearest the top-left of the
+    /// image.
+    public let corners: [PetalFinder]
+    /// Index into ``corners`` of a corner that was not seen but inferred from
+    /// the other three, if any.
+    public let inferred: Int?
+
+    public init(corners: [PetalFinder], inferred: Int?) {
+        self.corners = corners
+        self.inferred = inferred
+    }
+}
+
 /// A 4-connected component of a binarised image.
 public struct PetalComponent: Equatable, Sendable {
     /// Pixel count.
@@ -67,9 +82,14 @@ public struct PetalComponent: Equatable, Sendable {
 /// isolated blob) → selection of the four finders that form a plausible,
 /// similarly sized quadrilateral. Solid blossoms survive defocus that would
 /// fill in the gaps of a bullseye.
+///
+/// When a finger, a glare or the edge of the frame hides one blossom, three
+/// large blossoms that form a corner still identify the code: the fourth
+/// corner is inferred (and later refined by the decoder).
 public enum PetalLocator {
-    /// Sensitivities tried in order by ``locate(_:)``.
-    static let sensitivities: [Double] = [0.12, 0.22, 0.34]
+    /// Binarisation thresholds, from the most to the least permissive: a
+    /// higher sensitivity separates blurred blossoms from their surroundings.
+    public static let sensitivities: [Double] = [0.12, 0.22, 0.34]
 
     /// Marks pixels that are clearly brighter than their neighbourhood.
     ///
@@ -251,6 +271,27 @@ public enum PetalLocator {
         return (0..<4).map { quad[(start + $0) % 4] }
     }
 
+    /// The finders of the largest size class: lit tiles and merged dots form
+    /// blob candidates too, but the corner finders are the biggest isolated
+    /// round blobs in view.
+    static func strongFinders(_ finders: [PetalFinder]) -> [PetalFinder] {
+        var largest = 0.0
+        for finder in finders { largest = Double.maximum(largest, finder.size) }
+        return finders.filter { $0.size >= 0.55 * largest }
+    }
+
+    /// The ten largest candidates, largest first (ties keep discovery order),
+    /// so that clutter in a busy scene cannot push the real finders out of the
+    /// set that is combined. The tie-break is explicit: the result never
+    /// depends on sort stability.
+    static func ranked(_ finders: [PetalFinder]) -> [PetalFinder] {
+        let keys = finders.map { PetalNumeric.totalOrderKey($0.size) }
+        let order = finders.indices.sorted { a, b in
+            keys[a] != keys[b] ? keys[a] > keys[b] : a < b
+        }
+        return order.prefix(10).map { finders[$0] }
+    }
+
     /// Chooses four finders that look like the corners of one code.
     ///
     /// Tile glyphs such as `ロ` form tile-sized blobs too, so the largest size
@@ -258,23 +299,91 @@ public enum PetalLocator {
     /// isolated blossoms in view. Within a class the ten largest candidates
     /// are combined. Returns the four corners clockwise from the top-left.
     public static func selectQuad(_ finders: [PetalFinder]) -> [PetalFinder]? {
-        var largest = 0.0
-        for finder in finders { largest = Double.maximum(largest, finder.size) }
-        let strong = finders.filter { $0.size >= 0.55 * largest }
-        return selectQuad(from: strong) ?? selectQuad(from: finders)
+        selectQuad(from: strongFinders(finders)) ?? selectQuad(from: finders)
     }
 
-    private static func selectQuad(from finders: [PetalFinder]) -> [PetalFinder]? {
-        guard finders.count >= 4 else { return nil }
-        // Largest first (ties keep discovery order) so that clutter in a busy
-        // scene cannot push the real finders out of the ten candidates that are
-        // combined. The tie-break is explicit: the result never depends on sort
-        // stability.
-        let keys = finders.map { PetalNumeric.totalOrderKey($0.size) }
-        let order = finders.indices.sorted { a, b in
-            keys[a] != keys[b] ? keys[a] > keys[b] : a < b
+    /// Chooses three finders that look like three corners of one code (an
+    /// `L`: similar sizes, two similar legs at a roughly right angle) and
+    /// completes the fourth corner as a parallelogram.
+    ///
+    /// Returns the clockwise quad and the index of the inferred corner in it.
+    public static func selectTriple(_ finders: [PetalFinder]) -> (quad: [PetalFinder], inferred: Int)? {
+        let ranked = ranked(finders)
+        let n = ranked.count
+        var best: (score: Double, quad: [PetalFinder], inferred: Int)?
+        for a in 0..<n {
+            for b in (a + 1)..<max(a + 1, n) {
+                for c in (b + 1)..<max(b + 1, n) {
+                    let set = [ranked[a], ranked[b], ranked[c]]
+                    var smin = Double.greatestFiniteMagnitude
+                    var smax = 0.0
+                    for finder in set {
+                        smin = Double.minimum(smin, finder.size)
+                        smax = Double.maximum(smax, finder.size)
+                    }
+                    if smax / smin > 1.9 { continue }
+                    var sizeSum = -0.0
+                    for finder in set { sizeSum += finder.size }
+                    let meanSize = sizeSum / 3.0
+                    for corner in 0..<3 {
+                        let k = set[corner]
+                        let p = set[(corner + 1) % 3]
+                        let q = set[(corner + 2) % 3]
+                        let ux = p.x - k.x
+                        let uy = p.y - k.y
+                        let vx = q.x - k.x
+                        let vy = q.y - k.y
+                        let lu = (ux * ux + uy * uy).squareRoot()
+                        let lv = (vx * vx + vy * vy).squareRoot()
+                        if lu <= 0.0 || lv <= 0.0 { continue }
+                        let legs = Double.maximum(lu, lv) / Double.minimum(lu, lv)
+                        let cosine = (ux * vx + uy * vy) / (lu * lv)
+                        // canvas geometry: side / finder diameter = 880 / 120
+                        let ratio = 0.5 * (lu + lv) / meanSize
+                        if legs > 2.0 || abs(cosine) > 0.5 || !(4.8...10.5).contains(ratio) { continue }
+                        let fourth = PetalFinder(x: p.x + q.x - k.x, y: p.y + q.y - k.y, size: meanSize)
+                        guard let quad = orderClockwise([k, p, q, fourth]) else { continue }
+                        guard let inferred = quad.firstIndex(where: {
+                            $0.x.bitPattern == fourth.x.bitPattern && $0.y.bitPattern == fourth.y.bitPattern
+                        }) else { continue }
+                        let score = (smax / smin - 1.0) + (legs - 1.0) + abs(cosine) + abs((ratio - 7.33) / 7.33)
+                        if best == nil || score < (best?.score ?? 0) {
+                            best = (score, quad, inferred)
+                        }
+                    }
+                }
+            }
         }
-        let ranked = order.prefix(10).map { finders[$0] }
+        return best.map { ($0.quad, $0.inferred) }
+    }
+
+    /// A blob of at least 0.3 × the finder size within 0.3 legs of the
+    /// inferred corner of a triple completes it into a seen quad.
+    static func completeTriple(_ finders: [PetalFinder], quad: [PetalFinder], missing: Int) -> [PetalFinder]? {
+        let d = quad[missing]
+        func distance(_ f: PetalFinder) -> Double {
+            ((f.x - d.x) * (f.x - d.x) + (f.y - d.y) * (f.y - d.y)).squareRoot()
+        }
+        let leg = 0.5 * (distance(quad[(missing + 1) % 4]) + distance(quad[(missing + 3) % 4]))
+        // the first of the nearest under the total order (Rust `Iterator::min_by`)
+        var fourth: PetalFinder?
+        var fourthKey = Int64.max
+        for finder in finders where finder.size >= 0.3 * d.size && distance(finder) <= 0.3 * leg {
+            let key = PetalNumeric.totalOrderKey(distance(finder))
+            if fourth == nil || key < fourthKey {
+                fourth = finder
+                fourthKey = key
+            }
+        }
+        guard let fourth else { return nil }
+        var full = quad
+        full[missing] = fourth
+        return orderClockwise(full)
+    }
+
+    static func selectQuad(from finders: [PetalFinder]) -> [PetalFinder]? {
+        guard finders.count >= 4 else { return nil }
+        let ranked = ranked(finders)
         var best: (score: Double, quad: [PetalFinder])?
         let n = ranked.count
         for a in 0..<n {
@@ -327,74 +436,224 @@ public enum PetalLocator {
     }
 
     static func refineCenter(_ image: PetalLumaView, finder: PetalFinder) -> PetalFinder {
+        centroid(image, finder: finder) ?? finder
+    }
+
+    /// The intensity-weighted centroid of the bright part of the disc of
+    /// diameter `finder.size` around the finder, or `nil` when that disc has
+    /// less than 20 levels of contrast (nothing bright is there).
+    static func centroid(_ image: PetalLumaView, finder: PetalFinder) -> PetalFinder? {
         guard finder.x.isFinite, finder.y.isFinite, finder.size.isFinite,
               image.width > 0, image.height > 0 else {
-            return finder
+            return nil
         }
         let radius = PetalNumeric.saturatingInt((finder.size * 0.5).rounded(.up))
         let cx = PetalNumeric.saturatingInt(finder.x.rounded(.down))
         let cy = PetalNumeric.saturatingInt(finder.y.rounded(.down))
-        guard radius >= 0 else { return finder }
+        guard radius >= 0 else { return nil }
         // Only in-image offsets contribute, so the scan is clipped to the image
-        // (same samples, same order as the reference loop).
-        let yStart = max(cy - radius, 0)
-        let yEnd = min(cy + radius, image.height - 1)
-        let xStart = max(cx - radius, 0)
-        let xEnd = min(cx + radius, image.width - 1)
-        guard yStart <= yEnd, xStart <= xEnd else { return finder }
-        var samples: [(Double, Double, Double)] = []
+        // (same samples, same order as the reference loop). Far-away finders
+        // clip to nothing instead of overflowing.
+        let (top, topOverflow) = cy.subtractingReportingOverflow(radius)
+        let (bottom, bottomOverflow) = cy.addingReportingOverflow(radius)
+        let (left, leftOverflow) = cx.subtractingReportingOverflow(radius)
+        let (right, rightOverflow) = cx.addingReportingOverflow(radius)
+        let yStart = topOverflow ? 0 : max(top, 0)
+        let yEnd = bottomOverflow ? image.height - 1 : min(bottom, image.height - 1)
+        let xStart = leftOverflow ? 0 : max(left, 0)
+        let xEnd = rightOverflow ? image.width - 1 : min(right, image.width - 1)
+        guard yStart <= yEnd, xStart <= xEnd else { return nil }
         let limit = finder.size * 0.5
+        // Two passes over the same samples in the same order (the reference
+        // collects them first): levels, then the weighted sums. No allocation.
+        var floor = Double.greatestFiniteMagnitude
+        var peak = 0.0
         for y in yStart...yEnd {
+            let py = Double(y) + 0.5
+            let dy = py - finder.y
             for x in xStart...xEnd {
-                let px = Double(x) + 0.5
-                let py = Double(y) + 0.5
-                let dx = px - finder.x
-                let dy = py - finder.y
+                let dx = Double(x) + 0.5 - finder.x
                 if (dx * dx + dy * dy).squareRoot() <= limit {
-                    samples.append((px, py, Double(image.at(x, y))))
+                    let value = Double(image.at(x, y))
+                    floor = Double.minimum(floor, value)
+                    peak = Double.maximum(peak, value)
                 }
             }
         }
-        var floor = Double.greatestFiniteMagnitude
-        var peak = 0.0
-        for sample in samples {
-            floor = Double.minimum(floor, sample.2)
-            peak = Double.maximum(peak, sample.2)
-        }
-        if peak - floor < 20.0 { return finder }
+        if peak - floor < 20.0 { return nil }
         let threshold = floor + 0.5 * (peak - floor)
         var sw = 0.0
         var sx = 0.0
         var sy = 0.0
-        for (px, py, value) in samples {
-            let weight = Double.maximum(value - threshold, 0.0)
-            sw += weight
-            sx += weight * px
-            sy += weight * py
+        for y in yStart...yEnd {
+            let py = Double(y) + 0.5
+            let dy = py - finder.y
+            for x in xStart...xEnd {
+                let px = Double(x) + 0.5
+                let dx = px - finder.x
+                if (dx * dx + dy * dy).squareRoot() <= limit {
+                    let weight = Double.maximum(Double(image.at(x, y)) - threshold, 0.0)
+                    sw += weight
+                    sx += weight * px
+                    sy += weight * py
+                }
+            }
         }
-        if sw <= 0.0 { return finder }
+        if sw <= 0.0 { return nil }
         return PetalFinder(x: sx / sw, y: sy / sw, size: finder.size)
     }
 
-    /// Locates the four finders of a code, trying progressively stricter
-    /// thresholds so blurred rings still separate from their cores. Returns
-    /// the refined corners clockwise from the top-left of the image.
+    /// Re-finds a finder near where it is expected (from the previous frame's
+    /// pose).
+    ///
+    /// A first centroid over a disc twice the finder's diameter catches a
+    /// blossom that moved up to about one diameter (nothing else bright is
+    /// that close to a corner finder); centroids over the finder's own disc
+    /// then repeat, at most five times, until the centre moves less than a
+    /// quarter pixel. `nil` when nothing bright is there or the result is
+    /// more than 0.75 diameters from the expected centre, which means the code
+    /// moved too far for tracking.
+    public static func follow(_ image: PetalLuma, expected: PetalFinder) -> PetalFinder? {
+        image.withView { follow($0, expected: expected) }
+    }
+
+    static func follow(_ image: PetalLumaView, expected: PetalFinder) -> PetalFinder? {
+        let wideDisc = PetalFinder(x: expected.x, y: expected.y, size: 2.0 * expected.size)
+        guard let wide = centroid(image, finder: wideDisc) else { return nil }
+        var current = PetalFinder(x: wide.x, y: wide.y, size: expected.size)
+        for _ in 0..<5 {
+            guard let next = centroid(image, finder: current) else { return nil }
+            let dx = next.x - current.x
+            let dy = next.y - current.y
+            let step = (dx * dx + dy * dy).squareRoot()
+            current = next
+            if step < 0.25 { break }
+        }
+        let dx = current.x - expected.x
+        let dy = current.y - expected.y
+        let moved = (dx * dx + dy * dy).squareRoot()
+        return moved <= 0.75 * expected.size ? current : nil
+    }
+
+    /// Locates four seen finders of a code: the first candidate of
+    /// ``candidates(_:)`` without an inferred corner. Returns the refined
+    /// corners clockwise from the top-left of the image.
     public static func locate(_ image: PetalLuma) -> [PetalFinder]? {
         image.withView { locate($0) }
     }
 
     static func locate(_ image: PetalLumaView) -> [PetalFinder]? {
-        let binarizer = PetalBinarizer(image)
-        var labels = [UInt32](repeating: 0, count: image.width * image.height)
-        for sensitivity in sensitivities {
-            let mask = binarizer.mask(image, sensitivity: sensitivity)
-            let components = labelComponents(mask, width: image.width, height: image.height, labels: &labels)
-            let finders = blossoms(components)
-            if let quad = selectQuad(finders) {
-                return quad.map { refineCenter(image, finder: $0) }
-            }
+        var candidates = PetalCandidateSearch()
+        while let set = candidates.next(image) {
+            if set.inferred == nil { return set.corners }
         }
         return nil
+    }
+
+    /// All candidate finder sets for one frame, in the order of
+    /// ``candidates(_:)``.
+    public static func locateCandidates(_ image: PetalLuma) -> [PetalFinderSet] {
+        Array(candidates(image))
+    }
+
+    /// Candidate finder sets for one frame, produced lazily in the order a
+    /// decoder should try them, so that a clean frame costs one binarisation.
+    ///
+    /// For each threshold of ``sensitivities`` in turn: four finders of the
+    /// largest size class that form a quad. Then, from the first threshold
+    /// that had them, three large finders forming a corner — completed by the
+    /// nearest smaller blob within 0.3 legs of where the fourth corner belongs
+    /// (steep tilt makes the far finder small) — then the first quad that
+    /// smaller blobs form, and last the same three finders with the fourth
+    /// corner inferred (the nearby blob may have been merged ring dots, a quad
+    /// may have been clutter).
+    public static func candidates(_ image: PetalLuma) -> PetalFinderCandidates {
+        PetalFinderCandidates(image: image)
+    }
+}
+
+/// The lazy sequence of ``PetalLocator/candidates(_:)``.
+public struct PetalFinderCandidates: Sequence, IteratorProtocol {
+    private let image: PetalLuma
+    private var search = PetalCandidateSearch()
+
+    init(image: PetalLuma) {
+        self.image = image
+    }
+
+    public mutating func next() -> PetalFinderSet? {
+        let image = image
+        return image.withView { search.next($0) }
+    }
+}
+
+/// The state of the candidate search over one image (Rust `Candidates`).
+///
+/// The caller passes the same image to every ``next(_:)``. The integral image
+/// and the label buffer are built on the first call and shared by the three
+/// thresholds.
+struct PetalCandidateSearch {
+    private var stage = 0
+    private var binarizer: PetalBinarizer?
+    private var labels: [UInt32] = []
+    private var completed: [PetalFinder]?
+    private var smaller: [PetalFinder]?
+    private var inferred: (corners: [PetalFinder], missing: Int)?
+    /// The sets left after the last threshold, in reverse order of delivery.
+    private var tail: [PetalFinderSet] = []
+
+    mutating func next(_ image: PetalLumaView) -> PetalFinderSet? {
+        let sensitivities = PetalLocator.sensitivities
+        while stage < sensitivities.count {
+            let sensitivity = sensitivities[stage]
+            stage += 1
+            if binarizer == nil {
+                binarizer = PetalBinarizer(image)
+                labels = [UInt32](repeating: 0, count: image.width * image.height)
+            }
+            guard let binarizer else { return nil }
+            let mask = binarizer.mask(image, sensitivity: sensitivity)
+            let components = PetalLocator.labelComponents(
+                mask,
+                width: image.width,
+                height: image.height,
+                labels: &labels
+            )
+            let finders = PetalLocator.blossoms(components)
+            let strong = PetalLocator.strongFinders(finders)
+            if inferred == nil, let triple = PetalLocator.selectTriple(strong) {
+                completed = PetalLocator.completeTriple(finders, quad: triple.quad, missing: triple.inferred)
+                    .map { full in full.map { PetalLocator.refineCenter(image, finder: $0) } }
+                var corners = triple.quad
+                for index in 0..<4 where index != triple.inferred {
+                    corners[index] = PetalLocator.refineCenter(image, finder: corners[index])
+                }
+                inferred = (corners, triple.inferred)
+            }
+            if smaller == nil {
+                smaller = PetalLocator.selectQuad(from: finders).map { quad in
+                    quad.map { PetalLocator.refineCenter(image, finder: $0) }
+                }
+            }
+            if let quad = PetalLocator.selectQuad(from: strong) {
+                return PetalFinderSet(
+                    corners: quad.map { PetalLocator.refineCenter(image, finder: $0) },
+                    inferred: nil
+                )
+            }
+        }
+        if stage == sensitivities.count {
+            stage += 1
+            var sets: [PetalFinderSet] = []
+            if let completed { sets.append(PetalFinderSet(corners: completed, inferred: nil)) }
+            if let smaller { sets.append(PetalFinderSet(corners: smaller, inferred: nil)) }
+            if let inferred { sets.append(PetalFinderSet(corners: inferred.corners, inferred: inferred.missing)) }
+            completed = nil
+            smaller = nil
+            inferred = nil
+            tail = sets.reversed()
+        }
+        return tail.popLast()
     }
 }
 

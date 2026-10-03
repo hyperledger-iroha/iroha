@@ -16,7 +16,9 @@ fn snapshot_read_buffer_refusal_preserves_descriptor_position_and_allows_retry()
         .unwrap();
     let mut reader = binding.handle.as_ref();
     reader.seek(std::io::SeekFrom::Start(3)).unwrap();
-    let budget = AllocationBudget::new(source.len());
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(source.len() + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let occupied = budget.try_reserve_bytes(source.len()).unwrap();
     let Err(TryReadError::PayloadAllocation(iroha_allocation::AllocationRefusal::Capacity {
         requested_bytes,
@@ -29,11 +31,15 @@ fn snapshot_read_buffer_refusal_preserves_descriptor_position_and_allows_retry()
     };
     assert_eq!(
         (requested_bytes, reserved_bytes, limit_bytes),
-        (source.len(), source.len(), source.len())
+        (
+            source.len(),
+            source.len() + waiter_bytes,
+            source.len() + waiter_bytes
+        )
     );
     assert_eq!(reader.stream_position().unwrap(), 3);
     assert_eq!(std::fs::read(&path).unwrap(), source);
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert!(released.as_mut().poll(&mut context).is_pending());
     drop(occupied);
@@ -41,10 +47,10 @@ fn snapshot_read_buffer_refusal_preserves_descriptor_position_and_allows_retry()
     let (bytes, digest) = read_bound_snapshot_payload(&binding, &budget).unwrap();
     assert_eq!(bytes.as_slice(), source);
     assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(source)));
-    assert_eq!(budget.reserved_bytes(), source.len());
+    assert_eq!((budget.reserved_bytes() - waiter_bytes), source.len());
     assert_eq!(reader.stream_position().unwrap(), 0);
     drop(bytes);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!((budget.reserved_bytes() - waiter_bytes), 0);
 }
 
 #[test]
@@ -239,6 +245,7 @@ fn snapshot_read_buffer_gc_fallback_cannot_filter_out_a_capacity_refusal() {
 
 struct SnapshotRefundAfterUnlock {
     budget: AllocationBudget,
+    waiter_bytes: usize,
     wakes: std::sync::atomic::AtomicUsize,
 }
 impl std::task::Wake for SnapshotRefundAfterUnlock {
@@ -253,7 +260,7 @@ impl std::task::Wake for SnapshotRefundAfterUnlock {
             .try_lock_for(std::time::Duration::from_secs(10))
             .expect("snapshot refund must notify only after publication guards release");
         assert_eq!(
-            self.budget.reserved_bytes(),
+            self.budget.reserved_bytes() - self.waiter_bytes,
             1,
             "only the fixture's prepaid sentinel may remain"
         );
@@ -281,10 +288,13 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
     )
     .unwrap();
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-    let budget = AllocationBudget::new(payload_len + 1);
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(payload_len + 1 + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
     let observer = Arc::new(SnapshotRefundAfterUnlock {
         budget: budget.clone(),
+        waiter_bytes,
         wakes: Default::default(),
     });
     let waker = Waker::from(Arc::clone(&observer));
@@ -294,7 +304,7 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
         else {
             panic!("fixture sentinel must provide a real original-pool refusal");
         };
-        let mut released = pin!(release.wait_for_release());
+        let mut released = pin!(release.wait_for_release(&mut registration));
         assert!(
             released
                 .as_mut()
@@ -340,7 +350,7 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
             std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
             pointer
         );
-        assert_eq!(budget.reserved_bytes(), 1);
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), 1);
     }
 }
 
@@ -399,7 +409,9 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
     let path = root.path().join(SNAPSHOT_FILE_NAME);
     std::fs::write(&path, b"unwind").unwrap();
     let binding = bind_snapshot_file_handle(&path, 6).unwrap().unwrap();
-    let budget = AllocationBudget::new(7);
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(7 + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
     let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         budget.try_reserve_bytes(7)
@@ -408,10 +420,11 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
     };
     let observer = Arc::new(SnapshotRefundAfterUnlock {
         budget: budget.clone(),
+        waiter_bytes,
         wakes: Default::default(),
     });
     let waker = Waker::from(Arc::clone(&observer));
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut registration));
     assert!(
         released
             .as_mut()
@@ -435,7 +448,7 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
             .poll(&mut Context::from_waker(&waker))
             .is_ready()
     );
-    assert_eq!(budget.reserved_bytes(), 1);
+    assert_eq!((budget.reserved_bytes() - waiter_bytes), 1);
 }
 
 // Composed entrypoint controls: all snapshots below use the canonical signed
@@ -646,6 +659,7 @@ where
 
 struct StrictInitializerRefundObserver {
     budget: AllocationBudget,
+    waiter_bytes: usize,
     kura: Arc<Kura>,
     original_kura_owners: usize,
     decoded_crypto:
@@ -670,8 +684,10 @@ impl std::task::Wake for StrictInitializerRefundObserver {
             .lock()
             .as_ref()
             .is_some_and(|crypto| crypto.strong_count() == 0);
-        self.saw_payload_refunded
-            .fetch_and(self.budget.reserved_bytes() == 1, SeqCst);
+        self.saw_payload_refunded.fetch_and(
+            self.budget.reserved_bytes() == self.waiter_bytes + 1,
+            SeqCst,
+        );
         self.saw_decoded_state_released.fetch_and(
             decoded_crypto_released && Arc::strong_count(&self.kura) == self.original_kura_owners,
             SeqCst,
@@ -699,7 +715,9 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let payload_path = current_generation_artifact(&store, SNAPSHOT_FILE_NAME);
     let payload = std::fs::read(&payload_path).unwrap();
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-    let budget = AllocationBudget::new(payload.len() + 1);
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(payload.len() + 1 + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
     let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         budget.try_reserve_bytes(payload.len() + 1)
@@ -708,6 +726,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     };
     let observer = Arc::new(StrictInitializerRefundObserver {
         budget: budget.clone(),
+        waiter_bytes,
         original_kura_owners: Arc::strong_count(&kura) + 1,
         kura: Arc::clone(&kura),
         decoded_crypto: Default::default(),
@@ -716,7 +735,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
         saw_decoded_state_released: true.into(),
     });
     let waker = Waker::from(Arc::clone(&observer));
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut registration));
     assert!(
         released
             .as_mut()
@@ -726,7 +745,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let calls = std::cell::Cell::new(0);
     let initialize = |restored: &mut State| {
         calls.set(calls.get() + 1);
-        assert_eq!(budget.reserved_bytes(), payload.len() + 1);
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), payload.len() + 1);
         let crypto = restored.crypto.read();
         assert_eq!(Arc::strong_count(&crypto), 1);
         *observer.decoded_crypto.lock() = Some(Arc::downgrade(&crypto));
@@ -769,7 +788,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
             .poll(&mut Context::from_waker(&waker))
             .is_ready()
     );
-    assert_eq!(budget.reserved_bytes(), 1);
+    assert_eq!((budget.reserved_bytes() - waiter_bytes), 1);
     assert_eq!(std::fs::read(&payload_path).unwrap(), payload);
     assert_eq!(
         std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
@@ -777,7 +796,11 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     );
     assert_eq!(kura.blocks_count(), 0);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
-    assert!(kura.get_block(nonzero!(1_usize)).is_none());
+    assert!(
+        kura.get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+            .expect("empty canonical history read completes")
+            .is_none()
+    );
 
     let restored =
         strict_snapshot_read_for_custody_test(&store, &state, &kura, &key, &budget, &|restored| {
@@ -786,7 +809,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
                 .map_err(TryReadError::ZkConfigInstall)
         })
         .expect("the same pool and authenticated source remain usable after initializer failure");
-    assert_eq!(budget.reserved_bytes(), 1);
+    assert_eq!((budget.reserved_bytes() - waiter_bytes), 1);
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&restored),
         canonical_state_snapshot_bytes_for_tests(&state)
@@ -820,7 +843,9 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
     let generation_name = current_generation_name(&store);
     let payload = std::fs::read(generation.join(SNAPSHOT_FILE_NAME)).unwrap();
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-    let budget = AllocationBudget::new(payload.len());
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(payload.len() + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let kura = Kura::blank_kura_for_testing();
     let runtime = tokio::runtime::Handle::current();
     let (entered_tx, entered_rx) = mpsc::sync_channel(1);
@@ -843,7 +868,7 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
                 reader_key,
                 reader_budget,
                 &|restored| {
-                    assert_eq!(reader_budget.reserved_bytes(), payload_len);
+                    assert_eq!((reader_budget.reserved_bytes() - waiter_bytes), payload_len);
                     entered_tx.send(()).unwrap();
                     finish_rx
                         .recv_timeout(Duration::from_secs(30))
@@ -857,7 +882,7 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
         entered_rx
             .recv_timeout(Duration::from_secs(30))
             .expect("Strict initializer owns the charged payload");
-        assert_eq!(budget.reserved_bytes(), payload.len());
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), payload.len());
         let Err(TryWriteError::PayloadAllocation(iroha_allocation::AllocationRefusal::Capacity {
             requested_bytes,
             reserved_bytes,
@@ -876,9 +901,13 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
         };
         assert_eq!(
             (requested_bytes, reserved_bytes, limit_bytes),
-            (payload.len(), payload.len(), payload.len())
+            (
+                payload.len(),
+                payload.len() + waiter_bytes,
+                payload.len() + waiter_bytes
+            )
         );
-        let mut released = pin!(release.wait_for_release());
+        let mut released = pin!(release.wait_for_release(&mut registration));
         assert!(
             released
                 .as_mut()
@@ -893,13 +922,13 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
             std::fs::read(generation.join(SNAPSHOT_FILE_NAME)).unwrap(),
             payload
         );
-        assert_eq!(budget.reserved_bytes(), payload.len());
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), payload.len());
         finish_tx.send(()).unwrap();
         let restored = reader
             .join()
             .expect("ordinary Strict reader worker")
             .unwrap();
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), 0);
         assert!(
             released
                 .as_mut()
@@ -917,7 +946,7 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
             )
             .unwrap()
         );
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!((budget.reserved_bytes() - waiter_bytes), 0);
         assert_eq!(
             std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
             pointer

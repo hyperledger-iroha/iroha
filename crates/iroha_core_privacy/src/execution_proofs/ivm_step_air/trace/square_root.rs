@@ -18,7 +18,7 @@ fn fill_word(bank: &mut [F], offset: usize, value: u64) {
 }
 
 /// Candidate generation uses integer binary search; the AIR establishes the result.
-pub(super) fn witness(value: u64, gas: u64) -> d::Witness {
+pub(in super::super) fn witness(value: u64, gas: u64) -> d::Witness {
     let trapped = gas < 6;
     let root = if trapped {
         0
@@ -77,8 +77,8 @@ pub(super) fn witness(value: u64, gas: u64) -> d::Witness {
     }
 }
 
-pub(super) fn append_residues(
-    out: &mut Vec<F>,
+pub(in super::super) fn append_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     product: &[F],
     sources: Sources<'_>,

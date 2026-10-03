@@ -75,7 +75,7 @@ pub(super) fn witness(active_generation: u16, transition: Transition) -> [F; WID
 /// The eventual resource profile must bound lifecycle entries by this namespace
 /// or widen the shared key; this bank never silently wraps or reuses a key.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: Schedule,
     row: &[F; WIDTH],
     selection: &[F; 3],
@@ -169,7 +169,7 @@ pub(super) fn append_residues(
 }
 
 fn header(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     port: &[F; packet::WIDTH],
     schedule: Schedule,
     slot: usize,

@@ -1495,6 +1495,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
         iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
         iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -1563,9 +1564,12 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(iroha_data_model::isi::musubi::RegisterMusubiArchiveV1) {
         return true;
     }
-    // The signed authority can only ratchet its own network-bound outbox digest. The native
-    // handler enforces exact predecessor, session lineage, and signed-transaction context.
-    if is_any!(iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1) {
+    // Sole direct signed native operations can ratchet or challenge only their authority's
+    // network-bound outbox. Core owns the exact origin, lineage, floor, and current row checks.
+    if is_any!(
+        iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1,
+        iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1
+    ) {
         return true;
     }
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.
@@ -2467,7 +2471,12 @@ where
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
                 .summarize_executable(bytecode.as_ref())
-                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+                .map_err(|error| {
+                    crate::execution_attempt::vm_attempt_error(
+                        error,
+                        crate::smartcontracts::ivm::program_admission_error,
+                    )
+                })?;
             let summary = match admitted {
                 ExecutableProgramSummary::Generic(summary) => {
                     crate::smartcontracts::ivm::validate_generic_execution_context(

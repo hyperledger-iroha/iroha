@@ -95,10 +95,27 @@ the public testnet.
 
 ### Public-lane staking commands
 
-`iroha staking register-candidate` atomically registers a fresh consensus peer
+`iroha app staking prepare --request intent.json` accepts a strict Norito JSON
+`PublicLanePreparationRequestV1` and prints the complete response: the exact plan,
+network and observed tip, pinned XOR definition, and each exact asset's balance,
+stake reserve and reward reserve. Inspect and retain that observation before
+passing its `plan.value` as the corresponding signing command's plan file.
+Preparation is read-only; the reported tip is not independently authenticated.
+
+`iroha app nexus public-lane committee-status --target-epoch 2` prints the
+original finality attachments and the selected attempt's preparation, candidate
+keys and pending beacon transcript. Authenticate those attachments against signed
+genesis and the native chain before provisioning or signing.
+`iroha app nexus public-lane committee-submit --file operation.json` accepts one
+strict `ValidatorCommitteeOperationV1` and uses the normal transaction signing and
+explicit fee-selection flow. Its only operations publish candidate keys, prepare
+credentials and admit a target seat. Activation and cancellation remain certified
+boundary decisions; the command cannot force them or modify a frozen roster.
+
+`iroha app staking register-candidate` atomically registers a fresh consensus peer
 and bonds the validator's initial stake on a stake-elected lane, including global
-lane 0. Admission schedules future election eligibility; the current production
-boundary retains the incumbent committee. The command signs the complete registration
+lane 0. Admission schedules future election eligibility; changing the committee
+requires complete preparation and incumbent-certified boundary finality. The command signs the complete registration
 against the genesis-derived `--network-id` with the key from
 `--peer-private-key-file`. That runtime file must use an absolute path, contain
 one canonical BLS-normal private key, and be owned by the caller with exact
@@ -107,19 +124,19 @@ repository. The transaction is submitted by the validator account. Admission
 schedules future eligibility; it does not change the current committee.
 
 ```sh
-iroha --config validator.toml staking register-candidate \
+iroha --config validator.toml --fee-payer authority app staking register-candidate \
   --lane-id "$STAKE_ELECTED_LANE_ID" --validator "$VALIDATOR" --peer-id "$PEER_ID" \
   --initial-stake 25000 --network-id "$NETWORK_ID" --activation-height "$ACTIVATION_HEIGHT" \
   --peer-private-key-file /run/iroha/peer.key --monetary-plan candidate-plan.json
-iroha --config staker.toml staking bond \
+iroha --config staker.toml --fee-payer authority app staking bond \
   --lane-id 0 --validator "$VALIDATOR" --amount 10.000000001 --monetary-plan bond-plan.json
-iroha --config staker.toml staking schedule-unbond \
+iroha --config staker.toml --fee-payer authority app staking schedule-unbond \
   --lane-id 0 --validator "$VALIDATOR" --amount 5 \
   --request-id "$WITHDRAWAL_HASH" --release-at-ms "$RELEASE_AT_MS"
-iroha --config staker.toml staking finalize-unbond \
+iroha --config staker.toml --fee-payer authority app staking finalize-unbond \
   --lane-id 0 --validator "$VALIDATOR" --request-id "$WITHDRAWAL_HASH" --monetary-plan withdrawal-plan.json
-iroha --config recipient.toml staking claim-rewards --lane-id 0 --claim-plan claim-plan.json
-iroha --config treasury.toml staking record-rewards --file epoch-rewards.json
+iroha --config recipient.toml --fee-payer authority app staking claim-rewards --lane-id 0 --claim-plan claim-plan.json
+iroha --config treasury.toml --fee-payer authority app staking record-rewards --file epoch-rewards.json
 ```
 
 `bond` supports self stake and delegation. `--staker` defaults to the configured
@@ -143,7 +160,7 @@ exact assets and amounts, and current tenure or reward cursor/record commitments
 The CLI rejects mismatched runtime networks, recipients, amounts, or noncanonical
 plans. Core rechecks
 all state preconditions at execution. Plans must use the network's configured
-staking asset and exact custody accounts.
+genesis-pinned global XOR definition at scale 9 and exact custody accounts.
 
 Claim plans contain at most 64 ordered reward record commitments and 64 exact
 sources. A zero payout may advance record processing while preserving unpaid

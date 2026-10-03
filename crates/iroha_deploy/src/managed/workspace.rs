@@ -85,8 +85,9 @@ impl InstalledRuntime {
 impl ManagedStore {
     /// Ensure a selected developer environment is ready, creating the default only when none exists.
     ///
-    /// An explicit unknown context is an error. A retained selection restarts the exact same
-    /// generation; no frontend substitutes a fresh network after failed startup or corrupt state.
+    /// An explicit context starts without changing the workspace selection; an unknown one is
+    /// an error. A retained selection restarts the exact same generation; no frontend substitutes
+    /// a fresh network after failed startup or corrupt state.
     ///
     /// # Errors
     /// Returns context, custody, startup or readiness errors without replacing retained state.
@@ -104,7 +105,10 @@ impl ManagedStore {
         let mut request = runtime.localnet_request(&name, timeout);
         let status = if retained {
             request.service_profile = self.prepared(&name)?.service_profile;
-            self.up_retained(&request)?
+            self.up_retained_with_selection(
+                &request,
+                super::store::StartupSelection::for_requested_context(requested),
+            )?
         } else {
             self.up(&request)?
         };

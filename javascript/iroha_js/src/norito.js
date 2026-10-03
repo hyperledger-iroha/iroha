@@ -1252,8 +1252,8 @@ export function noritoEncodeMultisigProposeRequest(request, networkPrefix) {
 }
 
 // Declared Norito frame identities of the native retail fee types.
-const RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH = Buffer.from("535a1db30ba036a8f35944ab5567877900", HEX_ENCODING);
-const RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH = Buffer.from("72ca99de9d49cae6dfc07a2a628eb91800", HEX_ENCODING);
+const RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH = Buffer.from("535a1db30ba036a8f35944ab55678779", HEX_ENCODING);
+const RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH = Buffer.from("72ca99de9d49cae6dfc07a2a628eb918", HEX_ENCODING);
 const RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1 = "iroha:retail_fee:assessment:v1:";
 const RETAIL_FEE_PAYMENT_INTENT_DOMAIN_V1 = "iroha.retail_fee.payment_intent.v1\0";
 const RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 = 4096;
@@ -1313,7 +1313,8 @@ function encodeRetailFeeAssessmentValue(value) {
   const assessment = normalizeRetailFeeAssessment(value);
   const context = "RetailFeeAssessmentV1";
   assertExactObjectKeys(assessment, RETAIL_FEE_ASSESSMENT_FIELDS_V1, context);
-  const hash = (name) => encodeFixedByteArrayArchiveValue(
+  // Derived Rust struct [u8; 32] fields are raw fixed bytes, not generic array archives.
+  const hash = (name) => encodeFixedBytesValue(
     Buffer.from(assessment[name], HEX_ENCODING), 32, `${context}.${name}`);
   return encodeStructValue([
     [encodeExactRetailFeeAccountIdValue(assessment.account_id, `${context}.account_id`)],
@@ -1395,7 +1396,7 @@ export function decodeRetailFeeAssessmentMarkerMessage(message) {
   const assessment = withNoritoCompactLengths(() => {
     const fields = decodeStructFields(frame.payload, "RetailFeeAssessmentV1", names);
     const hash = (name) => Buffer.from(
-      decodeFixedByteArrayArchiveValue(fields[name], 32, name),
+      decodeFixedBytesValue(fields[name], 32, name),
     ).toString(HEX_ENCODING).toUpperCase();
     const result = {
       account_id: decodeAccountIdValue(fields.account_id, "account_id"),

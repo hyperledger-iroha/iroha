@@ -274,7 +274,10 @@ pub async fn handle_get_name(
         let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
         let namespace_path = namespace.as_path().to_owned();
         let view = app_for_job.state.view();
-        let latest_block = view.latest_block();
+        let latest_block = view
+            .latest_block()
+            .map_err(crate::canonical_history::canonical_attempt_error)
+            .map_err(SnsError::Access)?;
         let block_height = latest_block
             .as_ref()
             .map_or(0, |block| block.header().height().get());

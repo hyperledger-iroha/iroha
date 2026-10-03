@@ -18,17 +18,16 @@ use crate::kagemusha_v1_recursion::{
 use crate::kagemusha_v1_state::DigestV1;
 use halo2_proofs::dev::MockProver;
 use iroha_crypto::{
-    Algorithm, KeyGenOption, KeyPair,
+    KeyGenOption,
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
-use iroha_data_model::{account::AccountId, kagemusha::*};
+use iroha_data_model::kagemusha::*;
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
-#[path = "ordinary_zero_bootstrap_fixture.rs"]
-mod originals;
+use super::ordinary_zero_bootstrap_fixture as originals;
 
 pub(super) struct MintOriginals {
-    pub(super) enrollment: originals::Fixture,
+    enrollment: originals::Fixture,
     pub(super) statement: KagemushaOrdinaryMintAuthorizationStatementV1,
     pub(super) approval: KagemushaOrdinaryMintApprovalV1,
     pub(super) opening: KagemushaCreditOpeningV1,
@@ -413,6 +412,14 @@ fn qualify() {
             &generated.ep.proof,
             &ep_column[..84]
         ));
+        #[cfg(unix)]
+        super::ordinary_mint_public_artifact_tests::export_from_environment(
+            &generated,
+            provider,
+            &f.enrollment.issuer_table,
+            apple,
+        )
+        .expect("export and replay exact public mathematical Mint artifacts");
         drop(generated);
         halo2_proofs::release_allocator_slack();
     }
@@ -464,5 +471,6 @@ fn verify_platform(
 #[path = "ordinary_active_state_qualification_tests.rs"]
 mod active_state;
 
+#[cfg(unix)]
 #[path = "ordinary_active_mint_state_tests.rs"]
 pub(super) mod active_mint_state;

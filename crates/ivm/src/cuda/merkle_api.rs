@@ -33,12 +33,29 @@ static PAIRS: PtxArtifact = PtxArtifact::new(
 );
 
 fn completed(
+    kernel: Kernel,
+    artifact: PtxArtifact,
+    expected_count: usize,
     result: Result<HostOutput<[u8; 32]>, CudaFailure>,
 ) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
+    completed_output(expected_count, result, || {
+        super::imp::record_completed_cuda_dispatch(kernel, artifact);
+    })
+}
+
+fn completed_output(
+    expected_count: usize,
+    result: Result<HostOutput<[u8; 32]>, CudaFailure>,
+    record: impl FnOnce(),
+) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
     match result {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == expected_count && expected_count != 0 => {
+            record();
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -53,24 +70,26 @@ fn completed(
 }
 
 fn leaf_stage(blocks: &[[u8; 64]]) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
-    completed(crate::cuda_dispatch::with_selected(
+    completed(
         Kernel::ShaLeaves,
         LEAVES,
-        |device| {
+        blocks.len(),
+        crate::cuda_dispatch::with_selected(Kernel::ShaLeaves, LEAVES, |device| {
             // SAFETY: exact embedded artifact, fixed symbol and checked public geometry.
             unsafe { launch::leaves_output(device, LEAVES, blocks) }
-        },
-    ))
+        }),
+    )
 }
 fn pair_stage(digests: &[[u8; 32]]) -> Result<HostOutput<[u8; 32]>, CudaFailure> {
-    completed(crate::cuda_dispatch::with_selected(
+    completed(
         Kernel::ShaPairs,
         PAIRS,
-        |device| {
+        1,
+        crate::cuda_dispatch::with_selected(Kernel::ShaPairs, PAIRS, |device| {
             // SAFETY: exact embedded artifact, fixed symbol and checked public geometry.
             unsafe { launch::pairs_output(device, PAIRS, digests) }
-        },
-    ))
+        }),
+    )
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
@@ -160,18 +179,19 @@ pub(crate) fn sha256_leaf_chunks_cuda_attempt(
         if !super::imp::ensure_cuda_kernel(Kernel::ShaLeaves) {
             return None;
         }
-        completed(crate::cuda_dispatch::with_selected(
+        completed(
             Kernel::ShaLeaves,
             LEAVES,
-            |device| {
+            count,
+            crate::cuda_dispatch::with_selected(Kernel::ShaLeaves, LEAVES, |device| {
                 // SAFETY: fixed canonical padded chunks, exact artifact and checked geometry.
                 unsafe {
                     launch::leaves_generated_output(device, LEAVES, count, |index| {
                         padded_chunk(data, chunk, index)
                     })
                 }
-            },
-        ))
+            }),
+        )
         .ok()
     })
 }
@@ -234,26 +254,30 @@ pub(crate) fn sha256_merkle_root_cuda(data: &[u8], chunk: usize) -> Option<[u8; 
         {
             return None;
         }
-        let output = completed(crate::cuda_dispatch::with_selected(
-            Kernel::ShaPairs,
-            PAIRS,
-            |device| {
-                if !crate::cuda_dispatch::current_is_admitted(Kernel::ShaLeaves, LEAVES) {
-                    return Err(CudaFailure::Quarantined);
-                }
-                // SAFETY: both artifacts are independently admitted on this pinned device;
-                // one request prepays all inputs, level buffers and final host output.
-                let result = unsafe {
-                    launch::root_output(device, LEAVES, PAIRS, count, |index| {
-                        padded_chunk(data, chunk, index)
-                    })
-                };
-                if !crate::cuda_dispatch::current_is_admitted(Kernel::ShaLeaves, LEAVES) {
-                    return Err(CudaFailure::Quarantined);
-                }
-                result
-            },
-        ))
+        let result = crate::cuda_dispatch::with_selected(Kernel::ShaPairs, PAIRS, |device| {
+            if !crate::cuda_dispatch::current_is_admitted(Kernel::ShaLeaves, LEAVES) {
+                return Err(CudaFailure::Quarantined);
+            }
+            // SAFETY: both artifacts are independently admitted on this pinned device;
+            // one request prepays all inputs, level buffers and final host output.
+            let result = unsafe {
+                launch::root_output(device, LEAVES, PAIRS, count, |index| {
+                    padded_chunk(data, chunk, index)
+                })
+            };
+            if !crate::cuda_dispatch::current_is_admitted(Kernel::ShaLeaves, LEAVES) {
+                return Err(CudaFailure::Quarantined);
+            }
+            result
+        });
+        let output = completed_output(1, result, || {
+            super::imp::record_completed_cuda_compound(
+                Kernel::ShaPairs,
+                PAIRS,
+                Kernel::ShaLeaves,
+                LEAVES,
+            );
+        })
         .ok()?;
         (output.len() == 1).then(|| output.as_slice()[0])
     })

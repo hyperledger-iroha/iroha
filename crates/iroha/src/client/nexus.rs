@@ -37,6 +37,8 @@ impl Nexus<'_> {
     ///
     /// This does not independently authenticate state. Inspect the exact effects
     /// before signing; execution checks expiry and recomputes every monetary leg.
+    /// Reward responses must retain every explicitly selected accrued source and
+    /// respect the requested record cut; additional sources require new records.
     /// Uses this context's asynchronous transport and deadline, with one dispatch
     /// and no compatibility probe or retry.
     ///
@@ -244,6 +246,31 @@ fn validate_plan(
                     .records
                     .iter()
                     .all(|record| intent.upto_epoch.is_none_or(|cut| record.epoch <= cut))
+                || intent
+                    .upto_epoch
+                    .zip(
+                        plan.expected_state
+                            .as_ref()
+                            .and_then(|state| state.through_epoch),
+                    )
+                    .is_some_and(|(cut, cursor)| cut < cursor)
+                || !intent.accrued_sources.iter().all(|selected| {
+                    plan.sources
+                        .binary_search_by(|source| source.source_asset.cmp(selected))
+                        .ok()
+                        .is_some_and(|index| {
+                            plan.sources[index]
+                                .expected_accrued
+                                .as_ref()
+                                .is_some_and(|amount| !amount.is_zero())
+                        })
+                })
+                || (plan.records.is_empty()
+                    && !plan
+                        .sources
+                        .iter()
+                        .map(|source| &source.source_asset)
+                        .eq(intent.accrued_sources.iter()))
             {
                 return Err(Error::ResponseBinding {
                     operation: PREPARE,
@@ -253,6 +280,10 @@ fn validate_plan(
             for source in &plan.sources {
                 assets.insert(source.source_asset.clone());
                 assets.insert(source.destination_asset.clone());
+            }
+            if let Some(claim) = &plan.fee_claim {
+                assets.insert(claim.source_asset.clone());
+                assets.insert(claim.destination_asset.clone());
             }
         }
         _ => {
@@ -298,6 +329,7 @@ mod tests {
                 expected_state: None,
                 records: vec![],
                 sources: vec![],
+                fee_claim: None,
             }),
             balances: vec![],
         };
@@ -339,6 +371,197 @@ mod tests {
             unreachable!()
         };
         plan.valid_until_height += 1;
+        assert!(validate_response(&changed, &request, network_id).is_err());
+    }
+
+    #[test]
+    fn reward_preparation_preserves_selected_accrual_sources_and_processing_cut() {
+        use iroha_data_model::{
+            asset::AssetId,
+            nexus::{
+                PublicLanePreparationBalanceV1, PublicLaneRewardClaimSourceV1,
+                PublicLaneRewardClaimStateV1, PublicLaneRewardRecordRefV1,
+            },
+        };
+
+        let network_id = super::super::test_network_id();
+        let (mut request, mut response) = fixture(network_id);
+        let source = AssetId::new(
+            response.xor_asset_definition_id.clone(),
+            iroha_test_samples::BOB_ID.clone(),
+        );
+        let destination = AssetId::new(
+            response.xor_asset_definition_id.clone(),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let PublicLanePreparationOperationV1::ClaimRewards(intent) = &mut request.operation else {
+            unreachable!()
+        };
+        intent.max_records = 0;
+        intent.upto_epoch = Some(100);
+        intent.accrued_sources = vec![source.clone()];
+        response.request = request.clone();
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut response.plan else {
+            unreachable!()
+        };
+        plan.expected_state = Some(PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(100),
+        });
+        plan.sources = vec![PublicLaneRewardClaimSourceV1 {
+            source_asset: source.clone(),
+            destination_asset: destination.clone(),
+            expected_accrued: Some(5_u64.into()),
+            payout: 5_u64.into(),
+        }];
+        response.balances = [source, destination.clone()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|asset| PublicLanePreparationBalanceV1 {
+                asset,
+                balance: 20_u64.into(),
+                stake_reserved: Quantity::zero(),
+                rewards_reserved: Quantity::zero(),
+            })
+            .collect();
+        validate_response(&response, &request, network_id).unwrap();
+
+        let mut omitted = response.clone();
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut omitted.plan else {
+            unreachable!()
+        };
+        plan.sources.clear();
+        omitted.balances.clear();
+        assert!(matches!(
+            validate_response(&omitted, &request, network_id),
+            Err(Error::ResponseBinding {
+                field: "reward_claim",
+                ..
+            })
+        ));
+
+        let mut missing_accrual = response.clone();
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut missing_accrual.plan else {
+            unreachable!()
+        };
+        plan.sources[0].expected_accrued = None;
+        assert!(matches!(
+            validate_response(&missing_accrual, &request, network_id),
+            Err(Error::ResponseBinding {
+                field: "reward_claim",
+                ..
+            })
+        ));
+
+        let mut extra = response.clone();
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut extra.plan else {
+            unreachable!()
+        };
+        plan.sources.push(PublicLaneRewardClaimSourceV1 {
+            source_asset: destination.clone(),
+            destination_asset: destination,
+            expected_accrued: None,
+            payout: 2_u64.into(),
+        });
+        plan.sources
+            .sort_by(|left, right| left.source_asset.cmp(&right.source_asset));
+        assert!(plan.has_canonical_shape(&iroha_test_samples::ALICE_ID));
+        assert!(matches!(
+            validate_response(&extra, &request, network_id),
+            Err(Error::ResponseBinding {
+                field: "reward_claim",
+                ..
+            })
+        ));
+
+        let mut stale_cut = response.clone();
+        let PublicLanePreparationOperationV1::ClaimRewards(intent) =
+            &mut stale_cut.request.operation
+        else {
+            unreachable!()
+        };
+        intent.upto_epoch = Some(99);
+        assert!(matches!(
+            validate_response(&stale_cut, &stale_cut.request, network_id),
+            Err(Error::ResponseBinding {
+                field: "reward_claim",
+                ..
+            })
+        ));
+
+        // A new record may introduce another source; state authentication and
+        // execution still determine the exact record asset and amount.
+        let PublicLanePreparationOperationV1::ClaimRewards(intent) = &mut extra.request.operation
+        else {
+            unreachable!()
+        };
+        intent.max_records = 1;
+        intent.upto_epoch = Some(101);
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut extra.plan else {
+            unreachable!()
+        };
+        plan.records.push(PublicLaneRewardRecordRefV1 {
+            epoch: 101,
+            record_hash: Hash::new(b"new record for additional exact XOR source"),
+        });
+        validate_response(&extra, &extra.request, network_id).unwrap();
+    }
+
+    #[test]
+    fn observational_fee_claim_requires_exact_xor_balances_and_recipient() {
+        use iroha_data_model::{
+            asset::AssetId,
+            nexus::{PublicLaneFeeRewardClaimV1, PublicLanePreparationBalanceV1},
+        };
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"client-fee-reward-preparation",
+        )));
+        let (request, mut response) = fixture(network_id);
+        let source = AssetId::new(
+            response.xor_asset_definition_id.clone(),
+            iroha_test_samples::BOB_ID.clone(),
+        );
+        let destination = AssetId::new(
+            response.xor_asset_definition_id.clone(),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut response.plan else {
+            unreachable!()
+        };
+        plan.fee_claim = Some(PublicLaneFeeRewardClaimV1 {
+            lifecycle_seal: [1; 32],
+            beneficiary_id: iroha_test_samples::ALICE_ID.clone(),
+            beneficiary_revision: 2,
+            source_asset: source.clone(),
+            destination_asset: destination.clone(),
+            amount: 1_u64.into(),
+            expected_claim_sequence: 3,
+        });
+        assert!(validate_response(&response, &request, network_id).is_err());
+        response.balances = [source, destination]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|asset| PublicLanePreparationBalanceV1 {
+                asset,
+                balance: 10_u64.into(),
+                stake_reserved: Quantity::zero(),
+                rewards_reserved: Quantity::zero(),
+            })
+            .collect();
+        validate_response(&response, &request, network_id).unwrap();
+
+        let mut changed = response.clone();
+        changed.xor_asset_definition_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
+        assert!(validate_response(&changed, &request, network_id).is_err());
+        let mut changed = response;
+        let PublicLanePreparedPlanV1::Claim(plan) = &mut changed.plan else {
+            unreachable!()
+        };
+        plan.fee_claim.as_mut().unwrap().destination_asset = AssetId::new(
+            changed.xor_asset_definition_id.clone(),
+            iroha_test_samples::BOB_ID.clone(),
+        );
         assert!(validate_response(&changed, &request, network_id).is_err());
     }
 

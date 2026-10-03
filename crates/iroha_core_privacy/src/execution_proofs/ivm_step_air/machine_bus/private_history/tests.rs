@@ -25,7 +25,7 @@ fn challenges() -> permutation::Challenges {
 }
 
 fn failures(bus: &PublicPacketBus, columns: &[Vec<F>]) -> usize {
-    let schedule = Schedule::new(bus.trace_log2).unwrap();
+    let schedule = Schedule::new(bus.trace_log2, 1).unwrap();
     let challenge = challenges();
     let aux = permutation::columns(
         &columns[NOTE_COPY_WIDTH_V1 + ORDERED..NOTE_COPY_WIDTH_V1 + SORTED],
@@ -75,14 +75,14 @@ fn distinct_private_events_and_activity_counts_share_identical_public_geometry()
     .unwrap();
     for bus in [&empty, &one, &three] {
         assert_eq!(bus.trace_log2, MIN_LOG);
-        let schedule = Schedule::new(bus.trace_log2).unwrap();
+        let schedule = Schedule::new(bus.trace_log2, 1).unwrap();
         for index in 0..schedule.size() {
             let fixed = schedule.fixed(index).unwrap();
             assert!(fixed[..packet::WIDTH].iter().all(|field| *field == F::ZERO));
             assert_eq!(fixed[TOTAL], F::ZERO);
             assert_eq!(
                 fixed,
-                Schedule::new(empty.trace_log2)
+                Schedule::new(empty.trace_log2, 1)
                     .unwrap()
                     .fixed(index)
                     .unwrap()
@@ -90,10 +90,10 @@ fn distinct_private_events_and_activity_counts_share_identical_public_geometry()
         }
         assert_eq!(failures(bus, &bus.columns()), 0);
     }
-    assert!(Schedule::new(MIN_LOG - 1).is_none());
-    assert!(Schedule::new(MAX_LOG + 1).is_none());
+    assert!(Schedule::new(MIN_LOG - 1, 1).is_none());
+    assert!(Schedule::new(MAX_LOG + 1, 1).is_none());
     assert!(
-        Schedule::new(MAX_LOG)
+        Schedule::new(MAX_LOG, 1)
             .unwrap()
             .fixed(1 << MAX_LOG)
             .is_none()

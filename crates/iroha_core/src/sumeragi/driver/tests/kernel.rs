@@ -29,6 +29,15 @@ const INSTANCE: Hash32 = Hash32([5; 32]);
 
 /// A kernel of member 0 of a four-member committee at genesis, and the committee's keys.
 pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
+    let (start, validators) = kernel_start(now, super::test_budget());
+    let (kernel, _) = Kernel::start(start).unwrap();
+    (kernel, validators)
+}
+
+fn kernel_start(
+    now: Millis,
+    allocation_budget: iroha_allocation::AllocationBudget,
+) -> (KernelStart, FakeValidators) {
     let vals = FakeValidators::new(4, 7, None);
     let me = vals.key(0);
     let crypto = vals.crypto.clone();
@@ -66,7 +75,7 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
         recent_headers: Vec::new(),
     };
     let start = KernelStart {
-        allocation_budget: super::test_budget(),
+        allocation_budget,
         local: LocalParams::default(),
         init,
         signers: vec![Arc::new(vals.signer(0).clone())],
@@ -77,8 +86,20 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
         ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
         config: DriverConfig::default(),
     };
-    let (kernel, _) = Kernel::start(start).unwrap();
-    (kernel, vals)
+    (start, vals)
+}
+
+#[test]
+fn kernel_refuses_unfunded_waiter_before_constructing_consensus() {
+    let budget = iroha_allocation::AllocationBudget::new(0);
+    let (start, _) = kernel_start(0, budget.clone());
+    assert!(matches!(
+        Kernel::start(start),
+        Err(super::super::KernelStartError::Admission(
+            iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
+        ))
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 fn request(height: u64) -> WireMessage {
@@ -118,6 +139,13 @@ fn tick_first_then_local_then_messages() {
     let next = kernel.core().next_wakeup();
     assert_eq!(kernel.next_input(next), Some(Event::Tick));
     assert!(kernel.has_input());
+    // The earlier Tick also queued original application-control work. Dispatch it
+    // before comparing the kernel deadline with the still-unconsumed Core Tick.
+    assert_eq!(kernel.next_wakeup(), 0, "queued control work is ready now");
+    assert!(
+        kernel.poll(next).iter().any(|op| matches!(op, Op::Exec(_))),
+        "the immediate deadline must dispatch actual executor work"
+    );
     assert_eq!(kernel.next_wakeup(), next);
 }
 
@@ -157,7 +185,16 @@ fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
             false,
         ))),
         ExecOp::DriveApplicationControl(_) => ExecDone::ApplicationControlDriven(Ok(None)),
-        ExecOp::ReceiveApplicationControl { .. } => ExecDone::ApplicationControlReceived(Ok(())),
+        ExecOp::ReceiveApplicationControl {
+            occurrence,
+            from,
+            message,
+        } => ExecDone::ApplicationControlReceived {
+            occurrence: *occurrence,
+            from: from.clone(),
+            message: message.clone(),
+            result: Ok(()),
+        },
         ExecOp::Build { .. } => ExecDone::Built(Ok((None, false))),
         ExecOp::Execute { .. } => ExecDone::Executed(None),
         ExecOp::Discard { .. } => ExecDone::Discarded,

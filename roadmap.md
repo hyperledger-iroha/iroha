@@ -80,8 +80,8 @@ formal, SDK and workspace gates.
 
 See the [JVM inventory](specs/jvm_consolidation_inventory.md),
 [native release contract](docs/norito_bridge_release.md),
-[KAGEMUSHA readiness](specs/kagemusha_v1_production_readiness.md) and
-[physical evidence](specs/kagemusha_v1_physical_evidence.md).
+[KAGEMUSHA design and goals](specs/kagemusha_single_design_proposal.md#10-goals-and-execution-order)
+and [verification checklist](specs/kagemusha_evidence_gate.md).
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
@@ -91,11 +91,11 @@ See the [JVM inventory](specs/jvm_consolidation_inventory.md),
 | S4 | Shared wire/activity | SDKs/Torii | Canonical signing/executable/account fixtures, multisig witnesses and snapshot-bound activity with bounded cursors and expiry. |
 | S5 | Kotlin closure | Kotlin/Android | Finish Java/JNI/publication retirement; release transport/attestation/Nearby and CUDA hardware qualification with separate host/device evidence. |
 | S6 | Native release matrix | Bridge/platform owners | Signed same-source current-bridge AAR/XCFramework/JNI/wheel/host packages; all SDK checkpoint/wire/alias/SNS and OS/architecture matrices; retired layouts fail closed. |
-| S7 | Recursive KAGEMUSHA | Core/coordinator/proofs | Request/Payment/Acknowledgement; both Pasta parities, authenticated mint/finality/replay/hardware claim-fold, 1,024+ handoffs and 1,000-funded-device merchant corridor. |
-| S8 | Durable money | Hardware/native/reserves | Provision authority/enrollment/selection; exact-next successor, trusted time and crash recovery; pooled top-ups/redemptions, reserve/nullifier concurrency and bank approval without software fallback. |
-| S9 | Mobile/Nearby/NFC | SDKs/device providers | Current JNI and operations 1–22 on governed profiles including Pixel 6, modern iPhones and HarmonyOS; cross-device, RF/power-loss, replay/restore/rollover, memory/thermal and conservation. |
+| S7 | Recursive KAGEMUSHA | Core/coordinator/proofs | G1/G3/G4: one fixed relation and bounded envelope; complete proof/receipt lineage, irreversible Send, exact Payment replay, permanent receive deduplication and offline onward spending; retire refund paths and duplicate monetary engines. |
+| S8 | Durable money | Native/platform/reserves | G2/G5: stock-OS journal/marker Advance, recoverable exact successor and platform enrollment; reserve-backed loads, one-use redemption/fee claims, optional controls default off. |
+| S9 | Mobile/Nearby/NFC | SDKs/device providers | G4/G6/G7: shared Rust core with Swift/Kotlin adapters and one envelope over NFC/radio/QR/Petal; record device recovery, replay/restore, memory/thermal, size and latency results while integrating and using the POC. |
 | S10 | Private-file/ZK-ACE SDK | JS/privacy/native | Governed two-pass intent signing, nonserializable private witnesses/erasure; Windows secure storage and authenticated native packages. |
-| S11 | Petal Stream devices | Petal/SDKs/device providers | [Device protocol](specs/petal_stream.md#8-qualification): 20 timed runs per device and distance on governed profiles including a low-end 480p–720p Android phone, a modern iPhone and a webcam; `ScanStats` lane rates filed per device with exposure compensation at 0, −1 and −2 EV, and the Swift/Kotlin/JS/Python/C# readers re-run against the same recorded camera captures. Field results decide the three-finger fallback and pose tracking. |
+| S11 | Petal Stream devices | Petal/SDKs/device providers | [Device protocol](specs/petal_stream.md#8-qualification): 20 timed runs per device and distance on governed profiles including a low-end 480p–720p Android phone, a modern iPhone and a webcam; `ScanStats` lane rates filed per device with exposure compensation at 0, −1 and −2 EV, and the Swift/Kotlin/JS/Python/C# readers re-run against the same recorded camera captures. Field results tune the inferred-corner search and the 500 ms tracking window, and measure tracking on hand-held phones. |
 
 ## Cryptography and VM
 
@@ -151,8 +151,9 @@ explicitly approved OVH target.
 
 Ordinary signing permits authenticated software custody with runtime-only secrets,
 rotation/revocation and recovery. The first production KAGEMUSHA app profile
-requires governed hardware app-key admission, genuine monetary proofs and
-current-owner/replay authority. Ordinary keys confer no hardware journal or
-clock guarantee. IVM is the sole VM; Wasm/WASI is prohibited. Sumeragi requires exact
+uses platform enrollment, hardware-backed keys, genuine monetary proofs and
+durable software state/replay authority on a stock uncompromised OS. KAGEMUSHA
+verification records do not gate integration or use. Ordinary keys confer no
+hardware journal or clock guarantee. IVM is the sole VM; Wasm/WASI is prohibited. Sumeragi requires exact
 `3f + 1` global committees, exactly `n - f` votes and signed RS16 availability.
 Idle chains create no blocks.

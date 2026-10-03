@@ -3,7 +3,7 @@
 use super::*;
 use crate::execution_attempt::{ExecutionAttemptError as Attempt, ExecutionDeferred};
 use iroha_allocation::AllocationRefusal;
-use std::{future::Future, pin::pin, task::Context};
+use std::task::Context;
 
 fn original_deferred<'a>(error: &'a (dyn std::error::Error + 'static)) -> &'a ExecutionDeferred {
     let Some(Attempt::Deferred(original)) = error.downcast_ref::<Attempt<io::Error>>() else {
@@ -12,16 +12,20 @@ fn original_deferred<'a>(error: &'a (dyn std::error::Error + 'static)) -> &'a Ex
     original
 }
 
-fn complete_release(original: &ExecutionDeferred, budget: &AllocationBudget) {
+fn complete_release(
+    original: &ExecutionDeferred,
+    budget: &AllocationBudget,
+    registration: &mut iroha_allocation::release::ReleaseRegistration,
+) {
     let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
         panic!("the original pool refusal must retain its release observation");
     };
-    let mut wait = pin!(release.clone().wait_for_release());
+    let wait = release.clone();
     let mut context = Context::from_waker(std::task::Waker::noop());
-    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(registration.poll_wait(&wait, &mut context).is_pending());
     let foreign = AllocationBudget::new(1);
     drop(foreign.try_reserve_bytes(1).unwrap());
-    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(registration.poll_wait(&wait, &mut context).is_pending());
     assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
 }
 
@@ -31,16 +35,21 @@ fn original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix() {
     let state = chain.state();
     let budget = state.ivm_execution_budget();
     let baseline = budget.reserved_bytes();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let limit = budget.limit_bytes();
     let mut scan = HistoryScan::open(state, record.lane, record.incarnation)
         .unwrap()
         .unwrap();
     let genesis = chain
         .kura()
-        .get_block(NonZeroUsize::new(1).unwrap())
+        .get_block(
+            NonZeroUsize::new(1).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     // The actual committed carrier is already selected before its original archive read.
-    scan.current = Some(Arc::clone(&genesis));
+    scan.current = Some(Clone::clone(&genesis));
     let path = chain
         .kura()
         .store_root()
@@ -59,27 +68,31 @@ fn original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix() {
     assert!(matches!(original.allocation_refusal(),
         Some(AllocationRefusal::Capacity { requested_bytes, limit_bytes, .. })
             if *requested_bytes == requested && *limit_bytes == limit));
-    complete_release(original, &budget);
+    complete_release(original, &budget, &mut registration);
     assert_eq!(scan.next, 1);
     assert!(!scan.completed);
     assert!(scan.read.is_some());
-    assert!(Arc::ptr_eq(scan.current.as_ref().unwrap(), &genesis));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        scan.current.as_ref().unwrap(),
+        &genesis
+    ));
     let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
         unreachable!("checked original capacity");
     };
-    let mut wait = pin!(release.clone().wait_for_release());
+    let wait = release.clone();
     let mut context = Context::from_waker(std::task::Waker::noop());
-    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(registration.poll_wait(&wait, &mut context).is_pending());
     let retained = path.with_extension("original-source-refusal");
     std::fs::rename(&path, &retained).unwrap();
     std::fs::write(&path, b"a replacement cannot become this pending read").unwrap();
     drop(occupied);
-    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert!(registration.poll_wait(&wait, &mut context).is_ready());
     assert_eq!(budget.limit_bytes(), limit);
     scan.complete().unwrap();
     let authority = scan.finish().expect("same original full prefix completes");
     assert!(authority.belongs_to(&budget));
     drop(authority);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), baseline);
     std::fs::remove_file(&path).unwrap();
     std::fs::rename(retained, path).unwrap();
@@ -90,19 +103,24 @@ fn original_certificate_projection_refusal_preserves_pool_release_and_exact_carr
     let (chain, record, _epoch) = super::super::tests::fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let baseline = budget.reserved_bytes();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let limit = budget.limit_bytes();
     let mut scan = HistoryScan::open(chain.state(), record.lane, record.incarnation)
         .unwrap()
         .unwrap();
     let genesis = chain
         .kura()
-        .get_block(NonZeroUsize::new(1).unwrap())
+        .get_block(
+            NonZeroUsize::new(1).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     let archive = scan.archive.as_ref().unwrap();
     let genesis_bytes = archive.read_exact(1, genesis.hash()).unwrap();
     assert!(
         scan.verifier
-            .push_shared_height(Arc::clone(&genesis), genesis_bytes.as_slice())
+            .push_height(Clone::clone(&genesis), genesis_bytes.as_slice())
             .unwrap()
             .is_none()
     );
@@ -110,21 +128,28 @@ fn original_certificate_projection_refusal_preserves_pool_release_and_exact_carr
     scan.next = 2;
     let original = chain
         .kura()
-        .get_block(NonZeroUsize::new(2).unwrap())
+        .get_block(
+            NonZeroUsize::new(2).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     scan.current_bytes = Some(archive.read_exact(2, original.hash()).unwrap());
     let pointer = scan.current_bytes.as_ref().unwrap().as_slice().as_ptr();
-    scan.current = Some(Arc::clone(&original));
+    scan.current = Some(Clone::clone(&original));
     let occupied = budget
         .try_reserve_bytes(limit - budget.reserved_bytes())
         .unwrap();
     let error = scan.complete().unwrap_err();
     let refusal = original_deferred(&error);
-    complete_release(refusal, &budget);
+    complete_release(refusal, &budget, &mut registration);
     assert_eq!(scan.next, 2);
     assert!(!scan.completed);
     assert!(scan.artifacts.is_some());
-    assert!(Arc::ptr_eq(scan.current.as_ref().unwrap(), &original));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        scan.current.as_ref().unwrap(),
+        &original
+    ));
     assert_eq!(
         scan.current_bytes.as_ref().unwrap().as_slice().as_ptr(),
         pointer
@@ -137,6 +162,7 @@ fn original_certificate_projection_refusal_preserves_pool_release_and_exact_carr
         .expect("same original certificate prefix completes");
     assert!(authority.belongs_to(&budget));
     drop(authority);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), baseline);
 }
 

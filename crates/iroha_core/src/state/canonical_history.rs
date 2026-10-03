@@ -1,13 +1,14 @@
 //! Fallible, world-state-anchored access to canonical block history.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use iroha_allocation::AllocationBudget;
+use iroha_data_model::block::SharedSignedBlock;
+use std::num::NonZeroUsize;
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
+    block::BlockHeader,
     query::error::{CanonicalHistoryError, QueryExecutionFail},
 };
-use iroha_logger::prelude::*;
 
 use crate::{
     execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error},
@@ -34,8 +35,8 @@ fn versioned_source_error(
 pub(super) fn authenticate_canonical_block(
     height: NonZeroUsize,
     expected: HashOf<BlockHeader>,
-    block: Option<Arc<SignedBlock>>,
-) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
+    block: Option<iroha_data_model::block::SharedSignedBlock>,
+) -> Result<iroha_data_model::block::SharedSignedBlock, CanonicalHistoryError> {
     let height_u64 = u64::try_from(height.get())
         .expect("supported target pointer widths always fit a block height into u64");
     let block = block.ok_or(CanonicalHistoryError::BodyUnavailable {
@@ -63,10 +64,22 @@ pub(super) fn committed_block_from_kura(
     kura: &Kura,
     height: NonZeroUsize,
     expected: HashOf<BlockHeader>,
-) -> Option<Arc<SignedBlock>> {
-    authenticate_canonical_block(height, expected, kura.get_block(height))
-        .inspect_err(|error| warn!(%error, "rejecting non-canonical Kura block body"))
-        .ok()
+    budget: &AllocationBudget,
+) -> Result<
+    Option<iroha_data_model::block::SharedSignedBlock>,
+    ExecutionAttemptError<CanonicalHistoryError>,
+> {
+    let block = kura.get_block(height, budget).map_err(|error| {
+        error.map_rejection(|_| CanonicalHistoryError::BodyUnavailable {
+            height: height.get() as u64,
+            expected_hash: expected,
+        })
+    })?;
+    block
+        .map(|block| {
+            authenticate_canonical_block(height, expected, Some(block)).map_err(Into::into)
+        })
+        .transpose()
 }
 
 /// Immutable, WSV-anchored source of canonical committed block bodies.
@@ -74,11 +87,12 @@ pub(super) fn committed_block_from_kura(
 /// Every load authenticates both the header hash and one-based header height.
 /// An authenticated hash-only snapshot entry is reported as an explicit body
 /// availability failure and is never omitted from iteration.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CanonicalHistorySource<'a> {
     kura: &'a Kura,
     block_hashes: &'a dyn super::BlockHashRead,
     tip: Option<super::NativeExecutionTip>,
+    budget: AllocationBudget,
 }
 
 impl<'a> CanonicalHistorySource<'a> {
@@ -86,23 +100,25 @@ impl<'a> CanonicalHistorySource<'a> {
         kura: &'a Kura,
         block_hashes: &'a dyn super::BlockHashRead,
         tip: Option<super::NativeExecutionTip>,
+        budget: AllocationBudget,
     ) -> Self {
         Self {
             kura,
             block_hashes,
             tip,
+            budget,
         }
     }
 
     /// Return the committed height captured by this immutable source.
     #[must_use]
-    pub fn height(self) -> usize {
+    pub fn height(&self) -> usize {
         self.block_hashes.len()
     }
 
     /// Resolve a committed header hash from the immutable WSV journal.
     #[must_use]
-    pub fn block_height_by_hash(self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
+    pub fn block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
         self.block_hashes
             .iter()
             .position(|candidate| *candidate == hash)
@@ -111,7 +127,7 @@ impl<'a> CanonicalHistorySource<'a> {
     }
 
     fn expected_hash(
-        self,
+        &self,
         height: NonZeroUsize,
     ) -> Result<HashOf<BlockHeader>, CanonicalHistoryError> {
         self.block_hashes
@@ -125,17 +141,29 @@ impl<'a> CanonicalHistorySource<'a> {
             })
     }
 
-    fn load(self, height: NonZeroUsize) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
+    fn load(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<
+        iroha_data_model::block::SharedSignedBlock,
+        ExecutionAttemptError<CanonicalHistoryError>,
+    > {
         let expected_hash = self.expected_hash(height)?;
         if self.kura.is_canonical_body_missing(height) {
             return Err(CanonicalHistoryError::BodyUnavailable {
                 height: u64::try_from(height.get())
                     .expect("supported target pointer widths fit a block height into u64"),
                 expected_hash,
-            });
+            }
+            .into());
         }
-        let block = self.kura.get_block(height);
-        authenticate_canonical_block(height, expected_hash, block)
+        let block = self.kura.get_block(height, &self.budget).map_err(|error| {
+            error.map_rejection(|_| CanonicalHistoryError::BodyUnavailable {
+                height: height.get() as u64,
+                expected_hash,
+            })
+        })?;
+        authenticate_canonical_block(height, expected_hash, block).map_err(Into::into)
     }
 
     /// Load a body whose header hash and height agree with this snapshot.
@@ -148,7 +176,13 @@ impl<'a> CanonicalHistorySource<'a> {
     /// Returns a typed availability error for a missing or authenticated
     /// hash-only body, and a typed corruption error when the Kura body
     /// contradicts the committed WSV hash journal or slot.
-    pub fn block(self, height: NonZeroUsize) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
+    pub fn block(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<
+        iroha_data_model::block::SharedSignedBlock,
+        ExecutionAttemptError<CanonicalHistoryError>,
+    > {
         self.load(height)
     }
 
@@ -156,10 +190,11 @@ impl<'a> CanonicalHistorySource<'a> {
     /// Metadata and cache presence cannot authorize unpaid body I/O or decoding.
     /// The caller retains one allocation scope across this and subsequent reads.
     pub(crate) fn block_with_admission(
-        self,
+        &self,
         height: NonZeroUsize,
         mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
-    ) -> Result<Arc<SignedBlock>, ExecutionAttemptError<QueryExecutionFail>> {
+    ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<QueryExecutionFail>>
+    {
         let expected = self
             .expected_hash(height)
             .map_err(QueryExecutionFail::CanonicalHistory)?;
@@ -191,15 +226,17 @@ impl<'a> CanonicalHistorySource<'a> {
             .ok_or_else(missing)?;
         let wire_len = source.wire_len();
         before_read(1, wire_len).map_err(source_query_error)?;
+        let shell = SharedSignedBlock::reserve(&self.budget)
+            .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
         let bytes = source
             .read(wire_len)
             .map_err(storage_error)?
             .ok_or_else(missing)?;
         let block = iroha_data_model::block::decode_framed_signed_block(&bytes)
             .map_err(versioned_source_error)?;
-        authenticate_canonical_block(height, expected, Some(Arc::new(block))).map_err(|error| {
-            ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(error))
-        })
+        authenticate_canonical_block(height, expected, Some(shell.initialize(block))).map_err(
+            |error| ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(error)),
+        )
     }
 
     /// Read execution identity through the original State tip, without inspecting
@@ -207,7 +244,7 @@ impl<'a> CanonicalHistorySource<'a> {
     /// Parent core hash, parent R and Iroha parent hash jointly authenticate the
     /// reverse walk. The finite captured tip bounds its number of source frames.
     pub(crate) fn executed_receipt(
-        self,
+        &self,
         height: NonZeroUsize,
         before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<
@@ -231,7 +268,7 @@ impl<'a> CanonicalHistorySource<'a> {
     /// is charged before reading; only authenticated receipts in the selected interval
     /// reach the visitor. No local certificate is parsed or trusted.
     pub(crate) fn visit_executed_backwards(
-        self,
+        &self,
         first: NonZeroUsize,
         last: NonZeroUsize,
         before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
@@ -251,7 +288,7 @@ impl<'a> CanonicalHistorySource<'a> {
     /// consume admitted source work and bytes before reading; every visited receipt
     /// is bound to this original State tip through its exact parent identities.
     pub(crate) fn visit_executed_backwards_until(
-        self,
+        &self,
         first: NonZeroUsize,
         last: NonZeroUsize,
         mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
@@ -346,12 +383,13 @@ impl<'a> CanonicalHistorySource<'a> {
     /// Load exact original execution bytes; the callback admits actual source
     /// count and bytes, including intermediate parents and a subsequently failed read.
     pub(crate) fn executed_block(
-        self,
+        &self,
         height: NonZeroUsize,
         before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
-    ) -> Result<Arc<SignedBlock>, ExecutionAttemptError<QueryExecutionFail>> {
+    ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<QueryExecutionFail>>
+    {
         self.executed_receipt(height, before_read)
-            .map(|receipt| Arc::clone(receipt.block()))
+            .map(|receipt| receipt.block().clone())
     }
 
     /// Iterate every committed slot from `start` through this source's tip.
@@ -360,11 +398,12 @@ impl<'a> CanonicalHistorySource<'a> {
     /// resume beyond an unavailable or corrupt canonical slot.
     #[must_use]
     pub fn cursor(self, start: NonZeroUsize) -> CanonicalHistoryCursor<'a> {
+        let height = self.height();
         CanonicalHistoryCursor {
             source: self,
             front: start.get(),
-            back_inclusive: self.height(),
-            done: start.get() > self.height(),
+            back_inclusive: height,
+            done: start.get() > height,
         }
     }
 }
@@ -380,8 +419,14 @@ pub struct CanonicalHistoryCursor<'a> {
 impl CanonicalHistoryCursor<'_> {
     fn stop_on_error(
         &mut self,
-        result: Result<Arc<SignedBlock>, CanonicalHistoryError>,
-    ) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
+        result: Result<
+            iroha_data_model::block::SharedSignedBlock,
+            ExecutionAttemptError<CanonicalHistoryError>,
+        >,
+    ) -> Result<
+        iroha_data_model::block::SharedSignedBlock,
+        ExecutionAttemptError<CanonicalHistoryError>,
+    > {
         if result.is_err() {
             self.done = true;
         }
@@ -390,7 +435,10 @@ impl CanonicalHistoryCursor<'_> {
 }
 
 impl Iterator for CanonicalHistoryCursor<'_> {
-    type Item = Result<Arc<SignedBlock>, CanonicalHistoryError>;
+    type Item = Result<
+        iroha_data_model::block::SharedSignedBlock,
+        ExecutionAttemptError<CanonicalHistoryError>,
+    >;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {

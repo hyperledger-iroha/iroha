@@ -55,7 +55,7 @@ impl<'a> Slot<'a> {
             writer_release: None,
             loan_release: None,
             retry_readers: Some(target.blocks.reader_release_batch()),
-            retry_writers: Some(target.released.deferred_batch()),
+            retry_writers: Some(target.history_released.deferred_batch()),
         }
     }
     pub(super) fn next_sequence(&self) -> u64 {
@@ -78,9 +78,9 @@ impl<'a> Slot<'a> {
             let Some(Phase::Original(work)) = self.phase.take() else {
                 unreachable!()
             };
-            let wait = self.target.released.observe();
+            let wait = self.target.history_release_wait();
             let acquired = match self.target.blocks.try_acquire_owned_retained(work) {
-                Ok(acquired) => self.target.released.guard(acquired),
+                Ok(acquired) => self.target.history_released.guard(acquired),
                 Err((work, error)) => {
                     self.phase = Some(Phase::Original(work));
                     return Err(physical_error(error, wait));
@@ -92,7 +92,7 @@ impl<'a> Slot<'a> {
             let Some(Phase::Acquired(acquired)) = self.phase.take() else {
                 unreachable!()
             };
-            let wait = self.target.released.observe();
+            let wait = self.target.history_release_wait();
             let writer = match acquired.try_map_preserving_release(|a| a.validate()) {
                 Ok(writer) => writer,
                 Err((acquired, error)) => {

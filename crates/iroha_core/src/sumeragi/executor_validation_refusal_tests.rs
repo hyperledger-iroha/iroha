@@ -72,7 +72,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
         assert!(original_refusal.allocation_refusal().is_none());
         assert!(matches!(
             norito::with_decode_limits_scope(limits, || worker.prepare(&block, &qc)),
-            Err(PublicationError::Retryable(_))
+            Err(PublicationError::Deferred(ref source)) if source.execution() == Some(&original_refusal)
         ));
         assert_eq!(
             worker.routing_refusal.as_ref(),
@@ -209,5 +209,117 @@ fn original_post_merge_validation_refusal_retains_worker_owner_and_exact_availab
         );
         assert_eq!(std::ptr::from_ref(block.source()), original_source);
         assert_eq!(block.payload().as_slice().as_ptr(), original_bytes);
+    });
+}
+
+#[test]
+fn prepared_certificate_busy_retries_same_execution_after_original_reader_release() {
+    use std::{
+        sync::mpsc,
+        task::{Context, Poll, Waker},
+    };
+    publication_tests::with_worker(|chain, worker, _blocks, events| {
+        let block = publication_tests::proposal(chain, worker);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let Some(ExecOutcome::Valid(result)) = worker.execute(&block, hash) else {
+            panic!("the actual signed body must execute before reader contention");
+        };
+        let qc = chain.commit_qc(
+            block.header().height,
+            hash,
+            result,
+            block.header().attest,
+            crate::sumeragi::test_chain::Signers::Quorum,
+        );
+        let state = worker.state;
+        let original_source = std::ptr::from_ref(block.source());
+        let original_bytes = block.payload().as_slice().as_ptr();
+        let original = worker.live.as_ref().unwrap();
+        let original_commitment = std::ptr::from_ref(original.commitment.get());
+        let original_overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
+        let original_witness = iroha_crypto::HashOf::new(&original.witness);
+        let PublicationPhase::Executed { preimage, .. } = &original.phase else {
+            panic!("the original execution must await publication");
+        };
+        let original_preimage = preimage.as_slice().as_ptr();
+        let budget = state.ivm_execution_budget();
+        let mut registration = crate::unit_test_support::release_registration(&budget);
+        let epoch = crossbeam_epoch::pin();
+        let occupied = budget.reserved_bytes();
+        let height = state.view().height();
+        std::thread::scope(|scope| {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let holder = scope.spawn(move || {
+                state.with_held_header_for_reader_test(|wait| {
+                    ready_tx.send(wait).unwrap();
+                    // A blocking regression releases the real guard on a finite deadline.
+                    release_rx.recv_timeout(Duration::from_secs(20)).is_ok()
+                })
+            });
+            let original_wait = ready_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            let outcome = worker.prepare(&block, &qc);
+            // Release before any assertion can unwind and strand the foreign holder.
+            release_tx.send(()).ok();
+            assert!(
+                holder.join().unwrap(),
+                "reader probe blocked on the actual writer"
+            );
+            let Err(PublicationError::Deferred(reason)) = outcome else {
+                panic!("original reader Busy must remain typed: {outcome:?}");
+            };
+            assert!(
+                matches!(&reason, crate::sumeragi::driver::traits::PublicationDeferral::StateViewBusy(wait) if wait == &original_wait)
+            );
+            let wait = original_wait;
+            assert_eq!(
+                registration.poll_wait(&wait, &mut Context::from_waker(Waker::noop())),
+                Poll::Ready(()),
+                "release before first poll must not be lost"
+            );
+        });
+        let retained = worker.live.as_ref().unwrap();
+        assert_eq!(
+            std::ptr::from_ref(retained.commitment.get()),
+            original_commitment
+        );
+        assert_eq!(
+            std::ptr::from_ref(retained.overlay.as_ref().unwrap()),
+            original_overlay
+        );
+        assert_eq!(
+            iroha_crypto::HashOf::new(&retained.witness),
+            original_witness
+        );
+        let PublicationPhase::Executed { preimage, .. } = &retained.phase else {
+            panic!("unfinished reader cannot stage the original publication");
+        };
+        assert_eq!(preimage.as_slice().as_ptr(), original_preimage);
+        assert_eq!(budget.reserved_bytes(), occupied);
+        assert_eq!(state.view().height(), height);
+        assert!(worker.context.staging.get(&hash).is_none());
+        assert!(worker.pending_commit.is_none());
+        assert!(worker.finishing.is_none());
+        assert!(worker.recovery.is_none());
+        assert!(events.try_recv().is_err());
+        assert_eq!(std::ptr::from_ref(block.source()), original_source);
+        assert_eq!(block.payload().as_slice().as_ptr(), original_bytes);
+        drop(epoch);
+        assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
+        let retained = worker.live.as_ref().unwrap();
+        assert_eq!(
+            std::ptr::from_ref(retained.commitment.get()),
+            original_commitment
+        );
+        assert_eq!(
+            std::ptr::from_ref(retained.overlay.as_ref().unwrap()),
+            original_overlay
+        );
+        assert_eq!(
+            iroha_crypto::HashOf::new(&retained.witness),
+            original_witness
+        );
+        assert!(matches!(retained.phase, PublicationPhase::Prepared { .. }));
+        assert_eq!(state.view().height(), height);
     });
 }

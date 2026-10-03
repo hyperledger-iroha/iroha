@@ -47,6 +47,9 @@ pub enum LaneEntryError {
     /// Admission could not finish under the reader's inherited local resources.
     #[error("lane evidence decode deferred: {0:?}")]
     Deferred(norito::core::DecodeResourceError),
+    /// The independently authenticated anchor read retains its original local retry owner.
+    #[error("lane evidence anchor read deferred: {0}")]
+    AnchorDeferred(crate::execution_attempt::ExecutionDeferred),
 }
 
 impl From<AdmissionAttemptError> for LaneEntryError {
@@ -54,6 +57,7 @@ impl From<AdmissionAttemptError> for LaneEntryError {
         match error {
             AdmissionAttemptError::Rejected(error) => Self::Admission(error),
             AdmissionAttemptError::Deferred(refusal) => Self::Deferred(refusal),
+            AdmissionAttemptError::AnchorDeferred(refusal) => Self::AnchorDeferred(refusal),
         }
     }
 }

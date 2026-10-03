@@ -274,6 +274,9 @@ impl CapturedNetworkPolicyRoutes {
         // owners whose history has already been rewound to the actual predecessor.
         let ledger_time_ms = state
             .latest_block()
+            .map_err(|error| {
+                error.map_rejection(|_| "Network parent history is unavailable or invalid")
+            })?
             .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
             .unwrap_or(0);
         let root_scope = if genesis {

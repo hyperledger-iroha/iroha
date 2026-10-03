@@ -157,7 +157,12 @@ impl Wake for Control {
         }
     }
 }
-fn fixture() -> (Arc<Target>, Arc<Control>) {
+fn fixture() -> (
+    Arc<Target>,
+    Arc<Control>,
+    iroha_allocation::release::ReleaseRegistration,
+    iroha_allocation::release::ReleaseRegistration,
+) {
     let control = Arc::new(Control {
         target: Mutex::new(Weak::new()),
         budget: AllocationBudget::new(1 << 20),
@@ -173,6 +178,8 @@ fn fixture() -> (Arc<Target>, Arc<Control>) {
         admission_drops: AtomicUsize::new(0),
         admission_busy: AtomicUsize::new(0),
     });
+    let registration_1 = crate::release_test_support::registration(&control.budget);
+    let registration_2 = crate::release_test_support::registration(&control.budget);
     let map = Storage::from_iter([(0, control.payload(10))]);
     {
         let mut tip = map.block();
@@ -188,7 +195,7 @@ fn fixture() -> (Arc<Target>, Arc<Control>) {
         map,
     });
     *control.target.lock().unwrap() = Arc::downgrade(&target);
-    (target, control)
+    (target, control, registration_1, registration_2)
 }
 struct Pending<'a> {
     cell: Option<cell::BlockCaptureSlot<'a, Payload, Admission, Charge>>,
@@ -224,9 +231,13 @@ fn originals<'a>(
     map.insert(0, control.payload(30));
     (cell, map)
 }
-fn register(source: &ReleaseNotification, control: &Arc<Control>) -> (ReleaseWait, ReleaseFuture) {
+fn register<'a>(
+    source: &ReleaseNotification,
+    control: &Arc<Control>,
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> (ReleaseWait, ReleaseFuture<'a>) {
     let observation = source.observe();
-    let mut future = observation.clone().wait_for_release();
+    let mut future = observation.clone().wait_for_release(registration_1);
     let waker = Waker::from(Arc::clone(control));
     assert!(
         Pin::new(&mut future)
@@ -246,7 +257,8 @@ fn assert_clean(control: &Control) {
 #[test]
 fn capture_slots_keep_exact_ordinary_and_replacement_journals_until_all_writers_release() {
     for mode in [BlockMode::Ordinary, BlockMode::Replace] {
-        let (target, control) = fixture();
+        let (target, control, mut helper_release_registration_1, mut helper_release_registration_2) =
+            fixture();
         let baseline_credit = control.budget.reserved_bytes();
         let reader = target.map.snapshot();
         let (cell, map) = originals(&target, &control, mode);
@@ -259,8 +271,16 @@ fn capture_slots_keep_exact_ordinary_and_replacement_journals_until_all_writers_
             map: Some(map.capture_slot()),
         };
         let waits = [
-            register(&target.cell.blocks_released, &control),
-            register(&target.map.blocks_released, &control),
+            register(
+                &target.cell.blocks_released,
+                &control,
+                &mut helper_release_registration_1,
+            ),
+            register(
+                &target.map.blocks_released,
+                &control,
+                &mut helper_release_registration_2,
+            ),
         ];
         control.armed.store(true, SeqCst);
         pending
@@ -318,7 +338,8 @@ fn capture_slots_keep_exact_ordinary_and_replacement_journals_until_all_writers_
 #[test]
 fn capture_slots_keep_successful_sibling_through_admission_refusal_and_caught_panic() {
     for panic in [false, true] {
-        let (target, control) = fixture();
+        let (target, control, mut helper_release_registration_1, mut helper_release_registration_2) =
+            fixture();
         let baseline = control.budget.reserved_bytes();
         let (cell, map) = originals(&target, &control, BlockMode::Replace);
         let mut pending = Pending {
@@ -326,8 +347,16 @@ fn capture_slots_keep_successful_sibling_through_admission_refusal_and_caught_pa
             map: Some(map.capture_slot()),
         };
         let waits = [
-            register(&target.cell.blocks_released, &control),
-            register(&target.map.blocks_released, &control),
+            register(
+                &target.cell.blocks_released,
+                &control,
+                &mut helper_release_registration_1,
+            ),
+            register(
+                &target.map.blocks_released,
+                &control,
+                &mut helper_release_registration_2,
+            ),
         ];
         control.armed.store(true, SeqCst);
         pending
@@ -365,7 +394,8 @@ fn capture_slots_keep_successful_sibling_through_admission_refusal_and_caught_pa
 
 #[test]
 fn capture_slots_failed_map_precheck_keeps_original_block_for_joint_abandonment() {
-    let (target, control) = fixture();
+    let (target, control, mut helper_release_registration_1, mut helper_release_registration_2) =
+        fixture();
     let baseline = control.budget.reserved_bytes();
     let mut cell = target.cell.block_charged(control.charges(true));
     cell.get_mut().value = 30;
@@ -380,8 +410,16 @@ fn capture_slots_failed_map_precheck_keeps_original_block_for_joint_abandonment(
         map: Some(map.capture_slot()),
     };
     let waits = [
-        register(&target.cell.blocks_released, &control),
-        register(&target.map.blocks_released, &control),
+        register(
+            &target.cell.blocks_released,
+            &control,
+            &mut helper_release_registration_1,
+        ),
+        register(
+            &target.map.blocks_released,
+            &control,
+            &mut helper_release_registration_2,
+        ),
     ];
     control.armed.store(true, SeqCst);
     pending
@@ -416,15 +454,24 @@ fn capture_slots_failed_map_precheck_keeps_original_block_for_joint_abandonment(
 
 #[test]
 fn capture_slots_outer_unwind_preserves_actual_attached_writer_poison_only() {
-    let (target, control) = fixture();
+    let (target, control, mut helper_release_registration_1, mut helper_release_registration_2) =
+        fixture();
     let (cell, map) = originals(&target, &control, BlockMode::Ordinary);
     let pending = Pending {
         cell: Some(cell.capture_slot()),
         map: Some(map.capture_slot()),
     };
     let waits = [
-        register(&target.cell.blocks_released, &control),
-        register(&target.map.blocks_released, &control),
+        register(
+            &target.cell.blocks_released,
+            &control,
+            &mut helper_release_registration_1,
+        ),
+        register(
+            &target.map.blocks_released,
+            &control,
+            &mut helper_release_registration_2,
+        ),
     ];
     control.armed.store(true, SeqCst);
     assert!(
@@ -457,15 +504,24 @@ fn capture_slots_outer_unwind_preserves_actual_attached_writer_poison_only() {
 
 #[test]
 fn capture_slots_admission_cleanup_panic_happens_after_all_physical_unlocks() {
-    let (target, control) = fixture();
+    let (target, control, mut helper_release_registration_1, mut helper_release_registration_2) =
+        fixture();
     let (cell, map) = originals(&target, &control, BlockMode::Ordinary);
     let mut pending = Pending {
         cell: Some(cell.capture_slot()),
         map: Some(map.capture_slot()),
     };
     let waits = [
-        register(&target.cell.blocks_released, &control),
-        register(&target.map.blocks_released, &control),
+        register(
+            &target.cell.blocks_released,
+            &control,
+            &mut helper_release_registration_1,
+        ),
+        register(
+            &target.map.blocks_released,
+            &control,
+            &mut helper_release_registration_2,
+        ),
     ];
     control.armed.store(true, SeqCst);
     pending

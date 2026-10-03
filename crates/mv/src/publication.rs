@@ -209,10 +209,33 @@ impl Eq for BlockPublicationIdentity {}
 
 impl Publication {
     pub(crate) fn new() -> Self {
+        Self::with_initial_controls(
+            Shared::new(Owner, None),
+            Shared::new(Version, None),
+            ReleaseNotification::default(),
+        )
+    }
+
+    fn with_initial_controls(
+        owner: Identity<Owner>,
+        version: Identity<Version>,
+        released: ReleaseNotification,
+    ) -> Self {
+        let version = Mutex::new(version);
+        // Some platforms allocate mutex internals on first acquisition. Perform
+        // that construction here so a cold nonblocking observation or refusal
+        // cannot allocate. This is initialization, not a publication release.
+        // TODO: fund native mutex internals along with the remaining lock owners;
+        // the three explicit initial layouts do not include platform internals.
+        drop(
+            version
+                .lock()
+                .expect("new publication mutex cannot be poisoned"),
+        );
         Self {
-            owner: Shared::new(Owner, None),
-            version: Mutex::new(Shared::new(Version, None)),
-            released: ReleaseNotification::default(),
+            owner,
+            version,
+            released,
         }
     }
 
@@ -260,11 +283,7 @@ impl Publication {
                 drop(charge);
                 error
             })?;
-        Ok(Self {
-            owner,
-            version: Mutex::new(version),
-            released,
-        })
+        Ok(Self::with_initial_controls(owner, version, released))
     }
 
     pub(crate) fn from_admission(mut reservation: AllocationReservation) -> Self {
@@ -277,11 +296,11 @@ impl Publication {
             .try_split(Identity::<Owner>::layout())
             .expect("original storage identity admission");
         let next = NextPublication::from_admission(reservation);
-        Self {
-            owner: Shared::new(Owner, Some(owner_charge)),
-            version: Mutex::new(next.0),
-            released: ReleaseNotification::new_charged(notification_charge),
-        }
+        Self::with_initial_controls(
+            Shared::new(Owner, Some(owner_charge)),
+            next.0,
+            ReleaseNotification::new_charged(notification_charge),
+        )
     }
 
     fn lock_version(&self) -> ReleaseGuard<'_, std::sync::MutexGuard<'_, Identity<Version>>> {

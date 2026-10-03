@@ -1739,9 +1739,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let (_temp_dir, kura, _data_path, _index_path) = fixture();
         let lane_root = kura.store_root().join("blocks").join("lane");
         let source_dir = lane_root.join("lane_001").join(PIPELINE_DIR_NAME);
-        let target_dir = lane_root
-            .join("lane_001_copy")
-            .join(PIPELINE_DIR_NAME);
+        let target_dir = lane_root.join("lane_001_copy").join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&source_dir).expect("create source lane directory");
         fs::create_dir_all(&target_dir).expect("create target lane directory");
         let source_data = source_dir.join("matching-progress.norito");
@@ -1986,9 +1984,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Kura::open_test_kura_with_configured_lane_config(&source_config, &lane_config)
                 .expect("create source Kura for root relocation");
         let source_root = source_kura.store_root();
-        let relative_sidecar_dir = PathBuf::from("blocks")
-            .join("lane")
-            .join(PIPELINE_DIR_NAME);
+        let relative_sidecar_dir = PathBuf::from("blocks").join("lane").join(PIPELINE_DIR_NAME);
         let source_sidecar_dir = source_root.join(&relative_sidecar_dir);
         fs::create_dir_all(&source_sidecar_dir).expect("create relocated sidecar directory");
         let source_data = source_sidecar_dir.join("relocated-progress.norito");

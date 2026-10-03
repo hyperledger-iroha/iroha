@@ -236,11 +236,14 @@ pub(super) fn append_residues(
     out.push(memory[BEFORE_TAG].sub(before_mask));
     let selected = phase.selected_bits();
     for limb in 0..8 {
-        let expected = if selected.contains(&(limb * 2)) {
-            reads[if phase.wide { 1 + limb / 4 } else { 1 }][BEFORE + limb % 4]
-        } else {
-            memory[BEFORE + limb]
-        };
+        let expected = payload_limb(
+            memory[BEFORE + limb],
+            reads[1][BEFORE + limb % 4],
+            reads[2][BEFORE + limb % 4],
+            F(u64::from(phase.address & 8 != 0)),
+            phase.wide,
+            limb,
+        );
         out.push(memory[AFTER + limb].sub(committed.mul(expected)));
     }
     let after_mask = row.iter().enumerate().fold(F::ZERO, |sum, (i, old)| {
@@ -294,6 +297,21 @@ pub(super) fn append_residues(
         out.push(control[column].sub(expected));
     }
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
+}
+
+/// The shared payload selection arithmetic. The caller constrains selection,
+/// address, permission and the original source packets; this supplies no owner.
+pub(super) fn payload_limb(before: F, low: F, high: F, high_half: F, wide: bool, limb: usize) -> F {
+    if wide {
+        if limb < 4 { low } else { high }
+    } else {
+        let selected = if limb < 4 {
+            F::ONE.sub(high_half)
+        } else {
+            high_half
+        };
+        before.add(selected.mul(low.sub(before)))
+    }
 }
 
 fn header(

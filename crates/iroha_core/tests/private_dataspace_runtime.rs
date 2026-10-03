@@ -624,7 +624,10 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         .expect("persist authenticated lane frame");
     let proposal = {
         let view = chain.state().view();
-        let parent = view.latest_block().expect("activation parent");
+        let parent = view
+            .latest_block()
+            .expect("parent history read completes")
+            .expect("activation parent");
         let merges = merge::propose(&view, &*stores, 5)
             .expect("authenticated private lane storage available");
         let cadence = Duration::from_millis(

@@ -1444,13 +1444,10 @@ pub mod tests {
             let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
                 fixture.manifest.chain_id(),
                 chain.network_id(),
-                Arc::clone(chain.committed(1).block()),
+                chain.committed(1).block().clone(),
             )
             .unwrap();
-            let (_, genesis) = prefix
-                .push(Arc::clone(committed.block()))
-                .unwrap()
-                .into_parts();
+            let (_, genesis) = prefix.push(committed.block().clone()).unwrap().into_parts();
             assert!(genesis.is_some());
         }
     }

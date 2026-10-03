@@ -23,7 +23,6 @@ use crate::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs},
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
-use ff::Field as _;
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
     gates::{

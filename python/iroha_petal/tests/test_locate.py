@@ -1,7 +1,8 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finder location: thresholding, labelling, blossoms, quads and refinement.
+"""Finder location: thresholding, labelling, blossoms, quads, corners of three,
+candidate sets, refinement and following.
 
 The fast row-wise threshold and run-based labelling are cross-checked against
 literal pixel-by-pixel ports of the Rust reference.
@@ -17,14 +18,21 @@ from petal_test_support import captures_fixture, luma_of, rendered
 from iroha_petal.image import Luma
 from iroha_petal.locate import (
     Finder,
+    FinderSet,
+    _complete_triple,
     _order_clockwise,
     _select_quad_from,
+    _strong_finders,
     adaptive_binarize,
     blossoms,
+    candidates,
+    follow,
     label_components,
     locate,
+    locate_candidates,
     refine_center,
     select_quad,
+    select_triple,
 )
 
 
@@ -178,6 +186,21 @@ class LocateTest(unittest.TestCase):
             _order_clockwise([f(0.0, 0.0), f(100.0, 0.0), f(50.0, 10.0), f(50.0, 100.0)])
         )
 
+    def test_decoys_that_pass_the_size_filter_cannot_displace_the_real_finders(self) -> None:
+        # Decoys of size 40 are at least 0.55 x the real finders (about 60), so the
+        # size-class filter keeps them; only largest-first ranking keeps the four
+        # real finders inside the ten candidates that are combined.
+        candidates = [Finder(10.0 + 7.0 * i, 5.0, 40.0) for i in range(12)]
+        candidates += [
+            Finder(100.0, 100.0, 60.0),
+            Finder(700.0, 110.0, 62.0),
+            Finder(690.0, 520.0, 58.0),
+            Finder(95.0, 510.0, 61.0),
+        ]
+        quad = select_quad(candidates)
+        self.assertIsNotNone(quad, "real finders found")
+        self.assertEqual(sorted(int(f.x) for f in quad), [95, 100, 690, 700])
+
     def test_the_largest_candidates_win_when_clutter_precedes_them(self) -> None:
         # twelve small decoys discovered before the four real finders
         candidates = [Finder(10.0 + 7.0 * i, 5.0, 18.0) for i in range(12)]
@@ -196,6 +219,105 @@ class LocateTest(unittest.TestCase):
         quad = _select_quad_from(decoys + candidates[12:])
         self.assertIsNotNone(quad)
         self.assertEqual(sorted(int(f.x) for f in quad), [95, 100, 690, 700])
+
+    def test_three_finders_forming_a_corner_infer_the_fourth(self) -> None:
+        def blob(x: float, y: float) -> Finder:
+            return Finder(x, y, 60.0)
+
+        # top-left, top-right and bottom-left of a slightly rotated square, plus clutter
+        finders = [blob(100.0, 110.0), blob(540.0, 90.0), blob(120.0, 550.0)]
+        finders += [Finder(300.0 + 10.0 * i, 300.0, 14.0) for i in range(5)]
+        triple = select_triple(finders)
+        self.assertIsNotNone(triple, "a corner of three")
+        quad, inferred = triple
+        fourth = quad[inferred]
+        self.assertLess(abs(fourth.x - 560.0), 1e-9)
+        self.assertLess(abs(fourth.y - 530.0), 1e-9)
+        self.assertEqual(inferred, 2, "the inferred corner is bottom-right in clockwise order")
+        # the fourth corner is sized like the mean of the three
+        self.assertEqual(fourth.size, 60.0)
+        # three blossoms in a row are no corner
+        self.assertIsNone(select_triple([blob(0.0, 0.0), blob(440.0, 0.0), blob(880.0, 0.0)]))
+        # nor are fewer than three, or three of very different sizes
+        self.assertIsNone(select_triple(finders[:2]))
+        uneven = [Finder(100.0, 110.0, 60.0), Finder(540.0, 90.0, 20.0), blob(120.0, 550.0)]
+        self.assertIsNone(select_triple(uneven))
+
+    def test_a_smaller_blob_at_the_inferred_corner_completes_the_quad(self) -> None:
+        # steep tilt: the far finder is under 0.55 of the largest, but it is where the
+        # fourth corner belongs
+        finders = [
+            Finder(100.0, 100.0, 64.0),
+            Finder(540.0, 100.0, 60.0),
+            Finder(100.0, 540.0, 62.0),
+            Finder(520.0, 515.0, 30.0),
+        ]
+        strong = _strong_finders(finders)
+        self.assertEqual(len(strong), 3)
+        triple = select_triple(strong)
+        self.assertIsNotNone(triple, "triple")
+        quad, missing = triple
+        full = _complete_triple(finders, quad, missing)
+        self.assertIsNotNone(full, "completed")
+        self.assertTrue(any(f.x == 520.0 and f.y == 515.0 for f in full))
+        # a blob too far from the parallelogram point does not complete it
+        far = finders[:3] + [Finder(420.0, 400.0, 30.0)]
+        self.assertIsNone(_complete_triple(far, quad, missing))
+
+    def test_a_hidden_blossom_yields_an_inferred_candidate(self) -> None:
+        image = clean_frame()
+        n = image.width
+        data = bytearray(image.data)
+        # paint over the bottom-left blossom (centre 36, 476 at this size)
+        for y in range(420, n):
+            data[y * n : y * n + 92] = bytes(92)
+        found = locate_candidates(Luma(n, n, bytes(data)))
+        inferred = next((s for s in found if s.inferred is not None), None)
+        self.assertIsNotNone(inferred, "an inferred candidate")
+        corner = inferred.corners[inferred.inferred]
+        self.assertLess(abs(corner.x - 36.0), 4.0, corner)
+        self.assertLess(abs(corner.y - 476.0), 4.0, corner)
+        # no set of four seen finders exists, so `locate` finds nothing
+        self.assertIsNone(locate(Luma(n, n, bytes(data))))
+
+    def test_candidates_come_lazily_and_seen_quads_first(self) -> None:
+        image = clean_frame()
+        sets = iter(candidates(image))
+        first = next(sets)
+        self.assertIsInstance(first, FinderSet)
+        self.assertIsNone(first.inferred)
+        self.assertEqual(first.corners, locate(image))
+        # a clean render has seen quads at every sensitivity and a corner of three among
+        # its four blossoms, which comes last
+        rest = list(sets)
+        self.assertEqual([s.inferred is None for s in rest][:2], [True, True])
+        self.assertIsNotNone(rest[-1].inferred)
+        self.assertEqual(locate_candidates(Luma(0, 0)), [])
+
+    def test_following_finds_a_moved_blossom_and_refuses_a_lost_one(self) -> None:
+        image = clean_frame()
+        expected = Finder(48.0, 27.0, 60.0)
+        found = follow(image, expected)
+        self.assertIsNotNone(found, "followed")
+        self.assertLess(abs(found.x - 36.0), 1.5, found)
+        self.assertLess(abs(found.y - 36.0), 1.5, found)
+        self.assertEqual(found.size, 60.0)
+        # nothing bright near the centre of the canvas corner gap
+        self.assertIsNone(follow(image, Finder(140.0, 36.0, 30.0)))
+        # a blossom more than 0.75 diameters away is refused even when it is found
+        self.assertIsNone(follow(image, Finder(36.0 + 40.0, 36.0, 40.0)))
+        # absurd expectations (a broken pose) are refused and never overflow
+        nan, inf = float("nan"), float("inf")
+        for x, y, size in (
+            (1e300, 36.0, 60.0),
+            (-1e300, -1e300, 60.0),
+            (nan, 36.0, 60.0),
+            (36.0, inf, 60.0),
+            (36.0, 36.0, nan),
+        ):
+            self.assertIsNone(follow(image, Finder(x, y, size)), (x, y, size))
+        # a huge disc just covers the whole image
+        follow(image, Finder(36.0, 36.0, 1e300))
 
     def test_a_blank_image_has_no_finders(self) -> None:
         self.assertIsNone(locate(Luma(200, 200)))

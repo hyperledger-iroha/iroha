@@ -241,7 +241,9 @@ impl FeeEvidenceSnapshotV1 {
     /// Derive a complete canonical commitment, rejecting omitted-order duplicates.
     ///
     /// # Errors
-    /// Returns an error for a zero height, excessive count, invalid records, or records not uniquely ordered at that height.
+    ///
+    /// Returns an error for a zero height, excessive count, invalid records, or
+    /// records not uniquely ordered at that height.
     pub fn from_records(height: u64, records: &[FeeEvidenceRecordV1]) -> Result<Self, String> {
         let count = u32::try_from(records.len()).map_err(|_| "fee record count overflow")?;
         if height == 0
@@ -331,7 +333,9 @@ impl FeeEvidenceWitnessProofV1 {
     /// Decode and return the exact canonical snapshot commitment.
     ///
     /// # Errors
-    /// Returns an error if the snapshot cannot be canonically decoded or its fields are incoherent.
+    ///
+    /// Returns an error if the snapshot cannot be canonically decoded or its
+    /// fields are incoherent.
     pub fn commitment(&self) -> Result<FeeEvidenceSnapshotV1, String> {
         let commitment: FeeEvidenceSnapshotV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -397,11 +401,7 @@ impl FeeEvidenceBlockProofV1 {
     /// Produce a compact requested-record proof from the complete verified corpus.
     pub fn record_proof(&self, key: &StatePath) -> Option<FeeEvidenceRecordProofV1> {
         let index = self.records.binary_search_by(|r| r.key.cmp(key)).ok()?;
-        let tree = self
-            .records
-            .iter()
-            .map(HashOf::new)
-            .collect::<MerkleTree<FeeEvidenceRecordV1>>();
+        let tree: MerkleTree<FeeEvidenceRecordV1> = self.records.iter().map(HashOf::new).collect();
         Some(FeeEvidenceRecordProofV1 {
             snapshot_witness: self.snapshot_witness.clone(),
             record: self.records[index].clone(),
@@ -535,6 +535,7 @@ impl FeeEvidenceWindowProofV1 {
     /// contiguous native certificate; the closing block must match its independent pin.
     ///
     /// # Errors
+    ///
     /// Returns an error for an unsupported version, incomplete or invalid finality,
     /// mismatched roots or policy provenance, altered immutable records, invalid
     /// reward evidence, or accounting that does not conserve funds.

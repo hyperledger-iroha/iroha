@@ -22,6 +22,7 @@ privacy-release-evidence = ["zk-stark", "iroha_data_model/privacy-exact12-confor
 test-utils = ["dep:rand_08"]
 
 [dependencies]
+iroha_allocation = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc", "json"] }
@@ -59,7 +60,6 @@ rand_08 = { package = "rand", version = "=0.8.7", optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
-iroha_allocation = { workspace = true }
 rand_08 = { package = "rand", version = "=0.8.7" }
 tempfile = { workspace = true }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }

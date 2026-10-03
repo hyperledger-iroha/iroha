@@ -1188,6 +1188,7 @@ where
                 json_item_len(&item, dynamic_budget).map_err(|error| match error {
                     norito::json::BoundedJsonError::BodyTooLarge
                     | norito::json::BoundedJsonError::AllocationFailed
+                    | norito::json::BoundedJsonError::ScopedDecodeResource(_)
                     | norito::json::BoundedJsonError::DecodeResource(_) => {
                         MusubiQueryExecutionErrorV1::from(QueryExecutionFail::CapacityLimit)
                     }

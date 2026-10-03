@@ -36,11 +36,20 @@ public struct KagemushaOrdinaryEnrollmentOriginalRequestV1: Sendable {
   public let path: String
   public let requestID: String
   public let idempotencyKey: String
-  public let body: Data
-  fileprivate init(stage: String, value: OrdinaryEnrollmentRequestRecord) {
+  private let originalBody: Data
+  private let recheckOriginal: @Sendable () throws -> Void
+  fileprivate init(stage: String, value: OrdinaryEnrollmentRequestRecord,
+    recheckOriginal: @escaping @Sendable () throws -> Void) {
     path = "/v1/kagemusha/enrollment/ordinary/" + stage
-    requestID = value.requestID; idempotencyKey = value.idempotencyKey; body = Data(value.body)
+    requestID = value.requestID; idempotencyKey = value.idempotencyKey
+    originalBody = Data(value.body); self.recheckOriginal = recheckOriginal
   }
+  /// Every HTTP dispatch/redirect/retry must obtain these exact bytes immediately
+  /// before sending. Only this workflow installs the held Native original check.
+  public func body() throws -> Data {
+    try recheckOriginal(); let result = Data(originalBody); try recheckOriginal(); return result
+  }
+  public func requireCurrent() throws { try recheckOriginal() }
 }
 
 /// Enrollment acknowledgement from actual Native FI acceptance, not cash readiness.
@@ -273,8 +282,8 @@ public actor KagemushaAppAttestOrdinaryEnrollmentV1 {
     try await current()
     let operation = try pending.possession.originalEnrollmentChallengeHash()
     if retail == nil {
-      let start = try await exchange("start", body: try OrdinaryEnrollmentWire.json([
-        "signed_preparation_base64": preparation.base64EncodedString(), "app_certificate_base64": appCertificate.base64EncodedString()]))
+      let originalStart = try pending.possession.financialStartOriginal(originalSignedPreparation: preparation)
+      let start = try await exchange("start", body: originalStart)
       let challenge = try OrdinaryEnrollmentWire.retailChallenge(start, operation: operation)
       retail = try pending.possession.prepareRetailEnrollment(originalChallenge: challenge.challenge,
         accountSigningMessage: challenge.message, identity: confirmed)
@@ -327,14 +336,49 @@ public actor KagemushaAppAttestOrdinaryEnrollmentV1 {
         idempotencyKey: UUID().uuidString.lowercased(), body: body) }
     }
     guard let request = record.requests[stage] else { throw Self.invalid() }
-    if let reply = record.responses[stage] { return Data(reply) }
+    let dispatch = try originalDispatch(stage: stage, request: request)
+    try dispatch.requireCurrent()
+    if let reply = record.responses[stage] { try dispatch.requireCurrent(); return Data(reply) }
     let reply: Data
-    do { reply = try await transport.exchangeOriginal(.init(stage: stage, value: request)) }
+    do {
+      try dispatch.requireCurrent()
+      reply = try await transport.exchangeOriginal(dispatch)
+      try dispatch.requireCurrent()
+    }
     catch { try await current(); throw OrdinaryEnrollmentTransportFailure(underlying: error) }
     try await current()
     guard (1...524288).contains(reply.count) else { throw Self.invalid() }
     try await update { $0.responses[stage] = Data(reply) }
     return reply
+  }
+
+  private func originalDispatch(stage: String, request: OrdinaryEnrollmentRequestRecord) throws
+    -> KagemushaOrdinaryEnrollmentOriginalRequestV1 {
+    let reservation = self.reservation
+    let possession = pending?.possession
+    let preparationOwner = prepared
+    let retailOwner = retail
+    let recheck: @Sendable () throws -> Void
+    if stage == "start" {
+      guard let possession, let preparationOwner else { throw Self.invalid() }
+      let preparation = try preparationOwner.originalSignedPreparationBytes()
+      let body = Data(request.body)
+      recheck = {
+        _ = try reservation.accountID()
+        guard try preparationOwner.originalSignedPreparationBytes() == preparation,
+          try possession.financialStartOriginal(originalSignedPreparation: preparation) == body else {
+          throw KagemushaCoreCoordinatorErrorV1.invalidFrame("financial Start dispatch original changed")
+        }
+      }
+    } else {
+      recheck = {
+        _ = try reservation.accountID()
+        if let possession { _ = try possession.signingBytes() }
+        else if let preparationOwner { _ = try preparationOwner.originalSignedPreparationBytes() }
+        if let retailOwner { _ = try retailOwner.recoverOriginals() }
+      }
+    }
+    return .init(stage: stage, value: request, recheckOriginal: recheck)
   }
 
   private func current() async throws {

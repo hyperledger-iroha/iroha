@@ -279,6 +279,10 @@ fn nonblocking_capture_returns_original_busy_release_and_never_stages() {
         }
     }
     let storage = TransactionsStorage::new();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&storage.budget);
+    let mut release_registration_1 =
+        crate::unit_test_support::release_registration(&storage.budget);
     let owner = storage.block();
     let expected = storage.released.observe();
     let Err(crate::state::storage_transactions::MembershipAdmissionError::Busy(wait)) =
@@ -290,7 +294,7 @@ fn nonblocking_capture_returns_original_busy_release_and_never_stages() {
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(wakes.clone());
     let mut context = Context::from_waker(&waker);
-    let mut waiting = wait.wait_for_release();
+    let mut waiting = wait.wait_for_release(&mut release_registration_0);
     assert!(Pin::new(&mut waiting).poll(&mut context).is_pending());
     let other = TransactionsStorage::new();
     drop(other.block());
@@ -311,7 +315,7 @@ fn nonblocking_capture_returns_original_busy_release_and_never_stages() {
     };
     drop(owner);
     assert!(
-        Pin::new(&mut wait.wait_for_release())
+        Pin::new(&mut wait.wait_for_release(&mut release_registration_1))
             .poll(&mut context)
             .is_ready(),
         "release before registration remains visible"

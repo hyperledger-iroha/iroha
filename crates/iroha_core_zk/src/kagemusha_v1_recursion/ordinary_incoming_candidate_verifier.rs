@@ -11,7 +11,7 @@ use super::{
 };
 use crate::kagemusha_v1_state::{
     KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1, KagemushaStateErrorV1,
-    KagemushaStateV1, KagemushaTransitionKindV1,
+    KagemushaStateV1,
 };
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 use iroha_data_model::kagemusha::KagemushaOrdinaryIncomingPreparationV1;

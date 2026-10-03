@@ -166,6 +166,87 @@ final class PetalImageTests: XCTestCase {
         XCTAssertEqual(crowded.map { Int($0.x) }.sorted(), [95, 100, 690, 700])
     }
 
+    func testThreeFindersFormingACornerInferTheFourth() throws {
+        func blob(_ x: Double, _ y: Double) -> PetalFinder { PetalFinder(x: x, y: y, size: 60) }
+        // top-left, top-right and bottom-left of a slightly rotated square, plus clutter
+        var finders = [blob(100, 110), blob(540, 90), blob(120, 550)]
+        finders += (0..<5).map { PetalFinder(x: 300 + 10 * Double($0), y: 300, size: 14) }
+        let triple = try XCTUnwrap(PetalLocator.selectTriple(finders), "a corner of three")
+        let fourth = triple.quad[triple.inferred]
+        XCTAssertEqual(fourth.x, 560, accuracy: 1e-9)
+        XCTAssertEqual(fourth.y, 530, accuracy: 1e-9)
+        XCTAssertEqual(triple.inferred, 2, "the inferred corner is bottom-right in clockwise order")
+        // three blossoms in a row are no corner
+        XCTAssertNil(PetalLocator.selectTriple([blob(0, 0), blob(440, 0), blob(880, 0)]))
+        XCTAssertNil(PetalLocator.selectTriple([blob(0, 0), blob(440, 0)]), "two blossoms are no corner")
+    }
+
+    func testASmallerBlobAtTheInferredCornerCompletesTheQuad() throws {
+        // steep tilt: the far finder is under 0.55 of the largest, but it is where the
+        // fourth corner belongs
+        let finders = [
+            PetalFinder(x: 100, y: 100, size: 64),
+            PetalFinder(x: 540, y: 100, size: 60),
+            PetalFinder(x: 100, y: 540, size: 62),
+            PetalFinder(x: 520, y: 515, size: 30),
+        ]
+        let strong = PetalLocator.strongFinders(finders)
+        XCTAssertEqual(strong.count, 3)
+        let triple = try XCTUnwrap(PetalLocator.selectTriple(strong), "triple")
+        let full = try XCTUnwrap(
+            PetalLocator.completeTriple(finders, quad: triple.quad, missing: triple.inferred),
+            "completed"
+        )
+        XCTAssertTrue(full.contains { abs($0.x - 520) < 1e-9 && abs($0.y - 515) < 1e-9 })
+        // nothing near the parallelogram point: no completion
+        XCTAssertNil(PetalLocator.completeTriple(strong, quad: triple.quad, missing: triple.inferred))
+    }
+
+    func testAHiddenBlossomYieldsAnInferredCandidate() throws {
+        let clean = try cleanFrameLuma(size: 512)
+        // paint over the bottom-left blossom (centre 36, 476 at this size)
+        var pixels = clean.pixels
+        for y in 420..<512 {
+            for x in 0..<92 { pixels[y * 512 + x] = 0 }
+        }
+        let candidates = PetalLocator.locateCandidates(try PetalLuma(width: 512, height: 512, pixels: pixels))
+        let inferred = try XCTUnwrap(candidates.first { $0.inferred != nil }, "an inferred candidate")
+        let corner = inferred.corners[inferred.inferred ?? 0]
+        XCTAssertEqual(corner.x, 36, accuracy: 4, "\(corner)")
+        XCTAssertEqual(corner.y, 476, accuracy: 4, "\(corner)")
+        // the lazy sequence yields the same sets in the same order
+        let lazy = Array(PetalLocator.candidates(try PetalLuma(width: 512, height: 512, pixels: pixels)))
+        XCTAssertEqual(lazy, candidates)
+        // a clean frame: the first candidate is the seen quad that `locate` returns
+        XCTAssertEqual(PetalLocator.candidates(clean).first { _ in true }?.corners, PetalLocator.locate(clean))
+    }
+
+    func testFollowingFindsAMovedBlossomAndRefusesALostOne() throws {
+        let luma = try cleanFrameLuma(size: 512)
+        let expected = PetalFinder(x: 48, y: 27, size: 60)
+        let found = try XCTUnwrap(PetalLocator.follow(luma, expected: expected), "followed")
+        XCTAssertEqual(found.x, 36, accuracy: 1.5, "\(found)")
+        XCTAssertEqual(found.y, 36, accuracy: 1.5, "\(found)")
+        XCTAssertEqual(found.size, 60)
+        // nothing bright near the centre of the canvas corner gap
+        XCTAssertNil(PetalLocator.follow(luma, expected: PetalFinder(x: 140, y: 36, size: 30)))
+        // degenerate expectations are refused, never crash
+        for odd in [
+            PetalFinder(x: .nan, y: 36, size: 60),
+            PetalFinder(x: 1e300, y: -1e300, size: 60),
+            PetalFinder(x: 1e300, y: 36, size: 60),
+            PetalFinder(x: -1e300, y: -1e300, size: 60),
+            PetalFinder(x: 36, y: .infinity, size: 60),
+            PetalFinder(x: 36, y: 36, size: .nan),
+            PetalFinder(x: 36, y: 36, size: -5),
+            PetalFinder(x: 36, y: 36, size: .infinity),
+        ] {
+            XCTAssertNil(PetalLocator.follow(luma, expected: odd), "\(odd)")
+        }
+        // a huge disc just covers the whole image
+        _ = PetalLocator.follow(luma, expected: PetalFinder(x: 36, y: 36, size: 1e300))
+    }
+
     func testABlankImageHasNoFinders() throws {
         XCTAssertNil(PetalLocator.locate(try PetalLuma(width: 200, height: 200)))
         XCTAssertEqual(PetalLocator.adaptiveBinarize(try PetalLuma(width: 0, height: 0), sensitivity: 0.12), [])
@@ -177,6 +258,8 @@ final class PetalImageTests: XCTestCase {
         XCTAssertTrue(PetalLocator.refineCenter(image, finder: odd).x.isNaN)
         let outside = PetalFinder(x: 1_000, y: -1_000, size: 20)
         XCTAssertEqual(PetalLocator.refineCenter(image, finder: outside), outside)
+        let far = PetalFinder(x: 9e18, y: -9e18, size: 1e18)
+        XCTAssertEqual(PetalLocator.refineCenter(image, finder: far), far)
     }
 
     // MARK: - Software renderer

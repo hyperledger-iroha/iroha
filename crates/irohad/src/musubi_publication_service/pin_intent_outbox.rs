@@ -43,8 +43,10 @@ const MAX_RECORDS: u32 = 1_024;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Closed operational failure for durable signed pin-intent custody.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPinIntentOutboxErrorV1 {
+    /// Original finalized-history allocation refusal, retained for a local retry.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// Configuration, owner identity, file shape or retained record is invalid.
     Invalid,
     /// Another process owns the same directory.
@@ -63,6 +65,7 @@ pub enum MusubiPinIntentOutboxErrorV1 {
 impl core::fmt::Display for MusubiPinIntentOutboxErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "signed pin-intent history read is waiting for local capacity",
             Self::Invalid => "signed pin-intent outbox state is invalid",
             Self::Locked => "signed pin-intent outbox is already owned",
             Self::Conflict => "signed pin-intent outbox has a conflicting record",
@@ -707,6 +710,9 @@ fn audit_finalized_inventory_with(
 ) -> Result<MusubiPinIntentOutboxLocalAuditV1, MusubiPinIntentOutboxErrorV1> {
     let record = read_current(&outbox.owner.pin_authority)
         .map_err(|error| match error {
+            MusubiPublicationPinOutboxHighWaterReadErrorV1::Deferred(error) => {
+                MusubiPinIntentOutboxErrorV1::Deferred(error)
+            }
             MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead => {
                 MusubiPinIntentOutboxErrorV1::LocallyAhead
             }
@@ -778,6 +784,9 @@ fn verify_source_with_reader(
     let archive = reader
         .read_current_archive(source)
         .map_err(|error| match error {
+            super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(error) => {
+                MusubiPinIntentOutboxErrorV1::Deferred(error)
+            }
             super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
                 MusubiPinIntentOutboxErrorV1::LocallyAhead
             }

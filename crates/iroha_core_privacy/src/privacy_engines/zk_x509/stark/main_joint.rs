@@ -122,7 +122,12 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         self.composition_transcript_state = self.transcript.state();
         #[cfg(test)]
         let composition_timer = PhaseTimerV1::start_v1(PhaseV1::Composition);
+        #[cfg(test)]
+        let provider_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionProviders);
         let providers = self.prover_constraint_providers_v1()?;
+        #[cfg(test)]
+        provider_timer.complete_v1();
+
         let sources = MainTraceReplaySourcesV1::Bound {
             log19: &self.log19,
             projection: &self.projection,
@@ -163,6 +168,8 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         if SECURITY_LANES != 1 || composition.evaluations.len() != 1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
+        #[cfg(test)]
+        let commitment_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionCommitment);
         let composition_roots = vec![
             aggregate::streaming_composition_commitment_v1(
                 main_domains_v1(proof_instance),
@@ -180,6 +187,8 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
             &composition_roots,
         )
         .map_err(map_aggregate_error_v1)?;
+        #[cfg(test)]
+        commitment_timer.complete_v1();
         #[cfg(test)]
         composition_timer.complete_v1();
         let fri_masks = aggregate::build_fri_mask_oracles_v1(

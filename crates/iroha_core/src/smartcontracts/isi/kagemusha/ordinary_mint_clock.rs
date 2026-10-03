@@ -7,7 +7,7 @@
 
 use super::ordinary_mint_permission::KagemushaWorldOrdinaryMintIssuerPurposeV1;
 use crate::{
-    state::{StateReadOnly as _, StateTransaction},
+    state::{StateReadOnly, StateTransaction},
     sumeragi::certified_chain::committed_block,
 };
 use iroha_core_zk::kagemusha_v1_state::{
@@ -98,6 +98,30 @@ pub fn admit_ordinary_mint_signed_clock_v1(
     context: &KagemushaOrdinaryCashClockContextV1,
 ) -> Result<KagemushaWorldOrdinaryMintSignedClockV1, String> {
     purpose.recheck(transaction)?;
+    let admitted = admit_retained_ordinary_mint_signed_clock_v1(
+        transaction,
+        purpose,
+        clock_selection_original,
+        clock_original,
+        parent_proof_originals,
+        context,
+    )?;
+    purpose.recheck(transaction)?;
+    Ok(admitted)
+}
+
+/// Retained historical source admission under an independently held actual World purpose.
+/// All authentic native execution and four-original signature checks are identical to the
+/// live wrapper. This gate cannot create a current execution/debit or elapsed-time loan.
+pub(super) fn admit_retained_ordinary_mint_signed_clock_v1(
+    view: &impl StateReadOnly,
+    purpose: &KagemushaWorldOrdinaryMintIssuerPurposeV1,
+    clock_selection_original: &[u8],
+    clock_original: &[u8],
+    parent_proof_originals: &[Vec<u8>],
+    context: &KagemushaOrdinaryCashClockContextV1,
+) -> Result<KagemushaWorldOrdinaryMintSignedClockV1, String> {
+    purpose.recheck_retained_scope(view)?;
     if <[u8; 32]>::from(Sha256::digest(clock_selection_original))
         != purpose.clock_selection_original_sha256()
     {
@@ -106,8 +130,8 @@ pub fn admit_ordinary_mint_signed_clock_v1(
     let selection =
         KagemushaOrdinaryNativeClockSelectionOriginalV1::decode_original(clock_selection_original)
             .map_err(|e| e.to_string())?;
-    if selection.network() != *transaction.network_id()
-        || selection.checkpoint().chain_id() != transaction.chain_id().to_string()
+    if selection.network() != *view.network_id()
+        || selection.checkpoint().chain_id() != view.chain_id().to_string()
     {
         return Err("ordinary Mint clock root names another actual chain".into());
     }
@@ -131,7 +155,7 @@ pub fn admit_ordinary_mint_signed_clock_v1(
     proofs.push(tip);
     for proof in &proofs {
         let decoded = proof.decode_checked().map_err(|e| e.to_string())?;
-        let actual = committed_block(transaction, proof.height()).map_err(|e| e.to_string())?;
+        let actual = committed_block(view, proof.height()).map_err(|e| e.to_string())?;
         if !decoded.matches_native_execution_decision(
             &actual.block_hash(),
             actual.core_hash().0,
@@ -150,7 +174,7 @@ pub fn admit_ordinary_mint_signed_clock_v1(
         .map_err(|e| e.to_string())?;
     let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
         &checkpoint,
-        transaction.network_id(),
+        view.network_id(),
         selection.checkpoint().chain_id(),
     )
     .map_err(|e| e.to_string())?;
@@ -169,7 +193,7 @@ pub fn admit_ordinary_mint_signed_clock_v1(
             .height(),
         context_id: *original.certified_context_id().as_ref(),
     };
-    purpose.recheck(transaction)?;
+    purpose.recheck_retained_scope(view)?;
     Ok(admitted)
 }
 

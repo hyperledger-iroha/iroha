@@ -1,4 +1,6 @@
 //! Actual scheduled invocation ownership, full-row fit and rollback controls.
+//! Fragment censuses include the one actual reward-maintenance World transaction
+//! applied when the Time phase starts, even with no active reward bindings.
 
 use super::*;
 use crate::exec_witness;
@@ -248,7 +250,7 @@ fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
     );
     assert!(block.world.triggers.time_triggers().is_empty());
     assert!(block.world.triggers.by_call_triggers().is_empty());
-    assert_eq!(block.committed_fragment_count(), fragments + 2);
+    assert_eq!(block.committed_fragment_count(), fragments + 3);
     assert!(block.gas_used_in_block > 0);
     assert!(matches!(
         block.commit().unwrap_err(),
@@ -287,7 +289,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
             }
             assert!(block.world.triggers.time_triggers().is_empty());
             assert!(block.world.triggers.by_call_triggers().is_empty());
-            assert_eq!(block.committed_fragment_count(), fragments + 2);
+            assert_eq!(block.committed_fragment_count(), fragments + 3);
         } else {
             assert!(output.is_output_limit_rejection());
             assert_eq!(output.completions().len(), 1);
@@ -322,7 +324,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
                     .get("time_effect")
                     .is_none()
             );
-            assert_eq!(block.committed_fragment_count(), fragments + 1);
+            assert_eq!(block.committed_fragment_count(), fragments + 2);
             assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
             assert_eq!(
                 block
@@ -740,7 +742,7 @@ mod retry_and_periodic {
                 .get("retry_ran"),
             Some(&Json::new(true))
         );
-        assert_eq!(block.committed_fragment_count(), fragments + 3);
+        assert_eq!(block.committed_fragment_count(), fragments + 4);
         assert!(block.batch_transfer_outcomes.is_empty());
         drop(_recording);
         drop(block);
@@ -830,7 +832,7 @@ mod retry_and_periodic {
                         .get("retry_effect"),
                     Some(&Json::new(9_u64))
                 );
-                assert_eq!(block.committed_fragment_count(), fragments + 2);
+                assert_eq!(block.committed_fragment_count(), fragments + 3);
             } else {
                 assert!(output.is_output_limit_rejection());
                 assert_eq!(action.retry_state, Some(retry));
@@ -844,7 +846,7 @@ mod retry_and_periodic {
                         .get("retry_effect")
                         .is_none()
                 );
-                assert_eq!(block.committed_fragment_count(), fragments + 1);
+                assert_eq!(block.committed_fragment_count(), fragments + 2);
                 assert_eq!(actual.completions.len(), 1);
                 assert_eq!(actual.completions[0].callback_index, 0);
                 assert_eq!(actual.completions[0].trigger_id, id);
@@ -1037,7 +1039,7 @@ mod retry_and_periodic {
             assert_eq!(*events[index].step_index(), 0);
         }
         assert!(block.world.triggers.time_triggers().get(&id).is_none());
-        assert_eq!(block.committed_fragment_count(), fragments + 4);
+        assert_eq!(block.committed_fragment_count(), fragments + 5);
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
         drop(_recording);
@@ -1156,7 +1158,7 @@ mod retry_and_periodic {
                 .get("replacement_ran")
                 .is_none()
         );
-        assert_eq!(block.committed_fragment_count(), fragments + 2);
+        assert_eq!(block.committed_fragment_count(), fragments + 3);
         drop(_recording);
         drop(block);
         let triggers = state.world.triggers.view();
@@ -1238,5 +1240,48 @@ fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
             .unwrap()
             .repeats,
         Repeats::Exactly(1)
+    );
+}
+
+#[test]
+fn empty_time_phase_applies_exactly_one_original_reward_maintenance_without_callback_output() {
+    let (state, source) = fixture(65_536, 1, Vec::new(), plain_network());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block
+        .produce_ordinary_execution_outputs(&source, |producer| {
+            execute_network(producer)?;
+            let fragments = producer.state.committed_fragment_count();
+            let durable_rows = producer.state.world.smart_contract_state.len();
+            producer.execute_scheduled_time_outputs()?;
+            assert_eq!(producer.state.committed_fragment_count(), fragments + 1);
+            assert_eq!(
+                producer.state.world.smart_contract_state.len(),
+                durable_rows
+            );
+            assert!(producer.state.world.triggers.time_triggers().is_empty());
+            Ok(())
+        })
+        .unwrap();
+    let rows = &retained(&block).rows;
+    assert_eq!(
+        rows.len(),
+        1,
+        "maintenance cannot invent a Time invocation row"
+    );
+    assert!(rows[0].result().is_ok());
+    assert!(rows[0].completions().is_empty());
+    assert!(rows[0].result().nexus_fee_receipt().is_none());
+    assert!(rows[0].result().batch_transfer_outcomes().is_empty());
+    assert!(block.batch_transfer_outcomes.is_empty());
+    assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
+    assert_eq!(
+        block
+            .world
+            .external_event_buf
+            .iter()
+            .filter(|event| matches!(event, EventBox::TriggerCompleted(_)))
+            .count(),
+        0
     );
 }

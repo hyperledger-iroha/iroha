@@ -102,6 +102,76 @@ impl Client {
         Ok(verified)
     }
 
+    /// Read native custody presence or absence without requiring admission or an advertisement.
+    ///
+    /// The caller independently selects the exact owner, complete signer binding, qualified
+    /// native World schema and fresh certified decision. An absent record is authenticated
+    /// against the complete World; HTTP absence or failure never means unconfigured custody.
+    /// This grants no enrollment, current-use, token or account spending authority.
+    /// # Errors
+    /// Invalid independent scope before dispatch, expired deadline, bounded transport/codec
+    /// failure, concealed state, changed owner, substituted binding or native preimages.
+    pub fn get_stream_token_custody_state(
+        &self,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        expected_owner: &iroha_data_model::account::AccountId,
+        expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+        native_schema: iroha_crypto::Hash,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
+    > {
+        use iroha_data_model::sorafs::stream_token_custody::proof::{
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1, StreamTokenCustodyProofV1,
+        };
+        use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
+        expected_binding.validate()?;
+        block.verify_global_scope(self.network_id, &self.chain.to_string())?;
+        if provider.as_bytes() == &[0; 32]
+            || block.height() < 2
+            || block.commitment().schedule.current.network_id != self.network_id
+            || expected_binding.chain_id != self.chain.to_string()
+            || expected_binding.network_id != *self.network_id.as_bytes()
+            || expected_binding.role != SignerRoleV1::StreamToken
+            || expected_binding.purpose
+                != (SignerPurposeBindingV1::StreamToken {
+                    provider_id: *provider.as_bytes(),
+                })
+        {
+            return Err(eyre!(
+                "custody state requires independently selected scope on this chain and network"
+            ));
+        }
+        self.ensure_data_model_compatibility()?;
+        let path = iroha_torii_shared::route_catalog::sorafs::STREAM_TOKEN_CUSTODY
+            .path()
+            .replace("{provider_id}", &hex::encode(provider.as_bytes()))
+            .replace("{height}", &block.height().to_string());
+        let response = self.send_activation_evidence_read(
+            &path,
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
+            None,
+            ActivationEvidenceReadAuth::Public,
+        )?;
+        let body = Self::bounded_norito_response_body(
+            &response,
+            StatusCode::OK,
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
+            "Failed to get native custody state",
+        )?;
+        let proof = StreamTokenCustodyProofV1::decode_frame(body)?;
+        let verified = proof.verify(
+            self.network_id,
+            provider,
+            expected_owner,
+            expected_binding,
+            native_schema,
+            block,
+        )?;
+        self.ensure_activation_evidence_deadline()?;
+        Ok(verified)
+    }
+
     fn read_provider_discovery_frame(
         &self,
         provider: iroha_data_model::sorafs::capacity::ProviderId,

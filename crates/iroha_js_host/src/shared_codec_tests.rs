@@ -73,7 +73,7 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
     }
 }
 
-fn malformed_context_operations(prefix: f64) -> [napi::Error; 10] {
+fn malformed_context_operations(prefix: f64) -> [napi::Error; 9] {
     [
         norito_encode_instruction("{}".to_owned(), prefix)
             .err()

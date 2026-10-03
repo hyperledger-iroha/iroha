@@ -423,6 +423,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1>,
     dispatch_instruction::<
         iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
     >,
@@ -595,7 +596,10 @@ define_instruction_handlers! {
     dispatch_instruction::<zk::CreateElection>,
     dispatch_instruction::<zk::SubmitBallot>,
     dispatch_instruction::<zk::FinalizeElection>,
-    dispatch_instruction::<zk::VerifyProof>,
+    // Generic verification records a bounded cryptographic result using an active registered
+    // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
+    // not authorize spending, key administration or stronger execution-proof semantics.
+    dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<zk::PruneProofs>,
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
@@ -626,6 +630,7 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
@@ -1334,8 +1339,8 @@ mod tests {
             callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "isi-mod-test".to_owned(),
@@ -1484,7 +1489,11 @@ mod tests {
         assert_eq!(state.kura().blocks_count(), 1);
         let genesis = state
             .kura()
-            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .get_block(
+                std::num::NonZeroUsize::new(1).unwrap(),
+                &state.ivm_execution_budget(),
+            )
+            .expect("completed original State read")
             .unwrap();
         assert_eq!(
             state.network_id_ref(),

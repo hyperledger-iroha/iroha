@@ -355,3 +355,5 @@ fn json_value_parser_charge_covers_physical_graph_requests_at_leaf_and_split_bou
         }
     }
 }
+#[path = "exact_field_streaming_allocations/nominal_text.rs"]
+mod nominal_text;

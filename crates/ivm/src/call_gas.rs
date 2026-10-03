@@ -13,6 +13,9 @@ pub const BITMAP_COVERAGE: u64 = 8;
 /// Validation cost for one aligned table slot or sum tag.
 pub const WORD: u64 = ivm_abi::call::CALL_WORD_BYTES_V1 as u64 * PER_BYTE;
 
+/// Charge before visiting each authenticated schema node, including inline products.
+pub const NODE: u64 = 1;
+
 /// Reserve the initialization bitmaps for a fresh frame and its result table.
 pub fn frame(frame_bytes: u32, result_words: usize) -> Result<u64, VMError> {
     u64::from(frame_bytes)

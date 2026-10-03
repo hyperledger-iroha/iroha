@@ -113,7 +113,8 @@ pub(super) fn populate_node_classification_v1(row: &mut ZkX509Rfc5280StarkBaseRo
     for (index, role) in TIME_ROLES.into_iter().enumerate() {
         let difference = row[BASE_ROLE].sub(F(role as u64));
         row[NODE_TIME_FLAGS + index] = F(u64::from(difference == F::ZERO));
-        row[NODE_TIME_INVERSES + index] = difference.inv().unwrap_or(F::ZERO);
+        // Role differences are canonical field values, including a matching zero.
+        row[NODE_TIME_INVERSES + index] = difference.inverse_or_zero_canonical_v1();
     }
 }
 
@@ -386,6 +387,18 @@ pub(super) fn append_residues_v1<A: PolynomialAirFieldV1>(
 
 pub(super) const RESIDUES_V1: usize = 85;
 
+// The caller admits a digit row from one of the two closed time templates,
+// so offset < length and both operands are canonical. The selected template
+// can depend on the private DER time tag even at a fixed public position.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn populate_decimal_inverses_v1(
+    row: &mut ZkX509Rfc5280StarkBaseRowV1,
+    template: temporal::DecimalTemplateV1,
+) {
+    row[BASE_INVERSE] = F(template.offset).inverse_or_zero_canonical_v1();
+    row[BASE_G] = F(template.length - template.offset - 1).inverse_or_zero_canonical_v1();
+}
+
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn append_temporal_rows_v1(
     trace: &ZkX509Rfc5280TraceV1,
@@ -468,10 +481,7 @@ pub(super) fn append_temporal_rows_v1(
                 row[BASE_STATE_AFTER] = F(state);
                 row[BASE_IS_WRITE] = F(u64::from(template.offset == 0));
                 row[BASE_STRICT] = F(u64::from(template.offset + 1 == template.length));
-                row[BASE_INVERSE] = F(template.offset).inv().unwrap_or(F::ZERO);
-                row[BASE_G] = F(template.length - template.offset - 1)
-                    .inv()
-                    .unwrap_or(F::ZERO);
+                populate_decimal_inverses_v1(&mut row, template);
             }
             family_rows[decimal_family].push(row);
         }
@@ -558,4 +568,128 @@ pub(super) fn append_relation_rows_v1(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod private_inverse_tests {
+    use super::*;
+
+    fn time_cells(bytes: &[u8]) -> Vec<ZkX509Rfc5280SourceCellV1> {
+        bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(address, value)| ZkX509Rfc5280SourceCellV1 {
+                document: 0,
+                address: u16::try_from(address).expect("bounded time"),
+                value,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn private_decimal_inverses_cover_both_admitted_time_templates() {
+        for (tag, bytes) in [
+            (23, b"700101000000Z".as_slice()),
+            (23, b"491231235959Z".as_slice()),
+            (24, b"20500101000000Z".as_slice()),
+            (24, b"99991231235959Z".as_slice()),
+        ] {
+            let operands = calendar_operands_v1(&time_cells(bytes), tag).expect("canonical time");
+            let mut saw_offset_zero = false;
+            let mut saw_remaining_zero = false;
+            let mut saw_both_nonzero = false;
+            for position in 0..numeric::DECIMAL_ROWS_PER_TIME_V1 {
+                let template = temporal::template_v1(position, operands.generalized);
+                if template.digit == 0 {
+                    continue;
+                }
+                let mut row = [F(37); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+                let mut expected = row;
+                let remaining = template.length - template.offset - 1;
+                expected[BASE_INVERSE] = F(template.offset).inv().unwrap_or(F::ZERO);
+                expected[BASE_G] = F(remaining).inv().unwrap_or(F::ZERO);
+                populate_decimal_inverses_v1(&mut row, template);
+                assert_eq!(row, expected, "tag {tag}, position {position}");
+                saw_offset_zero |= template.offset == 0;
+                saw_remaining_zero |= remaining == 0;
+                saw_both_nonzero |= template.offset != 0 && remaining != 0;
+            }
+            assert!(saw_offset_zero && saw_remaining_zero);
+            assert_eq!(saw_both_nonzero, operands.generalized);
+        }
+        for (tag, bytes) in [
+            (23, b"690101000000Z".as_slice()),
+            (24, b"20491231235959Z".as_slice()),
+            (24, b"20500230000000Z".as_slice()),
+            (24, b"20500101000000+".as_slice()),
+            (23, b"70010100000Z".as_slice()),
+            (25, b"20500101000000Z".as_slice()),
+        ] {
+            assert!(matches!(
+                calendar_operands_v1(&time_cells(bytes), tag),
+                Err(ZkX509Rfc5280StarkErrorV1::Semantic)
+            ));
+        }
+    }
+
+    #[test]
+    fn actual_temporal_constructor_preserves_zero_and_nonzero_inverse_rows() {
+        let trace = super::super::tests::canonical_trace_v1();
+        let mut rows =
+            core::array::from_fn(|_| PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1));
+        append_temporal_rows_v1(&trace, &mut rows).expect("original trace time rows");
+        let mut zeros = 0;
+        let mut nonzeros = 0;
+        for row in &*rows[ZkX509Rfc5280StarkFamilyV1::Decimal as usize] {
+            if row[BASE_H] == F::ONE {
+                assert_eq!(row[BASE_INVERSE], row[BASE_OFFSET].inv().unwrap_or(F::ZERO));
+                assert_eq!(
+                    row[BASE_G],
+                    row[BASE_B]
+                        .sub(row[BASE_OFFSET])
+                        .sub(F::ONE)
+                        .inv()
+                        .unwrap_or(F::ZERO)
+                );
+                zeros += usize::from(row[BASE_INVERSE] == F::ZERO);
+                nonzeros += usize::from(row[BASE_INVERSE] != F::ZERO);
+            } else {
+                assert_eq!((row[BASE_INVERSE], row[BASE_G]), (F::ZERO, F::ZERO));
+            }
+        }
+        assert!(zeros > 0 && nonzeros > 0);
+        let mut malformed = trace.clone();
+        let node = malformed
+            .semantic_provenance
+            .iter_mut()
+            .flat_map(|document| document.nodes.iter_mut())
+            .find(|node| node.role == ZkX509Rfc5280GrammarRoleV1::CertificateNotBefore)
+            .expect("original time node");
+        node.tag_number = 25;
+        let mut rejected_rows =
+            core::array::from_fn(|_| PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1));
+        assert!(matches!(
+            append_temporal_rows_v1(&malformed, &mut rejected_rows),
+            Err(ZkX509Rfc5280StarkErrorV1::Semantic)
+        ));
+    }
+
+    #[test]
+    fn private_time_role_inverses_preserve_original_zero_cells_and_row_ownership() {
+        // The source role is a bounded grammar enum. Include all byte values so
+        // this also covers values outside the admitted role census.
+        for role in 0_u64..=255 {
+            let mut row = [F(7); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            row[BASE_ROLE] = F(role);
+            let mut expected = row;
+            for (index, time_role) in TIME_ROLES.into_iter().enumerate() {
+                let difference = F(role).sub(F(time_role as u64));
+                expected[NODE_TIME_FLAGS + index] = F(u64::from(difference == F::ZERO));
+                expected[NODE_TIME_INVERSES + index] = difference.inv().unwrap_or(F::ZERO);
+            }
+            populate_node_classification_v1(&mut row);
+            assert_eq!(row, expected, "role={role}");
+        }
+    }
 }

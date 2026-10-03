@@ -20,7 +20,7 @@ the code:
 
 | Mark | What it is | Role |
 | --- | --- | --- |
-| **Sakura finders** | Four solid five-petal blossoms in the canvas corners | Locate the code in a camera frame and give the perspective. |
+| **Sakura finders** | Four solid five-petal blossoms in the canvas corners | Locate the code in a camera frame and give the perspective; any three suffice when a thumb, a glare or the frame edge hides one. |
 | **天 tile field** | 256 tiles in a `天`-shaped mask of a 20×20 lattice | Each tile's **light/dark polarity** is one bit (lane `P`); the **katakana glyph** drawn in it is four bits (lane `K`). The mask is mirror-symmetric left/right and not top/bottom, so it also tells a decoder which way is up. |
 | **Three dotted rings** | 80, 92 and 104 dot slots at radii 360, 410 and 460 | Which slots are lit carries 240 bits (lane `D`). Fixed *gates* at 3, 6 and 9 o'clock (none at 12) are always lit. |
 
@@ -39,6 +39,12 @@ does not carry `QrStreamFrame` or `IRQR` frames: it is a complete transport with
 forward error correction and payload integrity check. KAGEMUSHA payloads use the `kind` byte of
 §5.4 with the same values as `IrohaPeerWireKindV1` (1 request, 2 payment, 3 acknowledgement) and
 carry the encoded `IPM1` message as the payload.
+
+> **Superseded KAGEMUSHA kinds (2026-10-03).** Kinds 1 to 3 in this document name the retired
+> exchange. The [single implementation draft](kagemusha_single_design_proposal.md) §§5 and 8 define
+> the messages and their 10,000-byte bound, which the measurements in §8 use; Petal remains one of
+> their carriers and carries any such message whole (§5.5: the default receiver limit is 65 536 bytes).
+> The kind values are replaced together with the implementing change.
 
 ## 2. Frame geometry (normative)
 
@@ -257,20 +263,47 @@ The reference algorithm, which the golden captures are calibrated to:
 
 1. **Finders.** Adaptive threshold against the local mean (integral image; window radius `clamp(short side / 8, 12, 64)`).
    With `range = max(P99.5 − P2, 8)` over the luma percentiles, a pixel is lit when it exceeds the local mean by
-   `max(s·range, 5)` and also exceeds `P2 + 0.2·range`; try sensitivities `s = 0.12, 0.22, 0.34` in turn.
+   `max(s·range, 5)` and also exceeds `P2 + 0.2·range`, for sensitivities `s = 0.12, 0.22, 0.34`.
    Label 4-connected components. A finder candidate is a component with `size ≥ 14 px` (larger bounding-box side), area ≥ 100,
    fill (area / bounding box) 0.45–0.90 and principal-axis ratio ≥ 0.5, with no *other component of substance* (area ≥ 8 and
-   at least 1.5 % of the candidate's area) whose centroid lies within 0.8 × its size. Keep candidates of at least 0.55 × the
-   largest candidate; order them by size, largest first (ties in discovery order), and combine at most the first ten. Accept a
-   combination of four that forms a convex quadrilateral with similar sizes (largest/smallest ≤ 1.9, longest/shortest side ≤ 2.6,
-   mean side / mean size between 4.8 and 10.5) and take the one with the lowest score
-   `(size ratio − 1) + (side ratio − 1) + |mean side / mean size − 7.33| / 7.33`. If nothing qualifies, retry with all
-   candidates. Refine the four centres with an intensity-weighted centroid inside the blob.
+   at least 1.5 % of the candidate's area) whose centroid lies within 0.8 × its size. The *large* candidates are those of at
+   least 0.55 × the largest; any set of candidates is ordered by size, largest first (ties in discovery order), and at most the
+   first ten are combined. A *quad* is a combination of four that forms a convex quadrilateral with similar sizes
+   (largest/smallest ≤ 1.9, longest/shortest side ≤ 2.6, mean side / mean size between 4.8 and 10.5); the one with the lowest
+   score `(size ratio − 1) + (side ratio − 1) + |mean side / mean size − 7.33| / 7.33` wins. A *corner* is three candidates with
+   sizes within 1.9, one of them (the vertex) with two legs whose lengths are within a factor 2, whose angle has
+   `|cos| ≤ 0.5`, and whose mean length is 4.8–10.5 mean sizes; the lowest
+   `(size ratio − 1) + (leg ratio − 1) + |cos| + |mean leg / mean size − 7.33| / 7.33` wins, and its fourth corner is the
+   parallelogram point `a + c − vertex`. Finder centres are refined with an intensity-weighted centroid inside the blob
+   (inferred corners are not).
+
+   The decoder tries **candidate finder sets** in this order and keeps the first under which a lane decodes:
+   1. for each sensitivity in turn, the quad of the large candidates;
+   2. from the first sensitivity that has one, the corner of the large candidates completed by the nearest candidate of at least
+      0.3 × the mean size within 0.3 mean legs of its parallelogram point (steep tilt makes the far finder small);
+   3. from the first sensitivity that has one, the quad of all candidates;
+   4. the corner of step 2 with its fourth finder **inferred** — hidden by a thumb, a glare or the edge of the frame.
+
+   Only the sensitivities that are needed are computed: a clean frame costs one binarisation.
 2. **Pose.** Homography from the four finder centres to the canonical corners, for each of 4 rotations (and 4 mirrored).
-   Reference levels come from the finders (lit) and the black areas inward of them (dark).
-3. **Orientation.** Score each hypothesis by the mean normalised sample of the gate dots minus that of the guards. Try lane `D`
-   under the best three hypotheses whose score is at least 0.2; otherwise try the tile lanes (step 5) under the best four and
-   accept the first hypothesis under which lane `P` or lane `K` decodes.
+   An inferred corner is first moved to where the three dotted rings line up best: the brightness summed over all 276 ring
+   slots (five-point samples as in step 4) is maximised over a 13 × 13 grid in steps of 2 % of the mean leg around the
+   parallelogram point, then over a 9 × 9 grid in steps of 0.5 % around the best point. The ring slots map onto themselves under
+   every quarter turn and mirror (80, 92 and 104 are multiples of four), so this search fixes the geometry once for all
+   orientations; the orientation is decided in step 3. Reference levels come from the finders (lit, nine samples of the solid
+   core) and the black canvas 100 units inward of them (dark); a corner whose lit level is less than 12 above its dark level
+   refuses the candidate. An inferred corner has no levels of its own: its lit and dark levels are the parallelogram
+   extrapolation of the other three, clamped to their range, and must differ by 12 as well (uneven light can push the two
+   estimates past each other).
+3. **Orientation.** Each hypothesis gets a *gate score* — the mean normalised sample of the gate dots minus that of the
+   guards — and a *`天` score*: the mean normalised level of the 256 tiles (five-point samples spread ±8 units, so a glyph
+   stroke at the centre does not decide it) minus the mean over the 144 lattice cells outside the mask. The rings tell
+   rotations apart only through the gates, which glare or the frame edge can hide; the `天` is symmetric left to right but
+   not top to bottom, so it tells the four quarter turns apart by itself (the lanes then settle a mirror). Hypotheses are
+   ranked by gate score + `天` score. Try lane `D` under the best three whose gate score is at least 0.2; otherwise try the
+   tile lanes (step 5) under the best four and accept the first hypothesis under which lane `P` or lane `K` decodes. The
+   decoded frame reports the inferred corner, if any, as its canonical index (0 top-left, 1 top-right, 2 bottom-right,
+   3 bottom-left of the upright code).
 4. **Dots.** Sample each data slot (the mean of five points, the centre and four at ±3.5 units), normalise with the local
    lit/dark levels, and threshold per ring at the midpoint of that ring's gate and guard samples when they are more than 0.2
    apart (0.5 otherwise).
@@ -293,6 +326,16 @@ The reference algorithm, which the golden captures are calibrated to:
    division: lane `D` 0, 1, 2, 3, 5; lane `P` 0, 1, 3, 4, 6; lane `K` 0, 5, 11, 15, 22), and for lane `K` only also ⅔ (30).
    Lanes `D` and `P` stop at ½: with 11 and 13 parity bytes, a further erasure step leaves so few spare ones that it lets wrong
    codewords through (§11).
+
+**Tracking.** A scan session that decoded a frame reads the next ones by following that pose instead of searching the
+whole image, as long as the pose is at most 500 ms old. Each corner finder is re-found from where the previous pose puts it:
+an intensity-weighted centroid over a disc of twice the finder's expected diameter (nothing else bright is that close to a
+corner finder), then centroids over the finder's own disc, at most five, until the centre moves less than ¼ px; a finder
+with less than 20 levels of contrast in its disc, or ending more than 0.75 diameters from where it was expected, is lost.
+The mean movement of the corners that were followed predicts the others. A corner inferred in the previous frame is seen
+again only when its blossom is re-found within ¼ diameter of that prediction (a bright thumb beside it must not count).
+With one corner missing, it is placed at the prediction and refined against the rings as in step 2; with two missing, or
+when no lane decodes, the frame goes through the full search. The orientation is kept. Tracking takes about a quarter of the time of a full decode (§8).
 
 The constants above are what the ports use; they may be tuned together with the fixtures. Decoding is not bit-reproducible
 across platforms (it uses the platform's `sin`, `cos`, `exp` and `atan2`, and `f32` slot centres): conformance means the
@@ -321,36 +364,48 @@ Per-frame decode rates (60 random poses per row, rotation 0–360°, tilt up to 
 | 480p defocus σ 2.6 / 3.2 px | 100 % | 100 / 68 % | 0 % | 100 % |
 | harshest preset (480p, σ 1.7, tilt, bloom, ambient 10 %, barrel) | 100 % | 97 % | 0 % | 100 % |
 
-Light and motion that are not nominal (`stress` example, 40 poses per cell; each cell lists a modern 720p / a legacy 720p /
-the harshest 480p camera; light levels are fractions of the lit level; hand shake is a linear blur of the given length):
+Light, motion and framing that are not nominal (`stress` example, 40 poses per cell; each cell lists a modern 720p / a
+legacy 720p / the harshest 480p camera; light levels are fractions of the lit level; hand shake is a linear blur of the given
+length):
 
-| Condition | `P` | `K` | `D` |
-| --- | --- | --- | --- |
-| veiling light 0.35 / 0.5 | 100 / 100 / 0 % | 100 / 98–100 / 0 % | 100 / 100 / 100 % |
-| auto-exposure gain 1.5× / 2× too high | 100 / 98–100 / 0 % | 100 / 78–100 / 0 % | 100 / 100 / 100 % |
-| auto-exposure gain 3× too high | 100 / 12 / 0 % | 100 / 0 / 0 % | 100 / 100 / 100 % |
-| illumination gradient equal to the lit level | 100 / 100 / 0 % | 100 / 90 / 0 % | 100 / 100 / 2 % |
-| glare 0.5 × lit, σ 120 px | 100 / 98 / 2 % | 100 / 100 / 0 % | 98 / 98 / 88 % |
-| glare 1.0 × lit, σ 120 px | 92 / 45 / 0 % | 92 / 42 / 0 % | 70 / 50 / 8 % |
-| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 10 % | 100 / 98 / 0 % | 100 / 100 / 100 % |
-| banding 50 % deep, 80 px period | 20 / 2 / 0 % | 8 / 0 / 0 % | 98 / 88 / 12 % |
-| hand shake 4 px | 100 / 100 / 85 % | 60 / 12 / 0 % | 100 / 100 / 100 % |
-| hand shake 9 px | 100 / 100 / 30 % | 0 / 0 / 0 % | 100 / 100 / 100 % |
+| Condition | Any lane | `P` | `K` | `D` |
+| --- | --- | --- | --- | --- |
+| veiling light 0.35 / 0.5 | 100 / 100 / 100 % | 100 / 100 / 0 % | 100 / 98–100 / 0 % | 100 / 100 / 100 % |
+| auto-exposure gain 1.5× / 2× too high | 100 / 100 / 100 % | 100 / 98–100 / 0 % | 100 / 78–100 / 0 % | 100 / 100 / 100 % |
+| auto-exposure gain 3× too high | 100 / 100 / 100 % | 100 / 12 / 0 % | 100 / 0 / 0 % | 100 / 100 / 100 % |
+| illumination gradient equal to the lit level | 100 / 100 / 52 % | 100 / 100 / 0 % | 100 / 90 / 0 % | 100 / 100 / 52 % |
+| glare 0.5 × lit, σ 120 px | 100 / 100 / 88 % | 100 / 98 / 2 % | 100 / 100 / 0 % | 98 / 98 / 88 % |
+| glare 1.0 × lit, σ 120 px | 100 / 82 / 10 % | 100 / 60 / 0 % | 100 / 60 / 0 % | 72 / 60 / 10 % |
+| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 100 % | 100 / 100 / 10 % | 100 / 98 / 0 % | 100 / 100 / 100 % |
+| banding 50 % deep, 80 px period | 100 / 98 / 28 % | 20 / 2 / 0 % | 8 / 0 / 0 % | 100 / 98 / 28 % |
+| hand shake 4 px | 100 / 100 / 100 % | 100 / 100 / 85 % | 60 / 12 / 0 % | 100 / 100 / 100 % |
+| hand shake 9 px | 100 / 100 / 100 % | 100 / 100 / 30 % | 0 / 0 / 0 % | 100 / 100 / 100 % |
+| a thumb over one corner blossom | 100 / 100 / 62 % | 100 / 100 / 42 % | 100 / 95 / 0 % | 100 / 100 / 62 % |
+| a glare spot on one corner blossom | 95 / 98 / 85 % | 95 / 98 / 85 % | 95 / 5 / 0 % | 95 / 98 / 85 % |
+| one corner outside the frame | 100 / 100 / 72 % | 100 / 100 / 70 % | 98 / 95 / 0 % | 100 / 100 / 72 % |
 
 The tile lanes survive the lighting problems that old cameras actually have because of the normalised read of §7 step 5:
-without it the same legacy camera loses `P` at 2× over-exposure (4 % of frames) and `K` at 1.5× (0 %). Three limits remain.
-A 480p preview reads only lane `D` as soon as the light is not nominal (its tiles are 9 px wide and blurred into each other):
-that is why `D` is designed to work alone. A deep glare or wide, deep banding defeats every lane in the frames it covers: that
-is why the stream is rateless and frames are shown for several camera frames. Hand shake costs lane `K` first (it is gone at
-9 px of blur) while `P` and `D` hold at 720p.
+without it the same legacy camera loses `P` at 2× over-exposure (4 % of frames) and `K` at 1.5× (0 %). A hidden corner
+blossom used to cost every lane; with the inferred corner of §7 steps 1–2 a thumb, a glare spot or a frame edge over one
+blossom costs nothing at 720p (before: 0 % with a thumb, 0–2 % with a corner outside the frame). With all three ring gate
+groups glared out, ranking by the `天` (§7 step 3) still reads 100 % of frames, against 95–98 % with the gates alone. Three
+limits remain. A 480p preview reads only lane `D` as soon as the light is not nominal (its tiles are 9 px wide and blurred
+into each other): that is why `D` is designed to work alone. A deep glare or wide, deep banding defeats every lane in the
+frames it covers: that is why the stream is rateless and frames are shown for several camera frames. Hand shake costs lane
+`K` first (it is gone at 9 px of blur) while `P` and `D` hold at 720p.
 
 End to end (`stream_sim`: 8 fps animation, 30 fps camera, 1/60 s exposure with blending/tearing, random pose, 8 trials per
-camera) for the largest canonical KAGEMUSHA payment, 7 552 bytes: **8.6 s** with a modern or legacy camera (lane `K` readable in
-95–96 % of frames), **12 s** on average with a soft 720p camera (σ 1.8 px, lane `K` in 47 % of frames, 17 s at the 90th
-percentile) and **34–38 s** when only lanes `P` and `D` are readable (480p). A 2 KB payload takes 2.2 s, 3.2 s and 9–12 s
-respectively. With the camera 2× over-exposed or under veiling light of 0.35 a legacy camera still needs 8.6 s; without the
-normalised read of §7 step 5 it needed 72 s and 32 s. Completion was 100 % and no wrong payload was ever delivered. At
-1280×720 the reference decoder needs about 10 ms per frame; ports are expected to stay within a factor of 20.
+camera, received through a scan session that tracks the pose) for the largest KAGEMUSHA message, 10 000 bytes: **11.5 s**
+with a modern or legacy camera (lane `K` readable in 95–96 % of frames), **16.5 s** on average with a soft 720p camera
+(σ 1.8 px, lane `K` in 47 % of frames, 22 s at the 90th percentile) and **45 s** when only lanes `P` and `D` are readable
+(480p). A 2 KB payload takes 2.2 s, 3.2 s and 9–12 s respectively. With the camera 2× over-exposed or under veiling light
+of 0.35 a legacy camera still completes as fast as in nominal light; without the normalised read of §7 step 5 a 7 552-byte
+payload needed 72 s and 32 s instead of 8.6 s. Completion was 100 % and no wrong payload was ever delivered.
+
+Decode cost: at 1280×720 the reference decoder needs about 7.5 ms for a full search and 2 ms to track the pose of the
+previous frame; a frame whose corner blossom is hidden costs about 21 ms the first time (all three thresholds, the corner
+search) and is then tracked. A 7.5 KB stream through a tracking session averages 2.6–4.8 ms per camera frame, against
+7–12 ms without tracking. Ports are expected to stay within a factor of 20 of the reference.
 
 What this does and does not establish: it shows the format and decoder degrade gracefully — the lane that fails first is the
 katakana lane, then polarity, then the dots — and that localisation does not depend on the content. It does not replace
@@ -367,9 +422,9 @@ Run the evidence yourself:
 
 ```
 cargo run --release -p iroha_petal --example qualify -- 60          # per-frame matrix
-cargo run --release -p iroha_petal --example stress -- 40           # lighting stress matrix
-cargo run --release -p iroha_petal --example stream_sim -- 12 7552 8 # end to end
-iroha offline petal simulate --camera legacy --bytes 7552 --fps 8   # same, through the CLI
+cargo run --release -p iroha_petal --example stress -- 40           # light, motion and hidden-corner matrix
+cargo run --release -p iroha_petal --example stream_sim -- 8 10000 8 # end to end
+iroha offline petal simulate --camera legacy --bytes 10000 --fps 8  # same, through the CLI
 ```
 
 ## 9. CLI
@@ -378,7 +433,7 @@ iroha offline petal simulate --camera legacy --bytes 7552 --fps 8   # same, thro
 iroha offline petal encode   --input payload.bin --output out/ --kind 2 [--frames N] [--size 1024] [--fps 8] [--format png|gif]
 iroha offline petal decode   --input-dir out/ --output payload.out
 iroha offline petal inspect  --input out/frame_0000.png
-iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 7552 --fps 8 --trials 4
+iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 10000 --fps 8 --trials 4
 ```
 
 `encode` writes `frame_0000.png …` (or one looping `stream.gif` with the `offline-visual-codecs` feature) and
@@ -391,11 +446,15 @@ the beacon of one frame.
 * `fixtures/petal/petal_stream_v1.json` — constants, layout tables, glyph strokes and templates, CRC-32C, xorshift32/`mix32`,
   whitening, Reed–Solomon vectors, fountain masks, the atom-id schedule, and for three streams (`tiny`, `one-pass`, `wrap`) the
   lane data, transmitted words, glyph string and lit-dot list of every listed frame. Encoders must reproduce all of it bit for bit.
-* `fixtures/petal/petal_captures_v1.json` — nine degraded camera luma planes (zlib + base64, row-major 8-bit) with `must_decode`
-  lanes, the lanes the reference decoder reads (`reference_decoded`), the expected lane data, a `mirrored` flag, and two
-  negatives. A decoder must read the required lanes, must never return a lane with wrong data, must reject the negatives, and
-  conforming ports reproduce `reference_decoded` exactly. Three captures exist for the normalised tile read of §7: an
-  over-exposed frame, a frame under veiling light, and a frame with a shadow band across the code.
+* `fixtures/petal/petal_captures_v1.json` — eleven degraded camera luma planes (zlib + base64, row-major 8-bit) with
+  `must_decode` lanes, the lanes the reference decoder reads (`reference_decoded`), the expected lane data, a `mirrored` flag
+  and the `inferred_corner` (null, or the canonical index of a hidden corner blossom); two tracking pairs (`tracks`: a first
+  frame to decode and a second frame to read by tracking its pose, with `must_track`, `reference_tracked` and
+  `inferred_corner`); and two negatives. A decoder must read the required lanes, must never return a lane with wrong data, must
+  reject the negatives, and conforming ports reproduce `reference_decoded`, `reference_tracked` and the inferred corners
+  exactly. Three captures exist for the normalised tile read of §7 (an over-exposed frame, veiling light, a shadow band), two for
+  the inferred corner (a covered blossom, a corner outside the frame), and the tracking pairs cover a small hand movement and a
+  thumb arriving over a blossom between two frames.
 * Regenerate with `cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v1.json` and
   `cargo run --release -p iroha_petal --example gen_captures -- fixtures/petal/petal_captures_v1.json`; `cargo test -p iroha_petal`
   fails if the files and the reference drift apart.
@@ -424,7 +483,7 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 
 * TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, and of the
   exposure-compensation guidance.
-* TODO: accept three visible finders when one is glared out or outside the frame.
-* TODO: pose tracking between frames to skip the finder search on slow devices.
 * TODO: a denser layout profile (the beacon `version` byte reserves the profile nibble) for cameras that resolve
-  more than 22 px per tile.
+  more than 22 px per tile. At 8 fps the present profile moves a 10,000-byte KAGEMUSHA message in about 11.5 s, far from
+  the 2-second experience target of the single implementation draft; Petal is the carrier for cameras that cannot do
+  better, not the fast path.

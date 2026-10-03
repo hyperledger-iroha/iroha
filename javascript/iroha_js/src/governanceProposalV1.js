@@ -70,6 +70,11 @@ export function normalizeGovernanceProposalWireV1(value, context = "proposal") {
         kind,
         payload: normalizeKagemushaVerifierReleaseActivate(record.payload, payloadContext),
       };
+    case "KagemushaVerifierReleaseRetire":
+      return {
+        kind,
+        payload: normalizeKagemushaVerifierReleaseRetire(record.payload, payloadContext),
+      };
     default:
       throw new TypeError(`${context}.kind contains an unsupported V1 proposal variant: ${kind}`);
   }
@@ -1128,6 +1133,52 @@ function normalizeKagemushaVerifierReleaseActivate(value, context) {
     network_id: networkId,
     expected_predecessor: structuredClone(predecessor),
     successor_release_id: [...record.successor_release_id],
+  };
+}
+
+// This validates the public shape and lifecycle projection; native admission owns authentication.
+function normalizeKagemushaVerifierReleaseRetire(value, context) {
+  const record = exactRecord(value, [
+    "proposal_operator", "network_id", "expected_predecessor", "standby_release_id",
+  ], context);
+  const networkId = nonEmptyString(record.network_id, `${context}.network_id`);
+  NetworkId.parse(networkId);
+  const predecessor = record.expected_predecessor;
+  validateKagemushaReleaseSchemaV1("GovernanceKagemushaGovernedVerifierRegistryV1", predecessor);
+  const selected = byteArray(record.standby_release_id, 32, `${context}.standby_release_id`, { nonZero: true });
+  if (predecessor.authority_policy === null) {
+    throw new TypeError(`${context}.expected_predecessor requires a governed signer policy`);
+  }
+  // Reuse the established signer-policy boundary without accepting a registry installation.
+  normalizeKagemushaVerifierPolicyInstall({
+    proposal_operator: record.proposal_operator, network_id: networkId,
+    expected_predecessor: { version: 1, authority_policy: null, active_release_id: null, releases: [] },
+    authority_policy: predecessor.authority_policy,
+  }, context);
+  let previous = null;
+  const active = [];
+  for (const row of predecessor.releases) {
+    const identity = Buffer.from(row.release_id);
+    if (previous !== null && Buffer.compare(previous, identity) >= 0) {
+      throw new TypeError(`${context}.releases must be strictly ordered and unique`);
+    }
+    previous = identity;
+    if (Object.entries(row).some(([field, digest]) => field !== "status" && digest.every((byte) => byte === 0))) {
+      throw new TypeError(`${context}.releases must contain nonzero identities`);
+    }
+    if (row.status === 1) active.push(identity.toString("hex").toUpperCase());
+  }
+  const pointer = predecessor.active_release_id;
+  if (active.length !== (pointer === null ? 0 : 1) || (pointer !== null && active[0] !== pointer)
+      || (pointer === null && predecessor.releases.some((row) => row.status !== 2))) {
+    throw new TypeError(`${context}.active_release_id must match the unique active release`);
+  }
+  if (!predecessor.releases.some((row) => row.status === 2 && equalByteArrays(row.release_id, selected))) {
+    throw new TypeError(`${context}.standby_release_id must select an unused standby release`);
+  }
+  return {
+    proposal_operator: canonicalAccountId(record.proposal_operator, `${context}.proposal_operator`),
+    network_id: networkId, expected_predecessor: structuredClone(predecessor), standby_release_id: selected,
   };
 }
 

@@ -2,129 +2,11 @@
 
 use iroha_allocation::AllocationBudget;
 use iroha_model_base::name::{MAX_NAME_BYTES, Name};
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
-};
-
-#[derive(Clone, Copy)]
-struct Observation {
-    active: bool,
-    requests: [usize; 32],
-    count: usize,
-    bytes: usize,
-    live_pointer: usize,
-    live_bytes: usize,
-    peak: usize,
-    invalid: bool,
-}
-impl Observation {
-    const fn new() -> Self {
-        Self {
-            active: false,
-            requests: [0; 32],
-            count: 0,
-            bytes: 0,
-            live_pointer: 0,
-            live_bytes: 0,
-            peak: 0,
-            invalid: false,
-        }
-    }
-    fn request(&mut self, pointer: *mut u8, bytes: usize, previous: Option<*mut u8>) {
-        if !self.active {
-            return;
-        }
-        if let Some(previous) = previous {
-            self.invalid |= self.live_pointer != previous as usize;
-        } else {
-            self.invalid |= self.live_pointer != 0;
-        }
-        if let Some(slot) = self.requests.get_mut(self.count) {
-            *slot = bytes;
-        } else {
-            self.invalid = true;
-        }
-        self.count += 1;
-        self.bytes += bytes;
-        self.peak = self.peak.max(self.live_bytes + bytes);
-        self.live_pointer = pointer as usize;
-        self.live_bytes = bytes;
-    }
-}
-thread_local! {
-    static OBSERVED: Cell<Observation> = const { Cell::new(Observation::new()) };
-}
-fn observe(operation: impl FnOnce(&mut Observation)) {
-    let _ = OBSERVED.try_with(|cell| {
-        let mut value = cell.get();
-        operation(&mut value);
-        cell.set(value);
-    });
-}
-struct Allocator;
-#[allow(unsafe_code)]
-// SAFETY: original allocation requests are delegated to System without modification.
-unsafe impl GlobalAlloc for Allocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: unchanged system allocation request.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            observe(|state| state.request(pointer, layout.size(), None));
-        }
-        pointer
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: unchanged system allocation request.
-        let pointer = unsafe { System.alloc_zeroed(layout) };
-        if !pointer.is_null() {
-            observe(|state| state.request(pointer, layout.size(), None));
-        }
-        pointer
-    }
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, bytes: usize) -> *mut u8 {
-        // SAFETY: original live allocation and requested size are forwarded.
-        let result = unsafe { System.realloc(pointer, layout, bytes) };
-        if !result.is_null() {
-            observe(|state| state.request(result, bytes, Some(pointer)));
-        }
-        result
-    }
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        observe(|state| {
-            if state.active {
-                state.invalid |=
-                    state.live_pointer != pointer as usize || state.live_bytes != layout.size();
-                state.live_pointer = 0;
-                state.live_bytes = 0;
-            }
-        });
-        // SAFETY: the original allocation is returned to its allocator.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-}
-#[global_allocator]
-static ALLOCATOR: Allocator = Allocator;
-struct Stop;
-impl Drop for Stop {
-    fn drop(&mut self) {
-        observe(|state| state.active = false);
-    }
-}
-fn measured<T>(operation: impl FnOnce() -> T) -> (T, Observation) {
-    OBSERVED.with(|cell| {
-        assert!(!cell.get().active);
-        cell.set(Observation {
-            active: true,
-            ..Observation::new()
-        });
-    });
-    let stop = Stop;
-    let result = operation();
-    let observed = OBSERVED.with(Cell::get);
-    drop(stop);
-    (result, observed)
-}
+#[path = "name_nfc_scratch_allocation/observer.rs"]
+mod observer;
+#[path = "name_nfc_scratch_allocation/state_path.rs"]
+mod state_path;
+use observer::measured;
 
 // One test is intentional: this binary has no earlier Name call or parallel Name
 // test that could initialize the process-global profile before the first measurement.
@@ -210,7 +92,8 @@ fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
             "unexpected parallel or retained allocation for {raw:?}"
         );
         assert_eq!(
-            observed.live_pointer, 0,
+            observed.live_allocations(),
+            0,
             "physical ICU backing must be freed before its caller returns"
         );
         assert_eq!(observed.live_bytes, 0);
@@ -248,5 +131,8 @@ fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
         drop(bytes);
         true
     });
-    assert!(positive && observed.count >= 2 && observed.live_pointer == 0 && !observed.invalid);
+    assert!(
+        positive && observed.count >= 2 && observed.live_allocations() == 0 && !observed.invalid
+    );
+    state_path::long_path_census();
 }

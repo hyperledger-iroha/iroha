@@ -5,10 +5,9 @@
 //! ready/pending drain helpers stay panic-free under concurrent pressure.
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     queue::{Error as QueueError, Queue},
     state::{State, StateView, World},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -17,7 +16,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
 /// Read the queue's bounded ready snapshot and complete pending observation.
 trait QueueDrainExt {
@@ -48,9 +47,13 @@ fn checked_random_queue_keypair() -> KeyPair {
 fn queue_regression_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_queue_keypair();
 }
-fn build_state() -> (Arc<State>, NetworkId, AccountId, KeyPair) {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
+fn build_state() -> (
+    Arc<State>,
+    NetworkId,
+    AccountId,
+    KeyPair,
+    CertifiedTestChain,
+) {
     let key_pair = checked_random_queue_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
@@ -59,15 +62,14 @@ fn build_state() -> (Arc<State>, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
-    let chain_id = ChainId::from("queue-regressions-chain");
-    let state = Arc::new(State::new_with_chain_for_testing(
-        world,
-        kura,
-        query_handle,
-        chain_id.clone(),
-    ));
+    // Queue fee admission reads the immutable root installed by actual signed genesis.
+    let mut config = TestChainConfig::new(world, 0);
+    config.chain_id = ChainId::from("queue-regressions-chain");
+    let chain = CertifiedTestChain::start(config).expect("signed queue fixture genesis");
+    let state = Arc::clone(chain.state());
     let network_id = *state.network_id_ref();
-    (state, network_id, account_id, key_pair)
+    // Retain the original executor, event receiver and signed-chain custody for the test.
+    (state, network_id, account_id, key_pair, chain)
 }
 fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
     QueueConfig {
@@ -101,7 +103,7 @@ fn make_transaction(
 #[test]
 fn queue_rejects_explicitly_expired_transactions() {
     // Coverage: Queue::is_expired TTL override path (`queue.rs`).
-    let (state, chain_id, authority, key_pair) = build_state();
+    let (state, chain_id, authority, key_pair, _chain) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(queue_config(8, Duration::from_secs(60)), events_sender);
     let expired = make_transaction(
@@ -124,7 +126,7 @@ fn queue_rejects_explicitly_expired_transactions() {
 #[test]
 fn queue_rejects_transactions_expiring_by_config_ttl() {
     // Coverage: Queue::is_expired fallback to config TTL (`queue.rs`).
-    let (state, chain_id, authority, key_pair) = build_state();
+    let (state, chain_id, authority, key_pair, _chain) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(4);
     let queue = Queue::from_config(queue_config(4, Duration::from_millis(10)), events_sender);
     let expired = make_transaction(
@@ -150,13 +152,14 @@ fn queue_rejects_transactions_expiring_by_config_ttl() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_ready_and_pending_drains_stay_consistent() {
     // Coverage: concurrent access to the queue drain loops (ready vs. pending).
-    let (state, chain_id, authority, key_pair) = build_state();
+    let (state, chain_id, authority, key_pair, _chain) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(16);
     let queue = Arc::new(Queue::from_config(
         queue_config(64, Duration::from_secs(60)),
         events_sender,
     ));
     let now = TimeSource::new_system().get_unix_time();
+    let mut expected_hashes = BTreeSet::new();
     // Pre-seed a few transactions to exercise both drain paths immediately.
     for nonce in 0..8 {
         let tx = make_transaction(
@@ -171,6 +174,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             !queue.is_expired(&tx),
             "seed transactions should remain valid during stress"
         );
+        expected_hashes.insert(tx.hash_as_entrypoint());
         queue
             .push(tx, state.view())
             .expect("queue accepts seed transaction");
@@ -203,6 +207,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
     let authority_for_push = authority.clone();
     let key_pair_for_push = key_pair.clone();
     let push_task = async move {
+        let mut injected_hashes = BTreeSet::new();
         for nonce in 8..64 {
             let tx = make_transaction(
                 &chain_id_for_push,
@@ -212,24 +217,54 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
                 Some(Duration::from_secs(120)),
                 TimeSource::new_system().get_unix_time(),
             );
-            if queue_for_push.is_expired(&tx) {
-                continue;
-            }
+            assert!(
+                !queue_for_push.is_expired(&tx),
+                "injected transaction is live"
+            );
+            injected_hashes.insert(tx.hash_as_entrypoint());
             queue_for_push
                 .push(tx, state_for_push.view())
                 .expect("queue accepts injected transaction during stress");
             sleep(Duration::from_millis(1)).await;
         }
+        injected_hashes
     };
-    tokio::join!(ready_task, pending_task, push_task);
-    // The queue should stay internally consistent despite the concurrent drains.
+    let (_, _, injected_hashes) = tokio::join!(ready_task, pending_task, push_task);
+    expected_hashes.extend(injected_hashes);
+    // Snapshots retain all original signed inputs. The ready cursor may begin in
+    // the middle of the FIFO after concurrent sampling; one bounded window
+    // reaches its end, and the next covers the complete retained queue.
+    assert_eq!(expected_hashes.len(), 64);
     let remaining = queue.queued_len();
-    if remaining > 0 {
-        // Verify that any residual transactions remain accessible via the ready drain.
-        let view = state.view();
-        let limit = NonZeroUsize::new(remaining).expect("non-zero queue length");
-        let guards = queue.drain_ready(&view, limit);
-        drop(view);
-        assert_eq!(guards.len(), remaining);
-    }
+    assert_eq!(remaining, 64);
+    let view = state.view();
+    let limit = NonZeroUsize::new(remaining).expect("non-zero queue length");
+    let first = queue.drain_ready(&view, limit);
+    assert!(first.len() <= remaining);
+    assert!(
+        first
+            .iter()
+            .all(|tx| expected_hashes.contains(&tx.hash_as_entrypoint()))
+    );
+    let guards = queue.drain_ready(&view, limit);
+    assert_eq!(guards.len(), remaining);
+    assert_eq!(
+        guards
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<BTreeSet<_>>(),
+        expected_hashes
+    );
+    let pending = queue.drain_pending(&view);
+    assert_eq!(pending.len(), remaining);
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<BTreeSet<_>>(),
+        expected_hashes
+    );
+    drop(view);
+    drop((first, guards, pending));
+    assert_eq!(queue.queued_len(), remaining);
 }

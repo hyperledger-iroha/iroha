@@ -98,11 +98,12 @@ workflow likewise does not claim reference-host latency qualification. See
 
 ## Qualification and documentation
 
-Unsigned macOS ARM64 installed-release diagnostics now exercise both the local
-four-validator workflow and a disposable four-parent/four-private attachment.
-They verify all three contract inputs, exact repeat receipts, localnet restart
-recovery, funded parent provisioning, paid SNS ownership, private execution and
-independently authenticated parent anchoring. The attachment fixture also checks
+Installed-release fixtures exercise both the local four-validator workflow and a
+disposable four-parent/four-private attachment. They check all three contract inputs,
+exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
+ownership, private execution and independently authenticated parent anchoring.
+The combined flows require a fresh run against the current implementation; component
+tests do not establish their completion. The attachment fixture also checks
 that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
 does not establish universal secrecy, official Taira readiness, native desktop
@@ -219,6 +220,19 @@ That evidence supplies enrollment inputs; current signer eligibility and downloa
 admission still require their separate checks.
 The first release removes external broker gateway authority; bare gateway DTOs and
 test providers cannot supply the native deployment authority.
+
+The wallet owns a closed initial reserve-policy operation: revision one without a
+predecessor, exact asset and role bindings, and original signed fee/deadline terms.
+Its journal permits once-only dispatch and read-only recovery of that same request.
+Caller-selected fields do not prove policy absence or governance permission.
+The independent reserve-policy reader binds the selected Global decision and native
+schema to the manager's direct governance permission, selected account and asset keys,
+and exact policy and activation provenance. Its account-authenticated Torii route
+works before service activation and shares the native snapshot and bounded transport
+owners. Authenticated singleton absence does not establish namespace emptiness or
+initial activation eligibility. Current-candidate native validation, that separate
+eligibility prerequisite, managed collateral/credit/capacity provisioning and durable
+service activation remain required for unattended cold-package setup.
 
 The native gateway owner is separate from token-signing custody.
 Gateway requests, quota inputs and receipts now have one canonical data-model owner;

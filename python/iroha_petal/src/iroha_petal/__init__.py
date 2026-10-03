@@ -17,7 +17,7 @@ Sender::
 
 Receiver::
 
-    session = ScanSession()
+    session = ScanSession()  # tracks the code from frame to frame
     outcome = session.push(Luma(width, height, y_plane), now_ms)
     if outcome.completed is not None:
         payload = outcome.completed.payload
@@ -38,6 +38,7 @@ from .decode import (
     decode_frame_at,
     observed_cells,
     tile_match_error,
+    track_frame,
 )
 from .fountain import FountainDecoder, encode_atom, mask_len, mask_words, mix32, split_payload
 from .glyphs import GLYPH_CHARS, GLYPH_COUNT, STROKES, TEMPLATES, generate_templates, is_inked
@@ -69,7 +70,7 @@ from .layout import (
     split_slot,
     tile_center,
 )
-from .locate import Finder, locate
+from .locate import Finder, FinderSet, locate, locate_candidates
 from .pngio import decode_png, encode_pgm, encode_png, image_to_luma, read_luma, write_image
 from .prng import Xorshift32
 from .render import (
@@ -83,7 +84,7 @@ from .render import (
     render_frame,
 )
 from .rs import ReedSolomon, RsError, RsErrorKind
-from .session import ScanLimits, ScanOutcome, ScanSession, ScanStats
+from .session import TRACK_WINDOW_MS, ScanLimits, ScanOutcome, ScanSession, ScanStats
 from .stream import (
     BEACON_INTERVAL,
     DEFAULT_MAX_PAYLOAD_LEN,
@@ -129,6 +130,7 @@ __all__ = [
     "STROKES",
     "TEMPLATES",
     "TILES",
+    "TRACK_WINDOW_MS",
     "AssemblerLimits",
     "AtomPacket",
     "Beacon",
@@ -141,6 +143,7 @@ __all__ = [
     "DecodedFrame",
     "DrawList",
     "Finder",
+    "FinderSet",
     "FinderShape",
     "FountainDecoder",
     "FrameCells",
@@ -189,6 +192,7 @@ __all__ = [
     "is_beacon_frame",
     "is_inked",
     "locate",
+    "locate_candidates",
     "mask_len",
     "mask_words",
     "mix32",
@@ -203,5 +207,6 @@ __all__ = [
     "split_slot",
     "tile_center",
     "tile_match_error",
+    "track_frame",
     "write_image",
 ]

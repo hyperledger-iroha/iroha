@@ -345,11 +345,11 @@ pub fn transfer_return(
 fn complete_test_result(source: &mut IVM, words: &[u64]) -> u64 {
     let result_table = source.alloc_heap((words.len() * 8) as u64).unwrap();
     let stack_top = source.memory.stack_top();
-    let callable = ivm_abi::call::EmbeddedCallableV1 {
+    let callable = crate::call_frame::CallFrameShape {
         entry_pc: 0,
         frame_bytes: 0,
-        argument_words: Vec::new(),
-        result_words: vec![ivm_abi::call::CallWordV1::Bool; words.len()],
+        argument_words: 0,
+        result_words: words.len(),
     };
     source
         .memory

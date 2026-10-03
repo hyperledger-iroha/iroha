@@ -95,12 +95,12 @@ mod state_snapshot_decode_error_tests {
 /// A finite snapshot observation failed before it acquired immutable bytes.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SnapshotCaptureError {
-    /// A State publisher already owns the generation.
-    #[error("State snapshot observation is busy")]
-    Busy,
+    /// Original nonblocking physical State reader failure.
+    #[error(transparent)]
+    Read(#[from] crate::state::StateViewError),
     /// The semantic State changed during the single capture attempt.
     #[error("State snapshot observation changed during capture")]
-    Changed,
+    Changed(iroha_allocation::release::ReleaseWait),
     /// A stable runtime/World projection is malformed.
     #[error("invalid State snapshot runtime projection: {0}")]
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
@@ -112,24 +112,43 @@ pub(crate) enum SnapshotCaptureError {
 impl SnapshotCaptureError {
     /// Whether the caller should reacquire its observation rather than reject input.
     pub(crate) fn is_observation_changed(&self) -> bool {
-        matches!(self, Self::Busy | Self::Changed)
+        matches!(
+            self,
+            Self::Read(crate::state::StateViewError::Busy(_)) | Self::Changed(_)
+        )
     }
 }
 impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
     fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::ExecutionObservationChanged
-        } else {
-            Self::ExecutionStatePublication(error.to_string())
+        match error {
+            SnapshotCaptureError::Read(error) => Self::StateView(error),
+            SnapshotCaptureError::Changed(wait) => {
+                Self::StateView(crate::state::StateViewError::Busy(wait))
+            }
+            SnapshotCaptureError::Runtime(error) => {
+                Self::StateView(crate::state::StateViewError::Runtime(*error))
+            }
+            error => Self::ExecutionStatePublication(error.to_string()),
         }
     }
 }
 impl From<SnapshotCaptureError> for crate::state::storage_transactions::TransactionsBlockError {
     fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::SnapshotObservationChanged
-        } else {
-            Self::SnapshotProjection
+        match error {
+            SnapshotCaptureError::Read(crate::state::StateViewError::Busy(wait))
+            | SnapshotCaptureError::Changed(wait) => Self::PublicationBusy(wait),
+            SnapshotCaptureError::Read(crate::state::StateViewError::Runtime(
+                crate::state::LaneLifecycleError::NposPolicy(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ),
+            )) => Self::ExecutionDeferred(reason),
+            SnapshotCaptureError::Runtime(error) => match *error {
+                crate::state::LaneLifecycleError::NposPolicy(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ) => Self::ExecutionDeferred(reason),
+                _ => Self::SnapshotProjection,
+            },
+            _ => Self::SnapshotProjection,
         }
     }
 }
@@ -182,17 +201,21 @@ impl CapturedStateSnapshot {
         after_serialization: impl FnOnce(),
     ) -> Result<Self, SnapshotCaptureError> {
         let state = releases.state();
+        let publication = state.view_publication_release();
         let generation = state.state_view_generation();
         if generation % 2 != 0 {
-            return Err(SnapshotCaptureError::Busy);
+            return Err(crate::state::StateViewError::Busy(publication).into());
         }
         let view = releases.try_view_once();
         if state.state_view_generation() != generation {
-            return Err(SnapshotCaptureError::Changed);
+            return Err(SnapshotCaptureError::Changed(publication));
         }
-        let view = view
-            .map_err(|error| SnapshotCaptureError::Runtime(Box::new(error)))?
-            .ok_or(SnapshotCaptureError::Changed)?;
+        let view = view.map_err(|error| match error {
+            crate::state::StateViewError::Runtime(error) => {
+                SnapshotCaptureError::Runtime(Box::new(error))
+            }
+            error => SnapshotCaptureError::Read(error),
+        })?;
         // TODO: Bound the serializer's allocation while preserving the exact JSON
         // encoding. The existing writer resource limits run after this allocation.
         let mut json = String::new();
@@ -200,7 +223,7 @@ impl CapturedStateSnapshot {
         after_serialization();
         let after = state.state_view_generation();
         if generation != after || after % 2 != 0 {
-            return Err(SnapshotCaptureError::Changed);
+            return Err(SnapshotCaptureError::Changed(publication));
         }
         let identity = CapturedSnapshotIdentity {
             serialized_hash: Hash::new(json.as_bytes()),
@@ -856,6 +879,8 @@ pub struct SnapshotMaker {
     resource_policy: SnapshotResourcePolicy,
     /// Original startup pool, shared by all authenticated payload read buffers.
     read_buffer_budget: AllocationBudget,
+    /// Original commit-evidence refusal retained until a snapshot is successfully published.
+    commit_evidence_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 impl SnapshotMaker {
     /// Start supervised storage maintenance after successful startup recovery.
@@ -974,6 +999,7 @@ impl SnapshotMaker {
             });
             match result {
                 Ok(published) => {
+                    self.commit_evidence_refusal = None;
                     iroha_logger::info!(
                         at_height = published.height,
                         "Successfully created a snapshot of state"
@@ -982,6 +1008,10 @@ impl SnapshotMaker {
                 }
                 Err(TryWriteError::Capture(error)) if error.is_observation_changed() => {
                     iroha_logger::debug!(%error, "Deferring snapshot until a stable State observation is available");
+                }
+                Err(TryWriteError::CommitEvidenceResourceDeferred { height, reason }) => {
+                    iroha_logger::debug!(height, %reason, "Deferring snapshot until original commit-evidence resources are available");
+                    self.commit_evidence_refusal = Some(reason);
                 }
                 Err(error @ TryWriteError::CommitEvidenceDeferred { .. }) => {
                     iroha_logger::debug!(%error, "Deferring snapshot until commit evidence is complete");
@@ -1016,6 +1046,7 @@ impl SnapshotMaker {
                 max_payload_bytes: config.max_payload_bytes,
                 resource_policy: config.resources,
                 read_buffer_budget,
+                commit_evidence_refusal: None,
             })
         } else {
             None
@@ -4611,16 +4642,30 @@ fn ensure_snapshot_commit_evidence(
             "snapshot height/hash differs from its original native execution".into(),
         ));
     }
+    let attempt_failure = |error: crate::execution_attempt::ExecutionAttemptError<
+        crate::sumeragi::certified_chain::ChainReadError,
+    >| match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            failure(error.to_string())
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            TryWriteError::CommitEvidenceResourceDeferred {
+                height: checkpoint.height,
+                reason,
+            }
+        }
+    };
     let chain = crate::sumeragi::certified_chain::CertifiedChain::from_pinned(
         &identity.chain_id,
         &identity.network_id,
         &checkpoint.block_hashes,
         state.kura(),
+        &state.ivm_execution_budget(),
     )
-    .map_err(|error| failure(error.to_string()))?;
+    .map_err(&attempt_failure)?;
     let certified = chain
         .certified(checkpoint.height)
-        .map_err(|error| failure(error.to_string()))?;
+        .map_err(attempt_failure)?;
     if certified.block_hash() != tip.iroha_hash()
         || certified.core_hash() != tip.core_hash()
         || certified.result() != tip.result()

@@ -12409,6 +12409,7 @@ mod evidence_http_tests {
     include!("client/validator_committee_tests.rs");
     include!("client/consensus_keys_tests.rs");
     include!("client/activation_attestation_tests.rs");
+    include!("client/reserve_policy_tests.rs");
     include!("client/sns_lease_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
@@ -14711,6 +14712,7 @@ include!("client/canonical_request_auth.rs");
 include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
 include!("client/sumeragi_finality.rs");
+include!("client/reserve_policy.rs");
 include!("client/sns_lease.rs");
 /// Representation of `Iroha` client.
 impl Client {
@@ -28563,7 +28565,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "72fff8fd63bb7a8660839062f9a03800d978cf36df92d21ff140ba5e991f0431",
+            "ce3b2db09db97871a76cf1e2318ccfb51931ec71a9917af74270128ca510c913",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

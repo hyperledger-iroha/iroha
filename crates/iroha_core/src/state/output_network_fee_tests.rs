@@ -9,6 +9,9 @@ use iroha_data_model::{
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 
+#[path = "musubi_pin_outbox_history_tests.rs"]
+mod musubi_pin_outbox_history;
+
 fn priced_fixture(callback_bytes: Option<usize>) -> (State, AssetDefinitionId) {
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),

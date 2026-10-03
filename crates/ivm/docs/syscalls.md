@@ -597,6 +597,13 @@ node enforces that policy unconditionally.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
+- Callable metadata carries complete flat `CallSchemaV1` argument/result trees.
+  It preserves Option/Result payloads, exact List capacities and element types,
+  nominal products/errors, privacy, and `StateCursor(EntrypointValueKindV1)` keys.
+  Table counts derive from the trees; active nested values use the same checks as
+  direct words. Canonical cursor frames with a different key kind are rejected;
+  `Json` is not a supported cursor key kind. Private schemas retain the compiler's
+  250,000-node/depth-256 bounds; public record limits remain unchanged.
 - Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
   accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
   scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.

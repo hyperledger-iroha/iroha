@@ -2589,7 +2589,14 @@ pub fn apply_with_state_block<T>(
     state: &State,
     mutation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, SnsError>,
 ) -> Result<T, SnsError> {
-    let latest_block = state.view().latest_block();
+    let latest_block = state.view().latest_block().map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            SnsError::Deferred(reason)
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            SnsError::Internal(error.to_string())
+        }
+    })?;
     let next_height = latest_block
         .as_ref()
         .map(|block| block.header().height().get().saturating_add(1))

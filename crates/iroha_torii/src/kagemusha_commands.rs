@@ -1006,9 +1006,7 @@ fn ensure_kagemusha_command_authority_ready_in_world(
 }
 
 fn snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
-    state.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    })
+    state.query_ledger_time_ms()
 }
 
 fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Result<(), Error> {

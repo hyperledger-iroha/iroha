@@ -156,7 +156,12 @@ fn commit_with_signers_rejects_invalid_block_signature() {
         ValidatorIndex::try_from(1).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_err(),
@@ -179,7 +184,12 @@ fn commit_with_signers_succeeds_with_quorum_and_signatures() {
         ValidatorIndex::try_from(1).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),

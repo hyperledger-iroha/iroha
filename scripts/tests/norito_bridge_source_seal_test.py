@@ -23,6 +23,134 @@ sys.modules[SPEC.name] = seal
 SPEC.loader.exec_module(seal)
 
 
+class NoritoBridgeAndroidFirstDeviceServiceResourceTests(unittest.TestCase):
+    """A maintained public SPI filename never exempts source bytes or custody."""
+
+    RESOURCE = (
+        "kotlin/client-android/src/main/resources/META-INF/services/"
+        "org.hyperledger.iroha.sdk.offline.KagemushaFirstDeviceHardwareEvidenceServiceFactoryV1"
+    )
+    PROVIDER = (
+        b"org.hyperledger.iroha.sdk.offline."
+        b"KagemushaAndroidFirstDeviceHardwareEvidenceServiceFactoryV1\n"
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+
+    def test_first_device_spi_admits_only_the_exact_public_resource(self) -> None:
+        self.assertEqual(seal._public_source_relative(self.RESOURCE).as_posix(), self.RESOURCE)
+        for relative in (
+            self.RESOURCE + ".bak",
+            self.RESOURCE + "Unreviewed",
+            self.RESOURCE.replace("FirstDevice", "SecondDevice"),
+            self.RESOURCE.replace("client-android/", "core-jvm/"),
+            self.RESOURCE.replace("META-INF/services/", "META-INF/unreviewed/"),
+            self.RESOURCE.replace("ServiceFactoryV1", "ServiceFactoryV2"),
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                    seal._public_source_relative(relative)
+
+    def test_first_device_spi_fingerprints_every_byte_and_rejects_aliases(self) -> None:
+        path = self.root / self.RESOURCE
+        path.parent.mkdir(parents=True)
+        path.write_bytes(self.PROVIDER)
+        lockfile = self.root / "Cargo.lock"
+        lockfile.write_bytes(b"public synthetic lock\n")
+        with mock.patch.object(seal, "listed_files", return_value=[self.RESOURCE]), \
+                mock.patch.object(seal, "selected_lockfile_path", return_value=lockfile), \
+                mock.patch.object(seal, "lockfile_identity", return_value=("0" * 64,)):
+            original = seal.fingerprint(self.root, [self.RESOURCE], lockfile)
+            self.assertEqual(seal._read_public_source_bytes(self.root, self.RESOURCE), self.PROVIDER)
+            path.write_bytes(self.PROVIDER + b"# changed original\n")
+            self.assertNotEqual(seal.fingerprint(self.root, [self.RESOURCE], lockfile), original)
+            path.write_bytes(self.PROVIDER)
+            self.assertEqual(seal.fingerprint(self.root, [self.RESOURCE], lockfile), original)
+            actual = path.with_name(path.name + ".txt")
+            path.rename(actual)
+            path.symlink_to(actual)
+            with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                seal.fingerprint(self.root, [self.RESOURCE], lockfile)
+
+    def test_first_device_spi_cannot_override_material_or_provider_refusal(self) -> None:
+        for relative in (
+            "secrets/" + self.RESOURCE,
+            "vultr/" + self.RESOURCE,
+            self.RESOURCE + ".pem",
+            self.RESOURCE + ".key",
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                    seal._public_source_relative(relative)
+
+
+class NoritoBridgeAndroidMintFundingServiceResourceTests(unittest.TestCase):
+    """A maintained public SPI filename never exempts source bytes or custody."""
+
+    RESOURCE = (
+        "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/"
+        "org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeOwnerV1"
+    )
+    PROVIDER = (
+        b"org.hyperledger.iroha.sdk.offline."
+        b"KagemushaOrdinaryMintFundingNativeProviderV1\n"
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+
+    def test_mint_funding_spi_admits_only_the_exact_public_resource(self) -> None:
+        self.assertEqual(seal._public_source_relative(self.RESOURCE).as_posix(), self.RESOURCE)
+        for relative in (
+            self.RESOURCE + ".bak",
+            self.RESOURCE + "Unreviewed",
+            self.RESOURCE.replace("MintFunding", "OtherFunding"),
+            self.RESOURCE.replace("kagemusha-wallet-android/", "core-jvm/"),
+            self.RESOURCE.replace("META-INF/services/", "META-INF/unreviewed/"),
+            self.RESOURCE.replace("NativeOwnerV1", "NativeOwnerV2"),
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                    seal._public_source_relative(relative)
+
+    def test_mint_funding_spi_fingerprints_every_byte_and_rejects_aliases(self) -> None:
+        path = self.root / self.RESOURCE
+        path.parent.mkdir(parents=True)
+        path.write_bytes(self.PROVIDER)
+        lockfile = self.root / "Cargo.lock"
+        lockfile.write_bytes(b"public synthetic lock\n")
+        with mock.patch.object(seal, "listed_files", return_value=[self.RESOURCE]), \
+                mock.patch.object(seal, "selected_lockfile_path", return_value=lockfile), \
+                mock.patch.object(seal, "lockfile_identity", return_value=("0" * 64,)):
+            original = seal.fingerprint(self.root, [self.RESOURCE], lockfile)
+            self.assertEqual(seal._read_public_source_bytes(self.root, self.RESOURCE), self.PROVIDER)
+            path.write_bytes(self.PROVIDER + b"# changed original\n")
+            self.assertNotEqual(seal.fingerprint(self.root, [self.RESOURCE], lockfile), original)
+            path.write_bytes(self.PROVIDER)
+            self.assertEqual(seal.fingerprint(self.root, [self.RESOURCE], lockfile), original)
+            actual = path.with_name(path.name + ".txt")
+            path.rename(actual)
+            path.symlink_to(actual)
+            with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                seal.fingerprint(self.root, [self.RESOURCE], lockfile)
+
+    def test_mint_funding_spi_cannot_override_material_or_provider_refusal(self) -> None:
+        for relative in (
+            "secrets/" + self.RESOURCE,
+            "vultr/" + self.RESOURCE,
+            self.RESOURCE + ".pem",
+            self.RESOURCE + ".key",
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                    seal._public_source_relative(relative)
+
+
 class NoritoBridgeSourceSealTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

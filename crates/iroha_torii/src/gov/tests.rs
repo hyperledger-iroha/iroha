@@ -55,6 +55,7 @@ fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
             "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
             "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
+            "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
         ]
     );
 }
@@ -2097,7 +2098,7 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
     let mut publish = |totals: [u128; 3]| {
         let height = chain.height() + 1;
-        let parent = state.view().latest_block().map(|block| block.hash());
+        let parent = state.view().latest_block_hash();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(height).unwrap(),
             parent,

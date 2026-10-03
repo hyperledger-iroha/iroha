@@ -171,61 +171,109 @@ type P256AggregateFixedReplayScratchV1 = (
     [usize; 16],
 );
 
-/// Conservative simultaneous owners for one registration, excluding replay/cache.
+/// Distinct caller lifetime boundaries; replay/cache and worker/source scratch
+/// retain their separate reservations throughout the registration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MainRegistrationQuotientPayloadV1 {
+    pub(super) stripe: usize,
+    pub(super) interpolation: usize,
+    pub(super) accumulation: usize,
+}
+
+impl MainRegistrationQuotientPayloadV1 {
+    pub(super) fn maximum_v1(self) -> usize {
+        self.stripe.max(self.interpolation).max(self.accumulation)
+    }
+
+    pub(super) fn new_v1(
+        layout: &AggregateProofLayoutV1,
+        registration: RegisteredSegmentLayoutV1,
+        degree_cap: usize,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)?;
+        let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
+            segment.trace_log2,
+            plan.quotient_coset_log2,
+            0,
+        )?;
+        let field = core::mem::size_of::<F>();
+        let extension = core::mem::size_of::<E>();
+        let width = sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?;
+        // Conservatively retain all column/lane headers and bounded fixed-row
+        // metadata in every phase, even after their associated owner drops.
+        // Private stripe headers are also reserved by the bounded transform
+        // policy; this local charge does not reclaim that separate allowance.
+        let metadata = sum(&[
+            product(&[width, core::mem::size_of::<Vec<F>>()])?,
+            product(&[SECURITY_LANES, core::mem::size_of::<Vec<E>>()])?,
+            product(&[2, SECURITY_LANES, core::mem::size_of::<Vec<Vec<E>>>()])?,
+            product(&[
+                2,
+                SECURITY_LANES,
+                COMPOSITION_DEGREE_CHUNKS,
+                core::mem::size_of::<Vec<E>>(),
+            ])?,
+            product(&[
+                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                core::mem::size_of::<&mut [F]>(),
+            ])?,
+            core::mem::size_of::<P256AggregateFixedReplayScratchV1>(),
+            main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
+                segment.trace_log2,
+                stripe,
+            )?,
+        ])?;
+        let quotients = product(&[SECURITY_LANES, plan.quotient_coset_rows, extension])?;
+        let coefficients = product(&[plan.quotient_coset_rows, extension])?;
+        let chunks = product(&[
+            SECURITY_LANES,
+            COMPOSITION_DEGREE_CHUNKS,
+            degree_cap,
+            extension,
+        ])?;
+        let replacement = product(&[degree_cap, extension])?;
+        // The caller reserves every outer chunk before its first private write.
+        // Each stripe owns base/aux and the in-place public fixed matrix; only
+        // the original quotient vectors coexist with those matrices. Native
+        // fixed-column growth is serial, with one old allocation still live.
+        let stripe_payload = sum(&[
+            metadata,
+            product(&[width, stripe.rows, field])?,
+            if stripe.rows > segment.trace_size() {
+                product(&[segment.trace_size(), field])?
+            } else {
+                0
+            },
+            quotients,
+            chunks,
+        ])?;
+        // main_registration_composition_coefficient_chunks_v1 explicitly drops
+        // cache/fixed_coset after the stripe loop. Base/aux/denominators already
+        // dropped at each iteration. All quotient lanes remain while one lane
+        // is copied for IFFT and incoming chunks accumulate; the full incoming
+        // allocation includes the current lane's in-progress split.
+        let interpolation = sum(&[metadata, quotients, coefficients, chunks, chunks])?;
+        // Returning the contribution drops quotients and its final IFFT copy.
+        // The caller then holds outer plus incoming chunks. Although production
+        // reserves the outer capacities in advance, retain one complete serial
+        // replacement chunk for the general addition helper's growth path.
+        let accumulation = sum(&[metadata, chunks, chunks, replacement])?;
+        Ok(Self {
+            stripe: stripe_payload,
+            interpolation,
+            accumulation,
+        })
+    }
+}
+
+/// Charge the maximum of real lifetime phases, never their disjoint sum.
 fn registration_quotient_payload_v1(
     layout: &AggregateProofLayoutV1,
     registration: RegisteredSegmentLayoutV1,
     degree_cap: usize,
 ) -> Result<usize, ZkX509StarkErrorV1> {
-    let segment = registration.segment;
-    let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)?;
-    let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
-        segment.trace_log2,
-        plan.quotient_coset_log2,
-        0,
-    )?;
-    let field = core::mem::size_of::<F>();
-    let extension = core::mem::size_of::<E>();
-    // One trace/fixed stripe, quotient plus IFFT copy, and both accumulated/
-    // incoming chunks stay charged even where lifetimes separate. Fixed
-    // coefficients become stripe values in the same owned matrix; subsequent
-    // stripes recover coefficients in place, so no second fixed matrix lives.
-    sum(&[
-        // The final public fixed matrix is built in place. Charge its column
-        // headers and bounded borrowed targets/one arithmetic row explicitly;
-        // inverse FFTs are in place and allocate no second coefficient batch.
-        product(&[segment.fixed_width, core::mem::size_of::<Vec<F>>()])?,
-        product(&[
-            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
-            core::mem::size_of::<&mut [F]>(),
-        ])?,
-        core::mem::size_of::<P256AggregateFixedReplayScratchV1>(),
-        main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
-            segment.trace_log2,
-            stripe,
-        )?,
-        product(&[
-            sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?,
-            stripe.rows,
-            field,
-        ])?,
-        // Padding a public fixed column may allocate its final stripe while
-        // the old native allocation is still live. Growth is serial; charge
-        // exactly one native-column overlap in addition to the final matrix.
-        if stripe.rows > segment.trace_size() {
-            product(&[segment.trace_size(), field])?
-        } else {
-            0
-        },
-        product(&[2, SECURITY_LANES, plan.quotient_coset_rows, extension])?,
-        product(&[
-            2,
-            SECURITY_LANES,
-            COMPOSITION_DEGREE_CHUNKS,
-            degree_cap,
-            extension,
-        ])?,
-    ])
+    Ok(MainRegistrationQuotientPayloadV1::new_v1(layout, registration, degree_cap)?.maximum_v1())
 }
 
 /// Changing to CPU does not discharge allocations still owned by device work.
@@ -295,6 +343,9 @@ impl MainProverBufferPlanV1 {
         let shape = assembly.sha_schedule.shape();
         let retained = sum(&[
             small_retained,
+            // Both original masked RFC coefficient sets remain live through query replay.
+            // Reserve all public columns before the first source or entropy draw.
+            super::main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(layout)?,
             P256MainBaseSourceV1::allocation_forecast_v1()?,
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
                 .map_err(map_main_sha_source_error_v1)?,
@@ -362,6 +413,10 @@ impl MainProverBufferPlanV1 {
             retained,
             source_scratch,
             MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+            // A fixed public maximum pair is charged before native sources
+            // and in every later phase, even when the current public domain
+            // uses no table. No private capacity can select table/fallback.
+            main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
         ])?;
         if required > self.remaining_source_and_runtime_envelope {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
@@ -462,7 +517,11 @@ impl MainProverBufferPlanV1 {
         ])?;
         // Keep the former coefficient replay allowance unchanged. Native DEEP
         // charges its Lagrange weights, mask powers, bounded native batch and
-        // weighted arrays by actual capacity inside this envelope. The temporary
+        // weighted arrays by actual capacity inside this envelope. Mixed retained
+        // RFC DEEP independently admits BOTH the native and coefficient owners
+        // together against replay_batch; it does not spend this smaller native
+        // allowance twice. Its coefficient-power and weighted capacity checks
+        // retain the same full replay reservation in every applicable phase. The temporary
         // inversion prefix ends before the weighted/native batch lifetime starts;
         // no common-domain evaluation matrix is allocated during DEEP.
         let deep_replay = sum(&[

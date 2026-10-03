@@ -10,6 +10,7 @@ use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
 use thiserror::Error;
+mod proof_siblings;
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
 /// Maximum number of leaves addressable by the canonical `u32` proof index.
 const MERKLE_PROOF_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
@@ -1082,16 +1083,9 @@ impl<T> MerkleTree<T> {
     }
     /// Constructs a Merkle proof for the leaf at the given index among all leaves.
     pub fn get_proof(&self, leaf_index: u32) -> Option<MerkleProof<T>> {
-        let mut index = self.index_in_tree(leaf_index as usize)?;
-        let mut audit_path = Vec::new();
-        while let Some(parent_index) = self.parent_index(index) {
-            let sibling = self.sibling_index(index).and_then(|i| self.get(i));
-            audit_path.push(sibling.copied());
-            index = parent_index;
-        }
         Some(MerkleProof {
             leaf_index,
-            audit_path,
+            audit_path: self.proof_siblings(leaf_index)?.collect(),
         })
     }
     /// Incrementally update the leaf at `leaf_index` and recompute parents
@@ -1630,35 +1624,33 @@ impl MerkleTree<[u8; 32]> {
     ///
     /// # Errors
     ///
-    /// Returns [`MerkleError::InvalidChunkSize`] when `chunk` is outside `1..=32`.
+    /// Returns [`MerkleError::InvalidChunkSize`] when `chunk` is outside `1..=32`,
+    /// or [`MerkleError::AllocationUnavailable`] when its sole fixed node allocation
+    /// cannot be reserved. Its requested bytes are exactly
+    /// [`Self::repeated_sha256_node_allocation_bytes`] for the padded leaf count.
     pub fn from_byte_chunks(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
         validate_chunk_size(chunk)?;
-        let mut leaves = Vec::new();
-        let mut exact = data.chunks_exact(chunk);
-        for c in &mut exact {
-            let digest = Sha256::digest(c);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&digest);
-            leaves.push(arr);
+        let count = data.len().div_ceil(chunk).max(1);
+        let mut tree = Self::try_sha256_node_storage(count)?;
+        let offset = tree.nodes.len() - count;
+        for (index, node) in tree.nodes[offset..].iter_mut().enumerate() {
+            // Empty input retains its canonical single zero leaf. A partial
+            // final chunk is padded to exactly `chunk`, never to 32 bytes.
+            let start = index * chunk;
+            let end = start.saturating_add(chunk).min(data.len());
+            let digest: [u8; 32] = if end - start == chunk {
+                Sha256::digest(&data[start..end]).into()
+            } else {
+                let mut padded = [0u8; 32];
+                if start < end {
+                    padded[..end - start].copy_from_slice(&data[start..end]);
+                }
+                Sha256::digest(&padded[..chunk]).into()
+            };
+            *node = Some(HashOf::from_untyped_unchecked(Hash::prehashed(digest)));
         }
-        let rem = exact.remainder();
-        if !rem.is_empty() {
-            let mut buf = [0u8; 32];
-            buf[..rem.len()].copy_from_slice(rem);
-            let digest = Sha256::digest(&buf[..chunk]);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&digest);
-            leaves.push(arr);
-        }
-        if leaves.is_empty() {
-            // by convention, at least one zero leaf: hash of `chunk` zero bytes
-            let buf = [0u8; 32];
-            let digest = Sha256::digest(&buf[..chunk]);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&digest);
-            leaves.push(arr);
-        }
-        Ok(Self::from_hashed_leaves_sha256(leaves))
+        tree.rebuild_sha256_parents(offset);
+        Ok(tree)
     }
     /// Build a Merkle tree from an owned vector of pre-hashed 32-byte leaves, computing internal
     /// nodes in parallel. Semantics match `from_hashed_leaves_sha256` exactly and remain
@@ -1976,6 +1968,46 @@ impl<'a, T> LeafHashIterator<'a, T> {
 mod tests {
     use super::*;
     use crate::Hash;
+    #[test]
+    fn byte_chunks_fixed_allocation_preserves_empty_ragged_roots_and_proofs() {
+        for chunk in [1, 7, 17, 32] {
+            for len in [
+                0,
+                1,
+                chunk - 1,
+                chunk,
+                chunk + 1,
+                3 * chunk - 1,
+                65 * chunk - 3,
+            ] {
+                let data: Vec<_> = (0..len)
+                    .map(|index| (index as u8).wrapping_mul(37))
+                    .collect();
+                let mut leaves: Vec<[u8; 32]> = data
+                    .chunks(chunk)
+                    .map(|piece| {
+                        let mut padded = [0u8; 32];
+                        padded[..piece.len()].copy_from_slice(piece);
+                        Sha256::digest(&padded[..chunk]).into()
+                    })
+                    .collect();
+                if leaves.is_empty() {
+                    leaves.push(Sha256::digest(&[0u8; 32][..chunk]).into());
+                }
+                let expected = MerkleTree::from_hashed_leaves_sha256(leaves.iter().copied());
+                let actual = MerkleTree::from_byte_chunks(&data, chunk).unwrap();
+                assert_eq!(actual, expected, "chunk {chunk}, bytes {len}");
+                assert_eq!(
+                    actual.allocated_bytes(),
+                    MerkleTree::repeated_sha256_node_allocation_bytes(leaves.len()).unwrap()
+                );
+                for index in 0..u32::try_from(leaves.len()).unwrap() {
+                    assert_eq!(actual.get_proof(index), expected.get_proof(index));
+                }
+            }
+        }
+    }
+
     #[test]
     fn sha256_rewrite_reuses_nodes_and_matches_canonical_ragged_roots() {
         for count in [0, 1, 2, 3, 5, 63, 64, 65, 256] {

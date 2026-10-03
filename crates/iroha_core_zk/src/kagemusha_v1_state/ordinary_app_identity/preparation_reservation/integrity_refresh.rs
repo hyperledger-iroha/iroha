@@ -1067,6 +1067,9 @@ mod tests {
         let prepare = owner.prepare(financial).unwrap();
         let nonce: [u8; 32] = prepare[1].as_slice().try_into().unwrap();
         let (signed, der, lease) = originals(financial, nonce);
+        // TEST ONLY: cryptographic fixture construction must not spend the synthetic clock
+        // margin. Production continues sampling both actual bounds without resetting time.
+        time(financial, 1400);
         let fields = owner
             .accept_challenge(financial, &signed.to_transport_bytes().unwrap())
             .unwrap();

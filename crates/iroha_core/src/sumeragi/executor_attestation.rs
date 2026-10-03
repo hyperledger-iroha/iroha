@@ -82,20 +82,22 @@ impl Worker<'_> {
         Ok(())
     }
 
-    pub(super) fn finish_local_attestation(&mut self) -> ExecOutcome {
+    pub(super) fn finish_local_attestation(&mut self) -> Result<Hash32, PublicationError> {
         let Some(live) = self.live.as_mut() else {
-            return ExecOutcome::Failed("local attestation lacks its original execution".into());
+            return Err(PublicationError::RecoveryRequired(
+                "local attestation lacks its original execution".into(),
+            ));
         };
         if !live.header.attest
             || matches!(live.attestation, Progress::Published | Progress::NotSeated)
         {
-            return ExecOutcome::Valid(live.result);
+            return Ok(live.result);
         }
         let Some(custody) = self.attestation.as_ref() else {
             // Startup replay runs before custody attachment and separately verifies
             // the complete persisted native QC before preparing any publication.
             live.attestation = Progress::NotSeated;
-            return ExecOutcome::Valid(live.result);
+            return Ok(live.result);
         };
         let seated = live
             .commitment
@@ -110,27 +112,28 @@ impl Worker<'_> {
             });
         if !seated {
             live.attestation = Progress::NotSeated;
-            return ExecOutcome::Valid(live.result);
+            return Ok(live.result);
         }
         let Some(authority) = custody.authority.as_ref() else {
             let reason =
                 "scheduled local seat lacks its provisioned native Pasta custody".to_owned();
             self.recovery = Some(reason.clone());
-            return ExecOutcome::Failed(reason);
+            return Err(PublicationError::RecoveryRequired(reason));
         };
         let PublicationPhase::Executed { preimage, .. } = &live.phase else {
             let reason = "local attestation lost its original result preimage".to_owned();
             self.recovery = Some(reason.clone());
-            return ExecOutcome::Failed(reason);
+            return Err(PublicationError::RecoveryRequired(reason));
         };
         let budget = self.state.ivm_execution_budget();
         if matches!(live.attestation, Progress::WaitingBacking(_)) {
             let mut bytes = match ChargedBuffer::new(preimage.as_slice().len(), &budget) {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    let reason = error.to_string();
+                    let failure =
+                        PublicationError::Deferred(preparation::buffer_refusal(&error).into());
                     live.attestation = Progress::WaitingBacking(Some(error));
-                    return ExecOutcome::Failed(reason);
+                    return Err(failure);
                 }
             };
             bytes
@@ -150,15 +153,15 @@ impl Worker<'_> {
             match ResultWitness::from_charged(bytes, &budget) {
                 Ok(witness) => live.attestation = Progress::Signing(witness),
                 Err((bytes, error)) => {
-                    let reason = error.to_string();
+                    let failure = preparation::witness_failure(&error);
                     if !error.is_local_refusal() {
-                        self.recovery = Some(reason.clone());
+                        self.recovery = Some(failure.to_string());
                     }
                     live.attestation = Progress::WaitingControl {
                         bytes,
                         refusal: Some(error),
                     };
-                    return ExecOutcome::Failed(reason);
+                    return Err(failure);
                 }
             }
         }
@@ -182,7 +185,7 @@ impl Worker<'_> {
                     let reason = error.to_string();
                     live.attestation = Progress::Signing(witness);
                     self.recovery = Some(reason.clone());
-                    return ExecOutcome::Failed(reason);
+                    return Err(PublicationError::RecoveryRequired(reason));
                 }
             }
         }
@@ -194,15 +197,21 @@ impl Worker<'_> {
         match custody.publisher.publish(receipt) {
             Ok(()) => {
                 live.attestation = Progress::Published;
-                ExecOutcome::Valid(live.result)
+                Ok(live.result)
             }
             Err((receipt, error)) => {
-                let reason = format!("native attestation publication refused: {error:?}");
-                if !matches!(error, AttestationPublishError::Busy) {
-                    self.recovery = Some(reason.clone());
-                }
+                let failure = match error {
+                    AttestationPublishError::Busy(wait) => {
+                        PublicationError::Deferred(PublicationDeferral::AttestationBusy(wait))
+                    }
+                    error => {
+                        let reason = format!("native attestation publication refused: {error:?}");
+                        self.recovery = Some(reason.clone());
+                        PublicationError::RecoveryRequired(reason)
+                    }
+                };
                 live.attestation = Progress::Publishing(receipt);
-                ExecOutcome::Failed(reason)
+                Err(failure)
             }
         }
     }
@@ -213,12 +222,16 @@ impl Worker<'_> {
         &self,
         block: &AvailableBody,
         qc: &Qc,
-    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
-        let view = self
-            .state
-            .try_view_once()
-            .map_err(|error| error.to_string())?
-            .ok_or("committed publication is busy")?;
+    ) -> Result<(), PublicationError> {
+        let view = self.state.try_view_once().map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC72"))
+                && matches!(&error, crate::state::StateViewError::Busy(_))
+            {
+                PublicationError::Retryable(error.to_string())
+            } else {
+                PublicationError::from(error)
+            }
+        })?;
         let genesis = crate::sumeragi::certified_chain::committed_block(&view, 1)
             .map_err(|error| error.map_rejection(|error| error.to_string()))?;
         let instance =
@@ -256,9 +269,7 @@ impl Worker<'_> {
         )
         .verify_qc(&verifier, qc)
         .map_err(|error| {
-            crate::execution_attempt::ExecutionAttemptError::Rejected(format!(
-                "native quorum verification failed: {error:?}"
-            ))
+            PublicationError::Retryable(format!("native quorum verification failed: {error:?}"))
         })
     }
 }

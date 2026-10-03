@@ -4,6 +4,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Corrected retail-fee quote and assessment framing to use the declared 16-byte
+  Norito schema identities. Canonical markers and payment-intent hashes now use
+  the same header layout as the native codecs.
+- Validation-fee proof projections accept their exact declared fields regardless
+  of declaration order; missing and unexpected policy fields remain rejected.
+
 - Added the browser-safe `@iroha/iroha-js/petal` entry point: a pure
   JavaScript port of the `iroha_petal` Petal Stream optical transport (encoder
   bit-exact with the shared fixtures, decoder step by step). It
@@ -16,11 +22,17 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   no DOM globals at import time. The tile lanes are read against the finder
   light and dark levels first, and any lane that does not decode is re-read with
   a per-tile normalised read, so over-exposure, veiling light and shadows no
-  longer cost lane `K`. The shared `fixtures/petal` stream vectors and golden
-  camera captures (nine, including over-exposed, veiled and shadowed frames) are
-  part of the unit suite; the `PetalCameraScanner` documentation lists the
-  camera setup the decoder is calibrated for (about 1280×720, exposure
-  compensation of about -1 EV).
+  longer cost lane `K`. Three corner blossoms that form a corner are enough: the
+  hidden fourth is inferred, refined against the rings and reported as
+  `inferredCorner`, and orientations are ranked by the ring gates plus the `天`.
+  `PetalScanSession` follows a decoded code into the next frames by tracking its
+  pose (`trackPetalFrame`, 500 ms window) and counts `tracked` and `inferred`
+  frames; `PetalCameraScanner` passes those counters to `onProgress`. The shared
+  `fixtures/petal` stream vectors, golden camera captures (eleven, including
+  over-exposed, veiled, shadowed, covered-corner and cut-corner frames) and
+  tracking pairs are part of the unit suite; the `PetalCameraScanner`
+  documentation lists the camera setup the decoder is calibrated for (about
+  1280×720, exposure compensation of about -1 EV).
 
 - `getPipelinePreflight()` parses exactly the served `GET /v1/pipeline/preflight`
   body, checked against the Rust-generated `fixtures/torii/pipeline_preflight.json`:

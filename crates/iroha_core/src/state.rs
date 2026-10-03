@@ -349,7 +349,7 @@ pub(crate) use output_capacity::{
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
-pub(crate) use fastpq_quantity_capture::QuantityCaptureIssue;
+pub(crate) use fastpq_quantity_capture::{QuantityCaptureIssue, QuantityRetirementInvocation};
 mod fastpq_quantity_storage;
 mod fastpq_quantity_write_plan;
 mod fastpq_rejection_tail;
@@ -378,13 +378,14 @@ pub use native_execution_evidence::{
 };
 mod tiered;
 mod tiered_publication;
+use crate::execution_attempt::ExecutionAttemptError;
 pub use block_proofs::{BlockProofLimits, BlockProofResource};
 use block_proofs::{block_proofs_for_entry_from_kura, executed_block_wire_from_kura};
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
-pub(crate) use da_hydration::DaIndexHydrationError;
+pub use da_hydration::DaIndexHydrationError;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -1462,7 +1463,9 @@ mod world_commit;
 )]
 mod world_journals;
 pub(crate) mod world_projection;
-pub use world_projection::world_state_accumulator::ProviderAdmissionSnapshotOriginalsV1;
+pub use world_projection::world_state_accumulator::{
+    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError, WorldStateVerificationError,
+};
 
 /// Exercise actual World capture while retaining journals through a test observation.
 #[cfg(test)]
@@ -1590,22 +1593,22 @@ macro_rules! build_world_transaction {
 }
 macro_rules! build_world_view_from_fields {
     (
-        $state:expr;
+        $state:expr, $releases:expr;
         [$($prefix:ident,)*]
         [$($_privacy:ident,)*]
         [$($suffix:ident,)*]
     ) => {
-        WorldView {
+        Ok(WorldView {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            $($prefix: $state.$prefix.view(),)*
-            privacy_commitments: $state.privacy_commitments.view(),
-            $($suffix: $state.$suffix.view(),)*
-        }
+            $($prefix: view_acquisition::StateFieldReader::try_read_field(&$state.$prefix, &mut $releases.$prefix)?,)*
+            privacy_commitments: view_acquisition::StateFieldReader::try_read_field(&$state.privacy_commitments, &mut $releases.privacy_commitments)?,
+            $($suffix: view_acquisition::StateFieldReader::try_read_field(&$state.$suffix, &mut $releases.$suffix)?,)*
+        })
     };
 }
 macro_rules! build_world_view {
-    ($state:expr) => {
-        with_world_overlay_fields!(build_world_view_from_fields, $state)
+    ($state:expr, $releases:expr) => {
+        with_world_overlay_fields!(build_world_view_from_fields, $state, $releases)
     };
 }
 /// Shared immutable generations of the canonical block-hash journal.
@@ -2452,6 +2455,9 @@ pub(crate) fn committed_entrypoint_hashes(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Original nonblocking State read; local contention is never a peer-input verdict.
+    #[error(transparent)]
+    StateView(#[from] StateViewError),
     /// Original lane signer/sample storage could not be admitted before fresh State construction.
     #[error("local native lane custody admission failed: {0}")]
     NativeLaneCustodyAdmission(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
@@ -3141,7 +3147,7 @@ pub enum LaneLifecycleError {
     GeometryStorage(#[source] crate::kura::Error),
     /// Exact durable drain evidence could not be read or authenticated locally.
     #[error("lane drain evidence observation failed: {0}")]
-    DrainObservation(#[source] MergeLedgerCommitError),
+    DrainObservation(#[source] Box<MergeLedgerCommitError>),
     /// A physical publication owner must release before the retained attempt can resume.
     #[error("lane geometry publication is waiting for {field}")]
     PublicationBusy {
@@ -3174,6 +3180,9 @@ struct LaneGeometryCatalogPublicationFailure {
 /// Errors surfaced when computing block inclusion/execution proofs.
 #[derive(Clone, Debug, ThisError)]
 pub enum BlockProofError {
+    /// Original local allocation or decoder refusal; retry retains its release source.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// Height exceeds usize conversion on the current platform.
     #[error("block height {0} exceeds host pointer width")]
     HeightOutOfRange(NonZeroU64),
@@ -7367,29 +7376,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// -- either the initial step (transaction or time trigger) or a subsequent step (data trigger).
     pub(crate) internal_event_buf: Vec<SharedDataEvent>,
 }
-fn validate_alias_lease_window(
-    lease_expiry_ms: Option<u64>,
-    grace_until_ms: Option<u64>,
-    bound_at_ms: u64,
-) -> Result<(), Error> {
-    match (lease_expiry_ms, grace_until_ms) {
-        (None, None) => Ok(()),
-        (None, Some(_)) => Err(Error::InvariantViolation(
-            "alias grace_until_ms requires lease_expiry_ms".into(),
-        )),
-        (Some(lease_expiry_ms), _) if lease_expiry_ms <= bound_at_ms => {
-            Err(Error::InvariantViolation(
-                "alias lease_expiry_ms must be greater than bound_at_ms".into(),
-            ))
-        }
-        (Some(lease_expiry_ms), Some(grace_until_ms)) if grace_until_ms < lease_expiry_ms => {
-            Err(Error::InvariantViolation(
-                "alias grace_until_ms must not precede lease_expiry_ms".into(),
-            ))
-        }
-        (Some(_), _) => Ok(()),
-    }
-}
 /// Test-seeding handle that keeps governance-lock expiry buckets synchronized.
 pub struct GovernanceLocksMutForTesting<'transaction, 'block, 'world> {
     world: &'transaction mut WorldTransaction<'block, 'world>,
@@ -7761,7 +7747,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.asset_definitions.get(definition_id).is_some() {
             self.quantity_mutation_observation.changed();
         }
-        let removed = self.asset_definitions.remove(definition_id.clone());
+        let removed = self.remove_quantity_definition(definition_id);
         if let Some(definition) = removed.as_ref() {
             self.axt_asset_incarnations.remove(definition_id.clone());
             if let Some(transition) = definition.confidential_policy().pending_transition() {
@@ -10407,7 +10393,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -10431,7 +10418,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the SCCP v1 governance proposal when the proposal represents SCCP governance.
@@ -10455,7 +10443,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -10479,7 +10468,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -10503,7 +10493,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -10527,7 +10518,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -10551,7 +10543,8 @@ impl GovernanceProposalRecord {
             )
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
             | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
         }
     }
 }
@@ -12123,14 +12116,16 @@ pub struct State {
     /// distinct contracts from evicting consensus-path trigger runtimes.
     contract_query_ivm_cache: parking_lot::Mutex<IvmCache>,
     /// Process-persistent immutable artifacts and runtimes shared by pipeline workers.
-    pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
+    pipeline_ivm_prepared_cache: PublicationRwLock<PreparedContractCache>,
+    /// Original immutable pool identity; looking it up acquires no notifying reader.
+    ivm_execution_budget: iroha_allocation::AllocationBudget,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
     /// Cryptography configuration (enabled algorithms, defaults).
-    pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
+    pub crypto: PublicationRwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Configured Nexus policy baseline. Effective lifecycle values come from `canonical_runtime`.
     /// Direct fixture configuration is not a committed lifecycle transition.
-    pub nexus: parking_lot::RwLock<iroha_config::parameters::actual::Nexus>,
+    pub nexus: PublicationRwLock<iroha_config::parameters::actual::Nexus>,
     /// Sole MV authority for effective lanes, incarnation lineage and autoscale history.
     pub(crate) canonical_runtime: Cell<SnapshotNexusRuntime>,
     /// Original native execution identity, atomically published outside World.
@@ -12537,6 +12532,9 @@ pub(crate) use publication::StatePublicationOutcome;
 
 mod history_reader_releases;
 pub(crate) use history_reader_releases::StateViewReleases;
+#[path = "state/view_acquisition.rs"]
+pub(crate) mod view_acquisition;
+pub use view_acquisition::StateViewError;
 
 /// Original executing State fields, jointly retired by their enclosing owner.
 pub struct StateBlockFields<'state> {
@@ -14083,6 +14081,9 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_direct_final_promotion_operation_origin: Option<
         iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1,
     >,
+    /// One-use original sole signed native pin-outbox operation; never serialized into State.
+    pub(crate) current_direct_musubi_pin_outbox_origin:
+        Option<crate::smartcontracts::isi::musubi::PinOutboxOperationOrigin>,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal shared by authority-lifecycle transitions.
@@ -14499,8 +14500,8 @@ impl<'state> StateView<'state> {
     pub fn time_triggers_due_for_block(&self, block_header: &BlockHeader) -> bool {
         let to = block_header.creation_time();
         let since = self
-            .latest_block()
-            .map_or(to, |latest_block| latest_block.header().creation_time());
+            .native_execution_tip()
+            .map_or(to, |tip| Duration::from_millis(tip.creation_time_ms()));
         let (since, length) = to.checked_sub(since).map_or_else(
             || {
                 warn!(
@@ -18354,6 +18355,9 @@ fn parliament_derived_read_indexes_v1<'a>(
         tle_key_session_retention_deadlines,
     })
 }
+#[path = "state/network_xor.rs"]
+mod network_xor;
+pub(crate) use network_xor::{validate_network_xor_asset, validate_xor_custody_shape};
 #[path = "state/reward_reserves.rs"]
 mod reward_reserves;
 use reward_reserves::validate_public_lane_reward_reserves;
@@ -19404,127 +19408,7 @@ impl World {
         account_scope_restore::rebuild_accounts_index(self);
     }
     pub(crate) fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
-        let mut records = BTreeMap::new();
-        let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
-        let existing_records: Vec<_> = self
-            .account_rekey_records
-            .view()
-            .iter()
-            .map(|(label, record)| (label.clone(), record.clone()))
-            .collect();
-        let existing_bindings: Vec<_> = self
-            .account_aliases
-            .view()
-            .iter()
-            .map(|(label, account_id)| (label.clone(), account_id.clone()))
-            .collect();
-        let view = self.accounts.view();
-        for (label, record) in existing_records {
-            if record.label != label {
-                return Err(format!(
-                    "Account rekey record {label:?} stores mismatched label {:?}",
-                    record.label
-                ));
-            }
-            if account_label_is_pii(&label) {
-                return Err(format!(
-                    "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
-                ));
-            }
-            if let Some(existing) = records.get(&label) {
-                if existing != &record {
-                    return Err(format!(
-                        "Account rekey record {label:?} already bound to a different record"
-                    ));
-                }
-                continue;
-            }
-            records.insert(label, record);
-        }
-        for (label, account_id) in existing_bindings {
-            if view.get(&account_id).is_none() {
-                return Err(format!(
-                    "Account rekey record {label:?} references missing account {account_id}"
-                ));
-            }
-            let Some(record) = records.get(&label) else {
-                return Err(format!(
-                    "Account alias binding {label:?} is missing its continuity record"
-                ));
-            };
-            if record.active_account_id != account_id {
-                return Err(format!(
-                    "Account alias binding {label:?} points to {account_id}, but its continuity record points to {}",
-                    record.active_account_id
-                ));
-            }
-        }
-        for (label, record) in &records {
-            let Some(_account_value) = view.get(&record.active_account_id) else {
-                return Err(format!(
-                    "Account rekey record {label:?} references missing account {}",
-                    record.active_account_id
-                ));
-            };
-            let predecessors = record
-                .active_account_id_rekey_predecessors()
-                .map_err(|error| {
-                    format!("Account rekey record {label:?} has malformed provenance: {error}")
-                })?;
-            let mut unique_predecessors = BTreeSet::new();
-            for predecessor in predecessors {
-                if predecessor == &record.active_account_id {
-                    return Err(format!(
-                        "Account rekey record {label:?} contains an active account-id rekey cycle at {predecessor}"
-                    ));
-                }
-                if !unique_predecessors.insert(predecessor.clone()) {
-                    return Err(format!(
-                        "Account rekey record {label:?} repeats active account-id rekey predecessor {predecessor}"
-                    ));
-                }
-                if let Some(existing_target) = active_account_id_rekey_targets
-                    .insert(predecessor.clone(), record.active_account_id.clone())
-                    && existing_target != record.active_account_id
-                {
-                    return Err(format!(
-                        "Account-id rekey predecessor {predecessor} ambiguously targets {existing_target} and {}",
-                        record.active_account_id
-                    ));
-                }
-            }
-        }
-        for predecessor in active_account_id_rekey_targets.keys() {
-            let mut cursor = predecessor;
-            let mut visited = BTreeSet::new();
-            while let Some(next) = active_account_id_rekey_targets.get(cursor) {
-                if !visited.insert(cursor.clone()) {
-                    return Err(format!(
-                        "Account-id rekey provenance contains a cycle through {cursor}"
-                    ));
-                }
-                cursor = next;
-            }
-        }
-        for predecessor in active_account_id_rekey_targets.keys() {
-            if view.get(predecessor).is_some() {
-                return Err(format!(
-                    "Account-id rekey predecessor {predecessor} remains an independently live account"
-                ));
-            }
-        }
-        let current_index = account_rekey_occurrence_index(records.iter());
-        let previous_index = {
-            let reverted_records = self.account_rekey_records.block_and_revert();
-            let previous = account_rekey_occurrence_index(reverted_records.iter());
-            // Dropping this uncommitted MV write transaction preserves the authoritative
-            // record and undo layers; only its projected previous view is needed here.
-            drop(reverted_records);
-            previous
-        };
-        self.account_rekey_records_by_account =
-            rebuild_derived_storage_with_previous(current_index, previous_index);
-        Ok(())
+        account_rekey_restore::rebuild(self)
     }
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
         alias_index_restore::assets(self)
@@ -19533,77 +19417,7 @@ impl World {
         alias_index_restore::contracts(self)
     }
     fn rebuild_asset_definition_indexes(&mut self) -> Result<(), String> {
-        let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
-        let mut definitions_by_owner = BTreeMap::<AccountId, BTreeSet<AssetDefinitionId>>::new();
-        let definitions = self.asset_definitions.view();
-        let domains = self.domains.view();
-        let mut domain_contexts = BTreeMap::<AssetDefinitionId, DomainId>::new();
-        for (definition_id, definition) in definitions.iter() {
-            let owning_domain = definition.owning_domain().as_ref();
-            if definition.balance_scope_policy() == AssetBalancePolicy::DataspaceRestricted
-                && owning_domain.is_none()
-            {
-                return Err(format!(
-                    "restricted asset definition {definition_id} has no authoritative owning domain"
-                ));
-            }
-            if let Some(domain_id) = owning_domain {
-                if domains.get(domain_id).is_none() {
-                    return Err(format!(
-                        "asset definition {definition_id} references missing owning domain {domain_id}"
-                    ));
-                }
-                domain_contexts.insert(definition_id.clone(), domain_id.clone());
-                domain_definitions
-                    .entry(domain_id.clone())
-                    .or_default()
-                    .insert(definition_id.clone());
-            }
-            definitions_by_owner
-                .entry(definition.owned_by().clone())
-                .or_default()
-                .insert(definition_id.clone());
-        }
-        let mut holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
-        let mut definition_assets = BTreeMap::<AssetDefinitionId, BTreeSet<AssetId>>::new();
-        let mut assets_by_account = BTreeMap::<AccountId, BTreeSet<AssetId>>::new();
-        let mut assets_by_domain = BTreeMap::<DomainId, BTreeSet<AssetId>>::new();
-        let mut nonzero_holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
-        for (asset_id, asset_value) in self.assets.view().iter() {
-            holders
-                .entry(asset_id.definition().clone())
-                .or_default()
-                .insert(asset_id.account().clone());
-            definition_assets
-                .entry(asset_id.definition().clone())
-                .or_default()
-                .insert(asset_id.clone());
-            assets_by_account
-                .entry(asset_id.account().clone())
-                .or_default()
-                .insert(asset_id.clone());
-            if let Some(domain_id) = domain_contexts.get(asset_id.definition()) {
-                assets_by_domain
-                    .entry(domain_id.clone())
-                    .or_default()
-                    .insert(asset_id.clone());
-            }
-            if !asset_value.as_ref().is_zero() {
-                nonzero_holders
-                    .entry(asset_id.definition().clone())
-                    .or_default()
-                    .insert(asset_id.account().clone());
-            }
-        }
-        self.asset_definition_domains = domain_contexts.into_iter().collect();
-        self.domain_asset_definitions = domain_definitions.into_iter().collect();
-        self.asset_definitions_by_owner = definitions_by_owner.into_iter().collect();
-        self.asset_definition_holders = holders.into_iter().collect();
-        self.asset_definition_assets = definition_assets.into_iter().collect();
-        self.assets_by_account = assets_by_account.into_iter().collect();
-        self.assets_by_domain = assets_by_domain.into_iter().collect();
-        self.asset_definition_nonzero_holders = nonzero_holders.into_iter().collect();
-        Ok(())
+        asset_index_restore::assets(self)
     }
     fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
         for (election_id, election) in self.elections.view().iter() {
@@ -19931,15 +19745,15 @@ impl World {
     fn rebuild_domain_owner_index(&mut self) {
         self.domains_by_owner =
             ownership_index_restore::grouped(&self.domains.history(), |_, domain| {
-                domain.owned_by().clone()
+                Some(domain.owned_by().clone())
             });
     }
     fn rebuild_nft_owner_index(&mut self) {
         let (by_owner, by_domain) = {
             let history = self.nfts.history();
             (
-                ownership_index_restore::grouped(&history, |_, nft| nft.owned_by.clone()),
-                ownership_index_restore::grouped(&history, |id, _| id.domain().clone()),
+                ownership_index_restore::grouped(&history, |_, nft| Some(nft.owned_by.clone())),
+                ownership_index_restore::grouped(&history, |id, _| Some(id.domain().clone())),
             )
         };
         self.nfts_by_owner = by_owner;
@@ -19949,9 +19763,9 @@ impl World {
         let (by_owner, by_status, by_frozen) = {
             let history = self.rwas.history();
             (
-                ownership_index_restore::grouped(&history, |_, rwa| rwa.owned_by.clone()),
-                ownership_index_restore::grouped(&history, |_, rwa| rwa.status.clone()),
-                ownership_index_restore::grouped(&history, |_, rwa| rwa.is_frozen),
+                ownership_index_restore::grouped(&history, |_, rwa| Some(rwa.owned_by.clone())),
+                ownership_index_restore::grouped(&history, |_, rwa| Some(rwa.status.clone())),
+                ownership_index_restore::grouped(&history, |_, rwa| Some(rwa.is_frozen)),
             )
         };
         self.rwas_by_owner = by_owner;
@@ -19959,28 +19773,17 @@ impl World {
         self.rwas_by_frozen = by_frozen;
     }
     fn rebuild_escrow_indexes(&mut self) {
-        let mut public_by_seller = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut public_by_buyer = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut public_by_status = BTreeMap::<AssetEscrowStatus, BTreeSet<EscrowId>>::new();
-        for (escrow_id, record) in self.asset_escrows.view().iter() {
-            public_by_seller
-                .entry(record.seller.clone())
-                .or_default()
-                .insert(*escrow_id);
-            if let Some(buyer) = record.buyer.as_ref() {
-                public_by_buyer
-                    .entry(buyer.clone())
-                    .or_default()
-                    .insert(*escrow_id);
-            }
-            public_by_status
-                .entry(record.status)
-                .or_default()
-                .insert(*escrow_id);
-        }
-        self.asset_escrows_by_seller = public_by_seller.into_iter().collect();
-        self.asset_escrows_by_buyer = public_by_buyer.into_iter().collect();
-        self.asset_escrows_by_status = public_by_status.into_iter().collect();
+        let (by_seller, by_buyer, by_status) = {
+            let history = self.asset_escrows.history();
+            (
+                ownership_index_restore::grouped(&history, |_, escrow| Some(escrow.seller.clone())),
+                ownership_index_restore::grouped(&history, |_, escrow| escrow.buyer.clone()),
+                ownership_index_restore::grouped(&history, |_, escrow| Some(escrow.status)),
+            )
+        };
+        self.asset_escrows_by_seller = by_seller;
+        self.asset_escrows_by_buyer = by_buyer;
+        self.asset_escrows_by_status = by_status;
     }
     /// Rebuild skipped custody and liability indexes from retained session records.
     pub(crate) fn rebuild_game_session_indexes(&mut self) -> Result<(), String> {
@@ -20198,28 +20001,23 @@ impl World {
         Ok(())
     }
     fn rebuild_repo_agreement_indexes(&mut self) {
-        let mut by_initiator = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
-        let mut by_counterparty = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
-        let mut by_custodian = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
-        for (agreement_id, agreement) in self.repo_agreements.view().iter() {
-            by_initiator
-                .entry(agreement.initiator().clone())
-                .or_default()
-                .insert(agreement_id.clone());
-            by_counterparty
-                .entry(agreement.counterparty().clone())
-                .or_default()
-                .insert(agreement_id.clone());
-            if let Some(custodian) = agreement.custodian().as_ref() {
-                by_custodian
-                    .entry(custodian.clone())
-                    .or_default()
-                    .insert(agreement_id.clone());
-            }
-        }
-        self.repo_agreements_by_initiator = by_initiator.into_iter().collect();
-        self.repo_agreements_by_counterparty = by_counterparty.into_iter().collect();
-        self.repo_agreements_by_custodian = by_custodian.into_iter().collect();
+        let (by_initiator, by_counterparty, by_custodian) = {
+            let history = self.repo_agreements.history();
+            (
+                ownership_index_restore::grouped(&history, |_, agreement| {
+                    Some(agreement.initiator().clone())
+                }),
+                ownership_index_restore::grouped(&history, |_, agreement| {
+                    Some(agreement.counterparty().clone())
+                }),
+                ownership_index_restore::grouped(&history, |_, agreement| {
+                    agreement.custodian().clone()
+                }),
+            )
+        };
+        self.repo_agreements_by_initiator = by_initiator;
+        self.repo_agreements_by_counterparty = by_counterparty;
+        self.repo_agreements_by_custodian = by_custodian;
     }
     fn rebuild_proof_status_index(&mut self) {
         let mut by_status = BTreeMap::<
@@ -20379,7 +20177,8 @@ impl World {
     }
     /// Create a point-in-time view of this world.
     pub fn view(&self) -> WorldView<'_> {
-        build_world_view!(self)
+        let mut releases = view_acquisition::WorldReadReleases::new(self);
+        self.view_retaining(&mut releases)
     }
 }
 #[cfg(test)]
@@ -26944,26 +26743,32 @@ impl State {
     /// Access the in-memory DA commitment index.
     pub fn da_commitments(
         &self,
-    ) -> crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaCommitmentStore> {
-        self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
-        self.da_commitments.read()
+    ) -> Result<
+        crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaCommitmentStore>,
+        DaIndexHydrationError,
+    > {
+        self.ensure_da_indexes_hydrated()?;
+        Ok(self.da_commitments.read())
     }
     /// Access the in-memory confidential-compute receipt index.
     pub fn da_confidential_compute(
         &self,
-    ) -> crate::publication_rwlock::PublicationRwLockReadGuard<'_, ConfidentialComputeStore> {
-        self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
-        self.da_confidential_compute.read()
+    ) -> Result<
+        crate::publication_rwlock::PublicationRwLockReadGuard<'_, ConfidentialComputeStore>,
+        DaIndexHydrationError,
+    > {
+        self.ensure_da_indexes_hydrated()?;
+        Ok(self.da_confidential_compute.read())
     }
     /// Access the in-memory DA receipt cursor index.
     pub fn da_receipt_cursors(
         &self,
-    ) -> crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaReceiptCursorIndex> {
-        self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
-        self.da_receipt_cursors.read()
+    ) -> Result<
+        crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaReceiptCursorIndex>,
+        DaIndexHydrationError,
+    > {
+        self.ensure_da_indexes_hydrated()?;
+        Ok(self.da_receipt_cursors.read())
     }
     /// Snapshot already-loaded DA lane reset watermarks without replaying Kura.
     ///
@@ -26976,28 +26781,34 @@ impl State {
     /// Access the in-memory shard cursor index derived from DA commitments.
     pub fn da_shard_cursor_index(
         &self,
-    ) -> crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaShardCursorIndex> {
-        self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
-        self.da_shard_cursors.read()
+    ) -> Result<
+        crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaShardCursorIndex>,
+        DaIndexHydrationError,
+    > {
+        self.ensure_da_indexes_hydrated()?;
+        Ok(self.da_shard_cursors.read())
     }
     /// Access the in-memory DA pin intent index.
     pub fn da_pin_intents(
         &self,
-    ) -> crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaPinStore> {
-        self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
-        self.da_pin_intents.read()
+    ) -> Result<
+        crate::publication_rwlock::PublicationRwLockReadGuard<'_, DaPinStore>,
+        DaIndexHydrationError,
+    > {
+        self.ensure_da_indexes_hydrated()?;
+        Ok(self.da_pin_intents.read())
     }
     /// Lookup a DA commitment by manifest hash.
     #[must_use]
     pub fn find_da_commitment_by_manifest(
         &self,
         digest: &iroha_data_model::sorafs::pin_registry::ManifestDigest,
-    ) -> Option<iroha_data_model::da::commitment::DaCommitmentRecord> {
-        self.da_commitments()
+    ) -> Result<Option<iroha_data_model::da::commitment::DaCommitmentRecord>, DaIndexHydrationError>
+    {
+        Ok(self
+            .da_commitments()?
             .get_by_manifest(digest)
-            .map(|entry| entry.commitment.clone())
+            .map(|entry| entry.commitment.clone()))
     }
     #[cfg(test)]
     /// Lookup a DA commitment by `(lane_id, epoch, sequence)`.
@@ -27007,10 +26818,12 @@ impl State {
         lane_id: u32,
         epoch: u64,
         sequence: u64,
-    ) -> Option<iroha_data_model::da::commitment::DaCommitmentRecord> {
-        self.da_commitments()
+    ) -> Result<Option<iroha_data_model::da::commitment::DaCommitmentRecord>, DaIndexHydrationError>
+    {
+        Ok(self
+            .da_commitments()?
             .get_by_lane_epoch_sequence(lane_id, epoch, sequence)
-            .map(|entry| entry.commitment.clone())
+            .map(|entry| entry.commitment.clone()))
     }
     /// Derive an AXT policy snapshot, preferring explicit policy entries when present and
     /// otherwise projecting from the Space Directory + lane catalog.
@@ -27654,7 +27467,9 @@ impl State {
             .copied()
             .map(|lane_id| (lane_id, 0))
             .collect();
-        let da_shard_cursors = PublicationRwLock::new(DaShardCursorIndex::default());
+        let da_shard_cursors =
+            PublicationRwLock::try_new(DaShardCursorIndex::default(), &execution_budget)
+                .map_err(StateStorageAdmissionError::World)?;
         let LoadedStateJournals {
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
@@ -27726,7 +27541,19 @@ impl State {
         let pipeline_cache_size = pipeline.cache_size;
         let durable_height = exact_durable_height;
         let latest_block_header = NonZeroUsize::new(durable_height)
-            .and_then(|height| kura.get_block(height))
+            .map(|height| kura.get_block(height, &execution_budget))
+            .transpose()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(format!(
+                        "cannot read original latest block: {error}"
+                    ))
+                }
+            })?
+            .flatten()
             .map(|block| block.header());
         let tiered_backend = Arc::new(PublicationMutex::new(TieredStateBackend::default()));
         let tiered_snapshot_worker = TieredSnapshotWorker::new(
@@ -27741,7 +27568,7 @@ impl State {
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
                 .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
-            latest_block_header: PublicationRwLock::new(latest_block_header),
+            latest_block_header: PublicationRwLock::try_new(latest_block_header, &execution_budget).map_err(StateStorageAdmissionError::World)?,
             transactions,
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
@@ -27754,28 +27581,26 @@ impl State {
             })?,
             kura,
             query_handle,
-            da_commitments: PublicationRwLock::new(
-                crate::da::commitment_store::DaCommitmentStore::default(),
-            ),
-            da_confidential_compute: PublicationRwLock::new(
-                crate::da::confidential_store::ConfidentialComputeStore::default(),
-            ),
+            da_commitments: PublicationRwLock::try_new(
+                crate::da::commitment_store::DaCommitmentStore::default(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
+            da_confidential_compute: PublicationRwLock::try_new(
+                crate::da::confidential_store::ConfidentialComputeStore::default(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
-            da_receipt_cursors: PublicationRwLock::new(DaReceiptCursorIndex::default()),
+            da_receipt_cursors: PublicationRwLock::try_new(DaReceiptCursorIndex::default(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
             query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_projection_checkpoint_journal: parking_lot::RwLock::new(
                 query_projection_checkpoint_journal,
             ),
             query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
-            da_pin_intents: PublicationRwLock::new(DaPinStore::default()),
-            lane_manifests: PublicationRwLock::new(Arc::new(LaneManifestRegistry::empty())),
+            da_pin_intents: PublicationRwLock::try_new(DaPinStore::default(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
+            lane_manifests: PublicationRwLock::try_new(Arc::new(LaneManifestRegistry::empty()), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             provisional_emergency_lane_manifests_consumed: false,
-            lane_privacy_registry: PublicationRwLock::new(Arc::new(LanePrivacyRegistry::empty())),
+            lane_privacy_registry: PublicationRwLock::try_new(Arc::new(LanePrivacyRegistry::empty()), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             lane_compliance: parking_lot::RwLock::new(None),
             da_index_hydration_fence: parking_lot::Mutex::new(()),
-            da_indexes_hydrated: PublicationRwLock::new(None),
+            da_indexes_hydrated: PublicationRwLock::try_new(None, &execution_budget).map_err(StateStorageAdmissionError::World)?,
             chain_id,
             network_id,
             pipeline,
@@ -27794,15 +27619,17 @@ impl State {
                     pipeline_cache_size, execution_budget.clone(),
                 ),
             )),
-            pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
-                PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget),
-            ),
+            ivm_execution_budget: execution_budget.clone(),
+            pipeline_ivm_prepared_cache: PublicationRwLock::try_new(
+                PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget.clone()),
+                &execution_budget,
+            ).map_err(StateStorageAdmissionError::World)?,
             oracle: default_oracle(),
             canonical_runtime: Cell::new(SnapshotNexusRuntime::from_nexus_with_autoscale_history(
                 &nexus, &lane_incarnations, &lane_incarnation_activation_heights,
                 &VecDeque::new(), &lane_incarnation_lineage,
             )),
-            nexus: parking_lot::RwLock::new(nexus),
+            nexus: PublicationRwLock::try_new(nexus, &execution_budget).map_err(StateStorageAdmissionError::World)?,
             nexus_runtime_restored_from_snapshot: false,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
             evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
@@ -28063,18 +27890,18 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
-            kagemusha_v1_runtime_verifier: PublicationRwLock::new(Arc::new(
+            kagemusha_v1_runtime_verifier: PublicationRwLock::<Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>>::try_new(Arc::new(
                 crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
-            )),
+            ), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
-            crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
+            crypto: PublicationRwLock::try_new(Arc::new(initial_crypto.clone()), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             lane_lifecycle_lock: PublicationMutex::default(),
             geometry_publication: parking_lot::Mutex::new(None),
             tiered_startup_geometry: None,
             state_commit_lock: Arc::new(PublicationMutex::default()),
-            state_write_lock: PublicationMutex::default(),
+            state_write_lock: PublicationMutex::try_new((), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             view_generation: AtomicU64::new(0),
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -28988,7 +28815,12 @@ impl State {
         after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
     ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
+            .map_err(|error| match error {
+                DaIndexHydrationError::Deferred(original) => {
+                    StateBlockStartError::ExecutionDeferred(original)
+                }
+                error => StateBlockStartError::Policy(error.to_string()),
+            })?;
         let mut policy_routes = carrier
             .map(|source| {
                 network_policy_routes::CapturedNetworkPolicyRoutes::reserve(
@@ -29723,9 +29555,14 @@ impl State {
     fn try_merge_preexecution_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, StateAdmissionError> {
+    ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
         self.ensure_da_indexes_hydrated()
-            .expect("failed to hydrate DA indexes from Kura");
+            .map_err(|error| match error {
+                DaIndexHydrationError::Deferred(original) => {
+                    MergeLedgerCommitError::ExecutionDeferred(original)
+                }
+                error => MergeLedgerCommitError::ExecutionStatePublication(error.to_string()),
+            })?;
         let acquired = self.acquire_canonical_runtime_block(false)?;
         let mut state_block =
             self.construct_acquired_block(acquired, curr_block, core::convert::identity);
@@ -29746,7 +29583,7 @@ impl State {
     pub(crate) fn consensus_effects_probe_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, StateAdmissionError> {
+    ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
         self.try_merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
@@ -30172,9 +30009,17 @@ impl State {
     ///
     /// This avoids acquiring a full [`StateView`] when only block retrieval is needed.
     #[track_caller]
-    pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        let expected = self.block_hashes.view().get(height.get() - 1).copied()?;
-        committed_block_from_kura(&self.kura, height, expected)
+    pub fn block_by_height(
+        &self,
+        height: NonZeroUsize,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        let Some(expected) = self.block_hashes.view().get(height.get() - 1).copied() else {
+            return Ok(None);
+        };
+        committed_block_from_kura(&self.kura, height, expected, &self.ivm_execution_budget())
     }
     /// Load a committed block hash by height from Kura's durable index.
     ///
@@ -30196,9 +30041,17 @@ impl State {
     ///
     /// This avoids acquiring a full [`StateView`] when only hash-based block retrieval is needed.
     #[track_caller]
-    pub fn block_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
-        self.block_height_by_hash(hash)
-            .and_then(|height| self.block_by_height(height))
+    pub fn block_by_hash(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        match self.block_height_by_hash(hash) {
+            Some(height) => self.block_by_height(height),
+            None => Ok(None),
+        }
     }
     /// Latest committed block header from the state cache.
     ///
@@ -30321,6 +30174,7 @@ impl State {
             chain_id: self.chain_id_ref(),
             network: *self.network_id_ref(),
             hashes: &hashes,
+            budget: &self.ivm_execution_budget(),
         };
         let proof = block_proofs_for_entry_from_kura(
             source,
@@ -30351,6 +30205,7 @@ impl State {
             chain_id: self.chain_id_ref(),
             network: *self.network_id_ref(),
             hashes: &hashes,
+            budget: &self.ivm_execution_budget(),
         };
         let wire = executed_block_wire_from_kura(source, block_height, expected_hash, limits)?;
         self.recheck_committed_block_hash_for_proof(block_height, expected_hash)?;
@@ -30371,11 +30226,13 @@ impl State {
         max_bytes: u64,
     ) -> Result<
         crate::smartcontracts::isi::tx::FinalizedExecutionCarrier,
-        iroha_data_model::query::error::QueryExecutionFail,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
     > {
         use iroha_data_model::query::error::QueryExecutionFail;
         if max_work == 0 || max_bytes == 0 {
-            return Err(QueryExecutionFail::GasBudgetExceeded);
+            return Err(QueryExecutionFail::GasBudgetExceeded.into());
         }
         let hashes = self.block_hashes.view();
         let expected = hashes.get(height.get() - 1).copied().ok_or_else(|| {
@@ -30390,11 +30247,13 @@ impl State {
             expected,
             max_work,
             max_bytes,
+            &self.ivm_execution_budget(),
         )?;
         if self.block_hashes.view().get(height.get() - 1).copied() != Some(expected) {
             return Err(QueryExecutionFail::Conversion(
                 "canonical carrier changed during finalized read".into(),
-            ));
+            )
+            .into());
         }
         Ok(carrier)
     }
@@ -30673,6 +30532,10 @@ impl State {
     fn state_view_publication(&self) -> StateViewPublication<'_> {
         StateViewPublication::new(&self.view_generation, &self.publication_notify)
     }
+    /// Observe the actual publisher before a compound read of this original State.
+    pub(crate) fn view_publication_release(&self) -> iroha_allocation::release::ReleaseWait {
+        self.state_write_lock.observe_release()
+    }
     #[inline]
     pub(crate) fn state_view_generation(&self) -> u64 {
         self.view_generation.load(Ordering::Acquire)
@@ -30685,6 +30548,11 @@ impl State {
     /// Exclude committed publication only for the gateway's final synchronous capture handoff.
     /// Native proof/Kura reads, network waits and callback reconciliation must precede this lease.
     pub(crate) fn stream_token_gateway_publication_lease(&self) -> PublicationGuard<'_> {
+        self.state_commit_lock.lock()
+    }
+    /// Exclude publication only while consuming an exact current Musubi inventory readback.
+    /// Native proof and Kura reads precede this lease; it exposes no Queue or signing authority.
+    pub(crate) fn musubi_pin_outbox_publication_lease(&self) -> PublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
     #[inline]
@@ -30718,34 +30586,30 @@ impl State {
     #[track_caller]
     pub fn try_view(&self) -> Result<StateView<'_>, LaneLifecycleError> {
         loop {
-            if let Some(view) = self.try_view_once()? {
-                return Ok(view);
+            match self.try_view_once() {
+                Ok(view) => return Ok(view),
+                Err(StateViewError::Busy(_)) => {}
+                Err(StateViewError::Runtime(error)) => return Err(error),
+                Err(error) => return Err(LaneLifecycleError::Storage(error.to_string())),
             }
             self.note_view_generation_contention(core::panic::Location::caller());
             std::thread::yield_now();
         }
     }
-    /// Attempt one complete view acquisition without retrying a concurrent writer.
-    /// `None` reports a busy or changed generation; stable malformed runtime is an error.
+    /// Attempt one complete nonblocking view acquisition with the original retry source.
+    /// Stable malformed runtime and poisoned reader ownership remain terminal errors.
     #[track_caller]
-    pub(crate) fn try_view_once(&self) -> Result<Option<StateView<'_>>, LaneLifecycleError> {
+    pub(crate) fn try_view_once(&self) -> Result<StateView<'_>, StateViewError> {
         StateViewReleases::new(self).try_view_once()
     }
-    /// Borrow the same view kernel while an enclosing operation retains its
-    /// original index releases beyond all State and lifecycle fences.
+    /// Borrow the same view kernel while the enclosing owner retains every read notice.
     #[track_caller]
     fn view_with_index_releases(&self, releases: &mut LaneLifecycleReleases<'_>) -> StateView<'_> {
         loop {
-            if let Some(view) = self
-                .try_view_once_with_index_releases(
-                    &mut releases.header,
-                    &mut releases.manifests,
-                    &mut releases.hashes,
-                    &mut releases.membership,
-                )
-                .expect("persisted canonical runtime projection must be valid")
-            {
-                return view;
+            match self.try_view_once_with_index_releases(releases) {
+                Ok(view) => return view,
+                Err(StateViewError::Busy(_)) => {}
+                Err(error) => panic!("persisted State reader failed: {error}"),
             }
             self.note_view_generation_contention(core::panic::Location::caller());
             std::thread::yield_now();
@@ -30754,29 +30618,25 @@ impl State {
     #[track_caller]
     fn try_view_once_with_index_releases(
         &self,
-        header: &mut crate::publication_rwlock::DeferredPublicationRwLock<'_, Option<BlockHeader>>,
-        manifests: &mut crate::publication_rwlock::DeferredPublicationRwLock<
-            '_,
-            LaneManifestRegistryHandle,
-        >,
-        hashes: &mut Option<iroha_allocation::release::DeferredReleaseBatch>,
-        membership: &mut iroha_allocation::release::DeferredReleaseBatch,
-    ) -> Result<Option<StateView<'_>>, LaneLifecycleError> {
+        releases: &mut LaneLifecycleReleases<'_>,
+    ) -> Result<StateView<'_>, StateViewError> {
         const STATE_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
         let caller = core::panic::Location::caller();
         let total_start = Instant::now();
         {
+            // Every production visibility interval is enclosed by this original
+            // State writer. Observe before sampling so even an early unlock is retained.
+            let generation_release = self.state_write_lock.observe_release();
             let generation_before = self.state_view_generation();
             if generation_before % 2 != 0 {
-                return Ok(None);
+                return Err(StateViewError::Busy(generation_release));
             }
             let block_hashes_start = Instant::now();
-            let block_hashes = self.block_hashes.view_retaining(hashes);
+            let block_hashes = self.block_hashes.try_view_retaining(&mut releases.hashes)?;
             let block_hashes_wait = block_hashes_start.elapsed();
             let latest_hash = block_hashes.last().copied();
-            let cached_header = header.read().clone();
-            let query_ledger_time_ms =
-                self.latest_block_creation_time_ms_from_header(latest_hash, cached_header.as_ref());
+            let cached_header = releases.header.try_read_or_wait()?.clone();
+
             let nexus_start = Instant::now();
             let canonical_runtime = self.canonical_runtime.view();
             let canonical_runtime_predecessor = self.canonical_runtime.predecessor_view();
@@ -30784,19 +30644,19 @@ impl State {
             let native_execution_tip_predecessor = self.native_execution_tip.predecessor_view();
             let nexus_wait = nexus_start.elapsed();
             let world_start = Instant::now();
-            let mut world = self.world.view();
-            let baseline = manifests.read().clone();
-            let projection = self.project_canonical_runtime_with_manifests(
+            let mut world = self.world.try_view_retaining(&mut releases.world)?;
+            let baseline = releases.manifests.try_read_or_wait()?.clone();
+            let projection = Self::project_canonical_runtime_from_inputs(
                 canonical_runtime.get(),
                 &world,
                 &baseline,
+                &*releases.nexus.try_read_or_wait()?,
             );
             let world_wait = world_start.elapsed();
             let transactions_start = Instant::now();
             let transactions = self
                 .transactions
-                .view_retaining(membership)
-                .expect("original membership reader source must be healthy");
+                .try_view_retaining(&mut releases.membership)?;
             let transactions_wait = transactions_start.elapsed();
             let commit_topology_start = Instant::now();
             let commit_topology = self.commit_topology.view();
@@ -30804,13 +30664,26 @@ impl State {
             let prev_commit_topology_start = Instant::now();
             let prev_commit_topology = self.prev_commit_topology.view();
             let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
+            let pipeline_ivm_prepared_cache = releases.prepared_cache.try_read_or_wait()?.clone();
+            let crypto = releases.crypto.try_read_or_wait()?.clone();
+            let kagemusha_v1_runtime_verifier = releases.verifier.try_read_or_wait()?.clone();
+            let query_ledger_time_ms = cached_header
+                .as_ref()
+                .filter(|header| Some(header.hash()) == latest_hash)
+                .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX))
+                .or_else(|| {
+                    let tip = (*native_execution_tip.get())?;
+                    (Some(tip.iroha_hash()) == latest_hash
+                        && usize::try_from(tip.height()).ok() == Some(block_hashes.len()))
+                    .then_some(tip.creation_time_ms())
+                });
             let generation_after = self.state_view_generation();
             if !is_stable_state_view_generation(generation_before, generation_after) {
                 drop(prev_commit_topology);
                 drop(commit_topology);
                 drop(transactions);
                 drop(world);
-                return Ok(None);
+                return Err(StateViewError::Busy(generation_release));
             }
             let projection = projection?;
             let canonical_runtime::CanonicalRuntimeProjection {
@@ -30861,7 +30734,7 @@ impl State {
                     "state view acquisition slow or retried"
                 );
             }
-            return Ok(Some(StateView {
+            return Ok(StateView {
                 canonical_runtime,
                 canonical_runtime_predecessor,
                 native_execution_tip,
@@ -30872,7 +30745,7 @@ impl State {
                 commit_topology,
                 prev_commit_topology,
                 ivm: &self.ivm,
-                pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
+                pipeline_ivm_prepared_cache,
                 da_receipt_cursors: &self.da_receipt_cursors,
                 da_shard_cursors: &self.da_shard_cursors,
                 kura: &self.kura,
@@ -30883,7 +30756,7 @@ impl State {
                 telemetry: &self.telemetry,
                 pipeline: self.pipeline.clone(),
                 oracle: self.oracle.clone(),
-                crypto: self.crypto(),
+                crypto,
                 nexus,
                 lane_incarnations,
                 lane_incarnation_activation_heights,
@@ -30893,12 +30766,12 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
-                kagemusha_v1_runtime_verifier: self.kagemusha_v1_runtime_verifier(),
+                kagemusha_v1_runtime_verifier,
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
                 created_at: Instant::now(),
-            }));
+            });
         }
     }
     fn encode_pointer_abi_tlv(pointer_type: ivm::PointerType, payload: &[u8]) -> Option<Vec<u8>> {
@@ -32983,7 +32856,7 @@ impl State {
                 )?;
                 let nexus = self.nexus_snapshot().clone();
                 let manifests = releases.manifests.read().clone();
-                let world = self.world.view();
+                let world = self.world.view_retaining(&mut releases.world);
                 for addition in &mut effective_plan.additions {
                     #[cfg(test)]
                     if self.commit_topology_snapshot().is_empty()
@@ -33035,7 +32908,7 @@ impl State {
                     current_block_height,
                     allow_autoscale_managed_changes,
                 )?;
-                let world = self.world.view();
+                let world = self.world.view_retaining(&mut releases.world);
                 let mut prospective_nexus = nexus.clone();
                 prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
                 prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
@@ -33113,7 +32986,11 @@ impl State {
                 let state_write_lock_hold_start = Instant::now();
                 let _view_generation = publication_notice.begin();
                 {
-                    let mut nexus = self.nexus_ownership_projection();
+                    let mut nexus = self
+                        .canonical_runtime
+                        .view()
+                        .nexus_projection(&releases.nexus.read())
+                        .expect("persisted canonical runtime must be valid");
                     nexus.lane_catalog = lifecycle_update.updated_catalog;
                     nexus.lane_config = lifecycle_update.updated_lane_config;
                     Self::install_canonical_runtime_projection_with_owner(
@@ -33467,7 +33344,7 @@ impl State {
             prospective_nexus.dataspace_catalog = runtime_catalog_transition_dataspaces(
                 &nexus,
                 releases.manifests.read().as_ref(),
-                &self.world.view(),
+                &self.world.view_retaining(&mut releases.world),
                 runtime,
                 &pending.plan,
             )?;
@@ -33485,7 +33362,7 @@ impl State {
             allow_autoscale_managed_changes,
         )?;
         ensure_runtime_catalog_lanes_preserved(
-            &self.world.view(),
+            &self.world.view_retaining(&mut releases.world),
             &nexus.lane_catalog,
             &expected_update.updated_catalog,
         )?;
@@ -35049,6 +34926,11 @@ pub trait WorldStateSnapshot {
 }
 /// Read-only view over state-level resources (block/transaction/view).
 pub trait StateReadOnly: WorldStateSnapshot {
+    /// The original finite execution pool retained by this State generation.
+    /// Sharing the authority creates no replacement pool or allocation grant.
+    fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
+        self.prepared_contract_cache().execution_budget().clone()
+    }
     /// Merge-ledger cache for recent entries.
     /// Iroha Virtual Machine instance.
     fn ivm(&self) -> &IVM;
@@ -35194,6 +35076,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
             self.kura(),
             self.block_hashes(),
             self.native_execution_tip(),
+            self.execution_budget(),
         )
     }
     /// Load a canonical block body with a typed availability or corruption
@@ -35201,14 +35084,26 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn canonical_block_by_height(
         &self,
         height: NonZeroUsize,
-    ) -> core::result::Result<Arc<SignedBlock>, CanonicalHistoryError> {
+    ) -> core::result::Result<
+        iroha_data_model::block::SharedSignedBlock,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
         self.canonical_history().block(height)
     }
     /// Load a block body only when it authenticates against this immutable
     /// view's committed WSV hash at the same height.
     #[inline]
-    fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.canonical_block_by_height(height).ok()
+    fn block_by_height(
+        &self,
+        height: NonZeroUsize,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        if height.get() > self.height() {
+            return Ok(None);
+        }
+        self.canonical_block_by_height(height).map(Some)
     }
     /// Resolve a block hash from this immutable view's authoritative WSV
     /// journal, independently of a missing or contradictory Kura index.
@@ -35221,18 +35116,31 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ///
     /// If you only need hash of the latest block prefer using [`Self::prev_block_hash`].
     #[inline]
-    fn prev_block(&self) -> Option<Arc<SignedBlock>> {
-        self.height()
-            .checked_sub(1)
-            .and_then(NonZeroUsize::new)
-            .and_then(|height| self.block_by_height(height))
+    fn prev_block(
+        &self,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        match self.height().checked_sub(1).and_then(NonZeroUsize::new) {
+            Some(height) => self.block_by_height(height),
+            None => Ok(None),
+        }
     }
     /// Get a reference to the latest block. Returns none if genesis is not committed.
     ///
     /// If you only need hash of the latest block prefer using [`Self::latest_block_hash`]
     #[inline]
-    fn latest_block(&self) -> Option<Arc<SignedBlock>> {
-        NonZeroUsize::new(self.height()).and_then(|height| self.block_by_height(height))
+    fn latest_block(
+        &self,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        match NonZeroUsize::new(self.height()) {
+            Some(height) => self.block_by_height(height),
+            None => Ok(None),
+        }
     }
     /// Visit every canonical slot in the chain from `start`.
     ///
@@ -35244,18 +35152,12 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// Returns [`Some`] milliseconds since the genesis block was
     /// committed, or [`None`] if it wasn't.
     #[inline]
-    fn genesis_timestamp(&self) -> Option<Duration> {
-        if self.block_hashes().is_empty() {
-            None
-        } else {
-            let opt = self
-                .block_by_height(nonzero!(1_usize))
-                .map(|genesis_block| genesis_block.header().creation_time());
-            if opt.is_none() {
-                error!("Failed to get genesis block from Kura.");
-            }
-            opt
-        }
+    fn genesis_timestamp(
+        &self,
+    ) -> Result<Option<Duration>, ExecutionAttemptError<CanonicalHistoryError>> {
+        Ok(self
+            .block_by_height(nonzero!(1_usize))?
+            .map(|genesis_block| genesis_block.header().creation_time()))
     }
 }
 trait AxtBlockContextSource {
@@ -37429,10 +37331,11 @@ impl<'state> StateBlock<'state> {
     }
     /// Component-only scope over the same finite mandatory pool used by the real sweep.
     /// It grants no retained-custody, complete-inventory or carrier publication authority.
-    #[cfg(test)]
-    pub(crate) fn transaction_for_fastpq_protocol_testing(
-        &mut self,
-    ) -> StateTransaction<'_, 'state> {
+    ///
+    /// # Panics
+    /// Panics when an admitted carrier already owns this block's execution.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn transaction_for_fastpq_protocol_testing(&mut self) -> StateTransaction<'_, 'state> {
         assert!(
             self.execution_output_plan.is_none(),
             "component purpose fixture cannot replace a carrier owner"
@@ -37613,6 +37516,7 @@ impl<'state> StateBlock<'state> {
             current_direct_stream_token_reputation_payload: None,
             current_direct_reputation_policy_origin: None,
             current_direct_final_promotion_operation_origin: None,
+            current_direct_musubi_pin_outbox_origin: None,
             current_direct_sorafs_admission_initialization: false,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
@@ -38334,10 +38238,9 @@ impl<'state> StateBlock<'state> {
     /// Create time event using previous and current blocks.
     fn create_time_event(&self, block_header: &BlockHeader) -> TimeEvent {
         let to = block_header.creation_time();
-        let since = self.latest_block().map_or(to, |latest_block| {
-            let header = latest_block.header();
-            header.creation_time()
-        });
+        let since = self
+            .native_execution_tip()
+            .map_or(to, |tip| Duration::from_millis(tip.creation_time_ms()));
         // NOTE: in case of genesis block only single point in time is matched.
         // If block time regresses (e.g., clock skew), clamp to a zero-length interval.
         let (since, length) = to.checked_sub(since).map_or_else(
@@ -39977,7 +39880,14 @@ mod fastpq_tx_set_hash_tests {
             AcceptedTransaction::new_unchecked(Cow::Owned(tx2.clone())),
         ];
         let new_block = BlockBuilder::new(accepted)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(
+                0,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("completed original State read")
+                    .as_deref(),
+            )
             .sign(keypair.private_key())
             .unpack(|_| {});
         let source: SignedBlock = new_block.into();
@@ -40864,8 +40774,17 @@ impl StateTransaction<'_, '_> {
     }
     /// Load a committed block by height from Kura for the current transaction context.
     #[must_use]
-    pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        committed_block_from_kura(self.kura, height, *self.block_hashes.get(height.get() - 1)?)
+    pub fn block_by_height(
+        &self,
+        height: NonZeroUsize,
+    ) -> core::result::Result<
+        Option<iroha_data_model::block::SharedSignedBlock>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        let Some(expected) = self.block_hashes.get(height.get() - 1) else {
+            return Ok(None);
+        };
+        committed_block_from_kura(self.kura, height, *expected, &self.execution_budget())
     }
     /// Current slot derived from the block timestamp.
     #[inline]
@@ -42521,93 +42440,92 @@ impl StateTransaction<'_, '_> {
         }
         let heap_limit = self.world.parameters.get().smart_contract().memory().get();
         let ivm_cache = self.ivm_cache;
-        let mut cache = ivm_cache.lock();
-        let prepared_contract_cache = cache.prepared_contract_cache();
-        let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
-            ValidationFail::InternalError(format!(
-                "invalid admitted generic-trigger analysis: {error}"
-            ))
-        })?;
-        let mut vm = cache
-            .checkout_generic_runtime(summary, gas_limit, heap_limit)
-            .map_err(|error| {
-                self.vm_error_to_validation_fail(error, |error| {
-                    ValidationFail::InternalError(error.to_string())
-                })
+        let (artifacts, trigger_gas_used) = IvmCache::with_locked(ivm_cache, |cache| {
+            let prepared_contract_cache = cache.prepared_contract_cache();
+            let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
+                self.program_analysis_error_to_validation_fail(error, "generic-trigger")
             })?;
-        vm.set_max_cycles(eff_cycles.get());
-        vm.set_gas_limit(gas_limit);
-        let host_args = self
-            .trigger_host_args(event, Json::default())
-            .map_err(|error| self.attempt_error_to_validation_fail(error))?;
-        let accounts = self.trigger_accounts_snapshot();
-        let streaming_metadata =
-            crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
-        let bound_contract_records =
-            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self)
+            let mut vm = cache
+                .checkout_generic_runtime(summary, gas_limit, heap_limit)
+                .map_err(|error| {
+                    self.vm_error_to_validation_fail(error, |error| {
+                        ValidationFail::InternalError(error.to_string())
+                    })
+                })?;
+            vm.set_max_cycles(eff_cycles.get());
+            vm.set_gas_limit(gas_limit);
+            let host_args = self
+                .trigger_host_args(event, Json::default())
                 .map_err(|error| self.attempt_error_to_validation_fail(error))?;
-        let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
-            authority.clone(),
-            accounts,
-            host_args,
-        );
-        host.set_output_limits_from_parameters(self.world.parameters.get().smart_contract());
-        host.set_generic_execution();
-        host.set_prepared_contract_cache(prepared_contract_cache);
-        host.set_amx_analysis(amx_analysis);
-        host.set_amx_limits(
-            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
-        );
-        host.hydrate_axt_state(self).map_err(|error| {
-            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
-        })?;
-        let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
-            .expect("block creation timestamp must fit into u64");
-        host.set_trigger_id(id.clone());
-        host.set_block_time_ms(current_block_time_ms);
-        let default_base = self._curr_block.height().get().saturating_mul(256);
-        host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
-        #[cfg(feature = "telemetry")]
-        host.set_telemetry(self.telemetry.clone());
-        host.set_crypto_config(self.crypto());
-        host.set_zk_config(&self.zk);
-        host.set_chain_id(self.chain_id());
-        host.set_public_inputs_from_parameters(self.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
-            self.attempt_error_to_validation_fail(
-                error.map_rejection(ValidationFail::InternalError),
-            )
-        })?;
-        host.set_query_state(self);
-        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-        crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
-        host.set_zk_snapshots_from_world(&self.world, &self.zk)
-            .map_err(|error| {
-                ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+            let accounts = self.trigger_accounts_snapshot();
+            let streaming_metadata =
+                crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
+            let bound_contract_records =
+                crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self)
+                    .map_err(|error| self.attempt_error_to_validation_fail(error))?;
+            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                authority.clone(),
+                accounts,
+                host_args,
+            );
+            host.set_output_limits_from_parameters(self.world.parameters.get().smart_contract());
+            host.set_generic_execution();
+            host.set_prepared_contract_cache(prepared_contract_cache);
+            host.set_amx_analysis(amx_analysis);
+            host.set_amx_limits(
+                crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
+            );
+            host.hydrate_axt_state(self).map_err(|error| {
+                ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
             })?;
-        let run_result = vm.run_with_host(&mut host);
-        let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-        if let Err(error) = run_result {
-            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
-            {
-                drop(host);
+            let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
+                .expect("block creation timestamp must fit into u64");
+            host.set_trigger_id(id.clone());
+            host.set_block_time_ms(current_block_time_ms);
+            let default_base = self._curr_block.height().get().saturating_mul(256);
+            host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+            #[cfg(feature = "telemetry")]
+            host.set_telemetry(self.telemetry.clone());
+            host.set_crypto_config(self.crypto());
+            host.set_zk_config(&self.zk);
+            host.set_chain_id(self.chain_id());
+            host.set_public_inputs_from_parameters(self.world.parameters.get());
+            host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+                self.attempt_error_to_validation_fail(
+                    error.map_rejection(ValidationFail::InternalError),
+                )
+            })?;
+            host.set_query_state(self);
+            host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+            crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
+            host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                .map_err(|error| {
+                    ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+                })?;
+            let run_result = vm.run_with_host(&mut host);
+            let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+            if let Err(error) = run_result {
+                if let Some(reason) =
+                    crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+                {
+                    drop(host);
+                    drop(vm);
+                    return Err(self.defer_execution(reason));
+                }
+                let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                    &vm, &error,
+                );
+                {
+                    let _consumed_host = host;
+                }
                 drop(vm);
-                drop(cache);
-                return Err(self.defer_execution(reason));
+                self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                return Err(error);
             }
-            let error =
-                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error);
-            {
-                let _consumed_host = host;
-            }
+            let artifacts = host.into_execution_artifacts(None);
             drop(vm);
-            drop(cache);
-            self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
-            return Err(error);
-        }
-        let artifacts = host.into_execution_artifacts(None);
-        drop(vm);
-        drop(cache);
+            Ok((artifacts, trigger_gas_used))
+        })?;
         self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
         let artifacts = artifacts?;
         crate::validation_fee::enforce_opaque_deferred_instruction_groups(
@@ -42644,11 +42562,9 @@ impl StateTransaction<'_, '_> {
             }
             return Ok(Some(ResolvedIvmTriggerProgram::Contract(prepared)));
         }
-        if let Some(summary) = self
-            .ivm_cache
-            .lock()
-            .cached_generic_program_summary(code_hash)
-        {
+        if let Some(summary) = IvmCache::with_locked(self.ivm_cache, |cache| {
+            cache.cached_generic_program_summary(code_hash)
+        }) {
             if summary.program() != bytecode.as_ref() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "cached generic trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
@@ -42670,17 +42586,24 @@ impl StateTransaction<'_, '_> {
             }
             Ok(Some(ResolvedIvmTriggerProgram::Contract(prepared)))
         } else {
-            let summary = self
-                .ivm_cache
-                .lock()
-                .summarize_generic_program_with_parsed_metadata(
+            let summary = IvmCache::with_locked(self.ivm_cache, |cache| {
+                cache.summarize_generic_program_with_parsed_metadata(
                     bytecode.as_ref(),
                     code_hash,
                     parsed.metadata,
                     parsed.code_offset,
                     parsed.header_len,
                 )
-                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+            })
+            .map_err(|error| {
+                if let Some(reason) =
+                    crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+                {
+                    self.world.defer_execution(reason)
+                } else {
+                    crate::smartcontracts::ivm::program_admission_error(error)
+                }
+            })?;
             if summary.code_hash != code_hash || summary.program() != bytecode.as_ref() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "generic trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
@@ -43582,8 +43505,12 @@ mod range_bounds {
     include!("state/range_bounds.rs");
 }
 mod account_identity_restore;
+mod account_rekey_restore;
 mod account_scope_restore;
 mod alias_index_restore;
+mod alias_lease;
+use alias_lease::validate_alias_lease_window;
+mod asset_index_restore;
 mod ownership_index_restore;
 pub(crate) mod sccp_snapshot_state;
 pub(crate) mod snapshot_service_state;

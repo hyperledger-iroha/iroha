@@ -1846,14 +1846,184 @@ async fn torii_norito_body_decodes_successful_responses() {
             .expect("norito body should decode");
     assert_eq!(decoded.value, record);
 }
+// Route authority comes from the original executed genesis, never lane manifests.
+fn native_proof_read_app_for_test(
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> SharedAppState {
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        iroha_core::state::World::default(),
+        nexus,
+    );
+    assert_eq!(app.state.view().height(), 1);
+    let routes = super::torii_all_dataspace_routes(app.as_ref());
+    assert!(!routes.is_empty());
+    let mut original = None;
+    for route in routes {
+        let committee = app
+            .state
+            .resolve_route_authority(lane_authority_route(route))
+            .expect("executed genesis authenticates this configured route");
+        assert_eq!(committee.validators().len(), 4);
+        assert!(
+            committee
+                .validators()
+                .contains(app.local_peer_id.as_ref().unwrap())
+        );
+        if let Some(expected) = &original {
+            assert_eq!(committee.validators(), expected);
+        } else {
+            original = Some(committee.validators().to_vec());
+        }
+    }
+    app
+}
+
+fn seed_proof_record_after_native_genesis_for_test(
+    app: &SharedAppState,
+    backend: &str,
+    proof_hash: [u8; 32],
+) -> String {
+    assert_eq!(app.state.view().height(), 1);
+    let budget = app.state.ivm_execution_budget();
+    let genesis = app
+        .kura
+        .get_block(NonZeroUsize::new(1).unwrap(), &budget)
+        .expect("original signed genesis read completes")
+        .expect("retain original signed genesis");
+    let genesis_hash = genesis.hash();
+    let original_route = super::torii_all_dataspace_routes(app.as_ref())[0];
+    let original_committee = app
+        .state
+        .resolve_route_authority(lane_authority_route(original_route))
+        .unwrap()
+        .validators()
+        .to_vec();
+    let timestamp = u64::try_from(genesis.header().creation_time().as_millis())
+        .unwrap()
+        .checked_add(1)
+        .unwrap();
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(genesis_hash),
+        None,
+        timestamp,
+        0,
+    );
+    let id = ProofId {
+        backend: backend.to_owned(),
+        proof_hash,
+    };
+    let mut block = app.state.block(header);
+    let mut transaction = block.transaction();
+    transaction.world.proofs_mut_for_testing().insert(
+        id.clone(),
+        ProofRecord {
+            id: id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status: ProofStatus::Verified,
+            verified_at_height: Some(2),
+            bridge: None,
+        },
+    );
+    transaction.apply();
+    // Only the proof index is synthetic. H1's genuine signed schedule and hash remain intact;
+    // this H2 empty-index overlay is not a proof execution or finality claim.
+    block
+        .commit_empty_block_for_testing()
+        .expect("retain exact proof index header and membership");
+    assert_eq!(app.state.view().height(), 2);
+    assert_eq!(
+        app.kura
+            .get_block(NonZeroUsize::new(1).unwrap(), &budget)
+            .unwrap()
+            .expect("original signed genesis remains retained")
+            .hash(),
+        genesis_hash
+    );
+    assert_eq!(
+        app.state
+            .resolve_route_authority(lane_authority_route(original_route))
+            .unwrap()
+            .validators(),
+        &original_committee
+    );
+    id.to_string()
+}
+
+async fn unavailable_proof_http_upstream_for_test(
+    app: &mut SharedAppState,
+    route: RoutingDecision,
+    proof_id: &str,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let committee = app
+        .state
+        .resolve_route_authority(lane_authority_route(route))
+        .expect("unavailable transport must still have genuine configured authority");
+    assert_eq!(committee.validators().len(), 4);
+    assert!(
+        committee
+            .validators()
+            .contains(app.local_peer_id.as_ref().unwrap())
+    );
+    let request = torii_read_request(
+        ToriiReadEndpointV1::ProofRecordGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        route,
+        vec![proof_id.to_owned()],
+        None,
+        Vec::new(),
+    );
+    let expected_path = torii_external_read_path(&request).unwrap();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&requests);
+    let router = axum::Router::new().fallback(
+        move |method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap| {
+            let expected_path = expected_path.clone();
+            let observed = Arc::clone(&observed);
+            async move {
+                assert_eq!(method, axum::http::Method::GET);
+                assert_eq!(uri.path(), expected_path);
+                assert_eq!(
+                    headers.get(axum::http::header::ACCEPT),
+                    Some(&HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE))
+                );
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "test-owned authoritative HTTP transport is temporarily unavailable",
+                )
+            }
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .expect("serve test-owned proof transport");
+    });
+    Arc::get_mut(app).unwrap().public_dataspace_upstreams = Arc::new(
+        std::collections::BTreeMap::from([(route.dataspace_id, format!("http://{address}"))]),
+    );
+    (stop, server, requests)
+}
+
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        iroha_core::state::World::default(),
+    let app = native_proof_read_app_for_test(
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
-    let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
+    let id = seed_proof_record_after_native_genesis_for_test(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
     let (record, diagnostics, routed_by, _reservation) =
         super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
@@ -1867,55 +2037,63 @@ async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
  {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        iroha_core::state::World::default(),
+    let mut app = native_proof_read_app_for_test(
         crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let (local_route, foreign_route) =
-            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    let local_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10));
+    let foreign_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(12));
     let missing_id = ProofId {
         backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x44; 32],
     }
     .to_string();
-    let response = match super::resolve_torii_proof_record_for_routes(
-        &app,
+    let (stop, server, requests) =
+        unavailable_proof_http_upstream_for_test(&mut app, foreign_route, &missing_id).await;
+
+    for routes in [
         vec![foreign_route, local_route],
-        missing_id,
-    )
-    .await
-    {
-        Ok(_) => panic!("missing proof record should return an error response"),
-        Err(response) => response,
-    };
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_ne!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable"),
-        "a definitive missing-proof response should outrank an unrelated unavailable route",
-    );
+        vec![local_route, foreign_route],
+    ] {
+        let response =
+            match super::resolve_torii_proof_record_for_routes(&app, routes, missing_id.clone())
+                .await
+            {
+                Ok(_) => panic!("missing proof record should return an error response"),
+                Err(response) => response,
+            };
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable"),
+            "a definitive missing-proof response should outrank an unrelated unavailable route",
+        );
+    }
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+    stop.send(()).expect("stop proof transport");
+    server.await.expect("proof transport finished");
 }
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_only_unavailable() {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        iroha_core::state::World::default(),
+    let mut app = native_proof_read_app_for_test(
         crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let (_local_route, foreign_route) =
-            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    let foreign_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(12));
     let missing_id = ProofId {
         backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x55; 32],
     }
     .to_string();
+    let (stop, server, requests) =
+        unavailable_proof_http_upstream_for_test(&mut app, foreign_route, &missing_id).await;
+
     let response =
         match super::resolve_torii_proof_record_for_routes(&app, vec![foreign_route], missing_id)
             .await
         {
-            Ok(_) => panic!("offline authoritative route should be unavailable"),
+            Ok(_) => panic!("HTTP authoritative route should be unavailable"),
             Err(response) => response,
         };
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1926,6 +2104,162 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
             .and_then(|value| value.to_str().ok()),
         Some("route_unavailable")
     );
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    stop.send(()).expect("stop proof transport");
+    server.await.expect("proof transport finished");
+}
+#[tokio::test]
+async fn proof_record_route_preserves_encoded_backend_identity_and_refuses_path_aliases() {
+    use tower::ServiceExt as _;
+    let app = native_proof_read_app_for_test(iroha_config::parameters::actual::Nexus::default());
+    let id = seed_proof_record_after_native_genesis_for_test(&app, "halo2/ipa", [0xAB; 32]);
+    let route = *torii_all_dataspace_routes(app.as_ref())
+        .first()
+        .expect("public route");
+    let proxy_path = torii_external_read_path(&torii_read_request(
+        ToriiReadEndpointV1::ProofRecordGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        route,
+        vec![id.clone()],
+        None,
+        Vec::new(),
+    ))
+    .expect("actual routed-reader proof path");
+    assert!(proxy_path.contains("%3A"));
+    let router = axum::Router::new()
+        .route(
+            route_catalog::pipeline::PROOF.path(),
+            axum::routing::get(handler_proof_record_get),
+        )
+        .with_state(app)
+        .layer(axum::Extension(crate::loopback_connect_info()))
+        .layer(axum::middleware::from_fn(enforce_strict_request_target));
+    let mut url = url::Url::parse("http://localhost/").expect("fixed base URL");
+    url.path_segments_mut()
+        .expect("base URL")
+        .clear()
+        .extend(["v1", "proofs", &id]);
+    let path = url.path().to_owned();
+    for exact_path in [&path, &proxy_path] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(exact_path)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        let record: ProofRecord =
+            norito::decode_from_bytes(&bytes).expect("canonical proof record");
+        assert_eq!(record.id.to_string(), id);
+        assert_eq!(record.status, ProofStatus::Verified);
+    }
+    let missing = ProofId {
+        backend: "halo2/ipa".into(),
+        proof_hash: [0xCD; 32],
+    }
+    .to_string();
+    url.path_segments_mut()
+        .expect("base URL")
+        .clear()
+        .extend(["v1", "proofs", &missing]);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(url.path())
+                .body(Body::empty())
+                .expect("missing request"),
+        )
+        .await
+        .expect("missing response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    for path in [
+        path.replace("%2F", "%2f"),
+        path.replace("%2F", "%5C"),
+        path.replace("%2F", "%252F"),
+        path.replace("%2F", "%2F..%2F"),
+        path.replace("%2F", "%2F%2F"),
+        format!("{path}/other"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header(axum::http::header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .expect("invalid request"),
+            )
+            .await
+            .expect("invalid response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("error body")
+            .to_bytes();
+        let error: ErrorEnvelope = norito::json::from_slice(&bytes).expect("typed path refusal");
+        assert_eq!(error.code(), "request_path_invalid");
+    }
+}
+#[tokio::test]
+async fn proof_record_fanout_requests_the_binary_format_required_by_its_decoder() {
+    let app = native_proof_read_app_for_test(iroha_config::parameters::actual::Nexus::default());
+    let id = seed_proof_record_after_native_genesis_for_test(&app, "halo2/ipa", [0xD4; 32]);
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    let route = *routes.first().expect("public route");
+    let request = torii_read_request(
+        ToriiReadEndpointV1::ProofRecordGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        route,
+        vec![id.clone()],
+        None,
+        Vec::new(),
+    );
+    // Reproduce the incompatible representation without relaxing the shared
+    // request default or allowing JSON through the bounded Norito decoder.
+    assert_eq!(request.response_format, ToriiProxyResponseFormatV1::Json);
+    let response = execute_torii_read_for_route(&app, route, request, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
+    );
+    let mut budget = ToriiRoutedReadMemoryBudget::new(
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )
+    .expect("default bounded query budget");
+    let Err(response) =
+        torii_norito_body::<ProofRecord>(response, "proof record", &mut budget).await
+    else {
+        panic!("a JSON route response must not pass the binary decoder");
+    };
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(torii_response_has_reject_code(
+        &response,
+        "route_unavailable"
+    ));
+
+    // The production fanout must explicitly request the binary representation.
+    let (record, diagnostics, _, _reservation) =
+        resolve_torii_proof_record_for_routes(&app, routes, id.clone())
+            .await
+            .unwrap_or_else(|response| panic!("proof fanout failed: {}", response.status()));
+    assert_eq!(record.id.to_string(), id);
+    assert_eq!(record.status, ProofStatus::Verified);
+    assert_eq!(record.verified_at_height, Some(2));
+    assert_eq!(record.vk_ref, None);
+    assert_eq!(record.vk_commitment, None);
+    assert_eq!(record.bridge, None);
+    let _ = diagnostics;
 }
 #[tokio::test]
 async fn proof_record_get_advertises_cache_and_304() {
@@ -1997,12 +2331,10 @@ async fn proof_record_get_advertises_cache_and_304() {
 }
 #[tokio::test]
 async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspaces() {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        iroha_core::state::World::default(),
+    let app = native_proof_read_app_for_test(
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
-    let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
+    let id = seed_proof_record_after_native_genesis_for_test(&app, "debug-proof", [0xCD; 32]);
     let response = handler_proof_record_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2043,11 +2375,9 @@ async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspac
 }
 #[tokio::test]
 async fn proof_record_get_returns_not_found_when_all_routes_miss() {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        iroha_core::state::World::default(),
+    let app = native_proof_read_app_for_test(
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let missing_id = ProofId {
         backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x73; 32],
@@ -2063,11 +2393,26 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     .expect("proof handler should return a response")
     .into_response();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(torii_response_has_reject_code(&response, "not_found"));
+    for (header, expected) in [
+        ("x-iroha-fanout-routes-attempted", "3"),
+        ("x-iroha-fanout-routes-succeeded", "0"),
+        ("x-iroha-fanout-routes-not-found", "3"),
+    ] {
+        assert_eq!(
+            response
+                .headers()
+                .get(header)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected),
+        );
+    }
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body bytes");
     let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("error envelope payload");
-    assert_eq!(envelope.code, "proof_record_not_found");
+    // The shared skipped-route collector emits the canonical aggregate absence code.
+    assert_eq!(envelope.code, "not_found");
 }
 #[tokio::test]
 async fn proof_retention_status_reports_counts() {
@@ -2111,53 +2456,61 @@ async fn proof_retention_status_reports_counts() {
         let _ = insert_record([0xDD; 32], boundary_height);
         let _ = insert_record([0xEE; 32], fresh_height);
         stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(1).expect("block count should be non-zero"),
-        );
         block
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("seed proof block commit should succeed");
     }
-    // Advance the latest block past the grace window so the stale record becomes prunable.
-    set_latest_block_height(&app, current_height);
-    assert_eq!(
-        app.state.view().world().proofs().len(),
-        3,
-        "expected three proof records in the fixture"
-    );
-    let response = handler_proof_retention_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-    )
-    .await
-    .expect("retention status ok")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let status: iroha_torii_shared::ProofRetentionStatus =
-        norito::json::from_slice(&body).expect("decode retention status");
-    let backend = status
-        .backends
-        .iter()
-        .find(|entry| entry.backend == "debug-proof")
-        .expect("backend present");
-    assert_eq!(status.cap_per_backend, cap);
-    assert_eq!(status.grace_blocks, grace);
-    assert_eq!(status.prune_batch, prune_batch);
-    assert_eq!(status.total_records, 3);
-    // With defaults, the grace window is large enough that none of the seeded proofs
-    // are prunable yet; this ensures the endpoint mirrors policy rather than fixed numbers.
-    assert_eq!(status.total_prunable, 0);
-    assert_eq!(backend.records, 3);
-    assert_eq!(backend.prunable, 0);
-    assert_eq!(backend.oldest_height, Some(stale_height));
-    assert_eq!(backend.newest_height, Some(fresh_height));
+    assert!(cap >= 3 && prune_batch >= 2 && grace > 0);
+    // At the grace boundary only the stale record expires. One block later the
+    // boundary record expires too; status reads must never prune either record.
+    for (height, expected_prunable) in [(current_height, 1), (current_height + 1, 2)] {
+        set_latest_block_height(&app, height);
+        assert_eq!(
+            app.state.committed_height(),
+            usize::try_from(height).unwrap()
+        );
+        for media_type in ["application/json", "application/x-norito"] {
+            let response = handler_proof_retention_status(
+                State(app.clone()),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                Some(crate::utils::extractors::ExtractAccept(
+                    HeaderValue::from_static(media_type),
+                )),
+            )
+            .await
+            .expect("retention status ok")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(axum::http::header::CONTENT_TYPE),
+                Some(&HeaderValue::from_static(media_type))
+            );
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let status: iroha_torii_shared::ProofRetentionStatus =
+                if media_type == "application/json" {
+                    norito::json::from_slice(&body).expect("decode JSON retention status")
+                } else {
+                    norito::decode_from_bytes(&body).expect("decode Norito retention status")
+                };
+            assert_eq!(status.backends.len(), 1);
+            let backend = &status.backends[0];
+            assert_eq!(backend.backend, "debug-proof");
+            assert_eq!(status.cap_per_backend, cap);
+            assert_eq!(status.grace_blocks, grace);
+            assert_eq!(status.prune_batch, prune_batch);
+            assert_eq!(status.total_records, 3);
+            assert_eq!(status.total_prunable, expected_prunable);
+            assert_eq!(backend.records, 3);
+            assert_eq!(backend.prunable, expected_prunable);
+            assert_eq!(backend.oldest_height, Some(stale_height));
+            assert_eq!(backend.newest_height, Some(fresh_height));
+            assert_eq!(app.state.view().world().proofs().len(), 3);
+        }
+    }
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]

@@ -26,32 +26,53 @@ impl<'view, 'state, 'round> PreparedCheckExecutionV1<'view, 'state, 'round> {
         bound: BoundNativeCheckV1,
         round: &'round NativeCheckRoundV1,
     ) -> Result<Self, Error> {
-        round.ensure_live()?;
-        if !round.bound
-            || bound.purpose != purpose
-            || bound.started != round.started
-            || bound.max_elapsed != round.max_elapsed
-            || Some(bound.challenge) != round.challenge
-        {
-            return Err(Error::Invalid);
-        }
-        if view.network_id().as_bytes() != &bound.network_id
-            || view.chain_id().to_string() != bound.chain_id
-        {
-            return Err(Error::Finality);
-        }
-        let entry_hash = bound.signed.hash_as_entrypoint();
-        let height_index = view
-            .transactions
-            .get(&entry_hash)
-            .ok_or(Error::NotApplied)?;
-        let check_height = u64::try_from(height_index.get()).map_err(|_| Error::NotApplied)?;
-        let applied_height =
-            u64::try_from(view.block_hashes().len()).map_err(|_| Error::NotApplied)?;
-        if check_height <= bound.floor.height || check_height > applied_height {
-            return Err(Error::NotApplied);
-        }
-        check_history_span_v1(bound.floor.height, applied_height)?;
+        Self::new_retaining(view, purpose, bound, round).map_err(|(_, error)| error)
+    }
+
+    /// Prepare one read attempt while retaining the original paid Check on refusal.
+    /// A retry must start a new proof over the unchanged binding and original round.
+    pub(crate) fn new_retaining(
+        view: &'view StateView<'state>,
+        purpose: NativeCustodyCheckPurposeV1,
+        bound: BoundNativeCheckV1,
+        round: &'round NativeCheckRoundV1,
+    ) -> Result<Self, (BoundNativeCheckV1, Error)> {
+        let admitted = (|| {
+            round.ensure_live()?;
+            if !round.bound
+                || bound.purpose != purpose
+                || bound.started != round.started
+                || bound.max_elapsed != round.max_elapsed
+                || Some(bound.challenge) != round.challenge
+            {
+                return Err(Error::Invalid);
+            }
+            if view.network_id().as_bytes() != &bound.network_id
+                || view.chain_id().as_str() != bound.chain_id.as_str()
+            {
+                return Err(Error::Finality);
+            }
+            let entry_hash = bound
+                .signed
+                .try_hash_as_entrypoint()
+                .map_err(|_| Error::Transaction)?;
+            let height_index = view
+                .transactions
+                .get(&entry_hash)
+                .ok_or(Error::NotApplied)?;
+            let check_height = u64::try_from(height_index.get()).map_err(|_| Error::NotApplied)?;
+            let applied_height =
+                u64::try_from(view.block_hashes().len()).map_err(|_| Error::NotApplied)?;
+            if check_height <= bound.floor.height || check_height > applied_height {
+                return Err(Error::NotApplied);
+            }
+            check_history_span_v1(bound.floor.height, applied_height)?;
+            Ok((entry_hash, check_height, applied_height))
+        })();
+        let (entry_hash, check_height, applied_height) = match admitted {
+            Ok(admitted) => admitted,
+            Err(error) => return Err((bound, error)),
+        };
         let applied_floor = bound.floor;
         Ok(Self {
             view,
@@ -65,6 +86,11 @@ impl<'view, 'state, 'round> PreparedCheckExecutionV1<'view, 'state, 'round> {
             applied_floor,
             failed: false,
         })
+    }
+
+    /// Abandon only this read attempt, retaining the unchanged original signed binding.
+    pub(crate) fn into_bound(self) -> BoundNativeCheckV1 {
+        self.bound
     }
 
     pub(crate) const fn floor_height(&self) -> u64 {
@@ -164,15 +190,43 @@ impl<'view, 'state, 'round> PreparedCheckExecutionV1<'view, 'state, 'round> {
         ),
         Error,
     > {
-        self.validate_finish()?;
+        self.finish_retaining_attempt().map_err(|(_, error)| error)
+    }
+
+    /// Finish a read attempt without losing original custody on a local refusal.
+    pub(crate) fn finish_retaining_attempt(
+        self,
+    ) -> Result<
+        (
+            BorrowedCheckExecutionCutV1<'view, 'state>,
+            BoundNativeCheckV1,
+        ),
+        (BoundNativeCheckV1, Error),
+    > {
+        let retained = (|| {
+            self.validate_finish()?;
+            let check_block_hash = self.check_block_hash.ok_or(Error::Execution)?;
+            let bytes = &self.bound.entry_bytes;
+            norito::core::reserve_decode_allocation(bytes.len()).map_err(|_| Error::Execution)?;
+            let mut retained = Vec::new();
+            retained
+                .try_reserve_exact(bytes.len())
+                .map_err(|_| Error::Execution)?;
+            retained.extend_from_slice(bytes);
+            Ok((retained, check_block_hash))
+        })();
+        let (canonical_external, check_block_hash) = match retained {
+            Ok(retained) => retained,
+            Err(error) => return Err((self.bound, error)),
+        };
         let cut = BorrowedCheckExecutionCutV1 {
             view: self.view,
             data: CheckExecutionDataV1 {
                 check_height: self.check_height,
                 applied_floor: self.applied_floor,
                 entry_hash: self.entry_hash,
-                canonical_external: self.bound.entry_bytes.clone(),
-                check_block_hash: self.check_block_hash.ok_or(Error::Execution)?,
+                canonical_external,
+                check_block_hash,
             },
         };
         Ok((cut, self.bound))

@@ -1,13 +1,12 @@
 //! Real allocator controls for the ordered digest tree's private shared owner.
 
+use iroha_allocation::release::ReleaseRegistration;
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_crypto::{Hash, NoritoKeyDigestRangeTreeV1, NoritoKeyRangeError};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},
-    future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
-    pin::pin,
     sync::{
         Arc, Barrier, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
@@ -130,6 +129,7 @@ fn empty_tree(
 
 struct ReentrantAfterFree {
     budget: AllocationBudget,
+    observer_bytes: usize,
     bytes: usize,
     wakes: AtomicUsize,
 }
@@ -142,9 +142,9 @@ impl Wake for ReentrantAfterFree {
             FREED.load(SeqCst),
             "owner credit refunded before original System.dealloc returned"
         );
-        assert_eq!(self.budget.reserved_bytes(), 0);
+        assert_eq!(self.budget.reserved_bytes(), self.observer_bytes);
         self.wakes.fetch_add(1, SeqCst);
-        // A reentrant consumer may reuse the complete pool immediately. Its
+        // A reentrant consumer may reuse all released payload credit immediately. Its
         // original owner allocation must already be gone before this admission.
         let reused = self.budget.try_reserve_bytes(self.bytes).unwrap();
         assert!(FREED.load(SeqCst));
@@ -158,6 +158,14 @@ fn last_private_owner_deallocates_before_reentrant_refund_in_single_concurrent_a
     let schema = Hash::new(b"owner deallocation");
     for owners in [1, 8, 0] {
         let budget = AllocationBudget::new(4096);
+        let observer_bytes = ReleaseRegistration::allocation_layout().size();
+        let mut registration = ReleaseRegistration::from_reservation(
+            &mut budget
+                .try_reserve(ReleaseRegistration::allocation_layout())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(registration.belongs_to(&budget));
         // Warm source-independent hashing before observing the shared-owner-only empty tree.
         drop(empty_tree(&budget, schema).unwrap());
         observe(&budget);
@@ -168,7 +176,7 @@ fn last_private_owner_deallocates_before_reentrant_refund_in_single_concurrent_a
             1,
             "empty tree should allocate only its private owner"
         );
-        let bytes = budget.reserved_bytes();
+        let bytes = budget.reserved_bytes() - observer_bytes;
         assert!(bytes > 0);
         assert_eq!(
             SIZE.load(SeqCst),
@@ -177,23 +185,23 @@ fn last_private_owner_deallocates_before_reentrant_refund_in_single_concurrent_a
         );
         assert_eq!(
             RESERVED.load(SeqCst),
-            bytes,
+            bytes + observer_bytes,
             "credit precedes physical allocation"
         );
         assert!(!FREED.load(SeqCst));
-        budget.set_limit_bytes(bytes);
+        budget.set_limit_bytes(bytes + observer_bytes);
         let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
             panic!("empty tree's exact original owner must retain the entire pool")
         };
         let observer = Arc::new(ReentrantAfterFree {
             budget: budget.clone(),
+            observer_bytes,
             bytes,
             wakes: AtomicUsize::new(0),
         });
         let waker = Waker::from(Arc::clone(&observer));
-        let mut released = pin!(release.wait_for_release());
         assert_eq!(
-            released.as_mut().poll(&mut Context::from_waker(&waker)),
+            registration.poll_wait(&release, &mut Context::from_waker(&waker)),
             Poll::Pending
         );
         match owners {
@@ -210,7 +218,7 @@ fn last_private_owner_deallocates_before_reentrant_refund_in_single_concurrent_a
             count => {
                 let copies: Vec<_> = (0..count).map(|_| tree.clone()).collect();
                 drop(tree);
-                assert_eq!(budget.reserved_bytes(), bytes);
+                assert_eq!(budget.reserved_bytes(), bytes + observer_bytes);
                 assert!(!FREED.load(SeqCst));
                 let barrier = Barrier::new(count);
                 std::thread::scope(|scope| {
@@ -226,11 +234,13 @@ fn last_private_owner_deallocates_before_reentrant_refund_in_single_concurrent_a
         }
         assert!(FREED.load(SeqCst));
         assert_eq!(observer.wakes.load(SeqCst), 1);
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), observer_bytes);
         assert_eq!(
-            released.as_mut().poll(&mut Context::from_waker(&waker)),
+            registration.poll_wait(&release, &mut Context::from_waker(&waker)),
             Poll::Ready(())
         );
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
         BUDGET.with(|slot| *slot.borrow_mut() = None);
     }
 }

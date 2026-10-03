@@ -77,6 +77,64 @@ pub struct Shared<T, Charge> {
     pointer: NonNull<Allocation<T, Charge>>,
 }
 
+/// An already admitted runtime wake target shared by canonical charged handles.
+pub trait SharedWake: Send + Sync + 'static {
+    /// Notify the target while its original shared allocation remains alive.
+    fn wake(&self);
+}
+
+impl<T: SharedWake, Charge: Send + Sync + 'static> Shared<T, Charge> {
+    /// Transfer exactly this strong reference into the canonical Waker vtable.
+    pub(crate) fn into_waker(self) -> std::task::Waker {
+        struct Vtable<T, Charge>(std::marker::PhantomData<(T, Charge)>);
+        impl<T: SharedWake, Charge: Send + Sync + 'static> Vtable<T, Charge> {
+            const TABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+                Self::clone,
+                Self::wake,
+                Self::wake_by_ref,
+                Self::drop,
+            );
+
+            unsafe fn owner(pointer: *const ()) -> Shared<T, Charge> {
+                Shared {
+                    pointer: unsafe { NonNull::new_unchecked(pointer.cast_mut().cast()) },
+                }
+            }
+
+            unsafe fn clone(pointer: *const ()) -> std::task::RawWaker {
+                // Borrow the original ownership unit and create exactly one
+                // additional canonical reference without allocation.
+                let original = ManuallyDrop::new(unsafe { Self::owner(pointer) });
+                Self::raw(Shared::clone(&original))
+            }
+
+            unsafe fn wake(pointer: *const ()) {
+                // This stack owner retires its reference after the callback,
+                // including callback unwind, while retaining original custody.
+                let original = unsafe { Self::owner(pointer) };
+                T::wake(&original);
+            }
+
+            unsafe fn wake_by_ref(pointer: *const ()) {
+                let original = ManuallyDrop::new(unsafe { Self::owner(pointer) });
+                T::wake(&original);
+            }
+
+            unsafe fn drop(pointer: *const ()) {
+                drop(unsafe { Self::owner(pointer) });
+            }
+
+            fn raw(original: Shared<T, Charge>) -> std::task::RawWaker {
+                let original = ManuallyDrop::new(original);
+                std::task::RawWaker::new(original.pointer.as_ptr().cast(), &Self::TABLE)
+            }
+        }
+        // SAFETY: every entry consumes, borrows or clones exactly the ownership
+        // unit supplied by raw. Its payload and charge satisfy thread bounds.
+        unsafe { std::task::Waker::from_raw(Vtable::<T, Charge>::raw(self)) }
+    }
+}
+
 /// One original shared owner with an allocation-free erased charge type.
 ///
 /// The payload and its charge remain in their original concrete allocation.
@@ -289,6 +347,12 @@ impl<T, Charge> Shared<T, Charge> {
         left.pointer == right.pointer
     }
 
+    /// Borrow custody metadata without detaching it from its physical owner.
+    pub(crate) fn charge(&self) -> &Charge {
+        // The live shared reference keeps this initialized allocation and its charge alive.
+        unsafe { &self.pointer.as_ref().charge }
+    }
+
     /// Borrow the payload only when this is its sole original strong reference.
     /// No weak references exist, so another owner cannot race an upgrade.
     pub fn get_mut(&mut self) -> Option<&mut T> {
@@ -484,3 +548,7 @@ mod tests {
 #[cfg(all(test, not(miri)))]
 #[path = "shared_reservation_tests.rs"]
 mod reservation_tests;
+
+#[cfg(test)]
+#[path = "shared_wake_tests.rs"]
+mod wake_tests;

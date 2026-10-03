@@ -5,7 +5,10 @@ impl Kura {
     /// # Errors
     /// Returns an error if the block cannot be appended or the tracked block-store byte usage
     /// cannot be measured.
-    pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
+    pub fn persist_block_immediate_for_bench(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+    ) -> Result<()> {
         self.durable_mutation_authorized()?;
         let _write_guard = self.block_store_write_lock.lock();
         self.ensure_no_retired_rollback_intents()?;
@@ -21,7 +24,10 @@ impl Kura {
         Ok(())
     }
     /// Append an in-memory pending block for storage-budget benchmark scenarios.
-    pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
+    pub fn append_pending_block_for_bench(
+        &self,
+        block: iroha_data_model::block::SharedSignedBlock,
+    ) {
         if self.durable_mutation_authorized().is_err() {
             return;
         }
@@ -165,7 +171,10 @@ impl Kura {
 }
 #[cfg(test)]
 impl Kura {
-    pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
+    pub(crate) fn persist_block_immediate_for_tests(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+    ) {
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)

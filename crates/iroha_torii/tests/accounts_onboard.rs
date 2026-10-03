@@ -987,6 +987,7 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
         .state
         .view()
         .latest_block()
+        .expect("funded canonical history read")
         .expect("committed anchor");
     assert!(anchor.header().creation_time() + Duration::from_secs(32 * 60 * 60) < now);
     let target = AccountId::new(

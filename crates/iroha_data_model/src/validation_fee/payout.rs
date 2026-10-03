@@ -139,7 +139,9 @@ impl ValidationFeePayoutPolicyRegistryV1 {
     /// Check authority, revision order and permanent custody identity.
     ///
     /// # Errors
-    /// Returns an error for absent enactments, invalid authority, noncontiguous revisions, changed custody, invalid height order, or reused proposals.
+    ///
+    /// Returns an error for an empty registry, invalid authority, noncontiguous
+    /// revisions, changed custody, decreasing enactment heights, or duplicate proposals.
     pub fn validate(&self) -> Result<(), String> {
         let first = self
             .entries

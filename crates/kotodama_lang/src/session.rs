@@ -2391,8 +2391,8 @@ mod tests {
             .iter()
             .find(|callable| callable.entry_pc == smoke.pc_start)
             .expect("authenticated test callable");
-        assert!(callable.argument_words.is_empty());
-        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
+        assert!(callable.arguments.nodes.is_empty());
+        assert_eq!(callable.results, ivm_abi::call::CallSchemaV1::unit());
         assert!(
             outputs
                 .suite

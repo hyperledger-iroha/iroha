@@ -7,11 +7,15 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>
 /// Decodes the golden camera captures in <c>fixtures/petal/petal_captures_v1.json</c>:
 /// every conforming decoder must read the lanes named in <c>must_decode</c>,
-/// must never report wrong data for any lane, and must reject the negatives.
+/// must never report wrong data for any lane, must report the recorded inferred
+/// corner, must follow the tracking pairs, and must reject the negatives.
 /// </summary>
 public sealed class PetalCaptureTests(ITestOutputHelper output)
 {
-    /// <summary>The nine captures of the fixture; the last three need the normalised tile read.</summary>
+    /// <summary>
+    /// The eleven captures of the fixture; three need the normalised tile read and the last
+    /// two an inferred corner.
+    /// </summary>
     private static readonly string[] CaptureNames =
     [
         "clean-512",
@@ -23,7 +27,12 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
         "overexposed-540p",
         "veiled-720p",
         "shadow-band-540p",
+        "hidden-corner-540p",
+        "cut-corner-720p",
     ];
+
+    /// <summary>The two tracking pairs of the fixture.</summary>
+    private static readonly string[] TrackNames = ["steady-hand-540p", "thumb-arrives-540p"];
 
     private static JsonElement Doc => PetalTestSupport.Captures;
 
@@ -52,17 +61,78 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
                     Assert.False(must.Contains(letter), $"{name}: required lane {letter} was not decoded");
             }
 
-            // a bit-exact port reaches exactly the reference decoder's lanes
+            // a bit-exact port reaches exactly the reference decoder's lanes and inferred corner
             Assert.Equal(capture.GetProperty("reference_decoded").GetString(), decoded.Lanes);
+            Assert.True(InferredCorner(capture) == decoded.InferredCorner, $"{name}: inferred corner {decoded.InferredCorner}");
             output.WriteLine(
                 $"{name,-24} {image.Width}x{image.Height} lanes {decoded.Lanes,-3} (reference {capture.GetProperty("reference_decoded").GetString()}) " +
-                $"rotation {decoded.Rotation} mirrored {decoded.Mirrored} first decode {watch.Elapsed.TotalMilliseconds:F1} ms");
+                $"rotation {decoded.Rotation} mirrored {decoded.Mirrored} inferred {decoded.InferredCorner?.ToString() ?? "-"} " +
+                $"first decode {watch.Elapsed.TotalMilliseconds:F1} ms");
             decoded.Feed(assembler);
         }
 
         // captures of different frames of the same stream accumulate in one assembler
         Assert.True(assembler.Progress.AtomsReceived > 10);
     }
+
+    [Fact]
+    public void GoldenTracksFollowThePoseIntoTheNextFrame()
+    {
+        var tracks = Doc.GetProperty("tracks").EnumerateArray().ToArray();
+        Assert.Equal(TrackNames, tracks.Select(static track => track.GetProperty("name").GetString()));
+        foreach (var track in tracks)
+        {
+            var name = track.GetProperty("name").GetString()!;
+            var from = PetalTestSupport.LumaOf(track, "from_luma_zlib_base64");
+            var to = PetalTestSupport.LumaOf(track, "to_luma_zlib_base64");
+            var first = PetalDecoder.Decode(from);
+            Assert.True(first.Success, $"{name}: first frame {first.Error}");
+            var watch = Stopwatch.StartNew();
+            var followed = PetalDecoder.Track(to, first.Frame);
+            watch.Stop();
+            Assert.True(followed is not null, $"{name}: the pose was not followed");
+            var must = track.GetProperty("must_track").GetString()!;
+            foreach (var (letter, lane, key) in new[] { ('P', followed.P, "p_data"), ('K', followed.K, "k_data"), ('D', followed.D, "d_data") })
+            {
+                if (lane is not null)
+                    Assert.True(PetalTestSupport.Hex(track, key).AsSpan().SequenceEqual(lane.Data), $"{name}: lane {letter} data");
+                else
+                    Assert.False(must.Contains(letter), $"{name}: required lane {letter} was not tracked");
+            }
+
+            Assert.Equal(track.GetProperty("reference_tracked").GetString(), followed.Lanes);
+            Assert.True(InferredCorner(track) == followed.InferredCorner, $"{name}: inferred corner {followed.InferredCorner}");
+            // the orientation is kept from the first frame
+            Assert.Equal((first.Frame.Rotation, first.Frame.Mirrored), (followed.Rotation, followed.Mirrored));
+            output.WriteLine(
+                $"{name,-24} tracked lanes {followed.Lanes,-3} (reference {track.GetProperty("reference_tracked").GetString()}) " +
+                $"inferred {followed.InferredCorner?.ToString() ?? "-"} track {watch.Elapsed.TotalMilliseconds:F1} ms");
+        }
+    }
+
+    [Fact]
+    public void TheHiddenAndCutCornersAreInferred()
+    {
+        foreach (var (name, corner) in new[] { ("hidden-corner-540p", 3), ("cut-corner-720p", 2) })
+        {
+            var capture = Doc.GetProperty("captures").EnumerateArray().Single(entry => entry.GetProperty("name").GetString() == name);
+            var image = PetalTestSupport.LumaOf(capture);
+            // the locator offers three blossoms with the fourth corner inferred, and that set reads
+            var candidates = PetalLocator.LocateCandidates(image);
+            Assert.Contains(candidates, static set => set.Inferred is not null);
+            var decoded = PetalDecoder.Decode(image);
+            Assert.True(decoded.Success, $"{name}: {decoded.Error}");
+            Assert.Equal(corner, decoded.Frame.InferredCorner);
+            // diagnostics extrapolate the levels of the inferred corner like the decoder
+            Assert.NotNull(PetalDecoder.ObservedCells(image, decoded.Frame));
+            Assert.NotNull(PetalDecoder.TileMatchError(image, decoded.Frame));
+        }
+    }
+
+    private static int? InferredCorner(JsonElement entry) =>
+        entry.GetProperty("inferred_corner").ValueKind == JsonValueKind.Null
+            ? null
+            : entry.GetProperty("inferred_corner").GetInt32();
 
     [Theory]
     [InlineData("overexposed-540p")]
@@ -77,7 +147,7 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
         Assert.True(decoded.Success, $"{name}: {decoded.Error}");
         var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
         var pose = decoded.Frame.Homography;
-        var reference = PetalDecoder.ReferenceLevels(image, pose);
+        var reference = PetalDecoder.ReferenceLevels(image, pose, decoded.Frame.InferredCorner);
         Assert.NotNull(reference);
         var patches = new double[PetalLayout.TileCount * PetalGlyphs.TemplateSize * PetalGlyphs.TemplateSize];
         PetalDecoder.SamplePatches(image, pose, patches);

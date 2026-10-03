@@ -361,11 +361,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 398;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 400;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 398;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 400;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 377;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 378;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -415,9 +415,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "494d0e73ec219de022a4ed2c35b8a62879d302e8ca6ea7c814fa101f63617007";
+            "cf317f943c61b42bcb49f944bc006c2bc668812523f392884cbe97812af1aa05";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "6565c341378b3c8a1ab5b673232309c628d8596325a15734bf3397ff69642557";
+            "e6fc7d5b775f6909a95e1658fc396c2eb536a9c521cebac2af847b52ca3f4d4b";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -444,7 +444,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                21,
+                22,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -465,6 +465,7 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1",
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1",
             "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1",
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
@@ -1398,6 +1399,7 @@ mod tests {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
             claim_plan: crate::nexus::PublicLaneRewardClaimPlanV1 {
+                fee_claim: None,
                 network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
                     crate::NetworkId::from_genesis_hash(
                         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(

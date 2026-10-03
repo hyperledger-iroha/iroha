@@ -59,10 +59,15 @@ package, genuine signed context and selected hardware release.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, and peer rebinding. Its Rust-authored fixture is
+monetary plans, bounded reward claims with an explicit optional fee-custody
+payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records and noncanonical quantity decimals. Decoding preserves exact
+truncated records, retired reward-plan layouts, invalid fee custody and
+noncanonical quantity decimals. Decoding preserves exact
 Norito bytes but does not verify signatures, custody, or committee activation.
+Unsigned 64-bit fields retain their complete wire bits in `Long`, including
+staking-plan expiry heights; compare them as unsigned values. Collection and
+byte-array access returns copies, preserving the original decoded record.
 
 `UpdatePlainConvictionInstruction` exposes the public standalone ballot's
 choice-free conviction update to Kotlin and Java callers. It emits the registered
@@ -713,8 +718,15 @@ session.push(luma, SystemClock.elapsedRealtime()).completed?.let { deliver(it.pa
 ```
 
 `PetalDecoder.decode` locates the finders, tries four rotations and mirrored
-front-camera previews, reads lane `D` first and turns low-confidence cells into
-Reed–Solomon erasures; a lane is only reported when its codeword checks out.
+front-camera previews ranked by the ring gates plus the `天` silhouette, reads
+lane `D` first and turns low-confidence cells into Reed–Solomon erasures; a lane
+is only reported when its codeword checks out. When a thumb, a glare or the
+frame edge hides one corner blossom, three blossoms forming a corner still
+locate the code: the fourth corner is inferred, moved to where the dotted rings
+line up, and reported as `PetalDecodedFrame.inferredCorner` (canonical index).
+`PetalScanSession` reads the frames after a decoded one by `PetalDecoder.track`,
+which follows the last pose (at most 500 ms old) instead of searching the whole
+image, and counts both in `stats().tracked` and `stats().inferred`.
 The tile lanes `P` and `K` are read in two ways: the *level read* judges every
 8×8 tile patch against the light and dark levels measured at the finders, and a
 lane it cannot decode is retried with the *normalised read*, which rescales each
@@ -731,9 +743,10 @@ adds `PetalStreamView`, `PetalCanvasRenderer` and the dependency-free
 `PetalLumaAdapter` (CameraX `ImageAnalysis`, Camera2 `ImageReader` and Camera1
 NV21 previews); they use API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v1.json` and
+The tests check every section of `../fixtures/petal/petal_stream_v1.json`,
 decode the golden camera captures of `../fixtures/petal/petal_captures_v1.json`
-with exactly the lanes the reference reads:
+with exactly the lanes and inferred corners the reference reads, and track its
+golden frame pairs:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain

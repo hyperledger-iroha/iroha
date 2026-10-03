@@ -375,7 +375,12 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
 }
 
 fn mailbox_audit_sequence(state: &State) -> u64 {
-    let header = state.view().latest_block().unwrap().header();
+    let header = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .unwrap()
+        .header();
     let mut overlay = state.block(header);
     crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(&overlay.transaction())
         .expect("fixture audit sequence")

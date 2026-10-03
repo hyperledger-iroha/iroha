@@ -367,6 +367,8 @@ mod tests {
         let prepare = held.prepare_integrity_refresh().unwrap();
         let nonce = prepare[1].as_slice().try_into().unwrap();
         let (challenge, der, lease) = originals(&held.financial, nonce);
+        // TEST ONLY fixture clock after known-public cryptographic setup.
+        time(&mut held.financial, 1400);
         held.with_integrity_refresh_owner(|owner, financial| {
             owner.accept_challenge(financial, &challenge.to_transport_bytes().unwrap())?;
             owner.fence_platform_invocation(financial)?;
@@ -408,6 +410,8 @@ mod tests {
         let prepare = held.prepare_integrity_refresh().unwrap();
         let (challenge, der, lease) =
             originals(&held.financial, prepare[1].as_slice().try_into().unwrap());
+        // TEST ONLY fixture clock after known-public cryptographic setup.
+        time(&mut held.financial, 1400);
         held.with_integrity_refresh_owner(|owner, financial| {
             owner.accept_challenge(financial, &challenge.to_transport_bytes().unwrap())?;
             owner.fence_platform_invocation(financial)?;

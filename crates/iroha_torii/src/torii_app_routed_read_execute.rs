@@ -96,20 +96,18 @@ async fn resolve_torii_proof_record_for_supported_routes(
     }
     for route in &routes {
         diagnostics.record_attempt();
-        let response = execute_torii_read_for_route(
-            app,
+        let mut request = torii_read_request(
+            ToriiReadEndpointV1::ProofRecordGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             *route,
-            torii_read_request(
-                ToriiReadEndpointV1::ProofRecordGet,
-                ToriiFanoutRouteScopeV1::AllDataspaces,
-                *route,
-                vec![proof_id.clone()],
-                None,
-                Vec::new(),
-            ),
+            vec![proof_id.clone()],
             None,
-        )
-        .await;
+            Vec::new(),
+        );
+        // The bounded merge decodes a canonical ProofRecord archive. Request
+        // that same representation from both local and remote route producers.
+        request.response_format = ToriiProxyResponseFormatV1::Norito;
+        let response = execute_torii_read_for_route(app, *route, request, None).await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
             last_not_found = Some(summarize_skipped_torii_route_response(response));

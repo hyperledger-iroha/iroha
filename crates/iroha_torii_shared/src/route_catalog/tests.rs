@@ -3,6 +3,19 @@
 mod tests {
     use super::*;
     #[test]
+    fn reserve_policy_proof_is_an_account_authenticated_private_read() {
+        let route = contracts_and_verification_keys::SORAFS_RESERVE_POLICY_PROOF_GET;
+        assert_eq!(route.path(), "/v1/sorafs/reserve/policy/{height}");
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn staking_preparation_is_bounded_read_only_post() {
         let route = core::NEXUS_STAKING_PREPARATION_POST;
         assert_eq!(route.path(), "/v1/nexus/staking/prepare");
@@ -101,14 +114,15 @@ mod tests {
     }
 
     #[test]
-    fn provider_discovery_is_finite_private_no_store_sdk_evidence() {
-        let route = sorafs::PROVIDER_DISCOVERY;
-        assert_eq!(route.method(), HttpMethod::Get);
-        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
-        assert_eq!(route.effect(), RouteEffect::ReadOnly);
-        assert_eq!(route.projections(), RouteProjections::SDK);
-        assert!(route.requires_private_no_store());
-        assert!(RouteCatalog::new(&[route]).validate().is_ok());
+    fn provider_and_custody_discovery_are_finite_private_no_store_sdk_evidence() {
+        for route in [sorafs::PROVIDER_DISCOVERY, sorafs::STREAM_TOKEN_CUSTODY] {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.projections(), RouteProjections::SDK);
+            assert!(route.requires_private_no_store());
+            assert!(RouteCatalog::new(&[route]).validate().is_ok());
+        }
     }
 
     #[test]

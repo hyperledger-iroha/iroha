@@ -65,7 +65,17 @@ public sealed record PetalScanLimits
 /// <param name="LaneP">Lane <c>P</c> successes.</param>
 /// <param name="LaneK">Lane <c>K</c> successes.</param>
 /// <param name="LaneD">Lane <c>D</c> successes.</param>
-public readonly record struct PetalScanStats(uint Frames, uint Located, uint Readable, uint LaneP, uint LaneK, uint LaneD);
+/// <param name="Tracked">Frames read by tracking the previous pose instead of a full search.</param>
+/// <param name="Inferred">Frames read with one corner finder hidden and inferred (a hint to move a thumb or the phone).</param>
+public readonly record struct PetalScanStats(
+    uint Frames,
+    uint Located,
+    uint Readable,
+    uint LaneP,
+    uint LaneK,
+    uint LaneD,
+    uint Tracked,
+    uint Inferred);
 
 /// <summary>The result of offering one camera frame.</summary>
 public sealed class PetalScanOutcome
@@ -100,13 +110,24 @@ public sealed class PetalScanOutcome
 /// camera frames and reassembles the stream they carry.
 /// </summary>
 /// <remarks>
+/// <para>
+/// After a frame decodes, the next frames are first read by tracking the code from
+/// its last pose (<see cref="PetalDecoder.Track"/>), which skips the finder search;
+/// a full <see cref="PetalDecoder.Decode"/> runs when tracking fails or the last
+/// pose is older than <see cref="TrackWindowMilliseconds"/>.
+/// </para>
+/// <para>
 /// A half-received stream is forgotten after <see cref="PetalScanLimits.IdleTimeout"/>
 /// without new independent atoms, or <see cref="PetalScanLimits.AbsoluteTimeout"/>
 /// after it started. Instances are not thread-safe; see
 /// <see cref="PetalCameraAnalyzer"/> for a camera-callback wrapper.
+/// </para>
 /// </remarks>
 public sealed class PetalScanSession
 {
+    /// <summary>How long (in milliseconds) a decoded pose stays usable for tracking the next frames.</summary>
+    public const long TrackWindowMilliseconds = 500;
+
     private readonly PetalStreamAssembler assembler;
     private long? startedMs;
     private long progressMs;
@@ -117,6 +138,10 @@ public sealed class PetalScanSession
     private uint laneP;
     private uint laneK;
     private uint laneD;
+    private uint tracked;
+    private uint inferred;
+    private PetalDecodedFrame? lastPose;
+    private long lastPoseMs;
 
     /// <summary>Creates a session.</summary>
     /// <param name="limits">Limits; <see cref="PetalScanLimits.Default"/> when omitted.</param>
@@ -130,17 +155,18 @@ public sealed class PetalScanSession
     public PetalScanLimits Limits { get; }
 
     /// <summary>Diagnostic counters.</summary>
-    public PetalScanStats Stats => new(frames, located, readable, laneP, laneK, laneD);
+    public PetalScanStats Stats => new(frames, located, readable, laneP, laneK, laneD, tracked, inferred);
 
     /// <summary>Current progress.</summary>
     public PetalProgress Progress => assembler.Progress;
 
-    /// <summary>Drops all partial state (counters are kept).</summary>
+    /// <summary>Drops all partial state and the pose used for tracking (counters are kept).</summary>
     public void Reset()
     {
         assembler.Reset();
         startedMs = null;
         lastRank = 0;
+        lastPose = null;
     }
 
     /// <summary>Offers one camera luma plane captured at monotonic time <paramref name="nowMilliseconds"/>.</summary>
@@ -158,8 +184,22 @@ public sealed class PetalScanSession
         }
 
         frames++;
-        var result = PetalDecoder.Decode(image, Limits.Decode);
-        var lanes = result.Success ? Absorb(result.Frame) : string.Empty;
+        var followed = lastPose is not null && Elapsed(nowMilliseconds, lastPoseMs) <= TrackWindowMilliseconds
+            ? PetalDecoder.Track(image, lastPose, Limits.Decode)
+            : null;
+        if (followed is not null)
+            tracked++;
+        var result = followed is not null ? PetalDecodeResult.Ok(followed) : PetalDecoder.Decode(image, Limits.Decode);
+        var lanes = string.Empty;
+        if (result.Success)
+        {
+            if (result.Frame.InferredCorner is not null)
+                inferred++;
+            lastPose = result.Frame;
+            lastPoseMs = nowMilliseconds;
+            lanes = Absorb(result.Frame);
+        }
+
         if (result.Error is not (PetalDecodeError.NoFinders or PetalDecodeError.UnsupportedImage))
             located++;
         var progress = assembler.Progress;

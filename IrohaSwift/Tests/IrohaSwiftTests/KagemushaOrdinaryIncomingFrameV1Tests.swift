@@ -22,6 +22,7 @@ final class KagemushaOrdinaryIncomingFrameV1Tests: XCTestCase {
         let body = Data([11, 12]); fields = [Data([0]), body, Data(repeating: 1, count: 64),
           Data([8]), Data(SHA256.hash(data: body))]
       case .originalPlatformCounter: fields = [Data([4]), Data([0, 0, 0, 0])]
+      case .originalPlatformSigning: fields = try KagemushaOrdinaryIncomingSigningProjectionV1Tests.specimen()
       case .advanceState, .acknowledge, .refreshAccountClock: fields = []
       }
       let frame = try KagemushaOrdinaryIncomingFrameV1.encodeResponse(phase, handle: 19, fields: fields)

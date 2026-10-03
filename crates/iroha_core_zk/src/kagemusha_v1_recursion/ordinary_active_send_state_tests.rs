@@ -17,7 +17,6 @@ use crate::kagemusha_v1_state::DigestV1;
 use crate::kagemusha_v1_state::{
     OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
 };
-use ff::Field as _;
 use iroha_data_model::kagemusha::*;
 
 /// Actual funded→Send proof and full originals; no authenticated Native capability is constructed.
@@ -51,6 +50,11 @@ pub(super) fn prove_ordinary_send_state_for_testing_v1(
     wrapper_ep: &PlonkProtocol<EpAffine>,
     apple: bool,
 ) -> OrdinarySendStateForTestingV1 {
+    assert_eq!(
+        funded.consumed_credits.root(),
+        funded.state.consumed_credit_root,
+        "the funded predecessor must retain the actual Mint replay tree"
+    );
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
     let seed = KagemushaRecoverySeedV1::from_unsealed([44; 32]).unwrap();

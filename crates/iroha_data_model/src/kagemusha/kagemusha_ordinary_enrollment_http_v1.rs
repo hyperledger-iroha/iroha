@@ -147,28 +147,39 @@ record! {
         lease: String,
     }
 }
-record! {
-    /// Sole complete-original initial FI Start DATA. All seven fields are required.
-    /// Decoding this carrier supplies no platform, issuer, current or monetary authority.
-    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryRetailStartHttpRequestV1")]
-    KagemushaOrdinaryRetailStartHttpRequestV1 {
-        /// Canonical actual Native-selected wallet account, distinct from the FI signatory.
-        wallet: String,
-        /// Complete original signed C515.
-        signed_preparation_base64: String,
-        /// Complete original signed raw314.
-        raw_admission_original_base64: String,
-        /// Complete canonical ordered original platform container.
-        platform_original_base64: String,
-        /// Complete canonical E archive, including the actual platform possession original.
-        core_possession_original_base64: String,
-        /// Complete original canonical app credential.
-        app_certificate_base64: String,
-        /// Explicit null for initial Start; absence or caller-selected refresh originals refuse.
-        #[norito(required)]
-        selected_integrity: Option<KagemushaOrdinaryStartIntegrityHttpV1>,
-    }
+// Keep the required Option literal in this struct: a macro-forwarded type fragment
+// becomes an opaque type group to the derives and cannot select required-Option semantics.
+/// Sole complete-original initial FI Start DATA. All seven fields are required.
+/// Decoding this carrier supplies no platform, issuer, current or monetary authority.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::Encode,
+    norito::Decode,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryRetailStartHttpRequestV1")]
+pub struct KagemushaOrdinaryRetailStartHttpRequestV1 {
+    /// Canonical actual Native-selected wallet account, distinct from the FI signatory.
+    pub wallet: String,
+    /// Complete original signed C515.
+    pub signed_preparation_base64: String,
+    /// Complete original signed raw314.
+    pub raw_admission_original_base64: String,
+    /// Complete canonical ordered original platform container.
+    pub platform_original_base64: String,
+    /// Complete canonical E archive, including the actual platform possession original.
+    pub core_possession_original_base64: String,
+    /// Complete original canonical app credential.
+    pub app_certificate_base64: String,
+    /// Explicit null for initial Start; absence or caller-selected refresh originals refuse.
+    #[norito(required)]
+    pub selected_integrity: Option<KagemushaOrdinaryStartIntegrityHttpV1>,
 }
 record! {
     /// Finish supplies only the retained challenge identity and exact wallet Ed64.

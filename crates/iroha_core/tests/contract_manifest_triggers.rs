@@ -83,8 +83,8 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
                 ivm::call::EmbeddedCallableV1 {
                     entry_pc: u64::try_from(index).unwrap() * 16,
                     frame_bytes: 0,
-                    argument_words: Vec::new(),
-                    result_words: vec![ivm::call::CallWordV1::Unit],
+                    arguments: ivm::call::CallSchemaV1::empty(),
+                    results: ivm::call::CallSchemaV1::unit(),
                 }
             })
             .collect(),

@@ -59,6 +59,61 @@ enum OrdinaryEnrollmentWire {
     guard try string(p, digestField) == hex(Data(SHA256.hash(data: original))) else { throw invalid() }
     return original
   }
+  /// Strict DATA correlation of the complete Model-owned Start original.
+  /// Native supplies all seven fields; this checker never creates missing evidence.
+  static func requireRetailStartOriginal(_ raw: Data, signedPreparation: Data,
+    credential: Data) throws -> Data {
+    _ = try KagemushaOrdinaryAppIdentityPreparedProjectionV1.challenge(transport: signedPreparation)
+    guard (1...16384).contains(credential.count), (1...262144).contains(raw.count),
+      let text = String(data: raw, encoding: .utf8), Data(text.utf8) == raw else { throw invalid() }
+    try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: raw)
+    guard let fields = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+      Set(fields.keys) == Set(["wallet", "signed_preparation_base64", "raw_admission_original_base64",
+        "platform_original_base64", "core_possession_original_base64", "app_certificate_base64", "selected_integrity"]),
+      fields["selected_integrity"] is NSNull else { throw invalid() }
+    let wallet = try string(fields, "wallet")
+    guard (1...4096).contains(wallet.utf8.count), wallet.utf8.allSatisfy({ (0x21...0x7e).contains($0) }) else {
+      throw invalid()
+    }
+    // Canonical account/C binding is authenticated by the genuine Model-backed exporter.
+    // Swift's detached decoder preserves text; it cannot select an admitted account.
+    guard try startBase64(string(fields, "signed_preparation_base64"), maximum: 515, exact: 515) == signedPreparation,
+      try startBase64(string(fields, "app_certificate_base64"), maximum: 16384, exact: nil) == credential else {
+      throw invalid()
+    }
+    _ = try startBase64(string(fields, "raw_admission_original_base64"), maximum: 314, exact: 314)
+    _ = try startBase64(string(fields, "platform_original_base64"), maximum: 131072, exact: nil)
+    _ = try startBase64(string(fields, "core_possession_original_base64"), maximum: 5120, exact: nil)
+    return Data(raw)
+  }
+
+  /// Join exact Native phase15 originals; hashes and public metadata cannot fill gaps.
+  static func retailStartOriginalChunks(_ chunks: [[Data]], signedPreparation: Data,
+    credential: Data, pendingScope: Data, credentialDigest: Data, nativeTicket: Data) throws -> Data {
+    guard (1...4).contains(chunks.count), let first = chunks.first,
+      KagemushaAppPlatformPreparedProjectionV1.digest(pendingScope),
+      KagemushaAppPlatformPreparedProjectionV1.digest(credentialDigest) else { throw invalid() }
+    for (index, fields) in chunks.enumerated() {
+      let request = [KagemushaCoreCoordinatorFrameV1.u32(15), nativeTicket,
+        KagemushaCoreCoordinatorFrameV1.u32(UInt32(index))]
+      try KagemushaAppPlatformFrameV1.validateResponse(.appEnrollmentPossession, request, fields)
+      guard fields[2] == first[2], fields[3] == first[3],
+        fields[4] == pendingScope, fields[5] == credentialDigest else { throw invalid() }
+    }
+    let total = Int(KagemushaAppPlatformPreparedProjectionV1.u32(first[3]))
+    guard chunks.count == (total + 65535) / 65536 else { throw invalid() }
+    var body = Data(); body.reserveCapacity(total)
+    for fields in chunks { body.append(fields[1]) }
+    guard body.count == total, Data(SHA256.hash(data: body)) == first[2] else { throw invalid() }
+    // credentialDigest is the actual Model domain digest returned by Native phase8.
+    // It is deliberately not replaced by SHA256(credential transport bytes).
+    return try requireRetailStartOriginal(body, signedPreparation: signedPreparation, credential: credential)
+  }
+
+  private static func startBase64(_ value: String, maximum: Int, exact: Int?) throws -> Data {
+    guard value.utf8.count <= ((maximum + 2) / 3) * 4 else { throw invalid() }
+    return try base64(value, maximum: maximum, exact: exact)
+  }
   static func retailChallenge(_ reply: Data, operation: Data) throws -> (challenge: Data, message: Data) {
     guard operation.count == 32 else { throw invalid() }
     let p = try object(reply)

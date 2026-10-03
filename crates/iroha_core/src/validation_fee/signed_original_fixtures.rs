@@ -15,7 +15,7 @@ pub(super) fn signed_fee_registry_root_fixture() -> (
     signed_fee_registry_root_fixture_with_config(config)
 }
 
-fn signed_fee_registry_root_fixture_with_config(
+pub(super) fn signed_fee_registry_root_fixture_with_config(
     mut config: crate::sumeragi::test_chain::TestChainConfig,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,

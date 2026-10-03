@@ -1936,6 +1936,111 @@ fn checked_openapi_assets_match_package_authority() {
     );
 }
 #[test]
+fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
+    use iroha_data_model::{
+        asset::AssetId,
+        nexus::{
+            PublicLaneFeeRewardClaimV1, PublicLaneMonetaryScopeV1, PublicLaneRewardClaimPlanV1,
+        },
+        parameter::system::SumeragiNposParameters,
+    };
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    let schemas = openapi_schemas();
+    let plan_fields = [
+        "network_scope",
+        "valid_until_height",
+        "expected_state",
+        "records",
+        "sources",
+        "fee_claim",
+    ];
+    let claim_fields = [
+        "lifecycle_seal",
+        "beneficiary_id",
+        "beneficiary_revision",
+        "source_asset",
+        "destination_asset",
+        "amount",
+        "expected_claim_sequence",
+    ];
+    assert_strict_object_schema(&schemas, "PublicLaneRewardClaimPlanV1", &plan_fields, &[]);
+    assert_strict_object_schema(&schemas, "PublicLaneFeeRewardClaimV1", &claim_fields, &[]);
+    assert_eq!(
+        schemas["PublicLaneRewardClaimPlanV1"]["properties"]["fee_claim"]["anyOf"],
+        norito::json!([
+            {"$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"},
+            {"type": "null"}
+        ])
+    );
+    assert_eq!(
+        schemas["PublicLaneFeeRewardClaimV1"]["properties"]["lifecycle_seal"],
+        norito::json!({
+            "type": "array", "minItems": 32, "maxItems": 32,
+            "items": {"type": "integer", "minimum": 0, "maximum": 255}
+        })
+    );
+    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let claim = PublicLaneFeeRewardClaimV1 {
+        lifecycle_seal: [0xA5; 32],
+        beneficiary_id: ALICE_ID.clone(),
+        beneficiary_revision: u64::MAX,
+        source_asset: AssetId::new(xor.clone(), BOB_ID.clone()),
+        destination_asset: AssetId::new(xor, ALICE_ID.clone()),
+        amount: "0.000000001".parse().unwrap(),
+        expected_claim_sequence: u64::MAX,
+    };
+    assert!(claim.has_canonical_shape(&ALICE_ID));
+    for fee_claim in [None, Some(claim)] {
+        let plan = PublicLaneRewardClaimPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Genesis,
+            valid_until_height: 1,
+            expected_state: None,
+            records: Vec::new(),
+            sources: Vec::new(),
+            fee_claim,
+        };
+        let encoded = norito::json::to_value(&plan).unwrap();
+        assert_eq!(
+            encoded
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(plan_fields)
+        );
+        if plan.fee_claim.is_some() {
+            assert_eq!(
+                encoded["fee_claim"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(claim_fields)
+            );
+            assert_eq!(
+                encoded["fee_claim"]["lifecycle_seal"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                32
+            );
+        } else {
+            assert_eq!(encoded["fee_claim"], Value::Null);
+        }
+        assert_eq!(
+            norito::json::from_value::<PublicLaneRewardClaimPlanV1>(encoded.clone()).unwrap(),
+            plan
+        );
+        let mut omitted = encoded;
+        omitted.as_object_mut().unwrap().remove("fee_claim");
+        assert!(norito::json::from_value::<PublicLaneRewardClaimPlanV1>(omitted).is_err());
+    }
+}
+
+#[test]
 fn public_lane_staking_schema_closes_status_variants_and_unbond_cutoff() {
     let document = canonical_document();
     let schemas = component_schemas(&document);

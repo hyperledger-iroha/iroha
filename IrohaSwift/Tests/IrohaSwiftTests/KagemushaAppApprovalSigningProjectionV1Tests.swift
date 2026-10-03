@@ -57,7 +57,7 @@ final class KagemushaAppApprovalSigningProjectionV1Tests: XCTestCase {
     let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/kagemusha_app_owned_hardware_native_vectors_v1.json")
     let raw = try Data(contentsOf: path)
-    XCTAssertEqual(Data(SHA256.hash(data: raw)), try hex("94c94415d076675dee98c0de5931d9314ffab4b6434b8ad1f1bad0aeb30ade16"))
+    XCTAssertEqual(Data(SHA256.hash(data: raw)), try hex("7dac78994b46a008b4921104a739215a3ba64f1101252f25196ed2c81c03c9d3"))
     let root = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
     XCTAssertEqual(root["codec_only"] as? Bool, true)
     for flag in ["hardware_qualified", "monetary_authority", "native_authority"] {
@@ -95,6 +95,37 @@ final class KagemushaAppApprovalSigningProjectionV1Tests: XCTestCase {
         nativeFinancialSubject: subject))
     }
     XCTAssertEqual(operationCounts, [1: 2, 2: 2, 3: 2, 4: 2, 5: 2])
+  }
+
+  func testIncomingTerminalModelMessagesBindBothSelectorsWithoutChangingGenericHardwareGrammar() throws {
+    let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/kagemusha_app_owned_hardware_native_vectors_v1.json")
+    let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+    let rows = try XCTUnwrap(root["vectors"] as? [[String: Any]])
+    var incoming = 0
+    for row in rows where [1, 3].contains(row["operation_tag"] as? Int ?? -1) {
+      incoming += 1
+      let subject = try hex(try XCTUnwrap(row["subject_signing_hex"] as? String))
+      let wrapper = try hex(try XCTUnwrap(row["approval_signing_hex"] as? String))
+      XCTAssertNoThrow(try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: wrapper,
+        nativeFinancialSubject: subject))
+      XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: subject))
+      for offset in [364, 396] {
+        var changed = subject; changed[offset] ^= 1
+        XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: wrapper,
+          nativeFinancialSubject: changed))
+        changed.replaceSubrange(offset..<(offset + 32), with: Data(repeating: 0, count: 32))
+        var coherentWrapper = wrapper
+        coherentWrapper.replaceSubrange(245..<277, with: Data(SHA256.hash(data: changed)))
+        XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: coherentWrapper,
+          nativeFinancialSubject: changed))
+      }
+      for operation: UInt8 in [0, 2, 4, 5] {
+        var changed = subject; changed[331] = operation
+        XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(coreOrdinaryIncomingTerminalSigningBytes: changed))
+      }
+    }
+    XCTAssertEqual(incoming, 4)
   }
 
   func testPurposeTwoPreparationHasDistinctGrammarAndTenSecondBound() throws {

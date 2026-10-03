@@ -139,7 +139,8 @@ fn resource_gather_tracks_actual_sidecar_bytes_and_resident_queue_memberships() 
         )
         .unwrap();
     let block_hash = block.hash();
-    kura.store_block(Arc::new(block)).unwrap();
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(block))
+        .unwrap();
     assert_eq!(
         kura.get_durable_block_hash(std::num::NonZeroUsize::new(1).unwrap()),
         Some(block_hash)

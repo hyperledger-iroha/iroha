@@ -5,6 +5,11 @@
 //! AVX2, AVX-512 or NEON). The scalar routines serve as a portable fallback.
 #[path = "bn254_vec/batch.rs"]
 mod batch;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) use batch::BATCH_SIZES;
+pub(crate) use batch::BatchOperation;
+#[cfg(feature = "cuda")]
+pub(crate) use batch::cpu_batch_into;
 pub use batch::{add_batch_into, mul_batch_into, sub_batch_into};
 #[cfg(feature = "cuda")]
 pub(crate) use batch::{canonical, valid_batch};

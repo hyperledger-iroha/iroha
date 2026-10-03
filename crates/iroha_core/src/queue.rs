@@ -4036,9 +4036,7 @@ impl Queue {
             &view.pipeline,
             view,
             height,
-            view.latest_block().map_or(0, |block| {
-                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-            }),
+            view.query_ledger_time_ms(),
         );
         let prepared = self.prepare_checked_for_enqueue(
             checked,

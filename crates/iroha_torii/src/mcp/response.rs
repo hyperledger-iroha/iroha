@@ -187,7 +187,11 @@ fn bounded_jsonrpc_http_response_inner(payload: Value, max_response_bytes: usize
             };
             encoded.into_vec()
         }
-        Err(BoundedJsonError::AllocationFailed | BoundedJsonError::DecodeResource(_)) => {
+        Err(
+            BoundedJsonError::AllocationFailed
+            | BoundedJsonError::DecodeResource(_)
+            | BoundedJsonError::ScopedDecodeResource(_),
+        ) => {
             let error = jsonrpc_error_response(
                 response_id,
                 JSONRPC_INTERNAL_ERROR,

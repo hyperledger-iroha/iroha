@@ -27,7 +27,7 @@ use super::{
 
 use crate::{
     arithmetic::{CurveAffine, eval_polynomial},
-    circuit::Value,
+    circuit::{Value, layouter::SyncDeps},
     helpers::release_allocator_slack,
     plonk::Assigned,
     poly::{
@@ -40,18 +40,22 @@ use crate::{
     transcript::{EncodedChallenge, TranscriptWrite},
 };
 
+// Witnesses retain RNG/transcript values, but only name backend and challenge types.
+type WitnessTypeMarker<P, E> = PhantomData<fn() -> (P, E)>;
+
 /// This creates a proof for the provided `circuit` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
 /// generated previously for the same circuit. The provided `instances`
 /// are zero-padded internally.
+/// RNG and transcript satisfy the configured layouter thread-safety requirements.
 pub fn create_proof<
     'params,
     'a,
     Scheme: CommitmentScheme,
     P: Prover<'params, Scheme>,
     E: EncodedChallenge<Scheme::Curve>,
-    R: RngCore + 'a,
-    T: TranscriptWrite<Scheme::Curve, E>,
+    R: RngCore + SyncDeps + 'a,
+    T: TranscriptWrite<Scheme::Curve, E> + SyncDeps,
     ConcreteCircuit: Circuit<Scheme::Scalar>,
 >(
     params: &'params Scheme::ParamsProver,
@@ -170,7 +174,7 @@ where
         column_indices: [Vec<usize>; 3],
         challenge_indices: [Vec<usize>; 3],
         unusable_rows_start: usize,
-        _marker: PhantomData<(P, E)>,
+        _marker: WitnessTypeMarker<P, E>,
     }
 
     impl<'params, 'a, 'b, F, Scheme, P, C, E, R, T> Assignment<F>
@@ -1011,14 +1015,15 @@ impl<F: Field> OwnedAdviceColumn<F> {
 /// proving key's owned verifier key so callers can verify the new proof without
 /// reparsing or retaining a duplicate verifier domain. Last-use release does not
 /// establish a whole-process RSS bound; full advice polynomial banks remain.
+/// RNG and transcript satisfy the configured layouter thread-safety requirements.
 pub fn create_proof_consuming<
     'params,
     'a,
     Scheme: CommitmentScheme,
     P: Prover<'params, Scheme>,
     E: EncodedChallenge<Scheme::Curve>,
-    R: RngCore + 'a,
-    T: TranscriptWrite<Scheme::Curve, E>,
+    R: RngCore + SyncDeps + 'a,
+    T: TranscriptWrite<Scheme::Curve, E> + SyncDeps,
     ConcreteCircuit: Circuit<Scheme::Scalar>,
 >(
     params: &'params Scheme::ParamsProver,
@@ -1145,7 +1150,7 @@ where
         column_indices: [Vec<usize>; 3],
         challenge_indices: [Vec<usize>; 3],
         unusable_rows_start: usize,
-        _marker: PhantomData<(P, E)>,
+        _marker: WitnessTypeMarker<P, E>,
     }
 
     impl<'params, 'a, 'b, F, Scheme, P, C, E, R, T> Assignment<F>
@@ -1997,6 +2002,12 @@ fn reconstructed_proving_key_masks_have_canonical_domain_evaluations() {
             }
         );
     }
+}
+
+#[test]
+fn witness_type_markers_do_not_own_backend_or_challenge_state() {
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<WitnessTypeMarker<std::rc::Rc<()>, std::rc::Rc<()>>>();
 }
 
 #[test]

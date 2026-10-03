@@ -134,7 +134,8 @@ pub mod isi {
                 self,
                 &resolved_id,
                 &candidate,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
                 self,
                 &resolved_id,
@@ -262,7 +263,8 @@ pub mod isi {
                 self,
                 source_id,
                 source_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if enforce_credit_controls {
                 self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
             }
@@ -346,7 +348,8 @@ pub mod isi {
                 self,
                 source_id,
                 balance_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if source_id == destination_id {
                 self.precheck_quantity_balance_assignment(source_id, &delta.to_balance_after)?;
                 self.quantity_mutation_observation.changed();
@@ -4214,7 +4217,12 @@ pub mod isi {
             &movement.plan.destination_id,
             &amount,
             &movement.plan.prechecked_delta.to_balance_after,
-        )?;
+        )
+        .map_err(|error| {
+            state_transaction
+                .world
+                .attempt_error_to_instruction_error(error)
+        })?;
         movement.apply(state_transaction)?;
         custody.apply(&mut state_transaction.world);
         Ok(())
@@ -5777,11 +5785,8 @@ pub mod isi {
             )?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &destination_id)?;
-            crate::validation_fee_rewards::ensure_reward_custody_debit(
-                state_transaction,
-                &source_id,
-                &amount,
-            )?;
+            // The common transfer precheck below protects all additive reserves
+            // against the final net balance, including an exact self-transfer.
             let retail_usage_update = prepare_retail_daily_usage_update(
                 state_transaction,
                 &source_id,
@@ -6161,7 +6166,12 @@ pub mod isi {
                         state_transaction.world(),
                         source_id,
                         after,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        state_transaction
+                            .world
+                            .attempt_error_to_instruction_error(error)
+                    })?;
                 }
             }
             let mut aggregate_outbound =
@@ -6402,7 +6412,12 @@ pub mod isi {
                 state_transaction.world(),
                 &source,
                 &after,
-            )?;
+            )
+            .map_err(|error| {
+                state_transaction
+                    .world
+                    .attempt_error_to_instruction_error(error)
+            })?;
         }
         let mut plans = Vec::with_capacity(movements.as_slice().len());
         for movement in movements.as_slice() {
@@ -7389,6 +7404,147 @@ pub mod isi {
             ),
         )
     }
+    /// Closed original teardown arguments; these are borrowed observations, not
+    /// caller-created permission or a substitute for the signed execution entry.
+    #[derive(Clone, Copy)]
+    pub(in crate::smartcontracts::isi) enum QuantityRetirementScope<'a> {
+        /// The original Unregister<AssetDefinition> argument.
+        Definition(&'a AssetDefinitionId),
+        /// The original Unregister<Domain> argument and its authoritative membership.
+        Domain(&'a iroha_model_base::domain::DomainId),
+    }
+
+    /// Original teardown invocation retained before its actual balance enumeration.
+    pub(in crate::smartcontracts::isi) struct QuantityRetirementOwner<'a> {
+        authority: &'a AccountId,
+        scope: QuantityRetirementScope<'a>,
+        invocation:
+            Result<crate::state::QuantityRetirementInvocation, crate::state::QuantityCaptureIssue>,
+        lifecycles: Result<
+            iroha_allocation::ChargedBuffer<(
+                AssetDefinitionId,
+                iroha_data_model::nexus::AxtAssetIncarnationV1,
+            )>,
+            crate::state::QuantityCaptureIssue,
+        >,
+    }
+
+    impl<'a> QuantityRetirementOwner<'a> {
+        /// Observe the already authorized native instruction. Failure affects only
+        /// capture; it never changes the original business operation or error order.
+        pub(in crate::smartcontracts::isi) fn retain<'ids>(
+            state: &StateTransaction<'_, '_>,
+            authority: &'a AccountId,
+            scope: QuantityRetirementScope<'a>,
+            definitions: impl ExactSizeIterator<Item = &'ids AssetDefinitionId>,
+        ) -> Self {
+            let invocation = state.retain_quantity_retirement_invocation();
+            let lifecycles = (|| {
+                use crate::state::QuantityCaptureIssue;
+                invocation.as_ref().map_err(|error| *error)?;
+                let mut retained =
+                    state.reserve_quantity_retirement_lifecycles(definitions.len())?;
+                for id in definitions {
+                    let scope_matches = match scope {
+                        QuantityRetirementScope::Definition(expected) => expected == id,
+                        QuantityRetirementScope::Domain(domain) => {
+                            state.world.asset_definition_domains.get(id) == Some(domain)
+                        }
+                    };
+                    if !scope_matches
+                        || state.world.asset_definitions.get(id).is_none()
+                        || retained
+                            .as_slice()
+                            .last()
+                            .is_some_and(|(previous, _)| previous >= id)
+                    {
+                        return Err(QuantityCaptureIssue::InvalidFacts);
+                    }
+                    let incarnation = state
+                        .world
+                        .axt_asset_incarnations
+                        .get(id)
+                        .copied()
+                        .filter(|value| value.validate().is_ok())
+                        .ok_or(QuantityCaptureIssue::MissingIncarnation)?;
+                    retained.push_reserved((id.clone(), incarnation));
+                }
+                Ok(retained)
+            })();
+            Self {
+                authority,
+                scope,
+                invocation,
+                lifecycles,
+            }
+        }
+
+        fn context(
+            &self,
+            state: &StateTransaction<'_, '_>,
+            id: &AssetDefinitionId,
+            balance: Option<(&AssetId, &Quantity)>,
+        ) -> Result<(Hash, Hash), crate::state::QuantityCaptureIssue> {
+            use crate::state::QuantityCaptureIssue;
+            let hash = state.validate_quantity_retirement_invocation(
+                self.invocation.as_ref().map_err(|error| *error)?,
+            )?;
+            let (purpose, domain) = match self.scope {
+                QuantityRetirementScope::Definition(expected) if expected == id => {
+                    ("definition-unregister", None)
+                }
+                QuantityRetirementScope::Domain(domain)
+                    if state.world.asset_definition_domains.get(id) == Some(domain) =>
+                {
+                    ("domain-unregister", Some(domain))
+                }
+                _ => return Err(QuantityCaptureIssue::InvalidFacts),
+            };
+            let lifecycles = self.lifecycles.as_ref().map_err(|error| *error)?.as_slice();
+            let position = lifecycles
+                .binary_search_by(|(definition, _)| definition.cmp(id))
+                .map_err(|_| QuantityCaptureIssue::MissingIncarnation)?;
+            let incarnation = &lifecycles[position].1;
+            if state.world.axt_asset_incarnations.get(id) != Some(incarnation) {
+                return Err(QuantityCaptureIssue::MissingIncarnation);
+            }
+            let context = quantity_authorization::retirement_context(
+                purpose,
+                self.authority,
+                id,
+                incarnation,
+                domain,
+                balance,
+                state.quantity_candidate_preimage_limit(),
+            )
+            .ok_or(QuantityCaptureIssue::Capacity)?;
+            Ok((hash, context))
+        }
+
+        /// Preserve the original supply-before-balance removal and exact selected key.
+        pub(in crate::smartcontracts::isi) fn remove_asset(
+            &self,
+            state: &mut StateTransaction<'_, '_>,
+            id: &AssetId,
+        ) -> Result<Option<iroha_data_model::asset::AssetValue>, Error> {
+            remove_asset_with_quantity_candidate(state, self.authority, id, Some(self))
+        }
+
+        /// Consume the retained original lifecycle around the actual World erasure.
+        pub(in crate::smartcontracts::isi) fn retire_definition(
+            &self,
+            state: &mut StateTransaction<'_, '_>,
+            id: &AssetDefinitionId,
+        ) -> Result<Option<iroha_data_model::asset::AssetDefinition>, Error> {
+            let prepared = self.context(state, id, None).and_then(|(hash, context)| {
+                state.prepare_quantity_retirement_candidate(self.authority, hash, context, id)
+            });
+            state.apply_with_quantity_candidate(prepared, |state| {
+                Ok(state.world.remove_asset_definition_entry(id))
+            })
+        }
+    }
+
     /// Observe only the account-unregistration owner's existing full-balance removal.
     /// Lifecycle checks and execution authorization remain with that original caller;
     /// the bounded frame records its purpose and does not grant a new capability.
@@ -7396,6 +7552,15 @@ pub mod isi {
         state: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         asset_id: &AssetId,
+    ) -> Result<Option<iroha_data_model::asset::AssetValue>, Error> {
+        remove_asset_with_quantity_candidate(state, authority, asset_id, None)
+    }
+
+    fn remove_asset_with_quantity_candidate(
+        state: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        asset_id: &AssetId,
+        retirement: Option<&QuantityRetirementOwner<'_>>,
     ) -> Result<Option<iroha_data_model::asset::AssetValue>, Error> {
         let Some(value) = state.world.assets.get(asset_id).cloned() else {
             state.world.asset_metadata.remove(asset_id.clone());
@@ -7407,27 +7572,34 @@ pub mod isi {
             state
                 .world
                 .precheck_asset_total_amount_change(asset_id.definition(), &amount, false);
-        let context = quantity_authorization::supply_context(
-            &quantity_authorization::SupplyFrame {
-                mint: false,
-                purpose: "account-unregister-burn",
-                binding: &[],
-                authority,
-                id: asset_id,
-                amount: &amount,
-            },
-            state.quantity_candidate_preimage_limit(),
-        );
-        let prepared = match (state.tx_call_hash, context, &supply_after) {
-            (Some(entry_hash), Some(context), Ok(after)) => state
-                .prepare_quantity_account_removal_candidate(
-                    authority, entry_hash, context, asset_id, &amount, after,
-                ),
-            (_, _, Err(_)) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
-            _ => Err(crate::state::QuantityCaptureIssue::UnsupportedOwner),
+        let binding = if let Some(owner) = retirement {
+            owner.context(state, asset_id.definition(), Some((asset_id, &amount)))
+        } else {
+            let context = quantity_authorization::supply_context(
+                &quantity_authorization::SupplyFrame {
+                    mint: false,
+                    purpose: "account-unregister-burn",
+                    binding: &[],
+                    authority,
+                    id: asset_id,
+                    amount: &amount,
+                },
+                state.quantity_candidate_preimage_limit(),
+            );
+            state
+                .tx_call_hash
+                .zip(context)
+                .ok_or(crate::state::QuantityCaptureIssue::UnsupportedOwner)
+        };
+        let prepared = match (binding, &supply_after) {
+            (Ok((entry_hash, context)), Ok(after)) => state.prepare_quantity_removal_candidate(
+                authority, entry_hash, context, asset_id, &amount, after,
+            ),
+            (_, Err(_)) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
+            (Err(issue), _) => Err(issue),
         };
         state.apply_with_quantity_candidate(prepared, |state| {
-            // Account deletion has always updated total before removing the balance.
+            // Preserve each original teardown owner's supply-before-balance order.
             state.world.apply_prechecked_asset_total_amount_change(
                 asset_id.definition(),
                 &amount,

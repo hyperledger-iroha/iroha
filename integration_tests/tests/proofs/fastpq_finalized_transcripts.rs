@@ -14,16 +14,18 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     client::{AccountTransactionDraft, FeeQuoteRequest},
+    query::QueryError,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    NetworkId,
+    NetworkId, ValidationFail,
     asset::AssetBalancePolicy,
     block::{
         SignedBlock,
         proofs::{BlockProofs, TrustedBlockProofAnchor},
     },
     prelude::*,
+    query::error::QueryExecutionFail,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, VerifiedSumeragiBlock},
 };
 use iroha_model_base::{domain::DomainId, metadata::Metadata, peer::PeerId};
@@ -63,46 +65,125 @@ fn transfer(
     Ok(signed)
 }
 
+fn applied_transfer_height(
+    status: &iroha_torii_shared::PipelineTransactionStatusResponse,
+) -> Result<Option<u64>> {
+    ensure!(
+        status.scope == "local",
+        "status escaped the selected validator"
+    );
+    match status.status.kind.as_str() {
+        "Queued" | "Approved" | "Committed" => Ok(None),
+        "Applied" => {
+            ensure!(
+                status.resolved_from == "state",
+                "Applied status is not state-resolved"
+            );
+            let height = status
+                .status
+                .block_height
+                .ok_or_else(|| eyre!("Applied transfer has no carrier height"))?;
+            ensure!(
+                (2..=MAX_HEIGHT).contains(&height),
+                "transfer carrier height is out of bounds"
+            );
+            Ok(Some(height))
+        }
+        _ => Err(eyre!(
+            "exact transfer has unexpected status {}",
+            status.status.kind
+        )),
+    }
+}
+
 fn committed_transfer(
+    network: &Network,
     client: &Client,
     transaction: &SignedTransaction,
-) -> Result<(CommittedTransaction, SignedBlock)> {
+) -> Result<(CommittedTransaction, VerifiedSumeragiBlock)> {
     let expected = TransactionEntrypoint::External(transaction.clone());
     let deadline = Instant::now() + OBSERVATION_TIMEOUT;
     let reader = client.client().clone().with_request_deadline(deadline);
     loop {
-        let entries = reader.query(FindTransactions::new()).execute_all()?;
-        let matches: Vec<_> = entries
-            .into_iter()
-            .filter(|entry| entry.entrypoint_hash() == &expected.hash())
-            .collect();
-        ensure!(
-            matches.len() <= 1,
-            "duplicate committed transaction identity"
-        );
-        if let Some(entry) = matches.into_iter().next() {
-            ensure!(
-                entry.entrypoint() == &expected && entry.result().is_ok(),
-                "exact signed transfer did not apply"
-            );
-            let blocks = reader.query(FindBlocks).execute_all()?;
-            let mut carriers = blocks
-                .into_iter()
-                .filter(|block| block.hash() == *entry.block_hash());
-            let block = carriers
-                .next()
-                .ok_or_else(|| eyre!("committed transfer carrier is absent"))?;
-            ensure!(
-                carriers.next().is_none() && entry.verify_inclusion_in_block(&block),
-                "ambiguous or invalid transfer carrier"
-            );
-            return Ok((entry, block));
-        }
         ensure!(
             Instant::now() < deadline,
             "exact transfer did not become visible on this validator"
         );
+        if let Some(status) = reader.get_transaction_status_response_local(transaction.hash())? {
+            if let Some(height) = applied_transfer_height(&status)? {
+                // The signed exact-details route checks the input/output identity. Only
+                // canonical absence is retried; malformed, unauthorized and other errors fail.
+                let details = match reader.get_transaction_details(expected.hash()) {
+                    Ok(details) => Some(details),
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::NotFound,
+                    ))) => None,
+                    Err(error) => return Err(error.into()),
+                };
+                if let Some(details) = details {
+                    let entry = details.transaction;
+                    ensure!(
+                        entry.entrypoint_hash() == &expected.hash()
+                            && entry.entrypoint() == &expected
+                            && entry.result().is_ok(),
+                        "exact signed transfer did not apply"
+                    );
+                    // Status supplies only an untrusted bounded locator. Authenticate the
+                    // whole prefix against provisioned genesis before using its carrier.
+                    let verified = certified_tip(network, client, height)?;
+                    ensure!(
+                        entry.block_hash() == &verified.block().hash()
+                            && entry.verify_inclusion_in_block(verified.block()),
+                        "invalid exact transfer carrier"
+                    );
+                    verified.verify_committed_transaction(&network.network_id(), &entry)?;
+                    return Ok((entry, verified));
+                }
+            }
+        }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn transfer_height_requires_local_applied_state_and_bounded_carrier() {
+    use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+    let original = PipelineTransactionStatusResponse::new(
+        Hash::new(b"locator test").to_string(),
+        PipelineTransactionStatus {
+            kind: "Applied".into(),
+            block_height: Some(2),
+        },
+        "local".into(),
+        "state".into(),
+    );
+    assert_eq!(applied_transfer_height(&original).unwrap(), Some(2));
+    let mut maximum = original.clone();
+    maximum.status.block_height = Some(MAX_HEIGHT);
+    assert_eq!(applied_transfer_height(&maximum).unwrap(), Some(MAX_HEIGHT));
+    for kind in ["Queued", "Approved", "Committed"] {
+        let mut pending = original.clone();
+        pending.status.kind = kind.into();
+        assert_eq!(applied_transfer_height(&pending).unwrap(), None);
+    }
+    for mutation in 0..9 {
+        let mut changed = original.clone();
+        match mutation {
+            0 => changed.scope = "global".into(),
+            1 => changed.resolved_from = "cache".into(),
+            2 => changed.status.block_height = None,
+            3 => changed.status.block_height = Some(0),
+            4 => changed.status.block_height = Some(1),
+            5 => changed.status.block_height = Some(MAX_HEIGHT + 1),
+            6 => changed.status.kind = "Rejected".into(),
+            7 => changed.status.kind = "Expired".into(),
+            8 => changed.status.kind = "Unknown".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            applied_transfer_height(&changed).is_err(),
+            "mutation {mutation}"
+        );
     }
 }
 
@@ -330,13 +411,13 @@ fn observe(
     let mut expected = None;
     for peer in network.peers() {
         let client = peer.client();
-        let (committed, block) = committed_transfer(&client, transaction)?;
-        let verified = certified_tip(network, &client, block.header().height().get())?;
+        let (committed, verified) = committed_transfer(network, &client, transaction)?;
+        let block = verified.block();
         let proof = check_transcript(
             network,
             &verified,
             &committed,
-            &block,
+            block,
             transaction,
             asset,
             destination,
@@ -408,7 +489,7 @@ fn four_validator_fastpq_transcripts_bind_finality_and_survive_restart() -> Resu
             asset.clone(),
             "finalized transcript custody",
             AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         );
         let source_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
         let setup: Vec<InstructionBox> = vec![
@@ -428,13 +509,11 @@ fn four_validator_fastpq_transcripts_bind_finality_and_survive_restart() -> Resu
         );
         for peer in network.peers() {
             let reader = peer.client();
-            let (_, first_block) = committed_transfer(&reader, &first)?;
-            let (_, second_block) = committed_transfer(&reader, &second)?;
-            let second_finality =
-                certified_tip(&network, &reader, second_block.header().height().get())?;
+            let (_, first_finality) = committed_transfer(&network, &reader, &first)?;
+            let (_, second_finality) = committed_transfer(&network, &reader, &second)?;
             ensure!(
                 TrustedBlockProofAnchor::from_verified_finality(
-                    &first_block,
+                    first_finality.block(),
                     &second_finality,
                     &first.hash_as_entrypoint()
                 )
@@ -458,20 +537,14 @@ fn four_validator_fastpq_transcripts_bind_finality_and_survive_restart() -> Resu
             "restart changed second certified source"
         );
         for peer in network.peers() {
-            let assets = peer
-                .client()
-                .client()
-                .query(FindAssets::new())
-                .execute_all()?;
+            let client = peer.client();
             for (account, quantity) in [(&*ALICE_ID, 173_u32), (&destination, 27_u32)] {
-                let matching: Vec<_> = assets
-                    .iter()
-                    .filter(|entry| {
-                        entry.id().definition() == &asset && entry.id().account() == account
-                    })
-                    .collect();
+                let id = AssetId::new(asset.clone(), account.clone());
+                let actual = client
+                    .client()
+                    .query_single(FindAssetById::new(id.clone()))?;
                 ensure!(
-                    matching.len() == 1 && matching[0].value() == &Quantity::from(quantity),
+                    actual.id() == &id && actual.value() == &Quantity::from(quantity),
                     "restart duplicated or lost a financial effect"
                 );
             }

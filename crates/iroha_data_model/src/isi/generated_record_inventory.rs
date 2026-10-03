@@ -471,6 +471,11 @@ record!(
     "iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1"
 );
 record!(
+    musubi_check_musubi_pin_outbox_v1,
+    crate::isi::musubi::CheckMusubiPinOutboxV1,
+    "iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1"
+);
+record!(
     musubi_register_musubi_namespace_binding_v1,
     crate::isi::musubi::RegisterMusubiNamespaceBindingV1,
     "iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1"

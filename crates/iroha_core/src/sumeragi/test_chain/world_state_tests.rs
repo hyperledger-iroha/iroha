@@ -177,7 +177,17 @@ fn replay_rejects_a_tampered_world_and_startup_rejects_a_stale_accumulator() {
     }
     stale.replay_from(&source).unwrap();
     let error = stale.state().verify_world_state_accumulator().unwrap_err();
-    assert!(error.contains("differs"), "{error}");
+    let crate::state::WorldStateVerificationError::Mismatch {
+        stored_root,
+        stored_entries,
+        captured_root,
+        captured_entries,
+    } = error
+    else {
+        panic!("the actual stale World must fail its independent root comparison: {error}");
+    };
+    assert_ne!(stored_root, captured_root);
+    assert_eq!(captured_entries, stored_entries + 1);
 }
 
 #[test]
@@ -197,4 +207,120 @@ fn replay_from_scratch_reproduces_the_world_state_accumulator() {
         *source.state().world.state_accumulator.view().get(),
         *replica.state().world.state_accumulator.view().get()
     );
+}
+
+#[test]
+fn world_root_verification_preserves_original_writer_refusal_and_exact_retry() {
+    use crate::{
+        state::WorldStateVerificationError,
+        sumeragi::node::{NodeError, ReplayError},
+    };
+    use mv::storage::AdmittedStorageError;
+    use std::task::{Context, Waker};
+
+    let (chain, _) = fixture();
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let mut context = Context::from_waker(Waker::noop());
+    let expected_root = state.verify_world_state_accumulator().unwrap();
+    let expected_tip = state.view().native_execution_tip();
+    let original = state.world.try_block(&budget).unwrap();
+    let expected = state
+        .world
+        .try_block(&budget)
+        .err()
+        .expect("the actual original World writer remains held");
+    assert!(matches!(expected, AdmittedStorageError::Busy { .. }));
+    let error = NodeError::Replay {
+        height: chain.height(),
+        reason: ReplayError::StateRoot(state.verify_world_state_accumulator().unwrap_err()),
+    };
+    let NodeError::Replay {
+        reason: ReplayError::StateRoot(WorldStateVerificationError::Acquisition(error)),
+        ..
+    } = error
+    else {
+        panic!("the actual original World refusal must survive startup: {error}");
+    };
+    assert_eq!(error, expected);
+    let release = error.release_wait().unwrap();
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    // Actual unrelated capacity retirement cannot unlock the World writer.
+    drop(budget.try_reserve_bytes(1).unwrap());
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    assert_eq!(stored_root(&chain), expected_root);
+    assert_eq!(state.view().native_execution_tip(), expected_tip);
+    drop(original);
+    assert!(registration.poll_wait(release, &mut context).is_ready());
+    registration.cancel();
+    assert_eq!(
+        state.verify_world_state_accumulator().unwrap(),
+        expected_root
+    );
+    assert_eq!(state.view().native_execution_tip(), expected_tip);
+}
+
+#[test]
+fn world_root_verification_preserves_original_capacity_refusal_and_exact_retry() {
+    use crate::{
+        state::WorldStateVerificationError,
+        sumeragi::node::{NodeError, ReplayError},
+    };
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
+    use mv::storage::AdmittedStorageError;
+    use std::task::{Context, Waker};
+
+    let (chain, _) = fixture();
+    // Keep earlier EBR retirement from changing the actual occupied source mid-check.
+    let _epoch = crossbeam_epoch::pin();
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let mut context = Context::from_waker(Waker::noop());
+    let expected_root = state.verify_world_state_accumulator().unwrap();
+    let expected_tip = state.view().native_execution_tip();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let error = NodeError::Replay {
+        height: chain.height(),
+        reason: ReplayError::StateRoot(state.verify_world_state_accumulator().unwrap_err()),
+    };
+    let NodeError::Replay {
+        reason:
+            ReplayError::StateRoot(WorldStateVerificationError::Acquisition(
+                AdmittedStorageError::Allocation(refusal),
+            )),
+        ..
+    } = error
+    else {
+        panic!("the complete World shell must retain its actual original pool: {error}");
+    };
+    let AllocationRefusal::Capacity {
+        requested_bytes,
+        release,
+        ..
+    } = &refusal
+    else {
+        panic!("actual occupied State execution pool: {refusal}");
+    };
+    assert_eq!(
+        refusal,
+        budget.try_reserve_bytes(*requested_bytes).unwrap_err()
+    );
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    let foreign = AllocationBudget::new(1);
+    drop(foreign.try_reserve_bytes(1).unwrap());
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    assert_eq!(stored_root(&chain), expected_root);
+    assert_eq!(state.view().native_execution_tip(), expected_tip);
+    drop(occupied);
+    assert!(registration.poll_wait(release, &mut context).is_ready());
+    registration.cancel();
+    assert_eq!(
+        state.verify_world_state_accumulator().unwrap(),
+        expected_root
+    );
+    assert_eq!(state.view().native_execution_tip(), expected_tip);
 }

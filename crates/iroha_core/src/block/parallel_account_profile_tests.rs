@@ -278,7 +278,14 @@ impl AccountProfileValidationFixture {
             .collect();
         let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let block = BlockBuilder::new_with_time_source(accepted, time_source)
-            .chain(1, state.view().latest_block().as_deref())
+            .chain(
+                1,
+                state
+                    .view()
+                    .latest_block()
+                    .expect("original block read attempt")
+                    .as_deref(),
+            )
             .sign(self.signer.private_key())
             .unpack(|_| {});
         let block: SignedBlock = block.into();

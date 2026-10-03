@@ -7,6 +7,9 @@ use std::ffi::CStr;
 #[path = "bn254_launch.rs"]
 mod launch;
 
+#[path = "bn254_cost.rs"]
+mod cost;
+
 static ARTIFACT: PtxArtifact = PtxArtifact::new(
     match CStr::from_bytes_with_nul(
         concat!(include_str!(concat!(env!("OUT_DIR"), "/bn254.ptx")), "\0").as_bytes(),
@@ -38,7 +41,10 @@ fn stage(
     });
     match result {
         Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+            if !super::output_validation::bn254(output.as_slice(), left.len(), || {}) {
+                crate::cuda_dispatch::quarantine_current_kernel();
+                return Err(CudaFailure::Quarantined);
+            }
             Ok(output)
         }
         Err(error) => {
@@ -123,6 +129,65 @@ fn publish(output: &[[u64; 4]], destination: &mut [[u64; 4]]) -> bool {
     true
 }
 
+// A shared complete production/calibration operation; successful staging alone
+// receives no completion credit. All caller bytes remain intact until publication.
+fn complete_current(
+    kernel: Kernel,
+    left: &[[u64; 4]],
+    right: &[[u64; 4]],
+    destination: &mut [[u64; 4]],
+    still_selected: impl FnOnce() -> bool,
+) -> Result<(), CudaFailure> {
+    if !super::imp::cuda_policy_allows_attempt()
+        || !crate::cuda_dispatch::current_is_admitted(kernel, ARTIFACT)
+    {
+        return Err(CudaFailure::Unavailable);
+    }
+    let output = stage(kernel, left, right)?;
+    if !super::imp::cuda_policy_allows_attempt()
+        || !crate::cuda_dispatch::current_is_admitted(kernel, ARTIFACT)
+        || !still_selected()
+    {
+        return Err(CudaFailure::Unavailable);
+    }
+    if !publish(output.as_slice(), destination) {
+        crate::cuda_dispatch::quarantine_current_kernel();
+        return Err(CudaFailure::Quarantined);
+    }
+    super::imp::record_completed_cuda_dispatch(kernel, ARTIFACT);
+    Ok(())
+}
+
+pub(crate) fn bn254_batch_auto_into(
+    operation: crate::bn254_vec::BatchOperation,
+    left: &[[u64; 4]],
+    right: &[[u64; 4]],
+    destination: &mut [[u64; 4]],
+    cpu: &'static dyn crate::field_dispatch::FieldArithmetic,
+) -> bool {
+    if !crate::bn254_vec::valid_batch(left, right, destination.len()) || super::imp::cuda_disabled()
+    {
+        return false;
+    }
+    let kernel = crate::cuda_dispatch::bn254::kernel(operation);
+    let Some(selected) = crate::cuda_dispatch::bn254::select(
+        operation,
+        ARTIFACT,
+        left.len(),
+        cpu,
+        || super::imp::ensure_cuda_kernel(kernel),
+        |deadline| cost::calibrate(operation, cpu, deadline),
+    ) else {
+        return false;
+    };
+    selected
+        .run(|token| {
+            super::imp::record_cuda_attempt();
+            complete_current(kernel, left, right, destination, || token.valid()).is_ok()
+        })
+        .unwrap_or(false)
+}
+
 fn into(
     kernel: Kernel,
     left: &[[u64; 4]],
@@ -144,15 +209,7 @@ fn into(
         if !super::imp::ensure_cuda_kernel(kernel) {
             return false;
         }
-        let Ok(output) = stage(kernel, left, right) else {
-            return false;
-        };
-        // HostOutput retains the original reservation until publication finishes.
-        if !publish(output.as_slice(), destination) {
-            crate::cuda_dispatch::quarantine_current_kernel();
-            return false;
-        }
-        true
+        complete_current(kernel, left, right, destination, || true).is_ok()
     })
 }
 

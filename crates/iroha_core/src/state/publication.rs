@@ -697,6 +697,7 @@ impl<'state> StateBlock<'state> {
                         .da_pin_intents
                         .as_mut()
                         .expect("prepared pin cache"),
+                    &mut lifecycle_index_releases.world,
                 );
             #[cfg(feature = "telemetry")]
             state_ref
@@ -911,6 +912,15 @@ impl State {
             .with_physical_publication_blocked_for_test(action)
     }
 
+    /// Hold the actual logical membership writer after freezing the original execution.
+    pub(crate) fn with_membership_publication_blocked_for_test<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> R {
+        self.transactions
+            .with_membership_publication_blocked_for_test(action)
+    }
+
     /// Hold the actual native hash writer for a later-prefix refusal test.
     pub(crate) fn with_hash_publication_blocked_for_test<R>(
         &self,
@@ -1049,3 +1059,7 @@ impl StateBlock<'_> {
         fields.block_hashes.retire_retry_notices();
     }
 }
+
+#[cfg(test)]
+#[path = "replay_retirement_probe.rs"]
+mod replay_retirement_probe;

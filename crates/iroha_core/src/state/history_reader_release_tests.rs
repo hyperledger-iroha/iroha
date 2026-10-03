@@ -51,12 +51,17 @@ fn waits(state: &State) -> [iroha_allocation::release::ReleaseWait; 2] {
 fn complete_view_retains_both_native_reader_notices_beyond_state_fences() {
     for unwind in [false, true] {
         let state = state();
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+        let mut release_registration_1 =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let probe = probe(&state);
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
         let [hash, membership] = waits(&state);
-        let mut hash = std::pin::pin!(hash.wait_for_release());
-        let mut membership = std::pin::pin!(membership.wait_for_release());
+        let mut hash = std::pin::pin!(hash.wait_for_release(&mut release_registration_0));
+        let mut membership =
+            std::pin::pin!(membership.wait_for_release(&mut release_registration_1));
         assert!(hash.as_mut().poll(&mut context).is_pending());
         assert!(membership.as_mut().poll(&mut context).is_pending());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -65,7 +70,7 @@ fn complete_view_retains_both_native_reader_notices_beyond_state_fences() {
             let _write = state.state_write_lock.lock();
             let _lifecycle = state.lane_lifecycle_lock.lock();
             for _ in 0..3 {
-                let view = releases.try_view_once().unwrap().unwrap();
+                let view = releases.try_view_once().unwrap();
                 assert_eq!(view.block_hashes.len(), 0);
                 drop(view);
                 assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
@@ -89,13 +94,16 @@ fn executing_state_retains_captured_reader_notices_until_joint_writer_retirement
         let probe = probe(&state);
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
+        let mut registrations: [_; 2] = std::array::from_fn(|_| {
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget())
+        });
         let mut pending = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut block = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-            let futures = waits(&state).map(|wait| Box::pin(wait.wait_for_release()));
+            let futures = waits(&state);
             pending = Some(futures);
-            for future in pending.as_mut().unwrap() {
-                assert!(future.as_mut().poll(&mut context).is_pending());
+            for (future, registration) in pending.as_ref().unwrap().iter().zip(&mut registrations) {
+                assert!(registration.poll_wait(future, &mut context).is_pending());
             }
             let _hash = block._read_releases.lane_execution_state_hash().unwrap();
             assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
@@ -108,8 +116,8 @@ fn executing_state_retains_captured_reader_notices_until_joint_writer_retirement
         assert_eq!(result.is_err(), unwind);
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
         assert!(!probe.blocked.load(Ordering::SeqCst));
-        for future in pending.as_mut().unwrap() {
-            assert!(future.as_mut().poll(&mut context).is_ready());
+        for (future, registration) in pending.as_ref().unwrap().iter().zip(&mut registrations) {
+            assert!(registration.poll_wait(future, &mut context).is_ready());
         }
     }
 }
@@ -120,9 +128,12 @@ fn detached_read_notices_survive_ending_the_state_borrow() {
     let probe = probe(&state);
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
-    let mut pending = waits(&state).map(|wait| Box::pin(wait.wait_for_release()));
-    for future in &mut pending {
-        assert!(future.as_mut().poll(&mut context).is_pending());
+    let mut registrations: [_; 2] = std::array::from_fn(|_| {
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget())
+    });
+    let pending = waits(&state);
+    for (future, registration) in pending.iter().zip(&mut registrations) {
+        assert!(registration.poll_wait(future, &mut context).is_pending());
     }
     {
         let retirement;
@@ -144,11 +155,13 @@ fn detached_read_notices_survive_ending_the_state_borrow() {
 #[test]
 fn serializer_uses_only_the_already_captured_membership_reader() {
     let state = state();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let probe = probe(&state);
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
     let wait = state.transactions.reader_release_wait_for_tests();
-    let mut pending = std::pin::pin!(wait.wait_for_release());
+    let mut pending = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
     assert!(pending.as_mut().poll(&mut context).is_pending());
     let mut releases = StateViewReleases::new(&state);
     let captured =
@@ -167,12 +180,14 @@ fn serializer_uses_only_the_already_captured_membership_reader() {
 #[test]
 fn membership_read_refuses_foreign_original_batch_without_notifying() {
     let left = state();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&left.ivm_execution_budget());
     let right = state();
     let probe = probe(&left);
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
     let wait = left.transactions.reader_release_wait_for_tests();
-    let mut pending = std::pin::pin!(wait.wait_for_release());
+    let mut pending = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
     assert!(pending.as_mut().poll(&mut context).is_pending());
     let mut foreign = right.transactions.reader_release_batch();
     assert!(matches!(
@@ -224,9 +239,12 @@ fn original_read_notices_survive_an_actual_state_swap_under_the_commit_fence() {
     });
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
-    let mut pending = waits(&original).map(|wait| Box::pin(wait.wait_for_release()));
-    for future in &mut pending {
-        assert!(future.as_mut().poll(&mut context).is_pending());
+    let mut registrations: [_; 2] = std::array::from_fn(|_| {
+        crate::unit_test_support::release_registration(&original.ivm_execution_budget())
+    });
+    let pending = waits(&original);
+    for (future, registration) in pending.iter().zip(&mut registrations) {
+        assert!(registration.poll_wait(future, &mut context).is_pending());
     }
     let (hash_budget, membership_budget) = original.history_allocation_budgets();
     membership_budget.with_deferred_refund_notifications(|_| {
@@ -234,7 +252,7 @@ fn original_read_notices_survive_an_actual_state_swap_under_the_commit_fence() {
             let retirement;
             let mut releases = StateViewReleases::new(&original);
             let commit = probe.commit.lock();
-            drop(releases.try_view_once().unwrap().unwrap());
+            drop(releases.try_view_once().unwrap());
             retirement = releases.into_retirement();
             std::mem::swap(&mut original, &mut replacement);
             drop(replacement);
@@ -246,8 +264,8 @@ fn original_read_notices_survive_an_actual_state_swap_under_the_commit_fence() {
     });
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
     assert!(!probe.blocked.load(Ordering::SeqCst));
-    for future in &mut pending {
-        assert!(future.as_mut().poll(&mut context).is_ready());
+    for (future, registration) in pending.iter().zip(&mut registrations) {
+        assert!(registration.poll_wait(future, &mut context).is_ready());
     }
 }
 

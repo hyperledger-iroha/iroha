@@ -60,7 +60,7 @@ final class KagemushaOrdinaryEnrollmentNativeVectorsV1Tests: XCTestCase {
     let path=URL(fileURLWithPath:#filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/kagemusha_ordinary_enrollment_native_vectors_v1.json")
     let raw=try Data(contentsOf:path)
-    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("d398cbdbdb79d5216f202457404d32381d867caf208aeb360c9b8157a56b5e7a"))
+    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("44ecdc467c6d43d6d52cdd294ff1fe24313899db19ee6a77a40f9b6ae89b4951"))
     let root=try XCTUnwrap(JSONSerialization.jsonObject(with:raw) as? [String:Any])
     XCTAssertEqual(root["codec_only"] as? Bool,true)
     for flag in ["native_authority","hardware_qualified","monetary_authority"] {

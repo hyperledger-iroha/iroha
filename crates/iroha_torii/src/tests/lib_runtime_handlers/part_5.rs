@@ -62,6 +62,7 @@ fn pipeline_status_cache_prune_load_profile() {
                     kind: PipelineStatusKind::Committed,
                     block_hash: *block_hash,
                     observed_at,
+                    deferred: None,
                 },
             );
         }
@@ -2525,7 +2526,11 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
     let anchor = canonical_transaction_anchor(&app.state, &hash)
         .expect("consistent State")
         .expect("indexed transaction");
-    let canonical = app.kura.get_block(anchor.height).expect("canonical block");
+    let canonical = app
+        .kura
+        .get_block(anchor.height, &app.state.ivm_execution_budget())
+        .expect("admit canonical block")
+        .expect("canonical block");
     let mut replacement = canonical.as_ref().clone();
     crate::test_utils::attach_fixture_execution_outputs(
         &mut replacement,
@@ -2555,7 +2560,13 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
         canonical.encode_wire().expect("canonical wire")
     );
     assert!(matches!(
-        app.kura.store_block(replacement.clone()),
+        app.kura.store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                replacement.clone(),
+                &app.state.ivm_execution_budget()
+            )
+            .expect("fund deliberate replacement fixture")
+        ),
         Err(iroha_core::kura::Error::CanonicalBlockWireMismatch { height: 2 })
     ));
     let outcome = canonical_transaction_outcome(&app.state, &hash)
@@ -2962,7 +2973,8 @@ async fn transaction_details_http_preserves_original_receipt_after_cold_body_rea
         );
         let cold = app
             .kura
-            .get_block(height)
+            .get_block(height, &app.state.ivm_execution_budget())
+            .expect("admit original durable frame")
             .expect("read original durable frame");
         assert_eq!(cold.encode_wire().unwrap(), original_wire);
         assert_eq!(
@@ -3052,7 +3064,12 @@ async fn transaction_details_http_preserves_original_receipt_after_cold_body_rea
             None
         );
         assert_eq!(
-            app.kura.get_block(height).unwrap().encode_wire().unwrap(),
+            app.kura
+                .get_block(height, &app.state.ivm_execution_budget())
+                .unwrap()
+                .unwrap()
+                .encode_wire()
+                .unwrap(),
             original_wire
         );
     }
@@ -3960,6 +3977,7 @@ async fn ledger_state_endpoints_return_exact_native_finality_in_json_and_norito(
     let result_root = app
         .state
         .block_by_height(NonZeroUsize::new(2).expect("nonzero height"))
+        .expect("funded canonical history read")
         .expect("committed fixture block")
         .output_merkle_commitment()
         .map(|commitment| Hash::prehashed(*commitment.root().as_ref()))

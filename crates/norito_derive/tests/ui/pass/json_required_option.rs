@@ -13,4 +13,16 @@ enum RequiredEnum {
         value: Option<u32>,
     },
 }
+macro_rules! record {
+    ($ty:ty) => {
+        #[derive(JsonDeserialize, JsonSerialize, norito_derive::FastJson)]
+        #[norito(no_fast_from_json)]
+        struct ForwardedRequired {
+            #[norito(required)]
+            value: $ty,
+            optional: $ty,
+        }
+    };
+}
+record!(Option<u32>);
 fn main() {}

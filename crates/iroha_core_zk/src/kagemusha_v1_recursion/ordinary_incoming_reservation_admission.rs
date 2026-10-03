@@ -25,7 +25,7 @@ pub use commit_admission::{
 #[path = "ordinary_incoming_source_originals.rs"]
 mod source_originals;
 use iroha_data_model::kagemusha::*;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 pub use source_originals::{
     KagemushaOrdinaryIncomingMintOriginalsV1, KagemushaOrdinaryIncomingReceiveOriginalsV1,
     KagemushaOrdinaryIncomingSourceOriginalsV1,

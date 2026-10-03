@@ -1,9 +1,27 @@
 import test from "node:test";
+import { crc64Xz } from "../src/crc64Xz.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { decodeRetailFeeAssessmentMarkerMessage, encodeRetailFeeQuoteRequestV1, retailFeePaymentIntentHash, encodeRetailFeeAssessmentV1, retailFeeAssessmentMarkerMessage, noritoEncodeMultisigProposeRequest } from "../src/norito.js";
+import { decodeRetailFeeAssessmentMarkerMessage, encodeRetailFeeQuoteRequestV1, retailFeePaymentIntentHash, encodeRetailFeeAssessmentV1, retailFeeAssessmentMarkerMessage, noritoEncodeMultisigProposeRequest, validateNoritoFrame } from "../src/norito.js";
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_codec_v1.json", import.meta.url), "utf8"));
 const hash = (request) => Buffer.from(retailFeePaymentIntentHash(request)).toString("hex");
+
+test("retail frames bind the declared Rust schema and exact native header geometry", () => {
+  for (const [typeName, encoded, nativeHex] of [
+    ["RetailFeeQuoteRequestV1", encodeRetailFeeQuoteRequestV1(fixture.request), fixture.request_hex],
+    ["RetailFeeAssessmentV1", encodeRetailFeeAssessmentV1(fixture.assessment), fixture.assessment_hex],
+  ]) {
+    const frame = validateNoritoFrame(encoded, {
+      expectedTypeName: `iroha_data_model::validation_fee::${typeName}`,
+      expectedPaddingLength: 0,
+      requireNonEmptyPayload: true,
+    });
+    assert.equal(frame.schemaHash.length, 16);
+    assert.equal(frame.flags, 2);
+    assert.equal(encoded.length, 40 + frame.payload.length);
+    assert.equal(encoded.toString("hex"), nativeHex);
+  }
+});
 
 test("retail proposal codec has one versioned first-release schema and no retired fee fields", () => {
   const codec = readFileSync(new URL("../src/norito.js", import.meta.url), "utf8");
@@ -72,4 +90,43 @@ test("retail codecs enforce positive legs, canonical hash markers and Native cou
   }
   assert.throws(() => decodeRetailFeeAssessmentMarkerMessage(
     `iroha:retail_fee:assessment:v1:${"00".repeat(2_034)}`));
+});
+
+
+test("retail assessment hash fields use exact raw Rust byte-array fields", () => {
+  const canonical = Buffer.from(fixture.assessment_hex, "hex");
+  const frame = validateNoritoFrame(canonical);
+  const fields = [];
+  let cursor = 0;
+  while (cursor < frame.payload.length) {
+    // Every field in this bounded canonical fixture fits one compact length byte.
+    const length = frame.payload[cursor++];
+    assert.ok(length < 128);
+    assert.ok(cursor + length <= frame.payload.length);
+    fields.push(frame.payload.subarray(cursor, cursor + length));
+    cursor += length;
+  }
+  assert.equal(fields.length, 10);
+  for (const [index, name] of [[7, "state_commitment"], [8, "intent_hash"]]) {
+    assert.equal(fields[index].length, 32);
+    assert.equal(fields[index].toString("hex"), fixture.assessment[name].toLowerCase());
+    for (const length of [31, 33, 64]) {
+      const changed = fields.map((value, i) => i === index
+        ? length === 64
+          ? Buffer.from(Array.from(value, (byte) => [1, byte]).flat())
+          : Buffer.alloc(length, 1)
+        : value);
+      const payload = Buffer.concat(changed.flatMap((value) => [Buffer.from([value.length]), value]));
+      const header = Buffer.from(canonical.subarray(0, 40));
+      header.writeBigUInt64LE(BigInt(payload.length), 23);
+      header.writeBigUInt64LE(crc64Xz(payload), 31);
+      const bytes = Buffer.concat([header, payload]);
+      assert.doesNotThrow(() => validateNoritoFrame(bytes), "the mutation keeps the outer archive valid");
+      const marker = "iroha:retail_fee:assessment:v1:" + bytes.toString("hex");
+      assert.throws(() => decodeRetailFeeAssessmentMarkerMessage(marker),
+        new RegExp(`${name} must contain exactly 32 bytes`, "u"));
+    }
+  }
+  assert.equal(encodeRetailFeeAssessmentV1(fixture.assessment).toString("hex"), fixture.assessment_hex);
+  assert.deepEqual(decodeRetailFeeAssessmentMarkerMessage(fixture.marker), fixture.assessment);
 });

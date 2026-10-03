@@ -3,11 +3,7 @@
 use super::publication::{FieldRefusal, PreparedWorldField, WorldPublicationError};
 use super::*;
 use mv::PublicationPreparationError;
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Waker},
-};
+use std::task::{Context, Waker};
 
 type AfterPrepare = Box<dyn FnMut(&World) + Send + Sync>;
 
@@ -78,7 +74,11 @@ pub(in crate::state) fn arm_first_release(
     original: DetachedWorld<()>,
     target: &World,
     waker: &Waker,
-) -> iroha_allocation::release::ReleaseFuture {
+    mut registration: iroha_allocation::release::ReleaseRegistration,
+) -> (
+    iroha_allocation::release::ReleaseWait,
+    iroha_allocation::release::ReleaseRegistration,
+) {
     let (_, error, cleanup) = original
         .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
         .err()
@@ -91,13 +91,12 @@ pub(in crate::state) fn arm_first_release(
     else {
         panic!("actual first-field Busy observation");
     };
-    let mut wait = observation.wait_for_release();
     assert!(
-        Pin::new(&mut wait)
-            .poll(&mut Context::from_waker(waker))
+        registration
+            .poll_wait(&observation, &mut Context::from_waker(waker))
             .is_pending()
     );
-    wait
+    (observation, registration)
 }
 
 // Each independent original field is probed so an earlier busy/poisoned field
@@ -154,6 +153,9 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
         }
     }
     let world = Arc::new(World::default());
+    let mut registration = Some(crate::unit_test_support::release_registration(
+        world.operation_index_budget(),
+    ));
     let capture = || {
         world
             .block()
@@ -176,7 +178,12 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     let stored = Arc::clone(&wait);
     let waker = Waker::from(Arc::clone(&callback));
     after_last_preparation(&mut original, move |target| {
-        *stored.lock().unwrap() = Some(arm_first_release(observer.take().unwrap(), target, &waker));
+        *stored.lock().unwrap() = Some(arm_first_release(
+            observer.take().unwrap(),
+            target,
+            &waker,
+            registration.take().unwrap(),
+        ));
         panic!("after last real World field acquired");
     });
     let mut slot = original.publication_slot::<()>(&world);
@@ -194,10 +201,10 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     drop(slot);
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
     assert_eq!(*callback.counts.lock().unwrap(), Some([314, 0, 0]));
-    let mut wait = wait.lock().unwrap().take().unwrap();
+    let (observation, mut registration) = wait.lock().unwrap().take().unwrap();
     assert!(
-        Pin::new(&mut wait)
-            .poll(&mut Context::from_waker(Waker::noop()))
+        registration
+            .poll_wait(&observation, &mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
 }

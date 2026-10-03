@@ -196,8 +196,9 @@ fn original(
 /// Decode exactly one bounded canonical source without changing inherited caller limits.
 fn decode_global_source(
     wire: &[u8],
+    budget: &AllocationBudget,
 ) -> Result<
-    std::sync::Arc<iroha_data_model::block::SignedBlock>,
+    iroha_data_model::block::SharedSignedBlock,
     crate::execution_attempt::ExecutionAttemptError<Error>,
 > {
     use crate::execution_attempt::{norito_decode_attempt_error, versioned_decode_attempt_error};
@@ -210,6 +211,8 @@ fn decode_global_source(
             invalid("native AMX global source exceeds the canonical block format bound").into(),
         );
     }
+    let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
+        .map_err(|error| crate::execution_attempt::ExecutionAttemptError::Deferred(error.into()))?;
     let block =
         norito::core::with_decode_limits_scope(norito::canonical_decode_limits(wire.len()), || {
             iroha_data_model::block::decode_framed_signed_block(wire)
@@ -225,7 +228,7 @@ fn decode_global_source(
             invalid("native AMX global source is not the exact canonical SignedBlockWire").into(),
         );
     }
-    Ok(std::sync::Arc::new(block))
+    Ok(shell.initialize(block))
 }
 
 /// Admit only the physical prefix slot before calling the sole signed-source verifier.
@@ -240,7 +243,7 @@ fn global_source_prefix(
     iroha_allocation::ChargedBuffer<crate::sumeragi::certified_chain::CertifiedPrefix>,
     crate::execution_attempt::ExecutionAttemptError<Error>,
 > {
-    let genesis = decode_global_source(wire)?;
+    let genesis = decode_global_source(wire, budget)?;
     if iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()) != parent {
         return Err(
             invalid("native AMX global genesis differs from the signed private parent").into(),
@@ -267,7 +270,7 @@ fn authenticate_global_successor(
     wire: &[u8],
     budget: &AllocationBudget,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
-    let successor = decode_global_source(wire)?;
+    let successor = decode_global_source(wire, budget)?;
     let has_original_genesis_anchor = prefix
         .push_admitted_with_finish(successor, budget, |step| step.has_genesis_anchor())
         .map_err(|error| error.map_rejection(|error| invalid(error.to_string())))?;
@@ -426,7 +429,7 @@ impl Execute for PrepareAmxV1 {
             .leg(self.dataspace)
             .ok_or_else(|| invalid("native AMX transaction has no exact local leg"))?;
         let transfer = decode_leg(&leg.payload).map_err(|error| super::amx_error(error, state))?;
-        if (!cfg!(all(test, sumeragi_core_mutation = "HC57"))
+        if (!cfg!(all(test, sumeragi_core_mutation = "HC87"))
             && transfer.source.account() != authority)
             || transfer.source.scope() != &AssetBalanceScope::Dataspace(self.dataspace)
             || transfer.source.account() == &transfer.destination

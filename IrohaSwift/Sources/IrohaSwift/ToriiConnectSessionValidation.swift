@@ -31,23 +31,7 @@ private func validateConnectLaunchURI(_ literal: String,
                                       token: String,
                                       response: ToriiConnectSessionResponse,
                                       expectedNode: String?) throws {
-    guard let components = URLComponents(string: literal),
-          components.scheme == "iroha",
-          components.host == "connect",
-          components.path.isEmpty,
-          components.fragment == nil else {
-        throw ToriiClientError.invalidPayload("Connect \(role) URI must use iroha://connect")
-    }
-    let allowed = Set(["sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"])
-    var query: [String: String] = [:]
-    for item in components.queryItems ?? [] {
-        guard allowed.contains(item.name), query[item.name] == nil, let value = item.value else {
-            throw ToriiClientError.invalidPayload(
-                "Connect \(role) URI has duplicate or unsupported parameters"
-            )
-        }
-        query[item.name] = value
-    }
+    let query = try parseConnectLaunchQuery(literal)
     let expected: [String: String] = [
         "sid": response.sid,
         "network_id": response.networkID.literal,
@@ -64,4 +48,30 @@ private func validateConnectLaunchURI(_ literal: String,
             "Connect \(role) URI substituted the canonical session identity"
         )
     }
+}
+
+// Shared URI grammar for response validation and the wallet request owner.
+func parseConnectLaunchQuery(_ literal: String) throws -> [String: String] {
+    guard let components = URLComponents(string: literal),
+          components.scheme == "iroha",
+          components.host == "connect",
+          components.path.isEmpty,
+          components.user == nil, components.password == nil, components.port == nil,
+          components.fragment == nil else {
+        throw ToriiClientError.invalidPayload("Connect launch URI must use iroha://connect")
+    }
+    let allowed = Set(["sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"])
+    var query: [String: String] = [:]
+    for item in components.queryItems ?? [] {
+        guard allowed.contains(item.name), query[item.name] == nil, let value = item.value else {
+            throw ToriiClientError.invalidPayload(
+                "Connect launch URI has duplicate or unsupported parameters"
+            )
+        }
+        query[item.name] = value
+    }
+    guard Set(query.keys) == allowed else {
+        throw ToriiClientError.invalidPayload("Connect launch URI must contain every canonical parameter")
+    }
+    return query
 }

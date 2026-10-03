@@ -40,9 +40,7 @@ pub use lineage_cas::{
     KagemushaOrdinaryReceivedLineageCommitOriginalV1,
 };
 pub(crate) use lineage_cas::{
-    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
-    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
 };

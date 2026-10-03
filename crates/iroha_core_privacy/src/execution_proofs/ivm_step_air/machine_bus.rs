@@ -8,12 +8,14 @@
 // TODO: Connect these equations to the sole complete machine's constrained
 // request/initializer/owner ports before any production verifier admission.
 
+mod callable_lookup;
 mod frame_access;
 mod frame_descriptor;
 mod frame_lifecycle;
 mod memory_initialization;
 mod memory_load;
 mod memory_store;
+mod native_invocation;
 mod packet;
 mod permutation;
 mod private_dispatch;

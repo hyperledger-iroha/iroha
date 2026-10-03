@@ -605,6 +605,11 @@ The following are mandatory release gates; a failure blocks publication:
 3. Adversarial route tests cover known retired spellings, trailing and duplicate
    slashes, case changes, percent-encoded separators and dot segments, wildcard
    capture, wrong methods, and framework redirects.
+   The proof-record route permits canonical `%2F` only within its single typed
+   `ProofId` parameter for slash-delimited backend labels; decoded empty or dot
+   components, backslashes, nested escapes, and noncanonical encodings remain
+   rejected. The decoded identifier uses the `ProofId` display spelling; data
+   colons may remain literal or use the existing component encoder's `%3A`.
 4. JSON/Norito golden vectors and structural-schema guards, negotiation and
    typed-error tests, offline idempotency/lifecycle tests, cursor
    snapshot/authorization/lifetime tests, and streaming establishment/lag/

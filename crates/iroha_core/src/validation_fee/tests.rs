@@ -55,7 +55,7 @@ fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
 }
 
 fn xor_asset() -> AssetDefinitionId {
-    asset_definition("xor")
+    iroha_data_model::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id
 }
 
 fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
@@ -187,7 +187,7 @@ fn minimal_bound_contract_artifact() -> (
     (artifact, verified.manifest)
 }
 
-fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
         Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
@@ -207,7 +207,7 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     let xor_definition = AssetDefinition::new(
         xor_asset(),
         "xor".to_owned(),
-        NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -220,11 +220,20 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
         None,
     )
     .build(deployer);
-    crate::state::World::with(
+    let world = crate::state::World::with(
         [contract_domain, fee_domain],
         accounts,
         [fee_definition, successor_fee_definition, xor_definition],
-    )
+    );
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    world
 }
 
 pub(crate) fn register_bound_payout_time_trigger(
@@ -318,94 +327,43 @@ pub(crate) fn with_validation_fee_payout_protocol_at_time(
     );
 }
 
-/// Charge direct host artifacts to one actual signed, finite batch owner.
-/// This component fixture checks artifact authorities and effects; it does not
-/// qualify transaction admission or correspondence to the root's VM output.
-fn with_validation_fee_payout_artifact_batch_at_height(
+pub(crate) fn with_validation_fee_payout_block_at_time(
     height: u64,
-    batch: impl FnOnce(iroha_data_model::NetworkId, &AccountId) -> Vec<ContractInvocation>,
-    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+    timestamp_ms: u64,
+    test: impl FnOnce(&mut crate::state::StateBlock<'_>, &AccountId, &[u8], Hash),
 ) {
-    with_validation_fee_payout_component_state(
-        height,
+    // Contract reads require immutable scope authenticated by the actual root.
+    // The later header remains an isolated component fixture, not certified history.
+    let (chain, deployer, code, code_hash) =
+        signed_original_fixtures::signed_fee_registry_root_fixture();
+    let state = chain.state();
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("test height is non-zero"),
+        state.view().latest_block_hash(),
+        None,
+        timestamp_ms,
         0,
-        PayoutComponentSource::ArtifactBatch(Box::new(batch)),
-        test,
     );
+    let mut block = state.block(header);
+    test(&mut block, &deployer, &code, code_hash);
 }
 
-/// Encode the actual component call with the compiled entrypoint's canonical schema.
-fn artifact_component_call(
-    address: iroha_data_model::smart_contract::ContractAddress,
-    code: &[u8],
-    entrypoint: &str,
-    arguments: Option<Json>,
-) -> ContractInvocation {
-    let parsed = ivm::ProgramMetadata::parse(code).expect("actual component metadata");
-    let descriptor = parsed
-        .contract_interface
-        .as_ref()
-        .expect("compiled contract interface")
-        .entrypoints
-        .iter()
-        .find(|entry| entry.name == entrypoint)
-        .expect("actual component entrypoint");
-    let arguments = arguments.map(|arguments| {
-        let schema = descriptor
-            .argument_schema
-            .as_ref()
-            .expect("argument schema");
-        iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
-            ivm::encode_argument_record_from_json(schema, &arguments).expect("canonical arguments"),
-        )
-        .expect("bounded component argument record")
-    });
-    ContractInvocation {
-        contract_address: address,
-        expected_code_hash: ivm::contract_code_hash(code),
-        entrypoint: entrypoint.to_owned(),
-        arguments,
-    }
-}
-
-enum PayoutComponentSource<'a> {
+enum PayoutComponentSource {
     Unowned,
     Invocation(Hash),
     Mandatory,
-    ArtifactBatch(
-        Box<dyn FnOnce(iroha_data_model::NetworkId, &AccountId) -> Vec<ContractInvocation> + 'a>,
-    ),
 }
 
 fn with_validation_fee_payout_component_state(
     height: u64,
     timestamp_ms: u64,
-    invocation: PayoutComponentSource<'_>,
+    invocation: PayoutComponentSource,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
 ) {
     // Execute the original signed genesis; committed root metadata is never seeded by hand.
     // The requested height is only this component projection, not certified native history.
     let (chain, deployer, code, code_hash) =
         signed_original_fixtures::signed_fee_registry_root_fixture();
-    let (invocation, signed_artifact_source) = match invocation {
-        PayoutComponentSource::ArtifactBatch(batch) => {
-            let source = iroha_data_model::transaction::TransactionBuilder::new(
-                chain.network_id(),
-                deployer.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(
-                    Vec::new(),
-                    std::num::NonZeroU64::new(100_000_000),
-                ),
-            )
-            .with_executable_batch(batch(chain.network_id(), &deployer))
-            .sign(key_pair(55).private_key());
-            (
-                PayoutComponentSource::Invocation(Hash::from(source.hash_as_entrypoint())),
-                Some(source),
-            )
-        }
-        source => (source, None),
-    };
     let state = std::sync::Arc::clone(chain.state());
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("test height is non-zero"),
@@ -421,17 +379,7 @@ fn with_validation_fee_payout_component_state(
         PayoutComponentSource::Invocation(hash) => block.transaction_for_fastpq_testing(hash),
         PayoutComponentSource::Mandatory => block.transaction_for_fastpq_protocol_testing(),
         PayoutComponentSource::Unowned => block.transaction(),
-        PayoutComponentSource::ArtifactBatch(_) => unreachable!("batch owner was materialized"),
     };
-    if let Some(source) = &signed_artifact_source {
-        state_tx.current_tx_hash = Some(source.hash());
-        state_tx
-            .begin_execution_effect_budget(source)
-            .expect("retain exact signed component batch budget");
-        state_tx
-            .admit_authored_execution_effects(&[])
-            .expect("the component batch contains only contract calls");
-    }
     let deployment_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
@@ -441,11 +389,6 @@ fn with_validation_fee_payout_component_state(
     )
     .expect("grant contract lifecycle authority");
     test(&mut state_tx, &deployer, &code, code_hash);
-    if signed_artifact_source.is_some() {
-        state_tx
-            .finish_execution_effect_budget()
-            .expect("close the same finite component artifact owner");
-    }
 }
 
 #[test]
@@ -653,7 +596,7 @@ fn assert_treasury_payout_plan_mismatch(
     let terms = ValidationFeePayoutTerms {
         debit_ds: "10".parse().expect("SBD"),
         min_xor_out: "19.8".parse().expect("reference minimum"),
-        xor_scale: 2,
+        xor_scale: 9,
     };
     assert!(matches!(
         validate_treasury_payout_effect_plan(groups, ordered, binding, &terms),
@@ -732,7 +675,7 @@ fn treasury_payout_effect_plan_rejects_every_unbound_substitution() {
     let terms = ValidationFeePayoutTerms {
         debit_ds: "10".parse().expect("SBD"),
         min_xor_out: "19.8".parse().expect("minimum"),
-        xor_scale: 2,
+        xor_scale: 9,
     };
     assert!(
         validate_treasury_payout_effect_plan(

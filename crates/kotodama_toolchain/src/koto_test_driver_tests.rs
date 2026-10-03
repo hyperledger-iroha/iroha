@@ -160,8 +160,8 @@ fn compiler_owned_test_callables_preserve_artifact_verification() {
             .iter()
             .find(|callable| callable.entry_pc == relative)
             .expect("each private test root has an authenticated callable descriptor");
-        assert!(callable.argument_words.is_empty());
-        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
+        assert_eq!(callable.arguments, ivm_abi::call::CallSchemaV1::empty());
+        assert_eq!(callable.results, ivm_abi::call::CallSchemaV1::unit());
     }
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_harness(&compiled.suite.program)

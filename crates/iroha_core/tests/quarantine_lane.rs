@@ -2,14 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 // no nonzero macro used in this file
-use iroha_core::{
-    block::BlockBuilder, governance::manifest::LaneManifestRegistry, state::StateReadOnly,
-};
+use iroha_core::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use std::{borrow::Cow, sync::Arc};
 fn quarantine_metadata() -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(
@@ -29,20 +26,14 @@ fn quarantine_overflow_rejects_one_tx() {
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [account], []);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
-    let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    // Configure quarantine: allow only 1 tx per block (to force overflow).
-    let mut cfg = state.view().pipeline().clone();
-    cfg.quarantine_max_txs_per_block = 1;
-    cfg.quarantine_tx_max_cycles = 0;
-    state.set_pipeline(cfg);
+    // Bind quarantine configuration before the original signed genesis is applied.
+    let mut config = TestChainConfig::new(world, 0);
+    config.chain_id = chain_id;
+    config.pipeline.quarantine_max_txs_per_block = 1;
+    config.pipeline.quarantine_tx_max_cycles = 0;
+    let mut chain =
+        Box::new(CertifiedTestChain::start(config).expect("authenticated quarantine genesis"));
+    let network_id = chain.network_id();
     // Build two transactions whose signed metadata opts into the quarantine lane.
     let tx1 = TransactionBuilder::new(
         network_id,
@@ -60,23 +51,13 @@ fn quarantine_overflow_rejects_one_tx() {
     .with_instructions([Log::new(Level::INFO, "q2".to_string())])
     .with_metadata(quarantine_metadata())
     .sign(kp.private_key());
-    // Convert into accepted txs and build a block with both.
-    let a1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-    let a2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-    let new_block = BlockBuilder::new(vec![a1, a2])
-        .chain(0, None)
-        .sign(kp.private_key())
-        .unpack(|_| {});
-    // Validate and record transactions; commit to state.
-    let (mut sb, sb_recorder) =
-        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
-            .expect("original writer-first component execution");
-    let vb = new_block
-        .validate_and_record_transactions(&mut sb, sb_recorder)
-        .unpack(|_| {});
-    let _ = sb.commit();
-    // Inspect results: exactly one Approved and one Validation(NotPermitted("quarantine overflow"))
-    let block = vb.as_ref();
+    // The same original inputs pass native payload execution and three-of-four
+    // certification. The fixture does not author transaction results.
+    let proposal = chain.proposal(None, vec![tx1, tx2]);
+    let committed = chain.commit_proposal(proposal, Signers::Quorum, Default::default());
+    let block = committed.block();
+    assert_eq!(block.external_transactions().count(), 2);
+    // Exactly one approved input and one explicit quarantine overflow remain.
     let mut approved = 0usize;
     let mut rejected_overflow = 0usize;
     for (idx, _tx) in block.external_transactions().enumerate() {

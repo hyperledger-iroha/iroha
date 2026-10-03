@@ -77,6 +77,7 @@ mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod ordinary_mint_credit;
 mod ordinary_mint_finalized;
 mod ordinary_mint_issuer_purpose;
 mod ordinary_wallet_current;
@@ -94,10 +95,13 @@ mod push;
 #[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(feature = "app_api")]
+mod reserve_policy_proof;
 /// SCCP v1 public read API.
 mod sccp;
 mod sns_lease;
 mod staking_preparation;
+mod stream_token_custody_proof;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
 mod validator_committee;
@@ -2762,6 +2766,7 @@ struct PendingBlockStatus {
     kind: PipelineStatusKind,
     block_hash: HashOf<BlockHeader>,
     observed_at: Instant,
+    deferred: Option<iroha_core::execution_attempt::ExecutionDeferred>,
 }
 #[derive(Debug)]
 struct PipelineStatusCache {
@@ -2780,10 +2785,11 @@ struct PipelineStatusCache {
     event_hints_trustworthy: AtomicBool,
     prune_lock: parking_lot::Mutex<()>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum BlockRecordOutcome {
     Recorded,
     MissingBlock,
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
 }
 impl PipelineStatusCache {
     #[cfg(test)]
@@ -2854,13 +2860,18 @@ impl PipelineStatusCache {
                 self.remove_pending_by_height(&height);
                 self.prune_if_needed(now);
             }
-            BlockRecordOutcome::MissingBlock => {
+            outcome @ (BlockRecordOutcome::MissingBlock | BlockRecordOutcome::Deferred(_)) => {
+                let deferred = match outcome {
+                    BlockRecordOutcome::Deferred(reason) => Some(reason),
+                    _ => None,
+                };
                 self.record_pending_block(
                     height,
                     PendingBlockStatus {
                         kind,
                         block_hash,
                         observed_at: now,
+                        deferred,
                     },
                 );
                 self.prune_if_needed(now);
@@ -2951,11 +2962,19 @@ impl PipelineStatusCache {
             .map(|entry| (*entry.key(), entry.value().clone()))
             .collect();
         for (height, pending) in pending {
+            if let Some(reason) = &pending.deferred {
+                iroha_logger::trace!(height = height.get(), %reason, "retrying original deferred pipeline history read");
+            }
             match self.record_block_results(height, pending.block_hash, pending.kind, state, now) {
                 BlockRecordOutcome::Recorded => {
                     self.remove_pending_by_height(&height);
                 }
                 BlockRecordOutcome::MissingBlock => {}
+                BlockRecordOutcome::Deferred(reason) => {
+                    if let Some(mut retained) = self.pending_blocks.get_mut(&height) {
+                        retained.deferred = Some(reason);
+                    }
+                }
             }
         }
         self.prune_if_needed(now);
@@ -3208,7 +3227,14 @@ impl PipelineStatusCache {
                 height = height.get(),
                 "pipeline status cache could not authenticate finalized carrier"
             );
-            return BlockRecordOutcome::MissingBlock;
+            return match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    BlockRecordOutcome::Deferred(reason)
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                    BlockRecordOutcome::MissingBlock
+                }
+            };
         }
         BlockRecordOutcome::Recorded
     }
@@ -4902,6 +4928,36 @@ fn has_percent_encoded_separator(path: &str) -> bool {
                 || (window[1] == b'5' && matches!(window[2], b'c' | b'C')))
     })
 }
+fn is_canonical_proof_record_path(path: &str) -> bool {
+    let Some(encoded_id) = path.strip_prefix("/v1/proofs/") else {
+        return false;
+    };
+    if encoded_id.contains('/') {
+        return false;
+    }
+    let Ok(decoded_id) = urlencoding::decode(encoded_id) else {
+        return false;
+    };
+    let Ok(id) = decoded_id.parse::<iroha_data_model::proof::ProofId>() else {
+        return false;
+    };
+    // Slash-delimited backend labels are identifier data in this one route's
+    // single parameter. Admit their canonical spelling, never path traversal,
+    // backslashes, nested escaping, or an arbitrary encoded path separator.
+    if id.backend.split('/').any(|part| {
+        part.is_empty()
+            || matches!(part, "." | "..")
+            || !part.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return false;
+    }
+    let canonical = id.to_string();
+    // URL path_segments and Torii's existing component encoder differ only in
+    // whether data colons are escaped. Both retain the same exact ProofId.
+    canonical.replace('/', "%2F") == encoded_id || urlencoding::encode(&canonical) == encoded_id
+}
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
         segment == "."
@@ -4941,9 +4997,14 @@ async fn enforce_strict_request_target(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let path = req.uri().path();
+    let encoded_path_invalid = if path.starts_with("/v1/proofs/") && path.contains('%') {
+        !is_canonical_proof_record_path(path)
+    } else {
+        has_percent_encoded_separator(path)
+    };
     let violation = if path.contains("//")
         || path.contains('\\')
-        || has_percent_encoded_separator(path)
+        || encoded_path_invalid
         || has_dot_segment(path)
         || has_percent_encoded_kagemusha_operation_id(path)
         || has_percent_encoded_operator_credential_id(path)
@@ -10265,7 +10326,8 @@ fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Op
                 KagemushaCommandBodyPolicy::redeem(transaction_max_content_len)
                     .maximum_working_set_bytes()?,
             )
-            .max(ordinary_mint_finalized::maximum_working_set_bytes()?),
+            .max(ordinary_mint_finalized::maximum_working_set_bytes()?)
+            .max(ordinary_mint_credit::maximum_working_set_bytes()?),
     )
 }
 fn encode_kagemusha_readiness_representation(
@@ -14490,9 +14552,7 @@ fn soracloud_runtime_status_sections(
 fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json::Value {
     let view = app.state.view();
     let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-    let latest_block_ms = view.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+    let latest_block_ms = view.query_ledger_time_ms();
     let wall_clock_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
@@ -16031,80 +16091,105 @@ impl ToriiDataspaceReadContext {
         }
     }
 
-    fn filter_event(&self, kura: &Kura, event: EventBox) -> Option<EventBox> {
+    fn filter_event(
+        &self,
+        kura: &Kura,
+        event: EventBox,
+    ) -> std::result::Result<
+        Option<EventBox>,
+        iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    > {
         let visibility = self.current_visibility();
         match event {
             EventBox::PipelineBatch(events) => {
-                let events = events
-                    .into_iter()
-                    .filter_map(|event| {
-                        Self::scope_pipeline_event(kura, event).into_visible(&visibility)
-                    })
-                    .map(|event| match event {
-                        EventBox::Pipeline(event) => event,
-                        _ => unreachable!("pipeline scoping returns one pipeline event"),
-                    })
-                    .collect::<Vec<_>>();
-                (!events.is_empty()).then_some(EventBox::PipelineBatch(events))
+                let mut visible = Vec::new();
+                for event in events {
+                    if let Some(EventBox::Pipeline(event)) = self
+                        .scope_pipeline_event(kura, event)?
+                        .into_visible(&visibility)
+                    {
+                        visible.push(event);
+                    }
+                }
+                Ok((!visible.is_empty()).then_some(EventBox::PipelineBatch(visible)))
             }
-            EventBox::Pipeline(event) => {
-                Self::scope_pipeline_event(kura, event).into_visible(&visibility)
-            }
+            EventBox::Pipeline(event) => Ok(self
+                .scope_pipeline_event(kura, event)?
+                .into_visible(&visibility)),
             // Data, trigger, and clock events do not yet carry committed route
-            // provenance. The explicit envelope therefore fails them closed
-            // to a global reader instead of guessing scope from payload data.
+            // provenance. The explicit envelope fails them closed to a global
+            // reader instead of guessing scope from payload data.
             other @ (EventBox::Data(_)
             | EventBox::Time(_)
             | EventBox::ExecuteTrigger(_)
-            | EventBox::TriggerCompleted(_)) => ScopedEvent {
+            | EventBox::TriggerCompleted(_)) => Ok(ScopedEvent {
                 event: other,
                 scope: ScopedEventScope::GlobalReaderOnly,
             }
-            .into_visible(&visibility),
+            .into_visible(&visibility)),
         }
     }
 
-    fn filter_current_event(&self, event: EventBox) -> Option<EventBox> {
+    fn filter_current_event(
+        &self,
+        event: EventBox,
+    ) -> std::result::Result<
+        Option<EventBox>,
+        iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    > {
         self.filter_event(self.app.kura.as_ref(), event)
     }
 
-    fn scope_pipeline_event(kura: &Kura, event: PipelineEventBox) -> ScopedEvent {
+    fn scope_pipeline_event(
+        &self,
+        kura: &Kura,
+        event: PipelineEventBox,
+    ) -> std::result::Result<
+        ScopedEvent,
+        iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    > {
         let scope = match &event {
             PipelineEventBox::Block(_) => ScopedEventScope::Public,
-            PipelineEventBox::Transaction(transaction) => {
-                Self::transaction_event_scope(kura, transaction)
-            }
+            PipelineEventBox::Transaction(transaction) => Self::transaction_event_scope(
+                kura,
+                transaction,
+                &self.app.state.ivm_execution_budget(),
+            )?,
             PipelineEventBox::Warning(_) | PipelineEventBox::Witness(_) => {
                 ScopedEventScope::GlobalReaderOnly
             }
         };
-        ScopedEvent {
+        Ok(ScopedEvent {
             event: EventBox::Pipeline(event),
             scope,
-        }
+        })
     }
 
     fn transaction_event_scope(
         kura: &Kura,
         transaction: &iroha_data_model::events::pipeline::TransactionEvent,
-    ) -> ScopedEventScope {
+        execution_budget: &iroha_core::state::AllocationBudget,
+    ) -> std::result::Result<
+        ScopedEventScope,
+        iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    > {
         let Some(height) = transaction.block_height() else {
-            return ScopedEventScope::GlobalReaderOnly;
+            return Ok(ScopedEventScope::GlobalReaderOnly);
         };
         let Ok(height) = usize::try_from(height.get()) else {
-            return ScopedEventScope::GlobalReaderOnly;
+            return Ok(ScopedEventScope::GlobalReaderOnly);
         };
         let Some(height) = NonZeroUsize::new(height) else {
-            return ScopedEventScope::GlobalReaderOnly;
+            return Ok(ScopedEventScope::GlobalReaderOnly);
         };
-        let Some(block) = kura.get_block(height) else {
-            return ScopedEventScope::GlobalReaderOnly;
+        let Some(block) = kura.get_block(height, execution_budget)? else {
+            return Ok(ScopedEventScope::GlobalReaderOnly);
         };
         let mut matched = false;
         let mut dataspaces = BTreeSet::new();
         for index in 0..block.external_entrypoint_count() {
             let Some(candidate) = block.external_signed_transaction_ref_at(index) else {
-                return ScopedEventScope::GlobalReaderOnly;
+                return Ok(ScopedEventScope::GlobalReaderOnly);
             };
             if candidate.hash() != *transaction.hash() {
                 continue;
@@ -16113,15 +16198,15 @@ impl ToriiDataspaceReadContext {
             let Some(entrypoint_dataspaces) =
                 routing::DataspaceReadVisibility::external_entrypoint_dataspaces(&block, index)
             else {
-                return ScopedEventScope::GlobalReaderOnly;
+                return Ok(ScopedEventScope::GlobalReaderOnly);
             };
             dataspaces.extend(entrypoint_dataspaces);
         }
-        if !matched || dataspaces.is_empty() {
+        Ok(if !matched || dataspaces.is_empty() {
             ScopedEventScope::GlobalReaderOnly
         } else {
             ScopedEventScope::Dataspaces(dataspaces)
-        }
+        })
     }
 }
 #[cfg(feature = "app_api")]
@@ -16377,6 +16462,7 @@ fn torii_permission_target<T: iroha_executor_data_model::permission::Permission>
     let encoded = norito::json::to_json_bounded(&token, iroha_primitives::json::MAX_JSON_BYTES)
         .map_err(|error| match error {
             norito::json::BoundedJsonError::DecodeResource(_)
+            | norito::json::BoundedJsonError::ScopedDecodeResource(_)
             | norito::json::BoundedJsonError::AllocationFailed => {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
@@ -18573,6 +18659,7 @@ fn bounded_signed_query_fanout_json_encode_error_response(
         ),
         norito::json::BoundedJsonError::Unsupported
         | norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::ScopedDecodeResource(_)
         | norito::json::BoundedJsonError::DecodeResource(_)
         | norito::json::BoundedJsonError::LengthMismatch => torii_proxy_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -19595,11 +19682,7 @@ fn dataspace_id_for_alias_segment(
 }
 #[cfg(feature = "app_api")]
 fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>) -> u64 {
-    state_view
-        .latest_block()
-        .as_ref()
-        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+    state_view.query_ledger_time_ms()
 }
 #[cfg(feature = "app_api")]
 fn asset_definition_home_dataspace_id(
@@ -24871,9 +24954,7 @@ async fn proxy_soracloud_public_hosted_http(
 }
 #[cfg(feature = "app_api")]
 fn current_public_ingress_ledger_time_ms(app: &SharedAppState) -> u64 {
-    let latest_block_ms = app.state.view().latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+    let latest_block_ms = app.state.view().query_ledger_time_ms();
     let wall_clock_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -26063,10 +26144,13 @@ async fn handler_blocks_stream_ws(
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _ = crate::panic_recovery::catch_async_recoverable(async move {
             let _preauth_guard = preauth_guard;
-            let stream =
-                routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout, move || {
-                    visibility.authorization_is_current()
-                });
+            let stream = routing::block::handle_blocks_stream(
+                kura,
+                app.state.ivm_execution_budget(),
+                ws,
+                app.ws_message_timeout,
+                move || visibility.authorization_is_current(),
+            );
             let result = tokio::select! {
                 () = shutdown.receive() => return,
                 result = stream => result,
@@ -32010,7 +32094,10 @@ async fn handler_alias_setup_plan(
         }
     }
     let state_view = app.state.view();
-    let Some(latest_block) = state_view.latest_block() else {
+    let Some(latest_block) = state_view
+        .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
         return Ok(alias_setup_plan_report_response(
             StatusCode::SERVICE_UNAVAILABLE,
             AliasSetupStatusV1::Pending,
@@ -32376,7 +32463,10 @@ async fn handler_alias_lease_renew_plan(
         ));
     }
     let state_view = app.state.view();
-    let Some(latest_block) = state_view.latest_block() else {
+    let Some(latest_block) = state_view
+        .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
         return Ok(alias_setup_plan_report_response(
             StatusCode::SERVICE_UNAVAILABLE,
             AliasSetupStatusV1::Pending,
@@ -32514,7 +32604,10 @@ async fn handler_alias_auto_renew_plan(
         ));
     }
     let state_view = app.state.view();
-    let Some(latest_block) = state_view.latest_block() else {
+    let Some(latest_block) = state_view
+        .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
         return Ok(alias_setup_plan_report_response(
             StatusCode::SERVICE_UNAVAILABLE,
             AliasSetupStatusV1::Pending,
@@ -34487,11 +34580,7 @@ async fn handler_ledger_headers(
         };
         let block = state_view
             .canonical_block_by_height(nz_height)
-            .map_err(|error| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(error),
-                ))
-            })?;
+            .map_err(crate::canonical_history::canonical_attempt_error)?;
         headers.push(block.header());
         if height == 1 {
             break;
@@ -34728,6 +34817,9 @@ async fn block_proof_response(
 
 fn map_block_proof_error(error: BlockProofError) -> Error {
     match error {
+        BlockProofError::Deferred(original) => canonical_history::query_attempt_error(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original),
+        ),
         BlockProofError::HeightOutOfRange(_) => conversion_error(error.to_string()),
         BlockProofError::BlockNotFound(_) | BlockProofError::EntrypointNotFound { .. } => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34857,10 +34949,8 @@ fn validate_account_onboarding_readiness(
     let world = state_view.world();
     let nexus = state_view.nexus();
     let catalog = &nexus.dataspace_catalog;
-    let has_committed_block = state_view.latest_block().is_some();
-    let now_ms = state_view.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+    let has_committed_block = state_view.latest_block_hash().is_some();
+    let now_ms = state_view.query_ledger_time_ms();
     let account_alias_policy =
         iroha_core::sns::policy_by_id(world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID);
     if let Err(error @ iroha_core::sns::SnsError::Deferred(_)) = account_alias_policy {
@@ -38618,6 +38708,7 @@ impl Torii {
             SORAFS_ORDERBOOK_EVENTS_STREAM_GET => limited_canonical_account_get(sorafs::api::handle_get_sorafs_orderbook_events_stream, app_state, 0, 0);
             SORAFS_ORDERBOOK_EVENTS_WS_GET => limited_canonical_account_get(sorafs::api::handle_get_sorafs_orderbook_events_ws, app_state, 0, 0);
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
+            SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38915,6 +39006,7 @@ impl Torii {
             ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_FINALIZED => limited_canonical_signature_post(ordinary_mint_finalized::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
+            ORDINARY_MINT_CREDIT => limited_canonical_signature_post(ordinary_mint_credit::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
         );
     }
     /// App-facing typed and protocol-native endpoints.
@@ -39358,6 +39450,7 @@ impl Torii {
             STORAGE_PEERS => public_get(sorafs::api::handle_get_sorafs_storage_peers);
             PROVIDERS => public_get(sorafs::api::handle_get_sorafs_providers);
             PROVIDER_DISCOVERY => public_get(provider_discovery::handler);
+            STREAM_TOKEN_CUSTODY => public_get(stream_token_custody_proof::handler);
             PROVIDER_ADVERT => limited_protocol_handshake_post(sorafs::api::handle_post_sorafs_provider_advert, sorafs_manifest::provider_advert::PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1);
             ROUTING_PROVIDERS => public_get(sorafs::delegated_routing::handle_get_routing_providers);
             ROUTING_PEERS => public_get(sorafs::delegated_routing::handle_get_routing_peers);
@@ -42951,17 +43044,26 @@ impl Torii {
             }
         }
         #[cfg(feature = "push")]
-        if let Some(task) = self.push.as_ref().and_then(|bridge| {
-            bridge.start_event_worker(
+        if let Some(bridge) = self.push.as_ref() {
+            match bridge.start_event_worker(
                 self.state.clone(),
                 self.events.clone(),
                 shutdown_signal.clone(),
-            )
-        }) {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "push_event",
-                task,
-            });
+            ) {
+                Ok(Some(task)) => critical_workers.push(ToriiCriticalWorker {
+                    name: "push_event",
+                    task,
+                }),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(rollback_torii_startup_workers(
+                        &shutdown_signal,
+                        critical_workers,
+                        Report::new(Error::StartServer).attach(error),
+                    )
+                    .await);
+                }
+            }
         }
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         if let Some(task) = app_state.peer_telemetry.start(shutdown_signal.clone()) {

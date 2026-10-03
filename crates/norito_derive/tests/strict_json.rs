@@ -529,3 +529,201 @@ fn named_enum_helpers_roundtrip_without_default_field_traits_and_remain_strict()
         assert!(decode_fast::<StrictHelperEvent>(&unknown).is_err());
     }
 }
+
+// A macro's ty fragment reaches derives as an invisible Type::Group. Both fields must retain
+// Option semantics, while only the explicitly required key must be present in JSON.
+macro_rules! forwarded_normal_options {
+    ($name:ident, $ty:ty) => {
+        #[derive(
+            Debug,
+            PartialEq,
+            Eq,
+            JsonDeserialize,
+            JsonSerialize,
+            norito::Encode,
+            norito::Decode,
+            norito::NoritoSchema,
+        )]
+        #[norito_schema(name = "norito_derive::strict_json::ForwardedNormalOptions")]
+        #[norito(deny_unknown_fields)]
+        struct $name {
+            #[norito(required)]
+            required: $ty,
+            optional: $ty,
+        }
+    };
+}
+macro_rules! forwarded_fast_options {
+    ($name:ident, $ty:ty) => {
+        #[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
+        #[norito(deny_unknown_fields)]
+        struct $name {
+            #[norito(required)]
+            required: $ty,
+            optional: $ty,
+        }
+    };
+}
+forwarded_normal_options!(ForwardedNormalOptions, Option<u32>);
+forwarded_fast_options!(ForwardedFastOptions, Option<u32>);
+
+#[test]
+fn macro_forwarded_required_option_retains_explicit_key_on_normal_and_direct_fast_paths() {
+    let expected = ForwardedNormalOptions {
+        required: None,
+        optional: None,
+    };
+    let original = r#"{"required":null}"#;
+    assert_eq!(
+        json::from_json::<ForwardedNormalOptions>(original).unwrap(),
+        expected
+    );
+    assert_eq!(
+        json::from_json_fast::<ForwardedNormalOptions>(original).unwrap(),
+        expected
+    );
+    assert_eq!(
+        decode_fast::<ForwardedFastOptions>(original).unwrap(),
+        ForwardedFastOptions {
+            required: None,
+            optional: None
+        }
+    );
+    assert_structured_missing_field(
+        json::from_json::<ForwardedNormalOptions>(r#"{}"#).unwrap_err(),
+        "required",
+    );
+    assert_missing_field(
+        json::from_json_fast::<ForwardedNormalOptions>(r#"{}"#).unwrap_err(),
+        "required",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<ForwardedFastOptions>(r#"{}"#).unwrap_err(),
+        "required",
+    );
+    let canonical = r#"{"required":null,"optional":null}"#;
+    assert_eq!(json::to_json(&expected).unwrap(), canonical);
+    let bytes = norito::to_bytes(&expected).unwrap();
+    assert_eq!(
+        norito::decode_from_bytes::<ForwardedNormalOptions>(&bytes).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn macro_forwarded_optional_option_keeps_absence_null_and_values_on_both_json_paths() {
+    for (original, required, optional) in [
+        (r#"{"required":null}"#, None, None),
+        (r#"{"required":null,"optional":null}"#, None, None),
+        (r#"{"required":7}"#, Some(7), None),
+        (r#"{"required":7,"optional":8}"#, Some(7), Some(8)),
+    ] {
+        let expected = ForwardedNormalOptions { required, optional };
+        assert_eq!(
+            json::from_json::<ForwardedNormalOptions>(original).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json::from_json_fast::<ForwardedNormalOptions>(original).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_fast::<ForwardedFastOptions>(original).unwrap(),
+            ForwardedFastOptions { required, optional }
+        );
+        let bytes = norito::to_bytes(&expected).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<ForwardedNormalOptions>(&bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+macro_rules! forwarded_option_record {
+    ($required:ty, $optional:ty) => {
+        #[derive(
+            Debug,
+            PartialEq,
+            Eq,
+            JsonDeserialize,
+            JsonSerialize,
+            norito_derive::FastJson,
+            norito::Encode,
+            norito::Decode,
+            norito::NoritoSchema,
+        )]
+        #[norito(no_fast_from_json, deny_unknown_fields)]
+        #[norito_schema(name = "norito.test.ForwardedOptionRecord")]
+        struct ForwardedOptionRecord {
+            #[norito(required)]
+            required: $required,
+            optional: $optional,
+        }
+    };
+}
+forwarded_option_record!(Option<u32>, ::core::option::Option<u32>);
+
+#[test]
+fn forwarded_macro_option_preserves_required_null_and_optional_omission_on_every_json_path() {
+    for (input, expected) in [
+        (
+            r#"{"required":null}"#,
+            ForwardedOptionRecord {
+                required: None,
+                optional: None,
+            },
+        ),
+        (
+            r#"{"required":7,"optional":9}"#,
+            ForwardedOptionRecord {
+                required: Some(7),
+                optional: Some(9),
+            },
+        ),
+    ] {
+        assert_eq!(
+            json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json::from_value::<ForwardedOptionRecord>(json::from_str(input).unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_fast::<ForwardedOptionRecord>(input).unwrap(),
+            expected
+        );
+        let binary = norito::encode_canonical(&expected).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ForwardedOptionRecord>(&binary).unwrap(),
+            expected
+        );
+        let encoded = json::to_json(&expected).unwrap();
+        assert!(encoded.contains("\"required\":"));
+        assert_eq!(
+            json::from_str::<ForwardedOptionRecord>(&encoded).unwrap(),
+            expected
+        );
+    }
+    for input in [r#"{}"#, r#"{"optional":9}"#] {
+        assert_missing_field(
+            json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).unwrap_err(),
+            "required",
+        );
+        assert_missing_field(
+            json::from_value::<ForwardedOptionRecord>(json::from_str(input).unwrap()).unwrap_err(),
+            "required",
+        );
+        assert_missing_field(
+            decode_fast::<ForwardedOptionRecord>(input).unwrap_err(),
+            "required",
+        );
+    }
+    for input in [
+        r#"{"required":null,"required":7}"#,
+        r#"{"required":null,"extra":7}"#,
+    ] {
+        assert!(json::from_slice::<ForwardedOptionRecord>(input.as_bytes()).is_err());
+        assert!(decode_fast::<ForwardedOptionRecord>(input).is_err());
+    }
+}

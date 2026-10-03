@@ -249,6 +249,9 @@ pub(crate) fn prepare_default_call_arguments(
     schema: &EntrypointArgumentSchemaV1,
     result_words: usize,
 ) -> Result<(), VMError> {
+    // Default-root argument effects include a host syscall. Admit its one
+    // detached logger before gas, allocation or descriptor writes.
+    let prepared_log = vm.prepare_host_register_log()?;
     let name: Name = "trigger_event_json"
         .parse()
         .map_err(|_| VMError::DecodeError)?;
@@ -258,7 +261,7 @@ pub(crate) fn prepare_default_call_arguments(
     vm.debit_gas(crate::gas::cost_of(instruction).ok_or(VMError::DecodeError)?)?;
     let name_pointer = vm.alloc_host_tlv(&encode_tlv(PointerType::Name, &name_payload)?)?;
     vm.set_register(10, name_pointer);
-    vm.execute_syscall(host, syscall)?;
+    vm.execute_syscall_with_register_log(host, syscall, Some(&prepared_log))?;
     let canonical_record = {
         let record = validate_tlv_any_region(vm, vm.register(10), PointerType::NoritoBytes)?;
         if record.payload.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
@@ -1163,7 +1166,10 @@ where
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
-fn validate_pointer_payload(kind: EntrypointValueKindV1, payload: &[u8]) -> Result<(), VMError> {
+pub(crate) fn validate_pointer_payload(
+    kind: EntrypointValueKindV1,
+    payload: &[u8],
+) -> Result<(), VMError> {
     match kind {
         EntrypointValueKindV1::Bool => return Err(VMError::DecodeError),
         EntrypointValueKindV1::Int => {

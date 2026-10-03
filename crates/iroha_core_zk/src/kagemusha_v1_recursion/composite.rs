@@ -5271,7 +5271,7 @@ mod tests {
     use crate::pasta_sha256::PastaSha256ConfigV1;
     use halo2_base::gates::RangeChip;
     use halo2_proofs::dev::MockProver;
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
 
     const RECEIVER_LANE_TEST_K: u32 = 17;
 

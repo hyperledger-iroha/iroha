@@ -221,7 +221,7 @@ impl From<ChainReadError> for iroha_data_model::sumeragi_finality::ScheduleError
 #[derive(Clone, Debug)]
 pub struct CommittedBlock {
     height: u64,
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     header: Option<BlockHeader>,
     core_hash: Hash32,
     result: Hash32,
@@ -239,7 +239,7 @@ impl CommittedBlock {
     /// [`commit_certificate`](SignedBlock::commit_certificate) is node-local: deterministic code
     /// must not read it.
     #[must_use]
-    pub fn block(&self) -> &Arc<SignedBlock> {
+    pub fn block(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.block
     }
 
@@ -394,7 +394,7 @@ fn read_decode_error(height: u64, error: norito::Error) -> ExecutionAttemptError
 /// Structural interpretation only: the caller must authenticate core hash and R
 /// from an original State tip or the full native certificate prefix.
 pub(crate) fn read_frame(
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     height: u64,
 ) -> Result<CommittedBlock, ExecutionAttemptError<ChainReadError>> {
     read_frame_with_validation(block, height, &mut EpochValidationScope::new())
@@ -403,7 +403,7 @@ pub(crate) fn read_frame(
 // Shape-validation reuse is private to this exact reader. The complete immutable context must
 // match; this scope never stores source, authority, availability or certificate verdicts.
 pub(crate) fn read_frame_with_validation(
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     height: u64,
     validation: &mut EpochValidationScope,
 ) -> Result<CommittedBlock, ExecutionAttemptError<ChainReadError>> {
@@ -692,7 +692,7 @@ fn decode_frame_result_admitted(
     reason = "distinct fields of an exact prepaid slot are written after complete verification; no incomplete receipt is exposed or dropped"
 )]
 fn read_frame_admitted(
-    block: Arc<SignedBlock>,
+    block: iroha_data_model::block::SharedSignedBlock,
     height: u64,
     validation: &mut EpochValidationScope,
     budget: &iroha_allocation::AllocationBudget,
@@ -917,7 +917,7 @@ impl PrefixVerifierContext<'_> {
             .ready(height)
             .map_err(|error| malformed(error.to_string()))?;
         let authority = if scheduled.epoch == prefix.authority.material {
-            Arc::clone(&prefix.authority)
+            Clone::clone(&prefix.authority)
         } else {
             Arc::new(VerifiedAuthority::new(
                 scheduled.epoch.clone(),
@@ -1364,7 +1364,7 @@ impl CertifiedPrefix {
     pub(crate) fn new_admitted(
         chain_id: &ChainId,
         network: NetworkId,
-        genesis: Arc<SignedBlock>,
+        genesis: iroha_data_model::block::SharedSignedBlock,
         budget: &iroha_allocation::AllocationBudget,
     ) -> Result<iroha_allocation::ChargedBuffer<Self>, ExecutionAttemptError<ChainReadError>> {
         let mut original = admit_verification_slot::<Self>(budget)?;
@@ -1405,7 +1405,7 @@ impl CertifiedPrefix {
     pub fn new(
         chain_id: &ChainId,
         network: NetworkId,
-        genesis: Arc<SignedBlock>,
+        genesis: iroha_data_model::block::SharedSignedBlock,
     ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         let (epoch, instance) = authenticate_genesis(&genesis, &network, chain_id)?;
         let mut validation = EpochValidationScope::new();
@@ -1431,7 +1431,7 @@ impl CertifiedPrefix {
     /// A rejected frame does not advance the original verified cursor.
     pub fn push(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
     ) -> Result<CertifiedPrefixStep, ExecutionAttemptError<ChainReadError>> {
         self.push_with_finish(block, None, |step| step)
     }
@@ -1442,7 +1442,7 @@ impl CertifiedPrefix {
         &mut self,
         artifacts: PrefixArtifacts,
     ) -> Result<CertifiedPrefixStep, ExecutionAttemptError<ChainReadError>> {
-        self.push_with_finish(Arc::clone(artifacts.source()), Some(artifacts), |step| step)
+        self.push_with_finish(artifacts.source().clone(), Some(artifacts), |step| step)
     }
 
     /// Consume the original complete verification receipt after all shared prefix checks.
@@ -1452,7 +1452,7 @@ impl CertifiedPrefix {
     /// Returns exactly the original `push` rejection/refusal without invoking `finish`.
     pub(crate) fn push_with_finish<Output>(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         artifacts: Option<PrefixArtifacts>,
         finish: impl FnOnce(CertifiedPrefixStep) -> Output,
     ) -> Result<Output, ExecutionAttemptError<ChainReadError>> {
@@ -1473,7 +1473,7 @@ impl CertifiedPrefix {
     /// may defer without advancing this prefix or invoking the completion consumer.
     pub(crate) fn push_admitted_with_finish<Output>(
         &mut self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         budget: &iroha_allocation::AllocationBudget,
         finish: impl FnOnce(CertifiedPrefixStep) -> Output,
     ) -> Result<Output, ExecutionAttemptError<ChainReadError>> {
@@ -1554,13 +1554,14 @@ enum ChainSource<'v, V: StateReadOnly + ?Sized> {
         chain_id: &'v ChainId,
         network: &'v NetworkId,
         hashes: &'v [HashOf<IrohaHeader>],
-        frames: &'v [Arc<SignedBlock>],
+        frames: &'v [iroha_data_model::block::SharedSignedBlock],
     },
     Pinned {
         chain_id: &'v ChainId,
         network: &'v NetworkId,
         hashes: &'v [HashOf<IrohaHeader>],
         kura: &'v Kura,
+        budget: iroha_allocation::AllocationBudget,
     },
 }
 impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
@@ -1579,7 +1580,8 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
     fn block(
         &self,
         height: u64,
-    ) -> Result<Arc<SignedBlock>, ExecutionAttemptError<ChainReadError>> {
+    ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>>
+    {
         let index = usize::try_from(height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -1593,7 +1595,7 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
                     .block_hashes()
                     .get(index.get() - 1)
                     .ok_or(ChainReadError::NotCommitted { height })?;
-                read_durable_pinned_block(view.kura(), index, *expected)
+                read_durable_pinned_block(view.kura(), index, *expected, &view.execution_budget())
             }
             Self::Frames { hashes, frames, .. } => {
                 let expected = hashes
@@ -1605,13 +1607,18 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
                 if block.hash() != *expected || block.header().height().get() != height {
                     return Err(ChainReadError::NotInView { height }.into());
                 }
-                Ok(Arc::clone(block))
+                Ok(block.clone())
             }
-            Self::Pinned { hashes, kura, .. } => {
+            Self::Pinned {
+                hashes,
+                kura,
+                budget,
+                ..
+            } => {
                 let expected = hashes
                     .get(index.get() - 1)
                     .ok_or(ChainReadError::NotCommitted { height })?;
-                read_durable_pinned_block(kura, index, *expected)
+                read_durable_pinned_block(kura, index, *expected, budget)
             }
         }
     }
@@ -1623,13 +1630,16 @@ fn read_durable_pinned_block(
     kura: &Kura,
     index: NonZeroUsize,
     expected: HashOf<IrohaHeader>,
-) -> Result<Arc<SignedBlock>, ExecutionAttemptError<ChainReadError>> {
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
     let height = index.get() as u64;
     let unavailable = || ChainReadError::NotInView { height };
     #[cfg(all(test, sumeragi_core_mutation = "HC11"))]
     {
         let _ = expected;
-        kura.get_block(index).ok_or_else(|| unavailable().into())
+        kura.get_block(index, budget)
+            .map_err(|error| error.map_rejection(|_| unavailable()))?
+            .ok_or_else(|| unavailable().into())
     }
     #[cfg(not(all(test, sumeragi_core_mutation = "HC11")))]
     {
@@ -1646,11 +1656,8 @@ fn read_durable_pinned_block(
             })?
             .ok_or_else(unavailable)?;
         let wire_len = source.wire_len();
-        // Retain this raw frame and its decoded graph under any inherited request
-        // allocation scope. This does not mint a new budget or bypass its ceiling.
-        let allocation = usize::try_from(wire_len).map_err(|_| unavailable())?;
-        norito::core::reserve_decode_allocation(allocation)
-            .map_err(|error| read_decode_error(height, error))?;
+        // NativeFrameRead owns the raw frame's allocation charge; the decoder below
+        // separately charges its graph to the same inherited cumulative scope.
         let bytes = source
             .read(wire_len)
             .map_err(|error| match error {
@@ -1663,6 +1670,8 @@ fn read_durable_pinned_block(
                 _ => unavailable().into(),
             })?
             .ok_or_else(unavailable)?;
+        let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
+            .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
         let block =
             iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|error| {
                 crate::execution_attempt::versioned_decode_attempt_error(error, |_| unavailable())
@@ -1670,14 +1679,14 @@ fn read_durable_pinned_block(
         if block.hash() != expected || block.header().height().get() != height {
             return Err(unavailable().into());
         }
-        Ok(Arc::new(block))
+        Ok(shell.initialize(block))
     }
 }
 
 /// Certified history over one immutable State view or explicit pinned restoration cut.
 pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     source: ChainSource<'v, V>,
-    genesis: Arc<SignedBlock>,
+    genesis: iroha_data_model::block::SharedSignedBlock,
     genesis_epoch: ValidatorEpochContextV1,
     instance: Hash32,
     attestations: Option<&'v dyn AttestationVerifier>,
@@ -1710,7 +1719,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     fn from_genesis(
         source: ChainSource<'v, V>,
-        genesis: Arc<SignedBlock>,
+        genesis: iroha_data_model::block::SharedSignedBlock,
     ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         let (genesis_epoch, instance) =
             authenticate_genesis(&genesis, source.network_id(), source.chain_id())?;
@@ -1751,7 +1760,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// The signed genesis body (the chain's trust root). Its result-only certificate was added
     /// after execution and is not authenticated by the genesis signatures.
     #[must_use]
-    pub fn genesis(&self) -> &Arc<SignedBlock> {
+    pub fn genesis(&self) -> &iroha_data_model::block::SharedSignedBlock {
         &self.genesis
     }
 
@@ -1856,7 +1865,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// cursor; an earlier-height read restarts at genesis instead of trusting an unbounded cache.
     fn check_certificate(
         &self,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         height: u64,
     ) -> Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>> {
         let mut cursor = self.prefix.lock();
@@ -1886,7 +1895,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     fn check_certificate_at_prefix(
         &self,
         prefix: &mut VerifiedPrefix,
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         height: u64,
     ) -> Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>> {
         let committed = read_frame_with_validation(block, height, &mut prefix.validation)?;
@@ -1943,7 +1952,7 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
         chain_id: &'v ChainId,
         network: &'v NetworkId,
         hashes: &'v [HashOf<IrohaHeader>],
-        frames: &'v [Arc<SignedBlock>],
+        frames: &'v [iroha_data_model::block::SharedSignedBlock],
     ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         if hashes.len() != frames.len() {
             return Err(ChainReadError::NotInView {
@@ -1979,12 +1988,14 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
         network: &'v NetworkId,
         hashes: &'v [HashOf<IrohaHeader>],
         kura: &'v Kura,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         Self::from_source(ChainSource::Pinned {
             chain_id,
             network,
             hashes,
             kura,
+            budget: budget.clone(),
         })
     }
 }

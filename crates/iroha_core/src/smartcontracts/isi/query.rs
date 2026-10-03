@@ -3219,6 +3219,7 @@ pub fn validate_fresh_query_for_client_world_parts(
     world_ro: &impl WorldReadOnly,
     latest_block: Option<BlockHeader>,
     limits: QueryLimits,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), ValidationFail> {
     if matches!(request, QueryRequest::Continue(_)) {
         return Err(ValidationFail::NotPermitted(
@@ -3231,6 +3232,7 @@ pub fn validate_fresh_query_for_client_world_parts(
         world_ro,
         latest_block,
         limits,
+        budget,
     )
     .map(drop)
 }
@@ -3699,6 +3701,7 @@ mod tests {
             &world_view,
             None,
             QueryLimits::default(),
+            &iroha_allocation::AllocationBudget::new(0),
         )
         .expect_err("a bare continuation must never enter reusable raw validation");
         assert!(
@@ -6772,7 +6775,10 @@ mod tests {
             &ALICE_ID,
         );
         let state = State::new(world, kura.clone(), LiveQueryStore::start_test());
-        let parent_block = state.view().latest_block();
+        let parent_block = state
+            .view()
+            .latest_block()
+            .expect("completed original State read");
         let unverified_block =
             BlockBuilder::new(vec![dummy_accepted_transaction(state.network_id)])
                 .chain(0, parent_block.as_deref())
@@ -7210,7 +7216,8 @@ mod tests {
         let genesis_rows = state
             .view()
             .kura()
-            .get_block(nonzero!(1_usize))
+            .get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+            .expect("completed original State read")
             .unwrap()
             .network_input_hashes()
             .len();
@@ -7968,7 +7975,8 @@ mod tests {
         let state_view = state.view();
         let block = state_view
             .kura()
-            .get_block(nonzero!(4_usize))
+            .get_block(nonzero!(4_usize), &state_view.execution_budget())
+            .expect("completed original State read")
             .expect("block available");
         let block_hash = block.hash();
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
@@ -8005,7 +8013,8 @@ mod tests {
         let state_view = state.view();
         let block = state_view
             .kura()
-            .get_block(nonzero!(4_usize))
+            .get_block(nonzero!(4_usize), &state_view.execution_budget())
+            .expect("completed original State read")
             .expect("block available");
         let entrypoint_hash = block
             .network_input_hashes()

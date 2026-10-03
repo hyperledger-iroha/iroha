@@ -204,6 +204,8 @@ fn world_publication_retains_original_busy_notification_until_aggregate_unlock()
         }
     }
     let world = fixture();
+    let mut registration =
+        crate::unit_test_support::release_registration(world.operation_index_budget());
     let competitor = capture(world.block());
     let mut original = world.block();
     mutate(&mut original, 19, "deferred_world_wake");
@@ -228,7 +230,7 @@ fn world_publication_retains_original_busy_notification_until_aggregate_unlock()
     });
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
-    let mut wait = wait.wait_for_release();
+    let mut wait = wait.wait_for_release(&mut registration);
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     let held = fence.lock().unwrap();
     let published = prepared.publish();
@@ -760,6 +762,8 @@ fn world_abort_retains_all_original_boxes_and_notifications_until_aggregate_unlo
         }
     }
     let world = fixture();
+    let mut registration =
+        crate::unit_test_support::release_registration(world.operation_index_budget());
     let competitor = capture(world.block());
     let mut original = world.block();
     mutate(&mut original, 19, "deferred_world_wake");
@@ -784,7 +788,7 @@ fn world_abort_retains_all_original_boxes_and_notifications_until_aggregate_unlo
     });
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
-    let mut wait = wait.wait_for_release();
+    let mut wait = wait.wait_for_release(&mut registration);
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     let held = fence.lock().unwrap();
     let published = prepared.abort();
@@ -806,8 +810,6 @@ fn world_abort_retains_all_original_boxes_and_notifications_until_aggregate_unlo
 #[test]
 fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_fence() {
     use std::{
-        future::Future,
-        pin::Pin,
         sync::Mutex,
         task::{Context, Wake, Waker},
     };
@@ -826,12 +828,17 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
             self.wakes.fetch_add(1, Ordering::SeqCst);
         }
     }
+    struct PrefixWatch {
+        observation: iroha_allocation::release::ReleaseWait,
+        registration: iroha_allocation::release::ReleaseRegistration,
+    }
     // Observe a real first-field release only after the earlier prefix has been
     // acquired. The separate original probe journal never includes this hook.
     struct ObservePrefix {
         original: Box<dyn RetainedWorldField>,
         journal: DetachedWorld<()>,
-        future: Arc<Mutex<Option<iroha_allocation::release::ReleaseFuture>>>,
+        future: Arc<Mutex<Option<PrefixWatch>>>,
+        registration: Option<iroha_allocation::release::ReleaseRegistration>,
         callback: Arc<Probe>,
     }
     impl RetainedWorldField for ObservePrefix {
@@ -850,12 +857,14 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
                 original,
                 journal,
                 future,
+                registration,
                 callback,
             } = *self;
             Box::new(PreparedObservePrefix {
                 original: original.publication_slot(target, scope),
                 journal: Some(journal),
                 future,
+                registration,
                 callback,
                 target,
             })
@@ -864,7 +873,8 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
     struct PreparedObservePrefix<'target> {
         original: Box<dyn PreparedWorldField + 'target>,
         journal: Option<DetachedWorld<()>>,
-        future: Arc<Mutex<Option<iroha_allocation::release::ReleaseFuture>>>,
+        future: Arc<Mutex<Option<PrefixWatch>>>,
+        registration: Option<iroha_allocation::release::ReleaseRegistration>,
         callback: Arc<Probe>,
         target: &'target World,
     }
@@ -883,14 +893,20 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
             else {
                 panic!("actual first-field lock observation");
             };
-            let mut wait = wait.wait_for_release();
+            let mut registration = self
+                .registration
+                .take()
+                .expect("original prepaid prefix watcher");
             let waker = Waker::from(Arc::clone(&self.callback));
             assert!(
-                Pin::new(&mut wait)
-                    .poll(&mut Context::from_waker(&waker))
+                registration
+                    .poll_wait(&wait, &mut Context::from_waker(&waker))
                     .is_pending()
             );
-            *self.future.lock().unwrap() = Some(wait);
+            *self.future.lock().unwrap() = Some(PrefixWatch {
+                observation: wait,
+                registration,
+            });
             self.original.try_prepare()
         }
         fn release(&mut self) {
@@ -907,6 +923,8 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
         }
     }
     let world = fixture();
+    let registration =
+        crate::unit_test_support::release_registration(world.operation_index_budget());
     let before = all_images(&world);
     let probe_journal = capture(world.block());
     let mut block = world.block();
@@ -934,6 +952,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
             original,
             journal: probe_journal,
             future: Arc::clone(&future),
+            registration: Some(registration),
             callback: Arc::clone(&callback),
         }),
     );
@@ -954,10 +973,13 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
     drop(outer);
     drop(cleanup);
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
-    let mut wait = future.lock().unwrap().take().unwrap();
+    let PrefixWatch {
+        observation,
+        mut registration,
+    } = future.lock().unwrap().take().unwrap();
     assert!(
-        Pin::new(&mut wait)
-            .poll(&mut Context::from_waker(Waker::noop()))
+        registration
+            .poll_wait(&observation, &mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
     assert_eq!(all_images(&world), before);

@@ -69,6 +69,27 @@ fn staking_preparation_error(error: eyre::Report) -> PayloadError {
         if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
             return PayloadError::StakingAdmission(refusal.clone());
         }
+        if let Some(refusal) = error.downcast_ref::<crate::state::MergeLedgerCommitError>() {
+            use crate::state::{MergeLedgerCommitError, StateAdmissionError};
+            let admission = match refusal {
+                MergeLedgerCommitError::StateStorageAdmission(original) => {
+                    Some(StateAdmissionError::Storage(original.clone()))
+                }
+                MergeLedgerCommitError::BlockHashAdmission(original) => {
+                    Some(StateAdmissionError::History(original.clone()))
+                }
+                MergeLedgerCommitError::MembershipAdmission(original) => {
+                    Some(StateAdmissionError::Membership(original.clone()))
+                }
+                MergeLedgerCommitError::ExecutionDeferred(original) => {
+                    return PayloadError::RoutingDeferred(original.clone());
+                }
+                _ => None,
+            };
+            if let Some(original) = admission {
+                return PayloadError::StakingAdmission(original);
+            }
+        }
     }
     if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
         error.downcast_ref::<crate::execution_attempt::ExecutionAttemptError<String>>()
@@ -148,6 +169,14 @@ pub fn assemble_with_merges(
     let minimum = parent_time
         .checked_add(assembly.cadence)
         .ok_or(PayloadError::TimeOverflow)?;
+    // The merge section already supplies an original canonical clock floor. Include it
+    // before the expensive State/parent-certificate build, while leaving the final
+    // canonical check below intact. No section means no merge-derived time authority.
+    let minimum = if merges.merges.is_empty() {
+        minimum
+    } else {
+        minimum.max(Duration::from_millis(merges.time_floor_ms))
+    };
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
         build_at(state, assembly, transactions, merges, time)
     };
@@ -168,6 +197,8 @@ fn build_at(
     merges: &MergeProposal,
     time: Duration,
 ) -> Result<SignedBlock, PayloadError> {
+    #[cfg(test)]
+    work_tests::record_build_at();
     let height = assembly.parent.header().height().get().saturating_add(1);
     let (_, time_source) = TimeSource::new_mock(time);
     let accepted = transactions.iter().cloned().collect::<Vec<_>>();
@@ -279,11 +310,11 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 }
 
 /// Decode a non-empty payload: the canonical wire of an unsigned, resultless proposal without
-/// a certificate (re-encoding must reproduce the bytes exactly).
+/// a certificate. The canonical decoder streams its encoding against the original bytes.
 ///
 /// # Errors
 /// The bytes do not decode, are not canonical, carry a result, a certificate or a signature,
-/// or the decoded block has no transactions. Local decoder resource refusal remains
+/// or the decoded block has no consensus work. Local decoder resource refusal remains
 /// [`PayloadError::DecodeResource`], rather than a deterministic property of the bytes.
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     let block =
@@ -310,12 +341,9 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
             "carries a block signature".into(),
         ));
     }
-    let reencoded = block
-        .encode_wire()
-        .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
-    if reencoded != payload {
-        return Err(PayloadError::NotCanonical("non-canonical encoding".into()));
-    }
+    // The framed decoder already authenticated every canonical byte in place.
+    // Re-encoding here would allocate another unfunded full payload and frame.
+    // TODO: fund the decoder's nested object graph from the original State pool.
     Ok(block)
 }
 
@@ -357,10 +385,7 @@ pub fn select(
     // the rescue is the committed load that closes it.
     let rescue_before_ms = routing.policy().map_or(0, |policy| {
         let cadence = view.world().parameters().sumeragi().block_cadence_ms.get();
-        let parent_ms = view
-            .latest_block()
-            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
-            .unwrap_or(0);
+        let parent_ms = view.authenticated_query_ledger_time_ms().unwrap_or(0);
         parent_ms.saturating_sub(
             policy
                 .anchor_freshness
@@ -578,6 +603,22 @@ mod tests {
         let decoded = decode(&bytes).expect("canonical nonempty proposal");
         assert_eq!(decoded.network_entrypoint_count(), 1);
         assert_eq!(decoded.encode_wire().unwrap(), bytes);
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(matches!(
+            decode(&trailing),
+            Err(PayloadError::NotCanonical(_))
+        ));
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(matches!(
+            decode(&truncated),
+            Err(PayloadError::NotCanonical(_))
+        ));
+        assert!(matches!(
+            decode(&bytes[1..]),
+            Err(PayloadError::NotCanonical(_))
+        ));
     }
     #[test]
     fn signed_native_lane_policy_drives_direct_global_context_without_queue_override() {
@@ -643,7 +684,10 @@ mod tests {
                 .unwrap()
                 .admits_anchor(3)
         );
-        let parent = view.latest_block().unwrap();
+        let parent = view
+            .latest_block()
+            .expect("completed original State read")
+            .unwrap();
         let mut builder = TransactionBuilder::new(
             chain.network_id(),
             account,

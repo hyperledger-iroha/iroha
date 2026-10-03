@@ -138,7 +138,12 @@ fn scalar_reference_v1(
                 );
             let multiplicity = row[BASE_PROFILE_TABLE_MULTIPLICITY];
             let query_gate =
-                row_family_gate_v1(material, row_index, ZkX509Rfc5280StarkFamilyV1::FixedByte)?;
+                row_family_gate_v1(material, row_index, ZkX509Rfc5280StarkFamilyV1::FixedByte)?
+                    .add(row_family_gate_v1(
+                        material,
+                        row_index,
+                        ZkX509Rfc5280StarkFamilyV1::NameValue,
+                    )?);
             let query_factor = profile_byte_factor_v1(&row, lane, challenges);
             let topology_query_gate = row[BASE_PROFILE_TOPOLOGY_QUERY_ACTIVE];
             let topology_query_factor = profile_topology_query_factor_v1(&row, lane, challenges);
@@ -442,4 +447,108 @@ fn numeric_scalar_reference_v1(
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
     Ok(values.into_vec())
+}
+
+#[test]
+#[ignore = "complete maximum-material280-column inverse-window parity and interleaved same-shape costs; run optimized"]
+fn rfc_private_inverse_window_matches_full_maximum_material_and_reports_both_costs() {
+    use super::super::relation::release_fixture::{
+        build_zk_x509_release_fixture_v1, reference_statement_context_v1,
+    };
+    use super::super::verifier_profile::compile_zk_x509_rfc_statement_from_authoritative_state_v1;
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true).unwrap();
+    let trace = build_zk_x509_rfc5280_trace_v1(
+        &fixture.witness.certificate_chain_der,
+        &fixture.witness.crl_der,
+        compile_zk_x509_rfc_statement_from_authoritative_state_v1(
+            &fixture.statement,
+            &fixture.authoritative_state,
+        ),
+    )
+    .unwrap();
+    assert_eq!(trace.certificates.len(), 3);
+    assert_eq!(trace.statement.disclosed_attribute_indices, [0, 1, 2, 3]);
+    let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+    let rows = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
+    let der = der_challenges_v1();
+    let challenges = challenges_v1();
+    let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
+    let scalar_scratch = aux_replay::scalar_scratch_payload_bytes_v1();
+    let window_scratch = aux_replay::inverse_window_tests::scratch_payload_bytes_v1();
+    println!(
+        "rfc_inverse_window_header rows={rows} columns=280 max_width=8 rounds=3 expected_records=210 scalar_scratch_bytes={scalar_scratch} window_scratch_bytes={window_scratch} material=maximum_depth3_disclosures4 public_pair_capacity=24 production_selected=true"
+    );
+    let mut records = 0;
+    for first in (0..280).step_by(8) {
+        let count = (280 - first).min(8);
+        let mut baseline: Vec<_> = (0..count)
+            .map(|_| PrivateTableV1::new(vec![F::ZERO; rows], zeroize_fields_v1))
+            .collect();
+        let mut candidate: Vec<_> = (0..count)
+            .map(|_| PrivateTableV1::new(vec![F::ZERO; rows], zeroize_fields_v1))
+            .collect();
+        // Both full output batches and the transient independent column are
+        // included in this experiment's peak payload; source material remains
+        // separately owned and visible to the process-wide resource observer.
+        let output_payload_bytes = (2 * count + 1) * rows * core::mem::size_of::<F>();
+        let experiment_payload_bytes = output_payload_bytes + window_scratch.max(scalar_scratch);
+        for round in 0..3 {
+            for window in if round % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let target = if window {
+                    &mut candidate
+                } else {
+                    &mut baseline
+                };
+                for column in target.iter_mut() {
+                    zeroize_fields_v1(column);
+                }
+                let mut refs: Vec<_> = target.iter_mut().map(|column| &mut column[..]).collect();
+                let started = std::time::Instant::now();
+                if window {
+                    aux_replay::inverse_window_tests::fill_columns_v1(
+                        &material, der, challenges, first, &mut refs, &centers,
+                    )
+                    .unwrap();
+                } else {
+                    aux_replay::fill_scalar_columns_for_testing_v1(
+                        &material, der, challenges, first, &mut refs, &centers,
+                    )
+                    .unwrap();
+                }
+                let elapsed_ns = started.elapsed().as_nanos();
+                drop(refs);
+                println!(
+                    "rfc_inverse_window_cost first={first} width={count} rows={rows} round={round} window={window} elapsed_ns={elapsed_ns} output_payload_bytes={output_payload_bytes} experiment_payload_bytes={experiment_payload_bytes}"
+                );
+                records += 1;
+            }
+            for offset in 0..count {
+                assert_eq!(
+                    candidate[offset].as_slice(),
+                    baseline[offset].as_slice(),
+                    "first{first} offset{offset} round{round}"
+                );
+            }
+            if round == 0 {
+                for (offset, column) in candidate.iter().enumerate() {
+                    let reference = PrivateTableV1::new(
+                        scalar_reference_v1(&material, der, challenges, first + offset, &centers)
+                            .unwrap(),
+                        zeroize_fields_v1,
+                    );
+                    assert_eq!(
+                        column.as_slice(),
+                        reference.as_slice(),
+                        "independent full scalar column{}",
+                        first + offset
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(records, 210);
 }

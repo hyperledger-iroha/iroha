@@ -225,7 +225,8 @@ fn finalized_role13_check_with_exact_grants_still_cannot_authenticate() {
     );
     let block = state
         .block_by_height(NonZeroUsize::new(3).unwrap())
-        .unwrap();
+        .expect("committed history read completes")
+        .expect("committed execution is retained");
     let (_, output) = block.network_output_at(0).unwrap();
     assert!(matches!(
         &output.result.0,

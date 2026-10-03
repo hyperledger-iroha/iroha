@@ -910,7 +910,6 @@ impl KagemushaOrdinaryIncomingAuxiliaryProofSourceV1
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::RngCore as _;
 
     #[test]
     fn incoming_public_fold_seed_binds_each_complete_original_without_financial_authority() {

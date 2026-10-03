@@ -14,6 +14,7 @@ use fastpq_prover::goldilocks_transform::{
 };
 
 type Words = PrivateTableV1<Vec<u64>>;
+type PublicPowers = crate::privacy_engines::transparent_stark::GoldilocksFftPowersV1;
 
 #[derive(Clone, Copy)]
 enum TransformUseV1 {
@@ -26,13 +27,26 @@ enum TransformUseV1 {
 pub(super) struct MainBoundedTransformPolicyV1 {
     available: usize,
     backend: Option<Backend>,
+    public_powers_reserved: bool,
 }
+
+// Two public max-stripe tables can coexist during a fixed inverse/forward
+// transition. This fixed allowance is reserved before private transforms; it
+// cannot be spent again by device staging or additional caller owners.
+pub(super) const SHARED_POWERS_ALLOWANCE_V1: usize = 2
+    * ((1usize << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1) / 2
+        * core::mem::size_of::<F>()
+        + core::mem::size_of::<PublicPowers>());
+// The measured registered log5 domain regressed for both widths. Retain the
+// original arithmetic there; the next registered native domain is public log8.
+const SHARED_POWERS_MIN_ROWS_V1: usize = 1 << 8;
 
 impl MainBoundedTransformPolicyV1 {
     pub(super) const fn cpu_v1() -> Self {
         Self {
             available: 0,
             backend: None,
+            public_powers_reserved: false,
         }
     }
 
@@ -67,6 +81,9 @@ impl MainBoundedTransformPolicyV1 {
                 .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
             backend: fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(
             ),
+            // check_before_sources_v1 already included the complete public
+            // allowance; do not subtract it a second time from device slack.
+            public_powers_reserved: true,
         })
     }
 
@@ -149,6 +166,7 @@ impl MainBoundedTransformPolicyV1 {
         Self {
             available: required_v1(rows, columns).unwrap(),
             backend: Some(Backend::Metal),
+            public_powers_reserved: false,
         }
     }
 
@@ -160,6 +178,66 @@ impl MainBoundedTransformPolicyV1 {
             .into_iter()
             .find(|&columns| required_v1(rows, columns).is_ok_and(|bytes| bytes <= self.available))
             .unwrap_or(0)
+    }
+
+    /// Use the separately reserved public allowance, never private residual slack.
+    /// Explicit reference policies and tiny public domains use the original FFT.
+    pub(super) fn cpu_powers_v1(
+        self,
+        rows: usize,
+        root: F,
+    ) -> Result<Option<PublicPowers>, ZkX509StarkErrorV1> {
+        PublicPowers::required_payload_bytes_v1(rows).map_err(map_transparent_error_v1)?;
+        if rows > 1usize << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1 {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if !self.public_powers_reserved || rows < SHARED_POWERS_MIN_ROWS_V1 {
+            return Ok(None);
+        }
+        PublicPowers::new_v1(rows, root, SHARED_POWERS_ALLOWANCE_V1)
+            .map(Some)
+            .map_err(map_transparent_error_v1)
+    }
+
+    /// One fixed public allowance owns the complete simultaneous pair. Actual
+    /// forward capacity is deducted before inverse allocation; excess is an
+    /// error, never a witness-dependent fallback or a second use of the budget.
+    pub(super) fn cpu_power_pair_v1(
+        self,
+        rows: usize,
+        root: F,
+        inverse: bool,
+    ) -> Result<(Option<PublicPowers>, Option<PublicPowers>), ZkX509StarkErrorV1> {
+        if !inverse {
+            return Ok((self.cpu_powers_v1(rows, root)?, None));
+        }
+        let minimum =
+            PublicPowers::required_payload_bytes_v1(rows).map_err(map_transparent_error_v1)?;
+        if rows > 1usize << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1 {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if !self.public_powers_reserved || rows < SHARED_POWERS_MIN_ROWS_V1 {
+            return Ok((None, None));
+        }
+        let forward_budget = SHARED_POWERS_ALLOWANCE_V1
+            .checked_sub(minimum)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let forward =
+            PublicPowers::new_v1(rows, root, forward_budget).map_err(map_transparent_error_v1)?;
+        let inverse_budget = SHARED_POWERS_ALLOWANCE_V1
+            .checked_sub(
+                forward
+                    .allocated_payload_bytes_v1()
+                    .map_err(map_transparent_error_v1)?,
+            )
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let inverse = PublicPowers::new_v1(
+            rows,
+            root.inv().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+            inverse_budget,
+        )
+        .map_err(map_transparent_error_v1)?;
+        Ok((Some(forward), Some(inverse)))
     }
 
     /// Apply the fixed-coset inverse/diagonal/forward transition with shared staging.
@@ -252,13 +330,30 @@ impl MainBoundedTransformPolicyV1 {
         }
         let width = self.columns_v1(rows);
         if width == 0 {
+            // Table selection uses only the public domain and pre-reserved
+            // capability. Bounded columns retain the shared FFT windows.
+            let table_root = match direction {
+                Direction::Forward => root,
+                Direction::Inverse => root.inv().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+            };
+            let powers = self.cpu_powers_v1(rows, table_root)?;
             columns.par_iter_mut().try_for_each(|column| {
+                if let Some(powers) = &powers {
+                    return match direction {
+                        Direction::Forward => crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_with_powers_v1(column, root, powers),
+                        Direction::Inverse => crate::privacy_engines::transparent_stark::goldilocks_ifft_coarse_with_powers_v1(column, root, powers),
+                    }.map_err(map_transparent_error_v1);
+                }
                 match direction {
                     Direction::Forward => {
-                        crate::privacy_engines::transparent_stark::goldilocks_fft_v1(column, root)
+                        crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_v1(
+                            column, root,
+                        )
                     }
                     Direction::Inverse => {
-                        crate::privacy_engines::transparent_stark::goldilocks_ifft_v1(column, root)
+                        crate::privacy_engines::transparent_stark::goldilocks_ifft_coarse_v1(
+                            column, root,
+                        )
                     }
                 }
                 .map_err(map_transparent_error_v1)
@@ -516,3 +611,11 @@ fn allocate_words_with_v1(
 #[cfg(test)]
 #[path = "main_bounded_transform_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "main_fft_scheduler_tests.rs"]
+mod scheduler_tests;
+
+#[cfg(test)]
+#[path = "main_shared_fft_powers_tests.rs"]
+mod shared_power_tests;

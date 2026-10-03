@@ -21,9 +21,9 @@ pub(in crate::state) enum PredecessorWorldError {
     /// State has no published predecessor with a native successor certificate.
     #[error("no finalized predecessor World is available")]
     Unavailable,
-    /// The generation-bound State view is malformed.
+    /// The generation-bound State view retains its original read refusal or invalidity.
     #[error("State view: {0}")]
-    View(String),
+    View(#[from] crate::state::StateViewError),
     /// The original native tips do not match the authenticated source chain.
     #[error("original State execution identity differs from its native source")]
     Identity,
@@ -90,25 +90,21 @@ impl PredecessorWorldReceipt<'_> {
 impl State {
     /// Resolve the latest retained predecessor through this State's own native source.
     ///
-    /// `None` requests a retry after concurrent publication. The caller supplies
-    /// finite source allowances, never a hash cut, root, committee, certificate or
-    /// World snapshot. Every original native source frame is admitted before I/O.
+    /// Contention retains the original State view's release observation. The caller
+    /// supplies finite source allowances, never a hash cut, root, committee,
+    /// certificate or World snapshot. Every original native source frame is admitted before I/O.
     /// This internal prerequisite is not a complete-State root or a private-execution
     /// anchor. Cold capture remains O(World); it is not a public query entrypoint.
     pub(in crate::state) fn predecessor_world_receipt_once(
         &self,
         limits: NativeExecutionReadLimits,
     ) -> Result<Option<PredecessorWorldReceipt<'_>>, PredecessorWorldError> {
+        let publication_release = self.view_publication_release();
         let generation = self.state_view_generation();
         if generation & 1 != 0 {
-            return Ok(None);
+            return Err(crate::state::StateViewError::Busy(publication_release).into());
         }
-        let Some(view) = self
-            .try_view_once()
-            .map_err(|error| PredecessorWorldError::View(error.to_string()))?
-        else {
-            return Ok(None);
-        };
+        let view = self.try_view_once()?;
         let current = view
             .native_execution_tip()
             .ok_or(PredecessorWorldError::Unavailable)?;
@@ -128,6 +124,7 @@ impl State {
             view.block_hashes(),
             current.height(),
             limits,
+            &self.ivm_execution_budget(),
         )?;
         let committed = source.authority.committed();
         if record(committed) != current.0
@@ -157,7 +154,7 @@ impl State {
             .map_err(PredecessorWorldError::Capture)?;
         drop(world);
         if !is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Ok(None);
+            return Err(crate::state::StateViewError::Busy(publication_release).into());
         }
         if world_root != stored_root || world_root != expected {
             return Err(PredecessorWorldError::WorldMismatch);
@@ -320,15 +317,38 @@ mod tests {
         ));
         let mut publication = chain.state().state_view_publication();
         let guard = publication.begin();
+        assert!(matches!(
+            chain
+                .state()
+                .predecessor_world_receipt_once(original_limits),
+            Err(PredecessorWorldError::View(
+                crate::state::StateViewError::Busy(_)
+            ))
+        ));
+        drop(guard);
+        drop(publication);
+        let original = chain.state().latest_block_header.write();
+        let expected = chain
+            .state()
+            .latest_block_header
+            .try_read_or_wait()
+            .err()
+            .unwrap();
+        let Err(PredecessorWorldError::View(crate::state::StateViewError::Busy(actual))) = chain
+            .state()
+            .predecessor_world_receipt_once(original_limits)
+        else {
+            panic!("predecessor read must preserve the original physical reader refusal");
+        };
+        assert_eq!(actual, expected);
+        drop(original);
         assert!(
             chain
                 .state()
                 .predecessor_world_receipt_once(original_limits)
                 .unwrap()
-                .is_none()
+                .is_some()
         );
-        drop(guard);
-        drop(publication);
         chain
             .kura()
             .corrupt_native_frame_for_test(NonZeroUsize::new(2).unwrap());

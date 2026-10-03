@@ -31,6 +31,21 @@ pub(crate) fn fixture(
         },
     );
 }
+pub(crate) fn fixture_block(
+    now: u64,
+    test: impl FnOnce(&mut crate::state::StateBlock<'_>, ValidationFeePolicyV1),
+) {
+    crate::validation_fee::tests::with_validation_fee_payout_block_at_time(
+        200_000,
+        now,
+        |block, deployer, code, code_hash| {
+            let mut setup = block.transaction();
+            let policy = install_retail_policy_fixture(&mut setup, deployer, code, code_hash);
+            setup.apply();
+            test(block, policy);
+        },
+    );
+}
 fn install_retail_policy_fixture(
     stx: &mut StateTransaction<'_, '_>,
     deployer: &AccountId,
@@ -229,37 +244,55 @@ fn included_payments_have_zero_receipts_without_treasury_balance_entries() {
 }
 #[test]
 fn direct_unquoted_and_stale_free_payments_cannot_silently_charge() {
-    fixture(START + 1000, |stx, policy| {
+    fixture_block(START + 1000, |block, policy| {
         let owner = account(3);
-        seed(stx, &policy, &owner, 1000, 49, START);
+        let mut setup = block.transaction();
+        seed(&mut setup, &policy, &owner, 1000, 49, START);
+        setup.apply();
+        let req = request(&policy, &owner, 1);
         let transfer = Transfer::asset_quantity(
             AssetId::new(policy.ds_asset_id.clone(), owner.clone()),
             Quantity::from(1_u32),
             account(4),
         );
-        let source = AssetId::new(policy.ds_asset_id.clone(), owner.clone());
-        assert!(transfer.execute(&owner, stx).is_err());
+        let mut unquoted =
+            block.transaction_for_fastpq_testing(Hash::new(b"retail-unquoted-refusal"));
+        assert!(transfer.clone().execute(&owner, &mut unquoted).is_err());
         assert_eq!(
-            stx.world.assets.get(&source).unwrap().as_ref(),
+            unquoted
+                .world
+                .assets
+                .get(&AssetId::new(policy.ds_asset_id.clone(), owner.clone()))
+                .unwrap()
+                .as_ref(),
             &Quantity::from(10_u32)
         );
-        assert!(stx.retail_fee_transcripts_for_test().is_empty());
-    });
-    // An intrinsic rejection poisons its invocation; the valid attempt needs a fresh owner.
-    fixture(START + 1000, |stx, policy| {
-        let owner = account(3);
-        seed(stx, &policy, &owner, 1000, 49, START);
-        let req = request(&policy, &owner, 1);
-        let old = reviewed(stx, &req, 3);
-        assert_eq!(old.fee_minor, 0);
-        pay(stx, &req);
-        finalize(stx).unwrap();
-        stx.world.retail_fee_assessment = Some(old);
-        stx.world.retail_fee_source_transaction_hash = Some(*Hash::new([4]).as_ref());
-        pay(stx, &req);
-        assert!(finalize(stx).is_err());
+        assert!(unquoted.retail_fee_transcripts_for_test().is_empty());
+        drop(unquoted);
+        let mut accepted =
+            block.transaction_for_fastpq_testing(Hash::new(b"retail-reviewed-payment"));
         assert_eq!(
-            account_state(&stx.world, &owner)
+            account_state(&accepted.world, &owner)
+                .unwrap()
+                .unwrap()
+                .payments_used,
+            49,
+            "unquoted refusal rolled back the original account"
+        );
+        let old = reviewed(&mut accepted, &req, 3);
+        assert_eq!(old.fee_minor, 0);
+        pay(&mut accepted, &req);
+        finalize(&mut accepted).unwrap();
+        accepted.apply();
+        let mut stale = block.transaction_for_fastpq_testing(Hash::new(b"retail-stale-payment"));
+        stale.world.retail_fee_assessment = Some(old);
+        stale.world.retail_fee_source_transaction_hash = Some(*Hash::new([4]).as_ref());
+        pay(&mut stale, &req);
+        assert!(finalize(&mut stale).is_err());
+        drop(stale);
+        let check = block.transaction();
+        assert_eq!(
+            account_state(&check.world, &owner)
                 .unwrap()
                 .unwrap()
                 .payments_used,

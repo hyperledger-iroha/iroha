@@ -192,3 +192,135 @@ def test_inherited_pipe_timeout_reaps_direct_child_and_stops_own_session(runtime
           "\"import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(10)\"])")
     with pytest.raises(owner.ProcessError,match="wall-clock"): run(code,runtime)
     assert children[0].poll()==0
+
+
+@pytest.mark.parametrize('sig', (owner.signal.SIGTERM, owner.signal.SIGKILL))
+@pytest.mark.parametrize('remaining_group', ('permitted', 'absent'))
+def test_permission_refusal_reaps_exited_child_before_same_group_retry(monkeypatch, sig, remaining_group):
+    events = []
+    class ExitedChild:
+        pid = 1729
+        def wait(self, *, timeout):
+            events.append(('wait', timeout))
+            return 0
+    def signal_group(pid, actual_signal):
+        events.append(('signal', pid, actual_signal))
+        if len(events) == 1:
+            raise PermissionError(1, 'unreaped exited group')
+        if remaining_group == 'absent':
+            raise ProcessLookupError(3, 'group gone after reap')
+    monkeypatch.setattr(owner.os, 'killpg', signal_group)
+    owner._signal_owned_group(ExitedChild(), sig)
+    assert events == [('signal', 1729, sig), ('wait', 0.5), ('signal', 1729, sig)]
+
+
+@pytest.mark.parametrize('sig', (owner.signal.SIGTERM, owner.signal.SIGKILL))
+def test_permission_refusal_does_not_retry_when_child_remains_live(monkeypatch, sig):
+    events = []
+    denied = PermissionError(1, 'actual group refusal')
+    class LiveChild:
+        pid = 1729
+        def wait(self, *, timeout):
+            events.append(('wait', timeout))
+            raise owner.subprocess.TimeoutExpired('owned child', timeout)
+    def signal_group(pid, actual_signal):
+        events.append(('signal', pid, actual_signal))
+        raise denied
+    monkeypatch.setattr(owner.os, 'killpg', signal_group)
+    with pytest.raises(PermissionError) as error:
+        owner._signal_owned_group(LiveChild(), sig)
+    assert error.value is denied
+    assert events == [('signal', 1729, sig), ('wait', 0.5)]
+
+
+@pytest.mark.parametrize('sig', (owner.signal.SIGTERM, owner.signal.SIGKILL))
+def test_permission_refusal_for_remaining_group_is_not_suppressed(monkeypatch, sig):
+    events = []
+    denied = PermissionError(1, 'remaining group refused')
+    class ExitedChild:
+        pid = 1729
+        def wait(self, *, timeout):
+            events.append(('wait', timeout))
+            return 0
+    def signal_group(pid, actual_signal):
+        events.append(('signal', pid, actual_signal))
+        raise denied
+    monkeypatch.setattr(owner.os, 'killpg', signal_group)
+    with pytest.raises(PermissionError) as error:
+        owner._signal_owned_group(ExitedChild(), sig)
+    assert error.value is denied
+    assert events == [('signal', 1729, sig), ('wait', 0.5), ('signal', 1729, sig)]
+
+
+def test_overflow_from_exited_unreaped_child_keeps_byte_limit_error(runtime, monkeypatch):
+    import select
+    children = []
+    poll_observations = []
+    gate = runtime['cwd'] / 'exit-after-poll'
+    original_popen = owner.subprocess.Popen
+    def capture(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        original_poll = child.poll
+        def poll_then_release():
+            observed = original_poll()
+            if not poll_observations:
+                # The real child remains live until this exact poll observes it.
+                assert observed is None
+                poll_observations.append(observed)
+                gate.write_bytes(b'exit')
+                # Observe actual EOF without polling or waiting again. The child
+                # exits after the live observation and before cleanup signals it.
+                ready, _, _ = select.select([child.stderr], [], [], 2)
+                assert ready and os.read(child.stderr.fileno(), 1) == b''
+                assert child.returncode is None
+            return observed
+        child.poll = poll_then_release
+        children.append(child)
+        return child
+    monkeypatch.setattr(owner.subprocess, 'Popen', capture)
+    runtime['stderr_limit'] = 0
+    source = ("import os,time\nfrom pathlib import Path\nos.write(2,b'!')\n"
+              f"while not Path({str(gate)!r}).exists(): time.sleep(.001)")
+    try:
+        with pytest.raises(owner.ProcessError, match='byte limit'):
+            run(source, runtime)
+        assert poll_observations == [None]
+        assert len(children) == 1 and children[0].returncode == 0
+        assert runtime['stderr_path'].read_bytes() == b''
+        with pytest.raises(ChildProcessError):
+            os.waitpid(children[0].pid, os.WNOHANG)
+    finally:
+        # Even a failing before-code control reaps this fixture's own child.
+        gate.write_bytes(b'exit')
+        for child in children:
+            child.wait(timeout=5)
+
+
+def test_actual_live_child_permission_refusal_remains_failure(runtime, monkeypatch):
+    child = owner.subprocess.Popen(
+        (sys.executable, '-I', '-B', '-c', 'import time; time.sleep(20)'),
+        stdin=owner.subprocess.DEVNULL, stdout=owner.subprocess.PIPE,
+        stderr=owner.subprocess.PIPE, cwd=runtime['cwd'],
+        env=owner.private_environment(runtime['home'], runtime['temporary']),
+        start_new_session=True,
+    )
+    original_killpg = owner.os.killpg
+    signals = []
+    denied = PermissionError(1, 'injected refusal for actual live owned group')
+    def refuse(pid, sig):
+        assert pid == child.pid and sig == owner.signal.SIGTERM
+        signals.append((pid, sig))
+        raise denied
+    try:
+        monkeypatch.setattr(owner.os, 'killpg', refuse)
+        with pytest.raises(PermissionError) as error:
+            owner._signal_owned_group(child, owner.signal.SIGTERM)
+        assert error.value is denied and child.poll() is None
+        assert signals == [(child.pid, owner.signal.SIGTERM)]
+    finally:
+        monkeypatch.setattr(owner.os, 'killpg', original_killpg)
+        # This exact newly-created Python session remains the fixture's owner.
+        original_killpg(child.pid, owner.signal.SIGKILL)
+        child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()

@@ -2567,8 +2567,22 @@ pub mod isi {
         )?;
         Ok(provenance)
     }
+    fn artifact_admission_instruction_error(
+        world: &WorldTransaction<'_, '_>,
+        error: ivm::ContractArtifactError,
+    ) -> InstructionExecutionError {
+        if let Some(error) = error.local_vm_error()
+            && let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+        {
+            return world.attempt_error_to_instruction_error(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+            );
+        }
+        invalid_smart_contract_parameter(error.to_string())
+    }
     fn verify_registered_contract_artifact_for_manifest(
         world: &WorldTransaction<'_, '_>,
+        execution_budget: &iroha_allocation::AllocationBudget,
         artifact_id: &ContractArtifactId,
         manifest: &ContractManifest,
     ) -> Result<Vec<u8>, InstructionExecutionError> {
@@ -2581,11 +2595,9 @@ pub mod isi {
                     "contract bytecode for manifest.code_hash not found".into(),
                 ))
             })?;
-        let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        let verified =
+            ivm::verify_contract_artifact_with_memory_budget(&code_bytes, execution_budget)
+                .map_err(|error| artifact_admission_instruction_error(world, error))?;
         if verified.code_hash != artifact_id.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "stored contract bytecode hash does not match manifest.code_hash".into(),
@@ -3394,6 +3406,60 @@ pub mod isi {
             Ok(())
         }
     }
+    impl Execute for gov::ProposeKagemushaVerifierReleaseRetireV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose KAGEMUSHA verifier release retirement"
+                        .into(),
+                ));
+            }
+            let payload = self.proposal;
+            if &payload.proposal_operator != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "KAGEMUSHA verifier retirement operator differs from the transaction authority"
+                        .into(),
+                ));
+            }
+            ensure_kagemusha_release_retire_predecessor_v1(&payload, state_transaction)?;
+            let kind = ProposalKind::KagemushaVerifierReleaseRetire(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
     fn ensure_sccp_route_governance_proposer(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -3659,6 +3725,15 @@ pub mod isi {
                 ),
             ));
         }
+        crate::state::validate_network_xor_asset(
+            &state_transaction.world,
+            &policy.reward_custody.xor_asset_id,
+        )
+        .map_err(|error| {
+            state_transaction
+                .world
+                .attempt_error_to_instruction_error(error)
+        })?;
         if policy.ds_asset_id == state_transaction.gov.voting_asset_id {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -3936,15 +4011,11 @@ pub mod isi {
                     ),
                 ));
             }
-            let xor_definition = state_transaction
-                .world
-                .asset_definition(&self.payout_binding.xor_asset_id)
-                .map_err(Error::from)?;
-            if xor_definition.spec().scale().is_none() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validator reward asset must have an exact minor-unit scale".into(),
-                ));
-            }
+            crate::state::validate_network_xor_asset(
+                &state_transaction.world,
+                &self.payout_binding.xor_asset_id,
+            )
+            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             for account_id in [
                 &self.payout_binding.treasury_account_id,
                 &self.payout_binding.pool_vault_account_id,
@@ -5599,11 +5670,11 @@ pub mod isi {
                         .into(),
                 ))
             })?;
-        let verified = ivm::verify_contract_artifact(code_bytes).map_err(|error| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("stored governance contract bytecode is invalid: {error}").into(),
-            ))
-        })?;
+        let verified = ivm::verify_contract_artifact_with_memory_budget(
+            code_bytes,
+            &state_transaction.execution_budget(),
+        )
+        .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
         crate::smartcontracts::ivm::validate_cycle_ceiling(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
@@ -5874,6 +5945,7 @@ pub mod isi {
             })?;
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
+            &state_transaction.execution_budget(),
             &ContractArtifactId::for_address(&contract_address, key)
                 .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
@@ -6697,6 +6769,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         require_derived_permissions: bool,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
+        crate::state::validate_network_xor_asset(&state_transaction.world, &binding.xor_asset_id)?;
         let record = fetch_bound_contract_record(state_transaction, &binding.contract_address)
             .map_err(|error| {
                 error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
@@ -6935,6 +7008,7 @@ pub mod isi {
         };
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
+            &state_transaction.execution_budget(),
             &ContractArtifactId::for_address(&contract_address, key)
                 .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
@@ -7628,6 +7702,7 @@ pub mod isi {
                 })?;
             verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
+                &state_transaction.execution_budget(),
                 &ContractArtifactId::for_address(&contract_address, code_hash)
                     .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
                 &manifest,
@@ -8025,11 +8100,11 @@ pub mod isi {
                 format!("code bytes exceed cap: {code_len} > {cap_bytes}").into(),
             ));
         }
-        let verified = ivm::verify_contract_artifact(&code).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        let verified = ivm::verify_contract_artifact_with_memory_budget(
+            &code,
+            &state_transaction.execution_budget(),
+        )
+        .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
         crate::smartcontracts::ivm::validate_cycle_ceiling(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
@@ -8581,6 +8656,32 @@ pub mod isi {
         }
         Ok(())
     }
+    fn ensure_kagemusha_release_retire_predecessor_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseRetireProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        payload.validate().map_err(|reason| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                reason.to_owned(),
+            ))
+        })?;
+        if payload.network_id != state_transaction.network_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier retirement belongs to a different exact NetworkId".into(),
+            )
+            .into());
+        }
+        if state_transaction.world.kagemusha_verifier_registry.get()
+            != &payload.expected_predecessor
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier retirement predecessor changed before the Parliament attempt"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
 
     fn parliament_expected_head_v1(
         proposal: &ProposalKind,
@@ -8704,6 +8805,25 @@ pub mod isi {
                 if payload.network_id != state_transaction.network_id {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "KAGEMUSHA verifier activation belongs to a different exact NetworkId"
+                            .into(),
+                    )
+                    .into());
+                }
+                let registry = state_transaction.world.kagemusha_verifier_registry.get();
+                registry.validate().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
+            }
+            ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
+                payload.validate().map_err(|reason| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(reason.to_owned()),
+                    )
+                })?;
+                if payload.network_id != state_transaction.network_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "KAGEMUSHA verifier retirement belongs to a different exact NetworkId"
                             .into(),
                     )
                     .into());
@@ -8898,6 +9018,16 @@ pub mod isi {
             }
             ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
                 ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
+                *state_transaction
+                    .world
+                    .kagemusha_verifier_registry
+                    .get_mut() = payload.successor().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                Ok(())
+            }
+            ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
+                ensure_kagemusha_release_retire_predecessor_v1(payload, state_transaction)?;
                 *state_transaction
                     .world
                     .kagemusha_verifier_registry
@@ -9185,7 +9315,8 @@ pub mod isi {
         let kagemusha_registry_authorization = match &proposal.kind {
             ProposalKind::KagemushaVerifierPolicyInstall(_)
             | ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | ProposalKind::KagemushaVerifierReleaseActivate(_) => Some(
+            | ProposalKind::KagemushaVerifierReleaseActivate(_)
+            | ProposalKind::KagemushaVerifierReleaseRetire(_) => Some(
                 crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
                     &attempt,
                     &proposal,
@@ -9534,6 +9665,9 @@ pub mod isi {
             }
             if let ProposalKind::KagemushaVerifierReleaseActivate(payload) = &self.proposal {
                 ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
+            }
+            if let ProposalKind::KagemushaVerifierReleaseRetire(payload) = &self.proposal {
+                ensure_kagemusha_release_retire_predecessor_v1(payload, state_transaction)?;
             }
             if let ProposalKind::ValidationFeePayoutLifecycle(payload) = &self.proposal {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
@@ -14893,6 +15027,7 @@ pub mod isi {
             }
             let _code_bytes = verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
+                &state_transaction.execution_budget(),
                 &key,
                 &manifest,
             )?;
@@ -17355,7 +17490,7 @@ pub mod isi {
         #[metrics("unregister_domain")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
@@ -17372,9 +17507,9 @@ pub mod isi {
                 .accounts_in_domain_iter(&domain_id)
                 .map(|account| account.id().clone())
                 .collect();
-            // Domain teardown removes its accounts directly, including issuer
-            // and recipient accounts for definitions owned by another domain.
-            // Apply the same retail guard as individual account teardown.
+            // Domain teardown preserves universal accounts and unrelated balances;
+            // it removes domain-owned definitions and clears this domain's labels.
+            // Preserve the existing retail guard for each relabeled account.
             for account_id in &relabeled_accounts {
                 if crate::sumeragi::amx::retained_account(&state_transaction.world, account_id) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -18000,10 +18135,17 @@ pub mod isi {
                     .world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
+            let retirement =
+                crate::smartcontracts::isi::asset::isi::QuantityRetirementOwner::retain(
+                    state_transaction,
+                    authority,
+                    crate::smartcontracts::isi::asset::isi::QuantityRetirementScope::Domain(
+                        &domain_id,
+                    ),
+                    remove_asset_definitions.iter(),
+                );
             for asset_id in &remove_assets {
-                state_transaction
-                    .world
-                    .remove_asset_and_metadata_with_total(asset_id)?;
+                retirement.remove_asset(state_transaction, asset_id)?;
             }
             if state_transaction
                 .world
@@ -18071,10 +18213,9 @@ pub mod isi {
                     .world
                     .zk_assets
                     .remove(asset_definition_id.clone());
-                state_transaction
-                    .world
-                    .remove_asset_definition_entry(&asset_definition_id);
+                retirement.retire_definition(state_transaction, &asset_definition_id)?;
             }
+            drop(retirement);
             for account_id in relabeled_accounts {
                 let alias_matches_domain =
                     |label: &AccountAlias| -> Result<bool, InstructionExecutionError> {
@@ -20371,6 +20512,102 @@ pub mod isi {
             );
         }
 
+        #[test]
+        fn kagemusha_retirement_proposal_requires_bonded_operator_and_exact_standby() {
+            let fixture: gov::ProposeKagemushaVerifierReleaseActivateV1 =
+                norito::decode_canonical(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
+                )))
+                .expect("canonical verifier activation fixture");
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let mut transaction = block.transaction();
+            let mut payload =
+                iroha_data_model::governance::types::KagemushaVerifierReleaseRetireProposalV1 {
+                    proposal_operator: fixture.proposal.proposal_operator,
+                    network_id: fixture.proposal.network_id,
+                    expected_predecessor: fixture.proposal.expected_predecessor,
+                    standby_release_id: fixture.proposal.successor_release_id,
+                };
+            payload.proposal_operator = ALICE_ID.clone();
+            payload.network_id = transaction.network_id;
+            *transaction.world.kagemusha_verifier_registry.get_mut() =
+                payload.expected_predecessor.clone();
+            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseRetireV1 { proposal };
+            assert!(
+                propose(payload.clone())
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err(),
+                "unbonded authority cannot propose retirement"
+            );
+            transaction.gov.citizenship_bond_amount = Quantity::zero();
+            transaction.world.citizens.insert(
+                ALICE_ID.clone(),
+                crate::state::CitizenshipRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    bonded_height: 1,
+                },
+            );
+            let mut wrong_operator = payload.clone();
+            wrong_operator.proposal_operator = BOB_ID.clone();
+            assert!(
+                propose(wrong_operator)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_network = payload.clone();
+            wrong_network.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([0xEF; 32]),
+                ));
+            assert!(
+                propose(wrong_network)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_predecessor = payload.clone();
+            wrong_predecessor.expected_predecessor.releases.clear();
+            assert!(
+                propose(wrong_predecessor)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut missing_release = payload.clone();
+            missing_release.standby_release_id = [0xEF; 32];
+            assert!(
+                propose(missing_release)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            assert!(transaction.world.governance_proposals.is_empty());
+
+            propose(payload.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("bonded exact standby retirement admitted");
+            let proposal_id =
+                ProposalKind::KagemushaVerifierReleaseRetire(payload.clone()).fingerprint();
+            assert!(
+                transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_some()
+            );
+            propose(payload.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("exact duplicate proposal is idempotent");
+            assert_eq!(transaction.world.governance_proposals.len(), 1);
+            assert_eq!(
+                transaction.world.kagemusha_verifier_registry.get(),
+                &payload.expected_predecessor,
+                "proposal admission cannot retire before Parliament certification"
+            );
+        }
+
         const PARLIAMENT_DUE_CERTIFICATE_HEIGHT: u64 = 60;
 
         #[derive(Clone)]
@@ -21512,7 +21749,10 @@ pub mod isi {
                 .put_governance_proposal(
                     proposal_id,
                     crate::state::GovernanceProposalRecord {
-                        proposer: ALICE_ID.clone(),
+                        proposer: proposal_kind
+                            .proposal_operator_v1()
+                            .cloned()
+                            .unwrap_or_else(|| ALICE_ID.clone()),
                         kind: proposal_kind,
                         created_height: 1,
                         status: crate::state::GovernanceProposalStatus::Proposed,
@@ -22518,7 +22758,11 @@ pub mod isi {
         }
         fn original_world_header(state: &State) -> BlockHeader {
             use crate::state::StateReadOnly as _;
-            let parent = state.view().latest_block().expect("original signed parent");
+            let parent = state
+                .view()
+                .latest_block()
+                .expect("completed original State read")
+                .expect("original signed parent");
             let time_ms = u64::try_from(parent.header().creation_time().as_millis())
                 .expect("original parent timestamp fits")
                 .checked_add(1)
@@ -22564,7 +22808,11 @@ pub mod isi {
             assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
             let header = original_world_header(&state);
             assert_eq!(header.prev_block_hash(), Some(parent));
-            let original_parent = state.view().latest_block().expect("original signed parent");
+            let original_parent = state
+                .view()
+                .latest_block()
+                .expect("completed original State read")
+                .expect("original signed parent");
             assert_eq!(
                 header.creation_time(),
                 original_parent.header().creation_time() + std::time::Duration::from_millis(1),
@@ -23060,7 +23308,7 @@ pub mod isi {
             chain.commit(Vec::new());
             assert_eq!(chain.height(), 10);
             let state = chain.state();
-            let parent = state.view().latest_block().expect("original certified H10");
+            let parent = state.view().latest_block().expect("completed original State read").expect("original certified H10");
             let time_ms = u64::try_from(parent.header().creation_time().as_millis())
                 .expect("original parent time fits")
                 .checked_add(1).expect("successor clock follows its original parent");
@@ -25505,7 +25753,7 @@ pub mod isi {
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(height);
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .unwrap()
         }
@@ -25528,13 +25776,13 @@ pub mod isi {
                 header.set_height(height);
                 header.set_prev_block_hash(parent);
             })
-            .commit(&topology)
+            .commit(&topology, crate::block::reserve_block_for_tests())
             .unpack(|_| {})
             .expect("commit fixture block");
             let hash = block.as_ref().hash();
             state
                 .kura()
-                .store_block(Arc::new(block.as_ref().clone()))
+                .store_block(block.into_shared())
                 .expect("retain fixture block bytes");
             let mut hashes = state.block_hashes.block();
             hashes.push_for_tests(hash);
@@ -25941,6 +26189,78 @@ pub mod isi {
                 "cap rejection must precede authoritative policy mutation"
             );
         });
+        #[test]
+        fn registered_artifact_admission_keeps_original_state_refusal_and_retries() {
+            use std::{
+                future::Future as _,
+                pin::pin,
+                task::{Context, Waker},
+            };
+
+            let (code, manifest) = contract_artifact_with_max_cycles(1000);
+            let key = ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
+            let mut world = World::default();
+            world.contract_code.insert(key, code.clone());
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(first_test_block_header());
+            let transaction = block.transaction();
+            let budget = transaction.execution_budget();
+            let mut registration = crate::unit_test_support::release_registration(&budget);
+            let original = budget.reserved_bytes();
+            let occupied = budget
+                .try_reserve_bytes(budget.limit_bytes() - original)
+                .unwrap();
+            let error = super::verify_registered_contract_artifact_for_manifest(
+                &transaction.world,
+                &budget,
+                &key,
+                &manifest,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvariantViolation(_)
+            ));
+            let retained = transaction.execution_deferral().unwrap();
+            let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+                retained.allocation_refusal()
+            else {
+                panic!("artifact admission lost the original State pool refusal");
+            };
+            let mut wait = pin!(release.clone().wait_for_release(&mut registration));
+            assert!(
+                wait.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+            drop(occupied);
+            assert!(
+                wait.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_ready()
+            );
+            assert_eq!(budget.reserved_bytes(), original);
+            drop(transaction);
+            let retry = block.transaction();
+            assert_eq!(
+                super::verify_registered_contract_artifact_for_manifest(
+                    &retry.world,
+                    &budget,
+                    &key,
+                    &manifest,
+                )
+                .unwrap(),
+                code
+            );
+            assert!(retry.execution_deferral().is_none());
+            assert_eq!(budget.reserved_bytes(), original);
+        }
+
         fn contract_artifact_with_max_cycles(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
             let meta = ivm::ProgramMetadata {
                 version_major: 1,
@@ -25954,8 +26274,8 @@ pub mod isi {
                 callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
@@ -33634,7 +33954,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("missing circuit index should reject proof");
             match err {
                 ValidationFail::InstructionFailed(
@@ -33668,7 +33988,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope", "unexpected msg: {msg}");
@@ -33692,7 +34012,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                     .expect_err("protocol name must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
                 let expected_message = if backend == "groth16/bls12-377" {
@@ -33718,7 +34038,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                     .expect_err(
                         "production-claim proof backend must reject before registry lookup",
                     );
@@ -33764,7 +34084,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                     .expect_err("non-admitted verifier record tag must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "verifying key backend mismatch", "unexpected msg for {}: {msg}", backend_tag.canonical_label());
@@ -33798,7 +34118,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("missing verifying key should reject generic VerifyProof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "registered verifying key reference", "unexpected msg: {msg}");
@@ -33846,7 +34166,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("missing verifying key bytes should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key bytes missing", "unexpected msg: {msg}");
@@ -33893,7 +34213,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect("an invalid proof must run backend verification and record rejection");
             let record = stx_verify
                 .world
@@ -33944,7 +34264,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("wrong envelope backend tag should reject");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope backend tag mismatch", "unexpected msg: {msg}");
@@ -34041,7 +34361,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                     .expect_err("metadata mismatch must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34095,7 +34415,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("duplicate proof record must reject");
             assert!(
                 matches!(
@@ -34167,7 +34487,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                     .expect_err("registry invariant must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34215,7 +34535,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
                 .expect_err("missing gas schedule should reject proof");
             match err {
                 ValidationFail::InstructionFailed(

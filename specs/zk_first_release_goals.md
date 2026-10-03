@@ -1,6 +1,6 @@
 # ZK first-release completion goals
 
-Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-02. Overall status: **Active**.
+Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-03. Overall status: **Active**.
 
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
@@ -46,133 +46,168 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current `optimizations` checkout includes the resolved Core/SDK merges and
-reviewed fixture, private execution and X509 repairs. Fresh normal Rust 1.93.1
-compilation emits all twelve selected Core/Kagami/IVM/storage/FASTPQ harnesses.
-The genuine host bridge passes ABI-25, loaded-image and all 103 required-symbol
-checks. Paired quantity and IVM producers return identical captures, and the
-quantity consumer passes. The full selected native census contains 3,271 ordinary
-executions; its run is incomplete. Fresh reruns pass the corrected issuer-key
-deadline, both sticky-quota regressions, all 109 FASTPQ source-inventory controls,
-seven MV publication controls and the Kagami export inventory. Six current mint
-failures expose an exact-size bug: production requires the 384-byte transport
-maximum instead of the 327-byte canonical envelope. The reviewed model repair is
-applied together with recursive-consumer corrections. The remaining 66 control
-groups finish with 2,870 passes, five failures and no skips. Three failures are
-the known CoreZk fixtures; two private-export fixtures configured a different fee
-asset from their signed genesis policy. The fresh rerun passes all 18 available CoreZk controls, both private-export
-fixtures and the model mint geometry checks. One production-prover control needs
-an explicitly enabled feature. It also exposes an ineffective clamped X25519
-entropy mutation, two missing lookup configurations and a provider-validation
-allocation from encoding solely to measure length. Reviewed repairs are applied;
-the original failed results remain retained. Both complete active/inactive mint
-binding controls pass on the retained native artifact. The complete mint relation
-then exposes a production capacity failure: 282 SHA blocks require 133,448 rows
-per Table8 lane, exceeding 65,527 usable rows at K=16. Limits remain unchanged.
-The original-State Musubi source capture and all three remaining semantic table
-readers are applied; their first compile exposed 14 missing read-trait
-implementations and one obsolete test callback. The reviewed API repair clears
-those compiler errors; a subsequent catalog enum-size lint is also repaired.
-The next five-crate native run waits for the separately owned merge to finish.
-Full-State capture still rejects the
-unresolved runtime-verifier schema. All nine cryptographic admission controls
-pass, including 44 actual fresh-process valid/malformed checks across all 11
-enabled algorithms with zero Rust allocation requests. This does not measure
-hidden C allocations or side-channel resistance.
+Work remains in the existing `optimizations` checkout, with merged HEAD
+`c0f2be96c6e15f773f23e916ab574a59c6806fb8`, subsequent repairs and concurrent
+Petal changes. Each native diagnostic retains its actual compiler artifacts and
+compile/runtime input observations. Component results below do not establish one
+unchanged, fully qualified release candidate. Original failures remain retained
+under `dist/zk-remediation/2026-09-30/`; no ZK03–ZK08 goal is closed.
 
-Fresh Linux verifier, evidence and optimized privacy builds pass. Its full X509
-namespace records 1,035 passes and one obsolete composite-constructor expectation;
-all four original full-domain oracles and all 46 private-dispatch controls pass.
-The latter include comparison gas, shifts/rotations and unary/select equations.
-A coherent-output diagnostic reproduces missing DER source provenance in seven
-RFC output roles. The five-SPKI-channel repair now passes all six native controls,
-including the genuine maximum three-certificate fixture, and eight existing key
-controls. The composite-constructor correction passes. Nine TBS/CRL/signature
-data/length bindings are applied; native tests exposed an incorrect little-endian
-assumption, and a reviewed repair restores the existing big-endian channel
-contract. All eight variable-output controls and complete source-lookup replay
-now pass. All six serial-source controls now pass. The selected disclosure source join
-passes all five native controls. Its full RFC namespace records 119 passes, four
-stale profile/descriptor/histogram failures and two ignored controls. Original
-Name OID census, uniqueness and nonempty structure repairs are now applied; their
-native controls, complete value/string policy and refreshed native profile pins
-remain open. The public zero-suffix FFT optimization passes native parity and
-all 72 relative cost comparisons; large-domain gains remain modest and do not
-establish the complete proof's five-minute target. Four private multiply variants
-now reuse the exact original arithmetic bank. Their first native run exposes two
-obsolete fixture copy extents before arithmetic assertions; the correction is
-applied and all 54 private-dispatch controls now pass, including four bit-count
-controls. All ten original public multiplication controls and all eight public
-bit-count controls pass, including their genuine maximum-segment proofs. The
-last run's merge-state guard fails after native completion; its overall failure
-is retained. Conditional moves are applied and await native validation.
+The seventeen-target Core/Kagami compilation passes with stock Rust 1.93.1 on
+its recorded inputs. The rebuilt aggregate Core library and group04 artifact now
+passes all 246 still-existing exact controls from the original 247-test request,
+with zero failures or skips. Its retired control now has three passing genuine
+producer/consumer replacements across five native invocations. Both captures are
+byte-identical, and both public bridge consumers verify them. The original 247
+obligations are fully accounted for, with no uncovered control. All five
+previously stack-aborting controls pass on the unchanged default stack, as do all
+72 selected certified-chain controls and both allocation-owner controls. The
+complete rebuilt 66-control group04 replay now passes, including both previously
+failing pin fixtures. The fixture seeds its initial fee-owning domain and its
+canonical golden is regenerated by the maintained genuine producer; ordinary
+replay verifies all ten changed leaves. The explicit allocation-credit refund
+control also passes. The separate CoreZK libtest now compiles after canonical
+import repairs, without changing witnesses or assertions; all eight bootstrap,
+canonical-stream and shared-capacity controls pass. Its original compiler-input
+audit refusal remains retained. A supplemental audit checks the actual IVM sample
+readers against every original compiler observation before admitting the copied
+native artifact.
+The earlier 4,132-execution partition (4,040 passes, 17 failures, one stack abort,
+49 unexecuted and 25 deferred heavy controls) and its 49-control tail (36 passes,
+nine boundary failures and four stack aborts) remain retained; later passes do
+not rewrite those outcomes. All four lane time-floor/build-count regressions pass.
+The fresh lifetime compile-fail doctest passes; the separate Primitives 333 and
+Norito derive 59 unit, 17 strict-JSON and 32 compiler cases in four UI tests pass.
+Full Mint/Guard/receiver, genuine proof/export and full-State authority remain
+incomplete. The canonical capture of 105 typed codec owners and 1,555 nominal
+identities preserves the 1,551 still-active historical hashes; remaining
+publication and reduced-feature controls are not inferred from that capture.
 
-Unrelated working-tree changes prevent one fixed-source qualification. These
-fresh runs are artifact diagnostics with actual Cargo output and immutable native
-executables; every source-observation failure and failed native result is retained.
-They do not qualify the changing checkout or inherit historical release results.
-All ten genuine Kotlin generator modes now produce identical paired outputs.
-The authentic canonical public fixture and its Kotlin pin are refreshed, and
-all five golden consumers pass. The first managed run completes all 1,756 test
-cases without failures or skips, but Gradle fails when a shared output file
-disappears before report completion. The isolated successor's Gradle task passes
-all 1,766 cases with no failures or skips; its wrapper rejects valid repeated
-parameter display names while reconciling reports. Exact multiset reconciliation now admits the 1,766 genuine executions. The
-remaining run passes tools (25), Android managed client/wallet (409/52), actual
-host-JNI client/wallet (95/1), the tooling distribution and the real 13,741-byte
-redemption example proof. Four Android test files required a JUnit 5 import
-correction before these passes. All original failures remain retained. All 57 current typed workflow/example
-checks also pass as managed workflow coverage.
-Exact C/JNI export inventories and SDK
-source contracts pass. The latest
-Apple retry compiles three real slices and stops on a Cargo.lock change before
-publishing a package. Complete Swift packaging, host tests and physical-device
-runs remain open. Fresh daemon, CLI and three network harness builds pass, but all
-four selected four-validator scenarios fail Torii startup because the alias-index
-route's mounted authentication marker disagrees with its required-signature
-catalog and handler. The reviewed registration correction and production-mount
-regression pass all ten native alias controls. The subsequent daemon build finds
-a missing data-model type qualification in the account-removal repair; that
-one-line correction is applied. Fresh daemon/harness rebuilding and four-validator
-reruns remain required. The last
-complete selected privacy candidate is source17, recorded at
-`dist/zk-remediation/2026-09-30/epoch19-integrated-source17/source.json`
-(SHA-256 `cf8c2dd49d1b315e5040b7f4db0e8daf039ac00607ba01fbef5ecd1e303739b5`).
-Stock Rust 1.93.1 production and normal optimized test builds pass on macOS and
-Linux. All three authentic profile/IO/projection pins pass, as do all 1,128
-ordinary privacy controls. Linux also passes its required full-domain CPU parity
-control; the separate macOS focused selection passes 35 controls including CPU
-and required Metal parity. The CRL cleanup census and owned-archive fixture
-repairs are validated on that candidate.
+The fresh Linux and Mac optimized privacy artifacts pass all 133 private-dispatch
+controls, including all eight direct-jump and eleven CALL descriptor/frame-work
+controls, with no failures or skips. The earlier 148 ordinary RFC controls with
+four explicitly ignored and both actual ignored RFC auxiliary oracles remain
+passes on their recorded artifacts. The original scalar scratch
+bound and every clearing assertion remain. The earlier 106-group run's 103
+passing and three failing groups are retained; the failing LOAD/RFC cases have
+fresh native repairs, while four reviewed PQ profile pins are applied and
+require their original complete KAT. All original FFT oracles and nonce controls pass.
+The complete current ordinary privacy suite requires a fresh native census and
+execution after the combined arithmetic and dispatcher changes. Applied DER/RFC
+constructor repairs replace eleven private-zero inversion sites with the
+canonical fixed schedule while preserving malformed-input effects. Fresh complete
+DER/RFC tests and actual compiled-caller review remain required; parser, activity,
+sorting and other private branches remain outside whole-prover qualification.
+Test-only public phase counters now separate composition joins and source adapters;
+the fixed diagnostic receipt grows by 1,680 bytes within the existing runtime
+reserve, without changing proof, time, RSS or address-space limits.
 
-Its complete Linux maximum proof, self-check, fresh verifier, wrong-genesis and
-tampering checks pass. Proof size and enforced address space meet their limits.
-Proving takes 2,275.987086 seconds against 300 seconds. The two RSS observations
-are below 12 GiB but disagree by 659,456 bytes, causing the existing observer's
-consistency gate to fail. Resource qualification remains failed.
+The latest Linux maximum (`epoch25-linux-deep-capacity-maximum-artifact1`)
+produces **9,412,944 bytes**. Producer self-verification, independent replay,
+wrong-genesis, corruption and all 32 nonce-byte substitutions pass. A separate
+fresh verifier passes in **8.674104 seconds** without regenerating the proof.
+Conservative reported RSS is 7,147,257,856 bytes; sampled address space has an
+8,668,545,024-byte observed lower bound, not an exact measured peak. The unchanged
+limits remain 9,437,184 proof bytes, 12 GiB RSS, literal hard/soft 32 GiB
+`RLIMIT_AS` and **300 seconds**. Proof size and resource gates pass, but proving
+takes **1,494.890315 seconds**, so overall qualification fails. Concurrent host
+work prevents a quiet-host performance claim. The current profile
+`294649842da2b565e94b022ce59c7a7c662aa2bf70502d8a554abb510d487852`
+contains 1,945 residues of degree at most four. Applied compact P-256 retention,
+shared FFT powers, original masked-coefficient reuse and exact-capacity DEEP
+construction complete this proof. The earlier Metal run's
+`MainProofConstruction(ProfileMismatch)` remains retained. The repaired Metal
+maximum now produces and verifies the complete 9,412,944-byte proof, including
+a fresh verifier and all 32 nonce substitutions. It takes 1,061.052853 seconds
+and fails the time and Darwin address-space gates; no maximum is qualified. The retained pre-CALL artifact has 2,028 of 2,588 ordinary
+controls pending; these counts do not describe the current source's expanded
+census. Source, integrated and release qualification remain false. The
+Darwin CPU observer now converts Mach ticks with the native integer timebase;
+original observations remain retained separately from corrected diagnostic
+derivations. No cap or supported shape is relaxed.
 
-The source17 native Core/MV/concread/IVM run executes 1,242 controls: 1,240 pass
-and two paid-alias fixtures fail. Both genuine IVM producers yield paired identical
-captures; all four original AIR consumers pass. The paid-alias fixture repair,
-retained quota-ledger custody, required X509 proof-instance nonce and genuine
-Kagemusha TSV correction are now applied as 50 reviewed files. Native validation
-of the new combined candidate is pending. Source20 passes stock verifier-only,
-evidence and optimized test builds and all four genuine profile/proof/pre-aux
-diagnostics. Its complete 1,187-control selection records 1,183 passes and four
-X509 fixture failures. The exact historical descriptor restoration and two
-independently regenerated scoped DER values are now applied; original failures
-remain failures. All 648 macOS CPU cost/parity records pass at one, four and
-twenty workers, with pruned transforms faster than the full-transform reference.
-Fresh Linux comparison and maximum-proof resource qualification remain required.
+FASTPQ maximum ordinary and AXT proofs and fresh verifier replays pass on their
+recorded preceding candidate. The current optimized hardware artifact passes
+57 selected controls, including all nine mandatory Metal controls on the M1 Ultra,
+affine next-column checks and secret-buffer ownership. Other hardware, whole-prover
+side channels and concrete cryptographic qualification remain open. The current
+four-validator finalized-transcript scenario now passes after replacing unsupported
+iterable queries with exact authenticated transaction details and exact asset
+queries. Its bounded peer-local status is only a locator: the original contiguous
+finality verification still starts from independently provisioned genesis. Both
+transfers retain identical certified transcript bytes on all four peers before and
+after restart; all eleven source substitutions, foreign-network, malformed-wire,
+committee and cross-carrier checks remain. The actual run takes 155.13 seconds;
+the new local-Applied/height refusal control also passes. This establishes native
+finalized transcript custody, not the complete q77 relation or D7 source/spend
+admission.
 
-Source17 managed SDK results are 1,214 JVM passes and 394 failures, 25 tools
-passes, 284 Android passes and one enrollment-fixture failure, and 40 wallet
-passes. The tools distribution and all 57 typed workflow/example checks pass.
-These results neither supply missing native/generator prerequisites nor qualify
-the revised source. The quiet Vega timing attempt refuses the busy host before
-running measurements. Genuine fixture production, full integrated controls,
-workspace checks, current packages and four-validator tests remain required.
-No historical result or partial component review closes ZK03 through ZK08.
+Current Kotlin JVM consumers pass **1,846 of 1,846**, including all six full-tree
+native controls. The original current Android client managed run passes 421 and
+fails one signature-journal fixture: variable-length genuine DER can reach the
+bounded-read limit before decoding. Its reviewed fixture correction preserves
+both error classes and unchanged-byte/no-resigning assertions. The corrected
+complete 422-control replay passes. The separate remaining tasks pass all 91
+wallet managed, 95 client host-JNI and one wallet host-JNI controls without skips.
+Together with 30 tooling tests, the eight original tasks account for 2,485 actual
+passes, the native example and tooling distribution; the original failed run is
+retained. The repaired test is outside the other tasks' actual selections and
+their relevant inputs remain unchanged.
+Current ARM64 and x86_64 Android JNI libraries pass the full 132-method audits.
+The Darwin host's four Android-only absences remain explicit rather than being
+relabeled a complete Android implementation. The host ABI-25 loaded probe passes;
+all ten authentic fixture-generator modes pass twice with identical paired bytes.
+
+The physical Android main and instrumentation APKs are genuinely built and pass
+native ZIP, signature, package, permission and complete 3,276-class checks. They
+contain the 20 selected local controls and no INTERNET permission. USB device
+connection has been requested; no physical-device result is claimed. The current
+Apple package completes all five native targets and three XCFramework slices.
+The original projection-wrapper environment failure remains separate from the
+successful official-environment projection and authentic Swift pin adoption. The
+initial full Swift suite records 2,357 passes and one compact metadata reader
+failure. Correcting its string lengths to canonical varints preserves order,
+tag, signature, metadata and full-consumption assertions. The focused test and
+complete 2,358-test replay pass without failures or skips. The unsigned arm64
+iOS example test build now passes after canonical Darwin handle, UTF-8 buffer
+and exclusivity repairs. Both maintained demo bridge sources pass 32 native
+envelope cases. The retired raw-hash callers are replaced by canonical SDK key
+derivation, and the genuine ABI-25 symbol probe passes. The canonical
+wallet-request SDK suite passes all 12 controls. Both maintained simulator
+classes pass without failures or skips: 18 tests in NoritoDemoXcode and 19 in
+the NoritoDemo template. Controls cover entropy refusal, low-order keys,
+approval verification before key installation, immutable launch bindings,
+replay/substitution refusal, session renewal, stale HTTP publication and bearer
+credentials kept out of URLs and logs. Both demos route OS wallet-launch URIs
+through the SDK-owned canonical request; the original Open is consumed once, and
+signed approval is verified before its one frame is prepared. Retired socket
+callbacks cannot publish into a replacement session. Deterministic tests
+preserve all 256 repeated-byte session values through canonical standard Base64
+and unpadded Base64URL while refusing malformed aliases. The earlier decode and
+test-owner failures remain retained. The template builds its maintained sources
+through an ignored generated project. These are actual consumer tests of the
+recorded Apple package, not native qualification of later Rust changes. Physical
+iPhone testing and signed release artifacts remain outstanding. A
+development-signed diagnostic APK does not satisfy release signing.
+
+The stock whole-workspace all-target check passes in 1,231.57 seconds on its
+recorded source; concurrent edits prevent fixed-candidate qualification. The
+fresh post-aggregate script suite passes 718 tests and 163 subtests, and all 58 typed workflow
+controls pass. The recorded strict all-target Clippy run failed with 146 rendered
+error blocks before subsequent mechanical and test repairs. Fresh strict lint
+and unresolved production proof-owner joins remain required.
+The current daemon, CLI and integration harnesses build. Real
+four-validator transaction commitment and lane P2P restart pass in 37.116 and
+114.416 seconds. The wallet proof-record replay now builds both native stages
+and observes exactly four validators. It passes the encoded `halo2/ipa` path but
+fails after 165.74 seconds with HTTP 502. The production proof fanout requests
+JSON and feeds it into its strict Norito decoder. The explicit Norito request
+repair and regression are applied. The fresh native router artifact passes all
+23 strict-target, proof-route and retention controls without skips. Genuine route
+authority, exact block-hash publication refusal, canonical missing-route envelopes,
+both 404/503 precedence orders and JSON/Norito grace-boundary counts pass.
+The complete four-validator wallet replay remains required. The complete workspace tests, current fixtures, source-bound
+network checks and remaining cryptographic/device/release evidence remain open.
 
 ### ZK01 — secret arithmetic
 
@@ -285,15 +320,219 @@ gas/cycle, degree and shared-bank controls await native execution on the combine
 source. The same original ports constrain all seven native shift/rotate
 operations, low-six-bit amounts, operand tags and native gas costs, plus NOT,
 NEG and signed MIN/MAX. The comparison relation charges the native two gas.
-All 54 private-dispatch controls pass in the retained optimized Linux artifact,
+All 65 private-dispatch controls pass in the retained optimized Linux artifact,
 including coherent wrong-gas forgeries, seven unary/select controls, four
 multiplication controls and four bit-count controls. POPCNT, CLZ and CTZ reuse
 the original zero-prefix equations over canonical source bits with native
 six-gas, one-cycle behavior. CMOV/CMOVI now bind the full public condition and
-only the native conditionally read source and written destination; source review
-passes and native controls are pending. The original 21 packet ports remain unchanged. Complete
-instruction/region semantics and finalized State binding remain open; these
-components do not enable IVM proof admission.
+only the native conditionally read source and written destination. DIV/DIVU/REM/REMU
+reuse the original arithmetic bank and preserve public trap-sensitive operands,
+native gas and the original 21 packet ports. GETGAS binds the destination directly
+to the original gas port, preserves its native zero-gas tariff and one-cycle
+transition, clears the destination's private tag, and ignores both encoded source
+bytes. Register zero remains unwritable, including at zero remaining opcode gas.
+ABS constrains the public operand and rejects signed overflow. MEAN owns exact
+65-bit signed addition and truncation toward zero, 44 shared result cells and
+native two-gas/three-cycle behavior. ISQRT constrains the 32-bit floor root and
+exact remainder in the existing product bank; DIV_CEIL constrains signed correction
+in the shared MEAN bank; GCD uses bounded exact products and Bezout arithmetic.
+The same append-only, bounded residue stream evaluates these shared banks without
+accumulating or rereading private equations. Their original tags, history ports
+and native gas/cycles remain constrained.
+
+Successful LOAD64 and STORE64 relations bind the original memory, initialization,
+frame, control and history ports in four phases. LOAD64 shares the dispatcher's
+original atomic destination value/tag transition; its 37-packet schedule places
+that destination after the physical memory read, with no duplicate register or
+tag event. An `r0` destination suppresses only the register write, preserving
+memory checks and the three-gas debit. Closed opcode selection rejects other
+running operations. Current merged native controls require fresh validation.
+Complete instruction/region semantics and finalized State binding remain open;
+these components do not enable IVM proof admission.
+
+The separate callable-lookup component derives frame sizes and exact argument
+and result word counts once from the original admitted artifact's complete flat
+schemas. Child selection uses the existing canonical fetch columns and binds
+the loaded-image target separately from the executable-relative callable entry.
+Return selection uses the original active frame generation's protected entry
+read, not the return continuation. The same lifecycle packets feed child
+descriptor publication, return operands and all 4,097 initialization/copyback
+cells without duplicate lifecycle producers. The composed evaluator joins all
+8,243 original packets and 54 reserved zero gaps to their actual clocks in one
+immutable global history view. It derives every current/next row and fixed phase
+from that view; caller-selected row lists and reclocked producer copies are not
+accepted. This establishes the complete 8,297-slot window's consistency, not
+initialization authority or a complete invocation history outside the window.
+Ordinary constructors cannot supply independent callable truth fields. The
+composed relation retains the dispatcher's degree-four bound; callable and scan
+equations have degree at most three. Admitted compiled returns remain nonempty:
+Unit occupies one word, and a zero-result schema is rejected by admission.
+
+The scan retains one funded, move-only 11,012,736-byte allocation and wipes its
+private fields before release. Equation output uses reusable 721-field scratch
+instead of accumulating scan/history residues. The 66,376 history rows require
+log 17 under the existing public diagnostic profile; a second such window exceeds
+that profile's unchanged 16,384-slot cap. The internal relation view can borrow
+exactly one or two original segment banks with the same per-segment log 13..17
+geometry. It uses absolute clocks, global first/last masks and the actual next
+segment's lookup state, counters and auxiliary products across the seam. One
+borrowed permutation challenge family serves the whole view and every callable
+window; no window can substitute a second family. The view retains only fixed
+column descriptors and scrubbed row scratch, without copying the backing banks.
+This bounded component does not enlarge the public adapter's degree-four,
+136-query, 4-MiB, single-segment proof profile. Joint base-commitment/transcript
+ownership, aggregate FRI and masking, exhaustive native packet production,
+full-invocation sizing and complete proof-memory admission remain open.
+Root entry is deliberately absent: the presence of a
+private callable does not authorize a public invocation. Recursive typed
+traversal, TLV/canonical payload and privacy relations, staged gas and exact
+faults, authoritative initialization and terminal publication,
+statement/code/finalized-State binding and whole-invocation masking remain open.
+This component has no production prover, verifier registration or admission path.
+
+A separate native producer component now owns a fresh ordinary IVM invocation
+from the original admitted artifact, selected public entrypoint and initial gas.
+Its sole constructor accepts no warmed VM, initial memory/register arrays, host,
+raw packet data or caller clocks. Coverage is restricted to empty public arguments,
+a Unit result, no child calls or syscalls, and bounded public scalar,
+LDI64/LOAD64/STORE64/root JALR execution with at most 64 total instructions
+including the return. Packet
+backing for all 16,384 private slots is partitioned from
+original parent credit before execution. Native commit hooks capture actual
+register/control and frame state, successful physical memory/initialization
+changes, both staged root and result-validation debits, all 4,097 return-scan
+slots and ordinary ZK padding. Unsupported reached operations refuse the local
+capture before their effects; failed or unwound attempts publish no owner.
+Final-owner cleanup erases payloads and packet metadata before refunding the
+original charge; allocation and reservation refusals retain their original
+typed ownership.
+
+The native initializer/instruction/history component moves this original owner into a sole
+source, projects one scrubbed packet at a time, and streams every original clock
+through the existing private history relation with one borrowed challenge family.
+It requires exactly the complete 16,384-slot history, including both global
+endpoints. All 64 initializer slots, including reserved zeros, have linear
+constraints derived from the admitted public entrypoint, its callable schema,
+public initial gas and the V1 stack policy. These bind staged root allocation and
+frame gas, registers, heap bounds, generation and protected frame/return words;
+absolute fetch PC and relative callable entry remain distinct. The initializer
+never derives expected values from captured observations or private-callable
+presence alone. Its bounded instruction workspace admits public scalar ALU,
+comparison, shift, rotate, multiply and bit-count operations, LDI64, public-root
+LOAD64/STORE64 and root JALR through
+the existing fetch/control/scalar relation. Additional native-source
+equations restrict the selected original code words to that subset and require
+the original return parent to be zero; constructor refusal is not an AIR premise.
+Every compact instruction
+captures an actual protected-depth read; the root return captures the original
+depth before and after the native pop. All 64 compact windows and the fixed
+return window are evaluated. Inactive windows have only zero packets; the former
+synthetic running write is removed. All 65 private witness rows are funded before
+construction and erased before their final backing refund, while the bounded
+public code stays inline. The sole source owns both native packets and derived
+workspace, so composed callers cannot substitute another packet bank.
+
+The public scalar subset is exactly ADD/SUB/AND/OR/XOR,
+ADDI/ANDI/ORI/XORI, NEG/NOT, SLT/SLTU/SEQ/SNE, signed MIN/MAX,
+SLL/SRL/SRA, ROTL/ROTR, ROTL_IMM/ROTR_IMM, MUL/MULH/MULHU/MULHSU
+and POPCNT/CLZ/CTZ.
+The native producer and constrained consumer share the immutable instruction
+operand-shape lookup. Actual source reads occupy the original left/right slots,
+including `r0` and aliases; immediate and unary operations never invent a second
+register read. One atomic destination packet carries the original value and tag
+transition. Native subset equations require public operands independently of
+constructor checks; the broader private scalar diagnostic bank does not authorize
+general Secret arithmetic. Shared canonical word, ALU, comparison and barrel-shift witness
+algorithms populate the existing fully constrained banks without expected-output
+inputs. Shift and rotate counts use the low six bits while authenticating the
+full original register word; rotate immediates are zero-extended eight-bit code
+values and never authorize a register read. SRA preserves the original sign bit.
+The full 128-bit product bank constrains the low and unsigned high halves,
+including bounded carries and signed-high corrections for the first or both
+original operands. Bit counts consume all 64 canonical source bits; CLZ alone
+reverses the prefix traversal selected by the immutable artifact word. Zero has
+64 leading and trailing zeros. Unused operand ports remain entirely zero.
+Comparisons and rotates consume two gas, products three, bit counts six and the
+other admitted scalars one; all advance one cycle and four code bytes. The canonical public gas
+descriptor supplies witness debit arithmetic; equations bind the actual original
+debit. Native packet geometry remains fixed. The shared instruction workspace has
+1,512 fields per row, including disabled arithmetic banks; all 65 rows reserve
+786,240 bytes before private construction. The composed maximum degree remains four. Conditional moves, GETGAS, division, branching and
+fault outcomes remain outside this native source's coverage.
+
+Public-root LOAD64/STORE64 consume the original compact memory and initialization
+packets. Checked 64-bit address/end arithmetic and comparisons prove containment
+in the immutable public root stack frame or Unit result region; native preflight
+acceptance is not a permission premise. The shared scalar payload selection and
+initialization OR arithmetic bind the selected half-cell, preserve the other
+half, and require public payloads and the original generation. Its 64 additional
+422-field witness rows reserve exactly 216,064 bytes before private construction
+and erase them before refund. All nine other compact slots are constrained to
+zero, completing the 32-slot compact schedule without synthetic events or clock
+changes. LOAD64 requires complete containment in the stack frame and all eight
+selected initialization bits; the result table remains write-only to guest code.
+Both read ports preserve their original values. The original atomic destination
+receives the selected half and a public tag, with no manufactured second tag event.
+An `r0` destination suppresses only the register write, preserving memory checks
+and the three-gas debit. LDI64 resolves its full 16-bit index through the same
+immutable prepared artifact's admitted scalar table; pointer entries cannot
+supply scalar coefficients or confer pointer provenance. Its one-gas debit and
+atomic destination remain in the same dispatcher and history. Neither operation
+increases packet or witness geometry. Memory equations have maximum degree three;
+the composed instruction relation retains the existing maximum degree four.
+
+The Unit root return consumes its actual public-entrypoint callable, original
+operands and every one of the 4,097 initialization-scan cells through the existing
+return equations. Its additional 9,308,384-byte workspace is reserved before
+private construction and erased before the original allocation is refunded;
+scan packets remain solely owned by the native capture. The original NODE and
+WORD debits are constrained separately to 1 and 8 gas with bounded subtraction,
+and the original typed memory read must contain a public zero Unit word.
+The three occupied typed-work slots are consumed directly, with the other return
+gaps constrained to zero; the callable-window diagnostic's zero-gap
+schedule is not used for this native composition.
+
+The successful terminal bank consumes original return cycles and final Unit gas,
+then constrains optional native padding at clocks 10,409 and 10,410. One 96-byte
+zeroizing witness is admitted before private construction. Bounded delta bits and
+an inverse require padding exactly when the public artifact's cycle horizon has
+not been reached; checked limb subtraction charges one gas per padded cycle.
+Disabled packets are entirely zero, and all 5,973 remaining packet slots must be
+zero. Compact activity is a contiguous prefix of at most 63 non-return
+instructions before the mandatory fixed root return. These new equations have
+maximum degree two; the composed component retains maximum degree four.
+Native gas/cycle summary getters are not expected-output coefficients. Final gas
+is derived from the constrained original gas packets; no external output or
+statement-authority constructor is added.
+
+This closes bounded initializer, fetch/control/public scalar arithmetic and bit operations, admitted scalar literals,
+public-root LOAD64/STORE64, Unit return, compact scheduling, successful padding and
+original-source history joins only. The successful private LOAD bank and native invocation both consume atomic
+destinations; diagnostic setter logs are compared to that completed native
+transition only in tests. General private/wide memory, pointer literals and other
+instruction semantics, general typed validation and its staged gas, faults,
+terminal statement publication and masked transcript ownership remain open. Native output and history consistency
+grant no signed-intent/finalized-State authority or production proof admission.
+
+The focused native capture bridge is runnable with
+`python3 scripts/check_ivm_native_frame_equations.py --ivm-test-binary <exact-ivm-libtest-path> --privacy-test-binary <exact-privacy-libtest-path> --output-dir target/<fresh-directory>`.
+It runs both native producers and all four exact equation consumers, retains
+owner-only captures/logs and records executed binary hashes in a bounded local
+receipt. Supplied binary paths do not establish common source/build provenance.
+The captures check native frame/call-method equivalence; they do not supply
+original instruction-packet ownership or a complete invocation proof.
+
+A reviewed successful JMP/JAL rd0 dispatcher relation is applied with the
+original 21 ports, artifact-bound signed target and native two-gas/one-cycle
+controls. Eight tests cover native target/tag behavior, coherent control
+forgeries, unsupported encodings, OOG/cycle limits, inactive producers, degree
+and original private-history joins. All eight pass within the fresh Linux and Mac
+133-control private namespaces. The successful CALL component also passes all
+eleven controls: it binds the authenticated callable, immediate parent descriptor,
+native validation rereads and exact frame-work debit through 47 original producers.
+Its backward-call fixture now uses its actual reachable entrypoint. Argument
+validation, allocation failures, return/copyback, complete invocation semantics
+and finalized State remain unfinished; these components do not enable proof admission.
 
 ### ZK04 — FASTPQ
 
@@ -302,39 +541,34 @@ verifier. Expected statements derive from canonical authenticated context; proof
 consistency alone does not authorize remote spending. Development replay APIs and
 required-Metal readiness preserve their existing boundaries.
 
-On historical source `051df111`, the library selection passes 1,312 ordinary controls,
-and all 16 offline ordinary controls pass. A required-Metal maximum ordinary proof passes
-production, self-verification and the native controls with unchanged source:
-973,755 proof bytes and 1,561,083,904 bytes peak RSS. Its native production and
-self-verification take 852.192443 seconds under concurrent work; this is not a
-quiet timing comparison. The maximum AXT producer also passes on
-unchanged source: 1,014,530 artifact bytes, 1,514,307,584 bytes peak RSS and
-2,263.745643 seconds including self-verification. Concurrent work and a one-second
-public stack sample preclude a quiet timing comparison. Both remain under the
-unchanged byte, memory and work ceilings. Separate fresh verifier processes pass
-both exact retained artifacts without reproving, with unchanged source and no
-failed or skipped controls. Earlier source-drifted maximum runs remain failures
-of source qualification.
+On the preceding fixed candidate, all 16 ordinary controls, both actual maximum
+producers and both fresh verifier replays pass. The ordinary artifact is 972,623
+bytes (SHA-256 `c6bc0bb2d94e49fd5743995c767c121d313933805ca8dc517ce7ff1126ffdfba`),
+with 1,494,040,576-byte RSS; the AXT artifact is 1,020,465 bytes
+(SHA-256 `10f633d4409cb54bf07608c0da49e8519f8cad34d242e532aebd38d6e22292b5`),
+with 1,508,605,952-byte RSS. Actual child times are 836.194 and 874.408 seconds;
+fresh replay times are 0.316 and 0.348 seconds. These are observed durations,
+not quiet-host comparisons. Both fit the unchanged 1 MiB artifact, per-segment
+2 GiB charged-payload and 2^42 work caps; payload accounting is distinct from RSS.
 
-Two actual-Metal controls on that source also pass scalar parity: all 63 continuation
-prefix/body boundary combinations and leaf batches for all eight proof oracle
-kinds. A fresh ordinary optimized build with `fastpq-gpu,simd` now passes 50
-distinct local hardware controls, including nine required-Metal controls,
-NEON state/scratch clearing on return and unwind, independent hash vectors,
-exact-root transform parity, staging and failure ownership. This covers the
-available M1 Ultra; it does not complete the hardware matrix or establish
-side-channel resistance, quiet-host performance or fixed-source qualification.
+The same source passes 52 actual local hardware controls, including nine
+required-Metal controls, independent hash vectors, NEON state/scratch clearing,
+exact-root transform parity and both private-next affine AIR guards. Thirteen
+actual entropy/preflight/owned-erasure controls pass separately. Production
+mask sampling uses fresh fallible OsRng and bounded unbiased canonical-field
+rejection; no test seed is admitted by the public Quantity facade. This covers
+the available M1 Ultra, not every target or whole-prover side channels.
 
-Historical seeded CPU and required-Metal proofs produce identical 485,219-byte
-artifacts and pass positive/negative controls. Historical known-answer controls
-and maximum artifacts do not qualify a changed candidate.
-
-[FASTPQ readiness](fastpq_production_readiness.md) owns unchanged proof, payload
-and work limits. Dedicated derivations provide conditional classical-ROM and
-ideal-QROM bounds under explicit query/attempt assumptions. They do not establish
-concrete Keccak security, full zero-knowledge, device/side-channel behavior or
-finalized authority. Finalized-source network behavior, broader workload shapes
-and current hardware coverage remain open.
+[FASTPQ readiness](fastpq_production_readiness.md) owns unchanged resource limits.
+Independent ideal-QROM review now covers explicit public simulator/conditional
+completion kernels, adaptive request channels and honest-conflict accounting.
+The retained bound is below 2^-91 for at most 108 attempts and 2^32 oracle queries
+under its explicit ideal assumptions; this is not a 128-bit work-factor claim.
+Concrete Keccak/entropy, complete zero-knowledge/side-channel, remaining hardware
+and complete finalized-source admission remain open. The current four-validator
+native transcript-custody prerequisite passes, including full restart and source
+substitutions; this does not complete q77/D7 admission. Changed candidates need
+fresh integrated evidence; historical seeded CPU/Metal parity is not inherited.
 
 The applied ordered-source census charges one row for every original input,
 including empty and rejected entries, and binds the original canonical frame,
@@ -354,54 +588,56 @@ DEEP point. All joint openings precede local mixing. The
 [joint relation contract](zk_x509_joint_private_relation.md) records the exact
 schedule, geometry and still-conditional algebraic ledger.
 
-The source17 Linux CPU maximum proof is 9,412,912 bytes, under the unchanged
-9,437,184-byte cap. Its SHA-256 is
-`8170e2b6ae2bd4c0f504c67943b077d66d4944c61ca573a150265269ab8883ce`.
-Native production/self-check, separate fresh verification, wrong-genesis rejection
-and tampered-proof rejection pass. Both actual proof and verifier children run
-under the unchanged hard and soft 32 GiB address-space limit; sampled producer
-virtual size reaches 9,950,617,600 bytes. This is a sampled lower bound on peak,
-not a substituted adjusted memory figure.
-
-Maximum resource qualification fails. Proving takes 2,275.987086 seconds against
-300 seconds. Composition takes 671.01 seconds, DEEP/FRI 291.24 seconds and query
-openings 841.22 seconds, including 639.87 seconds in selected query transforms.
-The corresponding initial joined transform takes 124.63 seconds. These stages
-and nested counters must not be added twice, and timings from the older macOS
-Metal run are not a same-hardware comparison. The producer observes 20 Rayon
-workers; no complete worker allocation bound is claimed.
-
-Terminal wait4 reports 8,431,575,040 bytes peak RSS, while live procfs RSS/HWM
-reaches 8,432,234,496 bytes. Both are below 12 GiB, but the 659,456-byte discrepancy
-fails the observer's consistency gate; the original failed result is retained.
-The proof, receipt, fresh replay and observations are in
-`dist/zk-remediation/2026-09-30/epoch19-linux-source17-maximum`.
+The latest Linux CPU maximum proof is 9,412,944 bytes, under the unchanged
+9,437,184-byte cap, with SHA-256
+`f1685be4fc2fa8287e3feafdad2ddf97a7f98b3dcde6f6c93293a964e195a075`.
+Producer self-check, independent replay, a separate fresh verifier, wrong-genesis,
+all 32 nonce-byte substitutions and corruption controls pass. Conservative
+reported RSS is 7,147,257,856 bytes and sampled address space reaches
+8,668,545,024 bytes; the unchanged 12 GiB RSS and enforced hard/soft 32 GiB
+address-space gates pass. Neither observation establishes an exact physical
+peak. Proving takes 1,494.890315 seconds against 300, so qualification remains
+failed; fresh replay takes 8.674104 seconds. The run overlaps other host work
+and does not establish a quiet-host speedup. Exact receipts, retained proof and
+fresh replay are in
+`dist/zk-remediation/2026-09-30/epoch25-linux-deep-capacity-maximum-artifact1`.
+Original failed runs and observer evidence remain preserved separately.
 
 Retained-query replay reuses original masks and authenticated Merkle cuts while
 checking original roots and allocation capacities. The selected-coordinate
 transform is correct in the current native controls and complete proof, but its
 CPU performance needs repair. The new required 32-byte X509 instance nonce binds
 dynamic MAIN/CA/joint hash contexts and consumes a separate checked RNG prefix.
-Fixed schedule metadata stays unchanged. Its derived maximum is 9,412,944 bytes;
-this is not a native maximum result. Authentic profile/proof/pre-aux values are
+Fixed schedule metadata stays unchanged. Its actual native maximum is now
+9,412,944 bytes, with every nonce-byte mutation rejected. Authentic profile/proof/pre-aux values are
 regenerated and independently checked, and the four primary diagnostics pass.
 The merged descriptors enumerate the current 192 endpoint, 17 key/digest,
 20 SHA-union and 108 CA-link alpha phases, retaining the claim-free joint wire
 and 39 RFC lookup relations. Their current profile pin and deterministic
 IO/Projection goldens bind the sole merged descriptor. Complete current-candidate
 qualification remains required; earlier descriptor passes do not qualify it.
-The expanded run exposed four additional fixture failures; their scoped DER and
-historical-profile repairs await native rerun. CPU/accelerator parity and a new
-maximum proof remain required.
+The scoped DER/profile fixture repairs now pass the 137 ordinary RFC controls
+and both actual ignored auxiliary oracles on the preceding fixed candidate.
+The repaired current ordinary RFC namespace passes 148 controls and both actual
+ignored auxiliary oracles. Remaining accelerator coverage and a maximum proof
+within the time limit remain required.
 
 The applied composition repair preserves public coefficient extents through
 zero values and cancellation, with full initialized-allocation erasure. Arithmetic
 fixed preprocessing now fills its already-owned public matrix once per row,
 reducing full row constructions from 44,564,480 to 2,621,440 across the five
 maximum registrations while retaining eight-column IFFT batches. This is a
-work-count reduction, not a measured proof speedup. A test-only Horner comparison
-preserves the original full selected-query baseline. Native parity, cleanup and
-Linux one/four/twenty-worker timing remain pending for these changes.
+work-count reduction, not an isolated measured proof speedup. The rebuilt artifact
+passes the original FFT parity controls and completes the maximum above. The
+reviewed shared-power tables, compact P-256 retention and reuse of original
+masked RFC coefficients are applied and complete the latest Linux maximum. The
+mixed DEEP path preserves native replay for uncached sources and checks each
+original opening before updating either weighted owner. The exact public-count
+capacity repair retains the strict workspace check. Both Linux and Metal now
+complete the proof and fresh verification; the unchanged time gate still fails,
+and Darwin cannot enforce the required address-space limit. Complete ordinary
+coverage and integrated qualification remain required. No
+quiet-host full-proof speedup is inferred.
 
 Full semantic, soundness, zero-knowledge, transcript and side-channel qualification
 remain open. Conditional classical-ROM/masking derivations do not establish
@@ -416,8 +652,9 @@ arithmetic, conditional soundness/hiding bounds and authentic native verificatio
 do not establish complete soundness, zero-knowledge, transcript security,
 side-channel resistance or release qualification. RAM-LFE construction and full
 IVM semantics remain absent. X509 now has a verified joint maximum proof, but
-complete relation/transcript/hiding review, time compliance and RSS observer
-reconciliation remain open. The revised nonce candidate requires fresh evidence.
+complete relation/transcript/hiding review and time compliance remain open.
+The current nonce-bearing maximum and conservative resource observer have actual
+fresh evidence; these controls do not establish whole-prover side-channel safety.
 
 An independent bounded review accepts the source15 X509 classical-ROM argument
 recorded in `epoch18-zk-dag-root3` and `epoch18-zk-dag-review-sdk3` under
@@ -453,17 +690,42 @@ with identical output. The subsequent Kotlin consumer run refuses the changed
 source before starting Gradle. Current merged native, Kotlin, Swift and device
 qualification remains open.
 
-Historical evidence covers all five Apple slices and ABI-25 package/resource checks.
-The current Apple builder uses stock pinned Cargo and the original authenticated
-root lock; it rejects compiler/configuration overrides and retires the temporary
-compiler wrapper. Its source and workflow owner controls pass. The merged Swift
-fixture correction is present; the full Swift host suite and
-same-source Apple package rerun remain pending. The historical
-JavaScript suite records 3,634
-passes and 15 failures in bundle accounting, manifest fields, scope and artifact
-identity. Reviewed corrections retain strict parsing and unchanged bundle caps;
-the reconciled manifest and bundle/replication proposals pass five and 35 focused
-managed controls. Full integrated/native rerunning remains required.
+Historical evidence covers all five Apple slices and ABI-25 package/resource
+checks. The current Apple builder uses stock pinned Cargo and the original
+authenticated root lock; it rejects compiler/configuration overrides and retires
+the temporary compiler wrapper. Its source and workflow owner controls pass. The
+current five-target Apple package, authentic Swift pins and complete 2,358-test
+Swift host suite pass. The original metadata reader and projection wrapper
+failures remain retained. The unsigned arm64 iOS test build and both maintained
+demo simulator classes pass with canonical SDK cryptography, explicit entropy
+failure and bound approval/session custody. Current native-package,
+physical-device and release-signing qualification remain open. The historical
+JavaScript suite records 3,634 passes and 15 failures in bundle accounting,
+manifest fields, scope and artifact identity. The original official Node unit
+profile records 3,840 passes, 38 failures and no skips among 3,878 tests.
+Maximum full-tree unshielding with one owned note and all 65,536 occupied leaves
+passes, as do its adversarial controls. The retail raw-byte correction preserves
+both identical genuine producer outputs and the canonical fixture. A fresh
+official addon build passes all 160 controls on its recorded generation across
+seven complete affected files: compiler, source-capture, Norito, Parliament,
+retail and validation-fee consumers. Original failures remain retained. Full
+official unit replay on the final generation remains pending; the focused run
+does not qualify the browser distribution or the full profile. The maintained
+golden producer emits two identical sets of 61 outputs, now adopted. Rebuilding
+the current Kotodama compiler then produces the canonical JavaScript artifact
+fixture twice identically. All 16 Rust artifact-admission controls pass,
+including the eight original negative cases previously blocked by stale ABI
+bytes; no assertion is relaxed. These are component results, not integrated SDK
+or release qualification. The managed bundle/checkpoint selection passes 34
+controls, and browser module ownership and unchanged bundle caps pass on their
+recorded inputs. The retained authentic ABI-25 C producer independently
+reproduces both canonical assessment markers and intent hashes twice, with exact
+decode roundtrips and eight malformed-input refusals. Its 2,513 recorded
+compiler inputs and artifact identity remain unchanged; this confirms the shared
+fixture without substituting for the JavaScript addon or consumer run. Reviewed
+corrections retain strict parsing and unchanged bundle caps; the reconciled
+manifest and bundle/replication proposals pass five and 35 focused managed
+controls. Full integrated/native rerunning remains required.
 
 Historical Android native arm64/x86_64 libraries and diagnostic APK packaging
 pass source, native-payload, signature, manifest and six-method DEX census checks.
@@ -471,18 +733,29 @@ Dependency resolution recovered the original offline-cache packaging failure,
 which remains retained. Physical testing requires rebuilt current packages and
 a connected device. The diagnostic APK's debug signature is not release signing.
 
-A genuine merged-base Core/Kagami finalized-execution fixture producer and public SDK
-bridge consumer pass. Paired schema, query/native fixture generation and the
-executable examples also pass. All 185 maintained golden-generation commands pass;
-both sets of 61 outputs are byte-identical and match canonical files. The
-top-up producer's two executions and eight consumer controls pass. Current installed
-consumers and packages,
-physical Apple/Android evidence and signed final artifacts remain open.
-The candidate RAM interfaces and stable unavailable errors confer no encryption
-qualification. Public guidance belongs in `iroha-docs`; this checkout's build and
-validation do not depend on that sibling repository.
+A genuine merged-base Core/Kagami finalized-execution fixture producer and
+public SDK bridge consumer pass. Paired schema, query/native fixture generation
+and the executable examples also pass. The current maintained golden producer
+generates two byte-identical sets of 61 outputs, and their authentic projection
+is adopted. The fresh compiler's paired JavaScript fixture and all 16 Rust
+artifact-admission controls pass. The top-up producer's two executions and eight
+consumer controls pass. Current installed consumers and packages, physical
+Apple/Android evidence and signed final artifacts remain open. The candidate RAM
+interfaces and stable unavailable errors confer no encryption qualification.
+Public guidance belongs in `iroha-docs`; this checkout's build and validation do
+not depend on that sibling repository.
 
 ### ZK08 — current source contracts
+
+The current seventeen-target Core/Kagami build and whole-workspace all-target
+check pass on their recorded inputs. The original 247 obligations now have
+complete native component evidence as listed above; combined-source workspace
+and SDK qualification remain required. Current
+four-validator transaction commitment, lane restart and FASTPQ transcript custody
+pass. Wallet proof-record routing now requires native replay of the binary
+response-format and fixture-owner repairs. The fresh strict workspace Clippy run fails as recorded above; its repairs
+and rerun remain required. The earlier selections
+below remain historical evidence, not inherited current-candidate passes.
 
 The historical `051df111` build passes workspace all-targets checking and Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. The default Core selection
@@ -519,9 +792,9 @@ unadapted release-evidence Python suite passes 130 tests on its recorded source.
 2. Preserve the clean FASTPQ maximum ordinary/AXT production and replay evidence;
    qualify finalized-source network and hardware behavior without changing proof
    or resource limits. Rerun affected proofs after any protocol/source changes.
-3. Complete X509 relation/transcript/hiding review, repair measured CPU time and
-   reconcile RSS observation, with
-   native parity, independent review and another complete maximum proof under
+3. Complete X509 relation/transcript/hiding review and repair measured CPU time,
+   preserving the conservative resource observer, with native parity, independent
+   review and another complete maximum proof under
    unchanged coverage, byte, memory and time limits.
 4. Complete IVM G3's native execution relation and finalized authority. Validate
    rejection of retired APIs and relation-confusion attempts in current consumers.

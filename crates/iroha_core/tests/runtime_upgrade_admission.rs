@@ -384,10 +384,9 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
 #[test]
 fn activation_allows_v1_in_same_block() {
     use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::ivm::cache::IvmCache,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -395,13 +394,32 @@ fn activation_allows_v1_in_same_block() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain: ChainId = "chain".parse().unwrap();
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    // Execute against an original signed root; a height-shaped overlay alone is not one.
+    let mut config = TestChainConfig::new(world, 0);
+    config.chain_id = ChainId::from("chain");
+    let chain = CertifiedTestChain::start(config).expect("signed runtime admission genesis");
+    let state = chain.state();
     let network_id = *state.network_id_ref();
-    install_current_lane_manifest_registry(&state);
+    install_current_lane_manifest_registry(state);
     let prog_current = minimal_ivm_program(1);
-    // Block 1: grant permission and propose upgrade [2, 10)
-    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    // Block 2, after signed genesis: grant permission and propose upgrade [3, 10)
+    let genesis_header = chain.genesis().header();
+    assert_eq!(
+        state.view().latest_block_hash(),
+        Some(genesis_header.hash())
+    );
+    let proposal_time = genesis_header
+        .creation_time_ms
+        .checked_add(1)
+        .expect("fixture time");
+    let header1 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        Some(genesis_header.hash()),
+        None,
+        proposal_time,
+        0,
+    );
+    let proposal_header_hash = header1.hash();
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -415,7 +433,7 @@ fn activation_allows_v1_in_same_block() {
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
-        start_height: 2,
+        start_height: 3,
         end_height: 10,
         sbom_digests: Vec::new(),
         slsa_attestation: Vec::new(),
@@ -428,8 +446,17 @@ fn activation_allows_v1_in_same_block() {
         .expect("propose manifest");
     stx1.apply();
     block1.commit_empty_block_for_testing().unwrap();
-    // Block 2: activate upgrade, then validate a v1 program in the same block
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    // Block 3: activate upgrade, then validate a v1 program in the same block
+    let committed_proposal_hash = state.view().latest_block_hash();
+    assert_eq!(committed_proposal_hash, Some(proposal_header_hash));
+    let activation_time = proposal_time.checked_add(1).expect("fixture time");
+    let header2 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(3_u64),
+        committed_proposal_hash,
+        None,
+        activation_time,
+        0,
+    );
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
@@ -451,7 +478,10 @@ fn activation_allows_v1_in_same_block() {
         &mut ivm_cache,
         None,
     );
-    assert!(result.is_ok(), "program with ABI v1 should validate");
+    assert!(
+        result.is_ok(),
+        "program with ABI v1 should validate: {result:?}"
+    );
 }
 #[test]
 fn active_manifest_hash_mismatch_rejects_block_construction() {

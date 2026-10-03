@@ -315,49 +315,32 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             .all(|pair| pair[0].hash() == pair[1].hash()),
         "all four validators must finalize the same exact enactment block",
     );
-    let enacted_height_nonzero =
-        NonZeroU64::new(enacted_height).expect("a Parliament enactment cannot be genesis");
     for (peer, block) in network.peers().iter().zip(&peer_blocks) {
-        let (proof, verified_hash) = read_on_dedicated_thread({
-            let client = peer.client().client().clone();
-            let height = (enacted_height_nonzero).clone();
-            let network_id = (network.network_id()).clone();
-            move || client.get_bridge_finality_anchor(height, network_id)
-        })
-        .await
-        .wrap_err("independently verify the enactment block's revision-4 finality")?;
-        let artifact = &proof.finality_artifact;
-        assert_eq!(verified_hash, block.hash());
-        assert_eq!(artifact.height, enacted_height);
-        assert_eq!(artifact.height_context.roster.len(), VALIDATOR_COUNT);
-        assert_eq!(artifact.height_context.quorum.min_signers, 3);
-        assert_eq!(artifact.height_context.quorum.total_power, 4);
-        assert_eq!(artifact.commit_qc.signers.len(), 3);
-        assert!(
-            artifact
-                .height_context
-                .roster
-                .iter()
-                .all(|entry| entry.power == 1),
-            "each signed-genesis validator must retain exactly one vote",
-        );
-        let mut proof_roster = artifact
-            .height_context
-            .roster
+        let (proof, verified) = finality::certified_block(&network, &peer.client(), enacted_height)
+            .await
+            .wrap_err("independently verify the enactment block's native finality")?;
+        assert_eq!(verified.block().hash(), block.hash());
+        assert_eq!(verified.height(), enacted_height);
+        let context = &verified.commitment().schedule.current;
+        assert_eq!(context.committee.len(), VALIDATOR_COUNT);
+        // The contiguous helper authenticates exactly three signatures; the native
+        // committee has one vote per member and no caller-selected voting weights.
+        let mut proof_roster = proof
+            .committee
             .iter()
-            .map(|entry| entry.validator.clone())
+            .map(|entry| PeerId::new(entry.public_key.clone()))
             .collect::<Vec<_>>();
         proof_roster.sort_unstable();
         let mut signed_genesis_roster = ordered_roster.clone();
         signed_genesis_roster.sort_unstable();
         assert_eq!(
             proof_roster, signed_genesis_roster,
-            "the revision-4 proof roster must equal the signed-genesis voting authority",
+            "the native proof roster must equal the signed-genesis voting authority"
         );
         assert_eq!(
-            artifact.height_context.da_layout,
+            context.da_layout,
             recommended_data_availability_layout(),
-            "every enactment proof must retain the signed revision-4 RS16 DA layout",
+            "every enactment proof must retain the signed RS16 DA layout"
         );
     }
     for peer in network.peers() {
@@ -630,10 +613,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             .hash(),
         pulse.finalized_chain_anchor.block_hash,
     );
+    let (expected_anchor, expected_context) =
+        finality::certified_pulse_context(&network, &client, pulse_height, &pulse).await?;
     verify_finalized_global_threshold_beacon_pulse_v1(
         &validated_beacon_session,
         pulse,
-        pulse.finalized_chain_anchor,
+        expected_anchor,
+        &expected_context,
     )
     .wrap_err("independently verify the mandatory pre-boundary pulse")?;
 
@@ -665,30 +651,20 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         assert!(status.committed_height >= boundary_height + 1);
         assert!(status.applied_height <= status.committed_height);
         // Epoch state is certified finality evidence, not a local status field.
-        let (proof, certified_hash) = read_on_dedicated_thread({
-            let client = peer.client().client().clone();
-            let network_id = network.network_id();
-            move || {
-                client.get_bridge_finality_anchor(
-                    NonZeroU64::new(boundary_height + 1).unwrap(),
-                    network_id,
-                )
-            }
-        })
-        .await?;
+        let (_, verified) =
+            finality::certified_block(&network, &peer.client(), boundary_height + 1).await?;
         assert_eq!(
             exact_block(&peer.client(), boundary_height + 1)
                 .await?
-                .header()
                 .hash(),
-            certified_hash,
+            verified.block().hash(),
         );
-        let context = &proof.finality_artifact.height_context;
-        assert_eq!(context.epoch, successor_epoch);
+        let context = &verified.commitment().schedule.current;
+        assert_eq!(context.authorization.epoch, successor_epoch);
         assert_eq!(context.leader_seed, successor_seed);
         assert_eq!(
-            context.epoch_end_height,
-            boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+            context.authorization.last_height,
+            boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
         );
     }
 
@@ -721,10 +697,18 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         beacon_record.session.transcript_hash
     );
     assert_eq!(successor_pulse.session_id, pulse.session_id);
+    let (expected_anchor, expected_context) = finality::certified_pulse_context(
+        &network,
+        &client,
+        successor_pulse_height,
+        &successor_pulse,
+    )
+    .await?;
     verify_finalized_global_threshold_beacon_pulse_v1(
         &validated_beacon_session,
         successor_pulse,
-        successor_pulse.finalized_chain_anchor,
+        expected_anchor,
+        &expected_context,
     )
     .wrap_err("independently verify the retained-session mandatory pulse")?;
 
@@ -757,142 +741,111 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         assert!(status.committed_height >= second_boundary_height + 1);
         assert!(status.applied_height <= status.committed_height);
         // Epoch state is certified finality evidence, not a local status field.
-        let (proof, certified_hash) = read_on_dedicated_thread({
-            let client = peer.client().client().clone();
-            let network_id = network.network_id();
-            move || {
-                client.get_bridge_finality_anchor(
-                    NonZeroU64::new(second_boundary_height + 1).unwrap(),
-                    network_id,
-                )
-            }
-        })
-        .await?;
+        let (_, verified) =
+            finality::certified_block(&network, &peer.client(), second_boundary_height + 1).await?;
         assert_eq!(
             exact_block(&peer.client(), second_boundary_height + 1)
                 .await?
-                .header()
                 .hash(),
-            certified_hash,
+            verified.block().hash(),
         );
-        let context = &proof.finality_artifact.height_context;
-        assert_eq!(context.epoch, second_successor_epoch);
+        let context = &verified.commitment().schedule.current;
+        assert_eq!(context.authorization.epoch, second_successor_epoch);
         assert_eq!(context.leader_seed, second_successor_seed);
         assert_eq!(
-            context.epoch_end_height,
-            second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+            context.authorization.last_height,
+            second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
         );
     }
 
-    // NetworkId pins the signed genesis. Verify every contiguous successor from that
-    // anchor so a self-consistent server snapshot cannot establish a new authority.
-    let trusted_network = network.network_id();
+    // Authenticate the whole prefix against the provisioned signed genesis;
+    // no claimed server context may establish an authority or scheduling epoch.
     let expected_roster = ordered_roster.clone();
     let expected_session = beacon_record.session.session_id;
     let expected_transcript = beacon_record.session.transcript_hash;
-    read_on_dedicated_thread({
-        let client = client.client().clone();
-        move || -> Result<()> {
-            use iroha_data_model::{
-                bridge::BridgeFinalityVerifier,
-                isi::kagemusha_v1::{
-                    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-                    KagemushaMintFinalityEpochDecisionV1,
-                },
+    let mut original_authority = None;
+    let mut frozen_attempt = None;
+    finality::visit_certified_prefix(
+        &network,
+        &client,
+        second_boundary_height + 1,
+        move |proof, verified| {
+            use iroha_data_model::isi::kagemusha_v1::{
+                BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+                KagemushaMintFinalityEpochDecisionV1,
             };
-            let (genesis, genesis_hash) =
-                client.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), trusted_network)?;
-            assert_eq!(genesis_hash, trusted_network.into_genesis_hash());
-            assert_eq!(
-                genesis
-                    .finality_artifact
-                    .height_context
-                    .roster
-                    .iter()
-                    .map(|seat| seat.validator.clone())
-                    .collect::<Vec<_>>(),
-                expected_roster
-            );
-            let authority = genesis
-                .finality_artifact
-                .height_context
-                .kagemusha_mint_finality_authority
-                .clone();
-            let mut verifier = BridgeFinalityVerifier::with_context(
-                trusted_network,
-                genesis.finality_artifact.context_id(),
-            );
-            verifier.verify(&genesis)?;
-            let mut frozen_attempt = None;
-            for height in 2..=second_boundary_height + 1 {
-                let proof = client.get_next_bridge_finality_proof(
-                    NonZeroU64::new(height).unwrap(),
-                    &mut verifier,
-                )?;
-                let context = &proof.finality_artifact.height_context;
-                assert_eq!(context.kagemusha_mint_finality_authority, authority);
-                assert_eq!(context.da_layout, recommended_data_availability_layout());
-                assert_eq!(context.quorum.min_signers, 3);
-                assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);
-                if height == boundary_height {
-                    frozen_attempt = context
-                        .next_epoch_snapshot
-                        .as_ref()
-                        .unwrap()
-                        .committee_preparation
-                        .clone();
-                }
-                if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
-                    let (expected_epoch, expected_seed, expected_end) =
-                        if height == boundary_height + 1 {
-                            (
-                                successor_epoch,
-                                successor_seed,
-                                boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
-                            )
-                        } else {
-                            (
-                                second_successor_epoch,
-                                second_successor_seed,
-                                second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
-                            )
-                        };
-                    assert_eq!(context.epoch, expected_epoch);
-                    assert_eq!(context.leader_seed, expected_seed);
-                    assert_eq!(context.epoch_end_height, expected_end);
-                    let authorization = &context.kagemusha_mint_finality_authorization;
+            let height = verified.height();
+            let schedule = &verified.commitment().schedule;
+            let context = &schedule.current;
+            if height == 1 {
+                assert_eq!(
+                    proof
+                        .committee
+                        .iter()
+                        .map(|seat| PeerId::new(seat.public_key.clone()))
+                        .collect::<Vec<_>>(),
+                    expected_roster
+                );
+                original_authority = Some(context.authority.clone());
+            }
+            assert_eq!(&context.authority, original_authority.as_ref().unwrap());
+            assert_eq!(context.da_layout, recommended_data_availability_layout());
+            assert_eq!(context.committee.len(), VALIDATOR_COUNT);
+            // visit_certified_prefix checks the exact three equal native votes at
+            // every non-genesis height before this callback sees the execution.
+            if height == boundary_height {
+                frozen_attempt = schedule.boundary.as_ref().unwrap().preparation.clone();
+            }
+            if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
+                let (expected_epoch, expected_seed, expected_end) = if height == boundary_height + 1
+                {
+                    (
+                        successor_epoch,
+                        successor_seed,
+                        boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                    )
+                } else {
+                    (
+                        second_successor_epoch,
+                        second_successor_seed,
+                        second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                    )
+                };
+                assert_eq!(context.authorization.epoch, expected_epoch);
+                assert_eq!(context.leader_seed, expected_seed);
+                assert_eq!(context.authorization.last_height, expected_end);
+                let authorization = &context.authorization;
+                assert_eq!(
+                    authorization.epoch,
+                    (height - 1) / MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
+                );
+                if height == second_boundary_height + 1 && frozen_attempt.is_some() {
                     assert_eq!(
-                        authorization.epoch,
-                        (height - 1) / MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
+                        authorization.decision,
+                        KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
                     );
-                    if height == second_boundary_height + 1 && frozen_attempt.is_some() {
-                        assert_eq!(
-                            authorization.decision,
-                            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
-                        );
-                        assert_eq!(
-                            authorization.transition_id,
-                            frozen_attempt.as_ref().unwrap().transition_id().unwrap()
-                        );
-                    } else {
-                        assert_eq!(
-                            authorization.decision,
-                            KagemushaMintFinalityEpochDecisionV1::Retain
-                        );
-                        assert_eq!(authorization.transition_id, [0; 32]);
-                    }
                     assert_eq!(
-                        authorization.beacon,
-                        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                            session_id: expected_session,
-                            transcript_hash: expected_transcript,
-                        })
+                        authorization.transition_id,
+                        frozen_attempt.as_ref().unwrap().transition_id().unwrap()
                     );
+                } else {
+                    assert_eq!(
+                        authorization.decision,
+                        KagemushaMintFinalityEpochDecisionV1::Retain
+                    );
+                    assert_eq!(authorization.transition_id, [0; 32]);
                 }
+                assert_eq!(
+                    authorization.beacon,
+                    BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                        session_id: expected_session,
+                        transcript_hash: expected_transcript,
+                    })
+                );
             }
             Ok(())
-        }
-    })
+        },
+    )
     .await
     .wrap_err("authenticate retained authority across both real scheduling boundaries")?;
 

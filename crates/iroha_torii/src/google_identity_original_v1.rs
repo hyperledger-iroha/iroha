@@ -636,12 +636,12 @@ mod tests {
 
     #[test]
     fn monotonic_cache_bounds_and_rotation_have_no_forever_union() {
-        let cases: [(u64, fn(Duration) -> bool); 3] = [
+        let predicates: [(u64, fn(Duration) -> bool); 3] = [
             (FRESH_SECONDS, cache_fresh),
             (STALE_SECONDS, cache_stale_allowed),
             (UNKNOWN_KID_REFRESH_SECONDS, suppress_unknown_refresh),
         ];
-        for (seconds, predicate) in cases {
+        for (seconds, predicate) in predicates {
             assert!(predicate(Duration::from_secs(seconds)));
             assert!(!predicate(
                 Duration::from_secs(seconds) + Duration::from_nanos(1)

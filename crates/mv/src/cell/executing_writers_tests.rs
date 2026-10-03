@@ -32,10 +32,15 @@ impl<V: Value> Wake for Probe<V> {
     }
 }
 
-fn arm<V: Value>(
+fn arm<'a, V: Value>(
     cell: &Arc<Cell<V>>,
     panic_once: bool,
-) -> (Arc<Probe<V>>, [iroha_allocation::release::ReleaseFuture; 2]) {
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+    registration_2: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> (
+    Arc<Probe<V>>,
+    [iroha_allocation::release::ReleaseFuture<'a>; 2],
+) {
     let probe = Arc::new(Probe {
         cell: Arc::clone(cell),
         calls: AtomicUsize::new(0),
@@ -43,8 +48,12 @@ fn arm<V: Value>(
         panic_once: AtomicBool::new(panic_once),
     });
     let mut waits = [
-        cell.revert_released.observe().wait_for_release(),
-        cell.blocks_released.observe().wait_for_release(),
+        cell.revert_released
+            .observe()
+            .wait_for_release(registration_1),
+        cell.blocks_released
+            .observe()
+            .wait_for_release(registration_2),
     ];
     let waker = Waker::from(Arc::clone(&probe));
     for wait in &mut waits {
@@ -59,7 +68,7 @@ fn arm<V: Value>(
 
 fn assert_released<V: Value>(
     probe: &Arc<Probe<V>>,
-    mut waits: [iroha_allocation::release::ReleaseFuture; 2],
+    mut waits: [iroha_allocation::release::ReleaseFuture<'_>; 2],
 ) {
     assert_eq!(probe.calls.load(SeqCst), 2);
     assert!(!probe.saw_held_writer.load(SeqCst));
@@ -94,6 +103,14 @@ fn seeded() -> Arc<Cell<u64>> {
 
 #[test]
 fn ordinary_replacement_and_same_cut_abandonment_release_the_original_pair() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for mode in 0..3 {
         for fault in 0..3 {
             let cell = seeded();
@@ -103,7 +120,12 @@ fn ordinary_replacement_and_same_cut_abandonment_release_the_original_pair() {
                 1 => (Some(cell.block_and_revert()), None),
                 _ => (None, Some(cell.current_replacement())),
             };
-            let (probe, waits) = arm(&cell, fault == 2);
+            let (probe, waits) = arm(
+                &cell,
+                fault == 2,
+                &mut helper_release_registration_1,
+                &mut helper_release_registration_2,
+            );
             let result = catch_unwind(AssertUnwindSafe(|| {
                 let original = original;
                 assert!(fault != 1, "original caller panic");
@@ -139,6 +161,14 @@ fn ordinary_replacement_and_same_cut_abandonment_release_the_original_pair() {
 
 #[test]
 fn capture_refusal_and_admission_unwind_release_both_original_writers() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for replacement in [false, true] {
         for panic in [false, true] {
             let cell = seeded();
@@ -148,7 +178,12 @@ fn capture_refusal_and_admission_unwind_release_both_original_writers() {
                 cell.block()
             };
             let original_identity = block.publication_identity();
-            let (probe, waits) = arm(&cell, false);
+            let (probe, waits) = arm(
+                &cell,
+                false,
+                &mut helper_release_registration_1,
+                &mut helper_release_registration_2,
+            );
             let result = catch_unwind(AssertUnwindSafe(|| {
                 block.try_detach(|original| {
                     assert_eq!(original.publication_identity(), original_identity);
@@ -175,6 +210,14 @@ fn capture_refusal_and_admission_unwind_release_both_original_writers() {
 
 #[test]
 fn capture_moves_exact_current_and_undo_allocations_before_notifying_either_writer() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for replacement in [false, true] {
         let cell = Arc::new(Cell::new(vec![10_u64, 11]));
         let mut tip = cell.block();
@@ -188,7 +231,12 @@ fn capture_moves_exact_current_and_undo_allocations_before_notifying_either_writ
         *block.get_mut() = vec![30, 31];
         let before = block.get_before_block().as_ptr();
         let after = block.get().as_ptr();
-        let (probe, waits) = arm(&cell, false);
+        let (probe, waits) = arm(
+            &cell,
+            false,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let journal = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
         assert_released(&probe, waits);
         let touched = journal.touched_value().unwrap();
@@ -234,6 +282,14 @@ impl Drop for Payload {
 
 #[test]
 fn private_payload_unwind_after_unlock_keeps_both_writers_healthy_before_native_wakes() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for fault_id in [1, 2] {
         let fault = Arc::new(AtomicUsize::new(0));
         let cell = Arc::new(Cell::new(Payload {
@@ -243,7 +299,12 @@ fn private_payload_unwind_after_unlock_keeps_both_writers_healthy_before_native_
         let predecessor = cell.publication.capture();
         let mut block = cell.block();
         block.get_mut().id = 2;
-        let (probe, waits) = arm(&cell, false);
+        let (probe, waits) = arm(
+            &cell,
+            false,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         fault.store(fault_id, SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| drop(block)));
         assert_eq!(
@@ -269,6 +330,14 @@ fn private_payload_unwind_after_unlock_keeps_both_writers_healthy_before_native_
 
 #[test]
 fn reset_revert_and_same_cut_payload_failure_keep_joint_custody_before_return() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for operation in 0..3 {
         let fault = Arc::new(AtomicUsize::new(0));
         let cell = Arc::new(Cell::new(Payload {
@@ -282,7 +351,12 @@ fn reset_revert_and_same_cut_payload_failure_keep_joint_custody_before_return() 
         // For the same-cut operation acquire first. Other modes exercise the
         // original reset/revert tail before its Block wrapper is returned.
         let replacement = (operation == 2).then(|| cell.current_replacement());
-        let (probe, waits) = arm(&cell, false);
+        let (probe, waits) = arm(
+            &cell,
+            false,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         fault.store(if operation == 0 { 1 } else { 2 }, SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| match operation {
             0 => drop(cell.block()),

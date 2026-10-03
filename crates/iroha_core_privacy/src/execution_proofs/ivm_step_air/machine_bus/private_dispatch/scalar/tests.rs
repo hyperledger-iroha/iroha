@@ -12,7 +12,7 @@ use ivm::{
     host::DefaultHost,
 };
 
-/// Test-only private workspace owner; packet backing has its own erasing Drop.
+/// Test-only scalar, branch and direct-jump workspace; packet backing erases on Drop.
 #[derive(Clone)]
 struct ScalarFixture(Fixture);
 impl Drop for ScalarFixture {
@@ -26,7 +26,7 @@ impl ScalarFixture {
     fn from_record(program: &Program, record: &DiagnosticStepRecord) -> Self {
         assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);
         let instruction = record.instruction.unwrap();
-        assert!(is_supported(instruction));
+        assert!(is_supported(instruction) || role(instruction) == Some(Role::Jump));
         let pc = record.before.pc;
         let slot = usize::try_from((pc - u64::from(program.first_pc)) / 4).unwrap();
         assert_eq!(program.words[slot], instruction);
@@ -50,13 +50,13 @@ impl ScalarFixture {
         carries(
             &mut fixture.row[CARRIES..CARRIES + 4],
             record.before.gas_remaining,
-            record.opcode_gas.expect("native scalar opcode tariff"),
+            record.opcode_gas.expect("native opcode tariff"),
             true,
         );
         carries(
             &mut fixture.row[CARRIES + 4..CARRIES + 8],
             record.before.cycles,
-            1,
+            record.after.cycles - record.before.cycles,
             false,
         );
         carries(
@@ -96,6 +96,11 @@ impl ScalarFixture {
                 false,
                 false,
             );
+        }
+        if role(instruction) == Some(Role::Jump) {
+            // The native jump has no operand/tag or lifecycle effect. Keep
+            // those original producer slots and their workspace inactive.
+            return Self(fixture);
         }
         let left = left_register(instruction);
         let right = right_register(instruction);
@@ -158,11 +163,12 @@ impl ScalarFixture {
         } else {
             0
         });
-        let (left, right) = if wide::opcode(instruction) == wide::arithmetic::NEG {
-            (0, left)
-        } else {
-            (left, right)
-        };
+        let (left, right) =
+            if wide::opcode(instruction) == wide::arithmetic::NEG || is_absolute(instruction) {
+                (0, left)
+            } else {
+                (left, right)
+            };
         fixture.row[SCALAR..SCALAR + ALU].copy_from_slice(&word::witness(left, right));
         fill_product(&mut fixture, left, right);
         fill_count(
@@ -171,7 +177,7 @@ impl ScalarFixture {
             wide::opcode(instruction) == wide::arithmetic::CLZ,
         );
         fixture.row[SCALAR + ALU..SCALAR + COMPARE].copy_from_slice(&alu::witness(
-            if is_alu(instruction) {
+            if is_alu(instruction) || is_absolute(instruction) {
                 alu_opcode(instruction)
             } else {
                 wide::arithmetic::ADD
@@ -200,11 +206,59 @@ impl ScalarFixture {
             left,
             right,
         ));
+        if let Some(kind) = division_kind(instruction) {
+            fill_division(&mut fixture, left, right, record.before.gas_remaining, kind);
+            if kind == 4 {
+                let result = ceiling::witness(&fixture.row[SCALAR + SHIFT..super::super::WIDTH]);
+                fixture.row[SCALAR + MEAN..SCALAR + SHIFT].copy_from_slice(&result);
+            }
+        }
+        if is_square_root(instruction) {
+            fill_square_root(&mut fixture, left, record.before.gas_remaining);
+        }
+        if is_absolute(instruction) {
+            fill_absolute_zero_test(&mut fixture, right);
+        }
+        if is_mean(instruction) {
+            fixture.row[SCALAR + MEAN..SCALAR + SHIFT]
+                .copy_from_slice(&mean::result_witness(left, right));
+        }
+        if is_gcd(instruction) {
+            gcd::fill(&mut fixture.row[SCALAR..], left, right);
+        }
         Self(fixture)
     }
     fn accepts(&self, program: &Program) -> bool {
         self.0.accepts(program)
     }
+}
+
+// Reuse the original zero-test cells with the full canonical ABS overflow delta.
+fn fill_absolute_zero_test(fixture: &mut Fixture, value: u64) {
+    let delta = F(u64::from((value ^ (1 << 63)).count_ones()));
+    fixture.row[SCALAR + MOVE_ZERO] = F(u64::from(delta == F::ZERO));
+    fixture.row[SCALAR + MOVE_INVERSE] = delta.inv().unwrap_or(F::ZERO);
+}
+
+// The successful native division uses the same original source words and gas.
+fn fill_division(fixture: &mut Fixture, left: u64, right: u64, gas: u64, kind: usize) {
+    let witness = division::witness(left, right, gas, kind);
+    fixture.row[SCALAR + SHIFT..super::super::WIDTH].copy_from_slice(&witness.bank);
+    fixture.row[SCALAR + PRODUCT_DIGITS..SCALAR + MULTIPLY].copy_from_slice(&witness.digits);
+    fixture.row[SCALAR + MULTIPLY..SCALAR + COUNT].copy_from_slice(&witness.product);
+    fixture.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS].copy_from_slice(&branch::bank_witness(
+        0,
+        witness.remainder,
+        witness.denominator,
+    ));
+}
+
+// Fill the same product and shift storage from the existing exact root bank.
+fn fill_square_root(fixture: &mut Fixture, value: u64, gas: u64) {
+    let witness = square_root::witness(value, gas);
+    fixture.row[SCALAR + SHIFT..super::super::WIDTH].copy_from_slice(&witness.bank);
+    fixture.row[SCALAR + PRODUCT_DIGITS..SCALAR + MULTIPLY].copy_from_slice(&witness.digits);
+    fixture.row[SCALAR + MULTIPLY..SCALAR + COUNT].copy_from_slice(&witness.product);
 }
 
 // Fill the shared exact-product workspace, including unused-operation rows.
@@ -229,16 +283,56 @@ fn fill_count(fixture: &mut Fixture, left: u64, leading: bool) {
 // diagnostic instruction. This is invocation setup, not an opcode debit.
 fn root_result_table_gas() -> u64 {
     let callable = crate::ivm_test_support::unit_callable(0);
-    assert!(callable.argument_words.is_empty());
-    u64::try_from(callable.result_words.len() * ivm::call::CALL_WORD_BYTES_V1).unwrap()
+    assert_eq!(callable.argument_word_count(), Some(0));
+    u64::try_from(callable.result_word_count().unwrap() * ivm::call::CALL_WORD_BYTES_V1).unwrap()
 }
 
 fn root_setup_gas() -> u64 {
     let callable = crate::ivm_test_support::unit_callable(0);
-    assert!(callable.argument_words.is_empty());
+    assert_eq!(callable.argument_word_count(), Some(0));
     assert_eq!(callable.frame_bytes, 0);
     // Native call_gas::frame charges one bitmap byte per result slot here.
-    root_result_table_gas() + u64::try_from(callable.result_words.len()).unwrap()
+    root_result_table_gas() + u64::try_from(callable.result_word_count().unwrap()).unwrap()
+}
+
+#[test]
+fn typed_unit_schema_charges_its_node_at_return_only() {
+    assert_eq!(root_setup_gas(), 9);
+    let return_words = crate::ivm_test_support::unit_return();
+    let opcode_gas = return_words
+        .chunks_exact(4)
+        .map(|bytes| ivm::gas::cost_of(u32::from_le_bytes(bytes.try_into().unwrap())).unwrap())
+        .sum::<u64>();
+    let validation_gas = 1 + ivm::call::CALL_WORD_BYTES_V1 as u64;
+    let total_gas = root_setup_gas() + opcode_gas + validation_gas;
+    // This test isolates call/return work. Match the exact instruction count so
+    // ordinary ZK cycle padding requires neither extra gas nor another record.
+    let cycles = u64::try_from(return_words.len() / 4).unwrap();
+    let (_, recorder, outcome) = shifts::capture(&[], &[], total_gas, cycles);
+    outcome.unwrap();
+    let records = recorder.records();
+    assert_eq!(records.len(), return_words.len() / 4);
+    assert_eq!(
+        records[0].before.gas_remaining,
+        total_gas - root_setup_gas()
+    );
+    let terminal = records.last().unwrap();
+    assert_eq!(terminal.opcode_gas, Some(2));
+    assert_eq!(terminal.before.gas_remaining, 2 + validation_gas);
+    assert_eq!(terminal.after.gas_remaining, 0);
+    assert!(terminal.after.halted);
+
+    // One gas short pays JALR and the schema node, then fails the complete
+    // Unit-word validation debit. It must not publish a completed root return.
+    let (_, recorder, outcome) = shifts::capture(&[], &[], total_gas - 1, cycles);
+    assert_eq!(outcome, Err(ivm::VMError::OutOfGas));
+    let terminal = recorder.records().last().unwrap();
+    assert_eq!(terminal.before.gas_remaining, 1 + validation_gas);
+    assert_eq!(
+        terminal.after.gas_remaining,
+        ivm::call::CALL_WORD_BYTES_V1 as u64 - 1
+    );
+    assert!(!terminal.after.halted);
 }
 
 fn assert_root_preflight_out_of_gas(
@@ -333,6 +427,48 @@ fn native_private_and_public_scalar_register_immediate_and_aliases_match() {
 }
 
 #[test]
+fn native_public_subset_rejects_shared_valid_private_scalars_and_unjoined_public_roles() {
+    for (opcode, private) in [
+        (wide::arithmetic::ADD, true),
+        (wide::arithmetic::ANDI, true),
+        (wide::arithmetic::NEG, true),
+        (wide::arithmetic::SLT, true),
+        (wide::arithmetic::MIN, true),
+        (wide::arithmetic::SLL, true),
+        (wide::arithmetic::SRL, true),
+        (wide::arithmetic::SRA, true),
+        (wide::arithmetic::ROTL, true),
+        (wide::arithmetic::ROTR, true),
+        (wide::arithmetic::ROTL_IMM, true),
+        (wide::arithmetic::ROTR_IMM, true),
+        (wide::arithmetic::MUL, true),
+        (wide::arithmetic::MULH, true),
+        (wide::arithmetic::MULHU, true),
+        (wide::arithmetic::MULHSU, true),
+        (wide::arithmetic::POPCNT, true),
+        (wide::arithmetic::CLZ, true),
+        (wide::arithmetic::CTZ, true),
+        (wide::arithmetic::CMOV, false),
+        (wide::system::GETGAS, false),
+    ] {
+        let word = enc::encode_rr(opcode, 4, 2, 3);
+        let (program, fixture) = native(word, &[(2, u64::MAX, private), (3, 1, private)]);
+        assert!(fixture.accepts(&program), "shared control {opcode:#x}");
+        let mut residues = Vec::new();
+        super::super::native_witness::append_subset_residues(
+            &mut residues,
+            &program,
+            &fixture.0.row,
+            &fixture.0.packets,
+        );
+        assert!(
+            residues.iter().any(|value| *value != F::ZERO),
+            "native subset must reject opcode {opcode:#x}, private={private}",
+        );
+    }
+}
+
+#[test]
 fn native_private_comparison_tariffs_bind_two_gas_and_reject_coherent_other_debits() {
     for opcode in [
         wide::arithmetic::SLT,
@@ -383,6 +519,7 @@ fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row()
         wide::arithmetic::MULHU,
         wide::arithmetic::MULHSU,
         wide::arithmetic::MULH,
+        wide::arithmetic::MEAN,
     ] {
         for rd in [0, 4] {
             let instruction = enc::encode_rr(opcode, rd, 2, 3);
@@ -425,6 +562,10 @@ fn every_scalar_original_field_and_workspace_mutation_rejects_except_prior_desti
         enc::encode_rr(wide::arithmetic::MULHU, 2, 2, 3),
         enc::encode_rr(wide::arithmetic::MULHSU, 3, 2, 3),
         enc::encode_rr(wide::arithmetic::MULH, 0, 2, 3),
+        enc::encode_rr(wide::arithmetic::MEAN, 2, 2, 3),
+        enc::encode_rr(wide::arithmetic::ISQRT, 2, 2, 255),
+        enc::encode_rr(wide::arithmetic::DIV_CEIL, 2, 2, 3),
+        enc::encode_rr(wide::arithmetic::GCD, 2, 2, 3),
         enc::encode_rr(wide::arithmetic::NEG, 2, 2, 255),
         enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
         enc::encode_rr(wide::arithmetic::MIN, 4, 2, 3),
@@ -440,7 +581,11 @@ fn every_scalar_original_field_and_workspace_mutation_rejects_except_prior_desti
     ] {
         let (program, fixture) = native(
             instruction,
-            &[(2, u64::MAX, true), (3, 3, true), (4, 9, false)],
+            &[
+                (2, u64::MAX, !is_division(instruction)),
+                (3, 3, !is_division(instruction)),
+                (4, 9, false),
+            ],
         );
         for slot in 0..PORTS {
             for column in 0..packet::WIDTH {
@@ -492,11 +637,74 @@ fn scalar_fetch_signed_immediate_alias_zero_and_tag_substitution_reject() {
 }
 
 #[test]
+fn native_division_and_getgas_share_canonical_fetch_without_register_read_leakage() {
+    for opcode in [
+        wide::arithmetic::DIV,
+        wide::arithmetic::DIVU,
+        wide::arithmetic::REM,
+        wide::arithmetic::REMU,
+        wide::arithmetic::DIV_CEIL,
+        wide::arithmetic::GCD,
+    ] {
+        let instructions = [
+            enc::encode_rr(opcode, 4, 2, 3),
+            enc::encode_rr(wide::system::GETGAS, 5, 4, 5),
+            enc::encode_rr(opcode, 4, 5, 3),
+        ];
+        let (program, recorder, _) = shifts::capture(
+            &instructions,
+            &[(2, u64::MAX, false), (3, 3, false), (5, 29, true)],
+            100,
+            32,
+        );
+        assert!(recorder.records().len() >= instructions.len());
+        for (instruction, record) in instructions.into_iter().zip(recorder.records()) {
+            assert_eq!(record.instruction, Some(instruction));
+            let fixture = ScalarFixture::from_record(&program, record);
+            assert!(fixture.accepts(&program));
+            let packets = &fixture.0.packets.fields;
+            assert_eq!(packets[SCALAR_DESTINATION][AFTER_TAG], F::ZERO);
+            if is_getgas(instruction) {
+                assert_eq!(packets[SCALAR_DESTINATION][BEFORE_TAG], F::ONE);
+                for slot in [SCALAR_LEFT, SCALAR_RIGHT] {
+                    assert!(packets[slot].iter().all(|cell| *cell == F::ZERO));
+                }
+                assert!(
+                    fixture.0.row[SCALAR + SOURCES..SCALAR + ALU]
+                        .iter()
+                        .all(|cell| *cell == F::ZERO)
+                );
+                assert_eq!(
+                    packet::half(&packets[SCALAR_DESTINATION], AFTER, 0),
+                    record.after.gas_remaining
+                );
+            } else {
+                for slot in [SCALAR_LEFT, SCALAR_RIGHT] {
+                    assert_eq!(packets[slot][ENABLED], F::ONE);
+                    assert_eq!(packets[slot][BEFORE_TAG], F::ZERO);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn composed_private_scalar_polynomials_have_degree_four() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let artifact = contract(
         &[
+            enc::encode_jump(wide::control::JAL, 0, 1),
+            enc::encode_offset24(wide::control::JMP, 1),
+            enc::encode_rr(wide::arithmetic::DIV, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::DIVU, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::REM, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::REMU, 4, 2, 3),
             enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::MEAN, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::CMOV, 4, 2, 3),
             enc::encode_ri(wide::arithmetic::CMOVI, 4, 2, -1),
             enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
@@ -563,149 +771,7 @@ fn composed_private_scalar_polynomials_have_degree_four() {
 
 #[test]
 fn every_original_scalar_port_joins_all_private_history_stages() {
-    use super::super::super::{
-        E, NOTE_COPY_WIDTH_V1, ORDERED, PublicPacketBus, ROW_WIDTH, SORTED, permutation,
-        private_history,
-    };
-    use packet::Event;
-    fn as_event(fields: &[F; packet::WIDTH]) -> Option<Event> {
-        (fields[ENABLED] == F::ONE).then(|| Event {
-            space: match fields[SPACE].0 {
-                2 => Space::Register,
-                4 => Space::Owner,
-                _ => panic!("only original scalar register/control ports"),
-            },
-            vm: fields[VM].0 as u8,
-            generation: fields[GENERATION].0 as u16,
-            index: fields[INDEX].0 as u32,
-            write: fields[WRITE] == F::ONE,
-            before: bytes(packet::half(fields, BEFORE, 0)),
-            after: bytes(packet::half(fields, AFTER, 0)),
-            before_private: fields[BEFORE_TAG].0 as u16,
-            after_private: fields[AFTER_TAG].0 as u16,
-        })
-    }
-    fn accepts(fixture: &ScalarFixture, substitution: Option<(usize, bool)>) -> bool {
-        let mut original = fixture.0.packets.clone();
-        let mut events = original.fields.iter().map(as_event).collect::<Vec<_>>();
-        if let Some((slot, missing)) = substitution {
-            if missing {
-                events[slot] = None;
-            } else {
-                let event = events[slot].as_mut().unwrap();
-                let value =
-                    u64::from_le_bytes(event.after[..8].try_into().unwrap()).wrapping_add(1);
-                event.after = bytes(value);
-                if !event.write {
-                    event.before = event.after;
-                    let key = (event.space, event.vm, event.generation, event.index);
-                    let before = event.before;
-                    // Aliased source/destination ports address the same original
-                    // register. Keep this alternative history locally coherent:
-                    // every read sees the replacement value, and a later write
-                    // reads that value before producing its unchanged result.
-                    for alias in events.iter_mut().flatten() {
-                        if (alias.space, alias.vm, alias.generation, alias.index) == key {
-                            alias.before = before;
-                            if !alias.write {
-                                alias.after = before;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Candidate initializers only make the test history internally valid.
-        // They have no execution/State authority and are not a proving adapter.
-        let mut first = std::collections::BTreeMap::new();
-        for event in events.iter().flatten() {
-            first
-                .entry((event.space as u8, event.generation, event.index))
-                .or_insert_with(|| {
-                    Some(Event {
-                        space: event.space,
-                        vm: event.vm,
-                        generation: event.generation,
-                        index: event.index,
-                        write: true,
-                        before: [0; 16],
-                        after: event.before,
-                        before_private: 0,
-                        after_private: event.before_private,
-                    })
-                });
-        }
-        let prefix = first.len();
-        let mut all = first.into_values().collect::<Vec<_>>();
-        all.extend(events);
-        for (slot, fields) in original.fields.iter_mut().enumerate() {
-            if fields[ENABLED] == F::ONE {
-                fields[CLOCK] = F((prefix + slot) as u64);
-            }
-        }
-        let bus = PublicPacketBus::new(all).unwrap();
-        let columns = bus.columns();
-        let challenges = permutation::Challenges::testing(
-            E::canonical([2, 1, 0, 0]).unwrap(),
-            E::canonical([7, 0, 1, 0]).unwrap(),
-        );
-        let aux = permutation::columns(
-            &columns[NOTE_COPY_WIDTH_V1 + ORDERED..NOTE_COPY_WIDTH_V1 + SORTED],
-            &columns
-                [NOTE_COPY_WIDTH_V1 + SORTED..NOTE_COPY_WIDTH_V1 + super::super::super::PREVIOUS],
-            &challenges,
-            bus.size(),
-        )
-        .unwrap();
-        let rows = (0..bus.size())
-            .map(|i| {
-                core::array::from_fn::<_, ROW_WIDTH, _>(|column| {
-                    columns[NOTE_COPY_WIDTH_V1 + column][i]
-                })
-            })
-            .collect::<Vec<_>>();
-        let aux_rows = (0..bus.size())
-            .map(|i| aux.iter().map(|column| column[i]).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let schedule = private_history::Schedule::new(bus.trace_log2).unwrap();
-        let fixed = (0..bus.size())
-            .map(|i| schedule.fixed(i).unwrap())
-            .collect::<Vec<_>>();
-        // Confirm each alternative history is locally consistent before testing
-        // the original producer join; no malformed sorted history is the oracle.
-        let mut residues = Vec::new();
-        for i in 0..bus.size() {
-            let next = (i + 1) % bus.size();
-            let producer = rows[i][ORDERED..SORTED].try_into().unwrap();
-            private_history::append_residues(
-                &mut residues,
-                &rows[i],
-                &rows[next],
-                &aux_rows[i],
-                &aux_rows[next],
-                &fixed[i],
-                producer,
-                &challenges,
-            );
-            assert!(
-                residues.iter().all(|value| *value == F::ZERO),
-                "candidate history must be valid at row {i} for substitution {substitution:?}"
-            );
-            residues.clear();
-        }
-        let windows = core::array::from_fn(|index| {
-            let i = prefix * super::super::super::PHASES + index;
-            HistoryRow {
-                current: &rows[i],
-                next: &rows[i + 1],
-                aux: &aux_rows[i],
-                next_aux: &aux_rows[i + 1],
-                fixed: &fixed[i],
-            }
-        });
-        original.append_history_residues(&mut residues, &windows, &challenges);
-        residues.iter().all(|value| *value == F::ZERO)
-    }
+    use history::accepts;
     let (_, gas) = native(
         enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
         &[(2, u64::MAX, true), (3, 23, true), (4, 19, true)],
@@ -727,11 +793,17 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         wide::arithmetic::MULHU,
         wide::arithmetic::MULHSU,
         wide::arithmetic::MULH,
+        wide::arithmetic::MEAN,
+        wide::arithmetic::DIV,
+        wide::arithmetic::DIVU,
+        wide::arithmetic::REM,
+        wide::arithmetic::REMU,
+        wide::arithmetic::DIV_CEIL,
+        wide::arithmetic::GCD,
     ] {
-        let (_, fixture) = native(
-            enc::encode_rr(opcode, 4, 2, 3),
-            &[(2, 17, true), (3, 23, true), (4, 19, false)],
-        );
+        let instruction = enc::encode_rr(opcode, 4, 2, 3);
+        let tag = !is_division(instruction);
+        let (_, fixture) = native(instruction, &[(2, 17, tag), (3, 23, tag), (4, 19, false)]);
         assert!(accepts(&fixture, None));
         for slot in [SCALAR_LEFT, SCALAR_RIGHT, SCALAR_DESTINATION] {
             assert!(!accepts(&fixture, Some((slot, false))));
@@ -760,10 +832,13 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         wide::arithmetic::ROTR_IMM,
         wide::arithmetic::NOT,
         wide::arithmetic::NEG,
+        wide::arithmetic::ABS,
+        wide::arithmetic::ISQRT,
     ] {
+        let instruction = enc::encode_ri(opcode, 4, 2, -1);
         let (_, fixture) = native(
-            enc::encode_ri(opcode, 4, 2, -1),
-            &[(2, u64::MAX, true), (255, 17, false)],
+            instruction,
+            &[(2, u64::MAX, !is_absolute(instruction)), (255, 17, false)],
         );
         assert!(accepts(&fixture, None));
         assert!(
@@ -778,7 +853,11 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
     }
     // Shared source keys and complete source/destination aliasing require the
     // alternative history to propagate a replacement through every read.
-    for opcode in [wide::arithmetic::ADD, wide::arithmetic::SLL] {
+    for opcode in [
+        wide::arithmetic::ADD,
+        wide::arithmetic::SLL,
+        wide::arithmetic::GCD,
+    ] {
         for (destination, left, right) in [(4, 2, 2), (2, 2, 2), (2, 2, 3), (3, 2, 3)] {
             let (_, fixture) = native(
                 enc::encode_rr(opcode, destination, left, right),
@@ -974,4 +1053,15 @@ mod unary_select;
 mod bit_counts;
 
 mod conditional_moves;
+
+mod absolute;
+mod div_rem;
 mod getgas;
+
+mod history;
+mod jumps;
+mod means;
+mod square_roots;
+
+mod ceiling_division;
+mod greatest_common_divisor;

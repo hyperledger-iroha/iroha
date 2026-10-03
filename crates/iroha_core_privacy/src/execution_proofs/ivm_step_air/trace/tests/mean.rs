@@ -197,7 +197,9 @@ fn mean_native_cycle_policy_allows_last_crossing_and_refuses_next_attempt() {
         enc::encode_ri(wide::arithmetic::ADDI, 9, 9, 1),
     ];
     let prepared = contract_with_cycle_policy(&body, 2, 0);
-    let root_words = crate::ivm_test_support::unit_callable(0).result_words.len() as u64;
+    let root_words = crate::ivm_test_support::unit_callable(0)
+        .result_word_count()
+        .unwrap() as u64;
     let root_gas = root_words * (ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + 1);
     let mut vm = IVM::new(20 + root_gas);
     vm.load_prepared(&prepared).unwrap();
@@ -264,7 +266,9 @@ fn mean_native_gas_failure_keeps_cycles_and_cannot_follow_a_limit_crossing() {
         enc::encode_rr(wide::arithmetic::MEAN, 8, 6, 7),
         enc::encode_rr(wide::arithmetic::MEAN, 9, 6, 7),
     ];
-    let root_words = crate::ivm_test_support::unit_callable(0).result_words.len() as u64;
+    let root_words = crate::ivm_test_support::unit_callable(0)
+        .result_word_count()
+        .unwrap() as u64;
     let root_gas = root_words * (ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + 1);
     for limit in [1, 2, 3] {
         for gas in [0, 1, 2, 3] {

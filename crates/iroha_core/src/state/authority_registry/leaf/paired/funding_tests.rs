@@ -103,13 +103,15 @@ fn staging_refusal_keeps_original_release_and_never_yields_partial_snapshot() {
     use iroha_allocation::AllocationRefusal;
     use std::{
         future::Future,
-        pin::pin,
         task::{Context, Poll, Waker},
     };
     let key = "original pool".to_owned();
     let value = vec![ConsensusKeyId::new(ConsensusKeyRole::Validator, "entry")];
     let budget = AllocationBudget::new(64 * 1024);
-    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
     let Err(LeafError::Admission(AllocationRefusal::Capacity { release, .. })) =
         CanonicalTableLeafSet::paired_table_from_rows(
             "world.consensus_keys_by_pk",
@@ -120,7 +122,7 @@ fn staging_refusal_keeps_original_release_and_never_yields_partial_snapshot() {
     else {
         panic!("first staged key must preserve original pool refusal");
     };
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = Box::pin(release.wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
     let other = AllocationBudget::new(1);
@@ -128,6 +130,8 @@ fn staging_refusal_keeps_original_release_and_never_yields_partial_snapshot() {
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
     drop(occupied);
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+    drop(wait);
+    drop(registration);
     let duplicate = [(&key, &value), (&key, &value)];
     assert!(matches!(
         CanonicalTableLeafSet::paired_table_from_rows(

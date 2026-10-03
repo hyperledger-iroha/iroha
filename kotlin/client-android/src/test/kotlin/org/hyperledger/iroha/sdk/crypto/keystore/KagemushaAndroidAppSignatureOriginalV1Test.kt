@@ -62,10 +62,19 @@ class KagemushaAndroidAppSignatureOriginalV1Test {
                 val low = BigInteger(1, s.copyOfRange(428, 444).reversedArray())
                 val high = BigInteger(1, s.copyOfRange(444, 460).reversedArray())
                 assertEquals(BigInteger(before), low); assertEquals(low.add(BigInteger.ONE), high)
-                assertEquals(tag == 2 || tag == 4, s.copyOfRange(364, 396).any { it != 0.toByte() })
-                assertEquals(tag == 2 || tag == 4, s.copyOfRange(396, 428).any { it != 0.toByte() })
-                org.hyperledger.iroha.sdk.crypto.keystore.attestation.requireKagemushaCoreSelectionFrameV1(
-                    s, s.copyOfRange(219, 251), s.copyOfRange(428, 444), s.copyOfRange(444, 460))
+                assertEquals(tag != 5, s.copyOfRange(364, 396).any { it != 0.toByte() })
+                assertEquals(tag != 5, s.copyOfRange(396, 428).any { it != 0.toByte() })
+                if (tag == 1 || tag == 3) {
+                    // Ordinary incoming purpose1 originals retain their separate grammar. These
+                    // codec-only fixtures grant no generic/OEM selection or Native authority.
+                    assertFailsWith<IllegalArgumentException> {
+                        org.hyperledger.iroha.sdk.crypto.keystore.attestation.requireKagemushaCoreSelectionFrameV1(
+                            s, s.copyOfRange(219, 251), s.copyOfRange(428, 444), s.copyOfRange(444, 460))
+                    }
+                } else {
+                    org.hyperledger.iroha.sdk.crypto.keystore.attestation.requireKagemushaCoreSelectionFrameV1(
+                        s, s.copyOfRange(219, 251), s.copyOfRange(428, 444), s.copyOfRange(444, 460))
+                }
                 val sHash = MessageDigest.getInstance("SHA-256").digest(s)
                 assertContentEquals(vector("s_" + name + "_sha256"), sHash)
                 val start = KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL.domain.toByteArray(Charsets.US_ASCII).size + 8

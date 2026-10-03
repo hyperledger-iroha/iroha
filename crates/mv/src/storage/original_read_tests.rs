@@ -164,6 +164,11 @@ fn nonblocking_original_maps_preserve_both_roots_and_reject_stale_or_foreign_own
 
 #[test]
 fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::pin,
@@ -178,7 +183,7 @@ fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
     else {
         panic!("publication lock must refuse immediately")
     };
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = pin!(release.wait_for_release(&mut release_registration_1));
     let mut cx = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
     drop(guard);
@@ -215,4 +220,23 @@ fn committed_readonly_interface_uses_the_same_retained_current_generation() {
     assert_eq!(range.next_back(), Some((&3, &30)));
     assert_eq!(range.next(), None);
     assert!(!retained.try_matches_current(&source).unwrap());
+}
+
+#[test]
+fn first_empty_original_map_pair_on_cold_thread_allocates_no_rust_backing() {
+    use crate::allocation_test_support::without_allocations;
+    let source = Storage::<u64, u64>::default();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let original =
+                    without_allocations(|| source.try_committed_view_nonblocking().unwrap());
+                assert!(original.current().is_empty());
+                assert!(original.undo().is_empty());
+                without_allocations(|| assert!(original.try_matches_current(&source).unwrap()));
+                without_allocations(|| drop(original));
+            })
+            .join()
+            .unwrap();
+    });
 }

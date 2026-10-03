@@ -31,7 +31,7 @@ fn staged32(
         // ABI; launch validates lengths and selects only its fixed u32 symbols.
         unsafe { launch::launch_u32_output(device, ARTIFACT, name, left, right) }
     });
-    complete_attempt(result)
+    complete_attempt(kernel, left.len(), result)
 }
 
 fn staged64(left: &[u64], right: &[u64]) -> Result<HostOutput<u64>, CudaFailure> {
@@ -39,16 +39,22 @@ fn staged64(left: &[u64], right: &[u64]) -> Result<HostOutput<u64>, CudaFailure>
         // SAFETY: the exact embedded artifact supplies the fixed vadd64 ABI.
         unsafe { launch::launch_u64_output(device, ARTIFACT, left, right) }
     });
-    complete_attempt(result)
+    complete_attempt(Kernel::Add64, left.len(), result)
 }
 
 fn complete_attempt<T>(
+    kernel: Kernel,
+    expected_count: usize,
     result: Result<HostOutput<T>, CudaFailure>,
 ) -> Result<HostOutput<T>, CudaFailure> {
     match result {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == expected_count && expected_count != 0 => {
+            super::imp::record_completed_cuda_dispatch(kernel, ARTIFACT);
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if failure_quarantines(error) {

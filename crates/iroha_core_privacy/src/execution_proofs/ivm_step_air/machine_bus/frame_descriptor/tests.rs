@@ -296,12 +296,12 @@ impl Fixture {
             self.schedule,
             &self.row,
             self.selected,
-            Callable {
-                entry_pc: &self.entry,
-                frame_bytes: self.frame,
-                argument_words: self.argument_words,
-                result_words: self.result_words,
-            },
+            &super::super::callable_lookup::SelectedCallable::unbound_diagnostic(
+                self.entry,
+                self.frame,
+                self.argument_words,
+                self.result_words,
+            ),
             Ports {
                 active: &self.active,
                 packets: core::array::from_fn(|i| &self.packets[i]),
@@ -484,12 +484,12 @@ fn original_descriptor_publication_residues_have_degree_three() {
                     schedule,
                     row[..WIDTH].try_into().unwrap(),
                     row[WIDTH],
-                    Callable {
-                        entry_pc: row[WIDTH + 1..WIDTH + 5].try_into().unwrap(),
-                        frame_bytes: row[WIDTH + 5],
-                        argument_words: row[WIDTH + 6],
-                        result_words: row[WIDTH + 7],
-                    },
+                    &super::super::callable_lookup::SelectedCallable::unbound_diagnostic(
+                        row[WIDTH + 1..WIDTH + 5].try_into().unwrap(),
+                        row[WIDTH + 5],
+                        row[WIDTH + 6],
+                        row[WIDTH + 7],
+                    ),
                     Ports {
                         active: packet(0),
                         packets: core::array::from_fn(|i| packet(i + 1)),
@@ -606,4 +606,26 @@ fn genuine_native_call_runtime_entries_match_original_operands_and_installed_des
             );
         }
     }
+}
+
+/// Local descriptor candidate, including deliberately invalid adversarial shapes.
+pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_witness(
+    entry: u64,
+    frame: u64,
+    arguments: u64,
+    results: u64,
+    selected: bool,
+) -> ([F; WIDTH], [[F; packet::WIDTH]; PORTS]) {
+    let mut shape = Shape::child();
+    shape.generation = 11;
+    shape.entry = entry;
+    shape.frame = frame;
+    shape.argument_words = arguments;
+    if arguments == 0 {
+        shape.argument = 0;
+    }
+    shape.result_words = results;
+    shape.selected = selected;
+    let fixture = Fixture::new(shape);
+    (fixture.row, fixture.packets)
 }

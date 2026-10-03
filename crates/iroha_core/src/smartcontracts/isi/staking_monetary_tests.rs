@@ -356,6 +356,201 @@ fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
 }
 
 #[test]
+fn staking_registration_rejects_wrong_xor_shape_with_transaction_rollback() {
+    use iroha_data_model::asset::AssetBalancePolicy;
+    use iroha_primitives::numeric::NumericSpec;
+    for (spec, scope) in [
+        (NumericSpec::default(), AssetBalancePolicy::Global),
+        (NumericSpec::fractional(18), AssetBalancePolicy::Global),
+        (
+            NumericSpec::fractional(9),
+            AssetBalancePolicy::DataspaceRestricted,
+        ),
+    ] {
+        let state = setup_state();
+        let mut block = state.block(block_header_with_height(1));
+        let (validator, definition, nexus, registration, source, before) = {
+            let mut stx = block.transaction_for_callback_testing();
+            let (validator, _, _, definition) = prepare_accounts(&mut stx);
+            let amount = Quantity::from(1_000_u64);
+            let registration = RegisterPublicLaneValidator {
+                lane_id: LaneId::new(42),
+                validator: validator.clone(),
+                peer_id: validator_peer_id(&validator),
+                stake_account: validator.clone(),
+                initial_stake: amount.clone(),
+                metadata: Metadata::default(),
+                monetary_plan: fixture_registration_plan(&stx, LaneId::new(42), &validator, amount),
+            };
+            let source = AssetId::new(definition.clone(), validator.clone());
+            let before = stx.world.assets.get(&source).unwrap().clone();
+            let nexus = stx.nexus.clone();
+            stx.apply();
+            (validator, definition, nexus, registration, source, before)
+        };
+        {
+            let mut rejected = block.transaction_for_callback_testing();
+            rejected.nexus = nexus.clone();
+            let currency = rejected
+                .world
+                .asset_definitions
+                .get_mut(&definition)
+                .unwrap();
+            currency.spec = spec;
+            currency.balance_scope_policy = scope;
+            let error = registration
+                .clone()
+                .execute(&validator, &mut rejected)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+            assert_eq!(rejected.world.assets.get(&source), Some(&before));
+            assert!(
+                rejected
+                    .world
+                    .public_lane_stake_custody
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+            assert!(
+                rejected
+                    .world
+                    .public_lane_stake_reserves
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+            // Dropping the actual transaction also removes the malformed definition.
+        }
+        let mut accepted = block.transaction_for_callback_testing();
+        accepted.nexus = nexus;
+        assert_eq!(
+            accepted
+                .world
+                .asset_definitions
+                .get(&definition)
+                .unwrap()
+                .spec(),
+            NumericSpec::fractional(9)
+        );
+        assert_eq!(accepted.world.assets.get(&source), Some(&before));
+        registration.execute(&validator, &mut accepted).unwrap();
+        assert_eq!(
+            accepted
+                .world
+                .public_lane_stake_custody
+                .get(&(LaneId::new(42), validator))
+                .unwrap()
+                .1,
+            Quantity::from(1_000_u64)
+        );
+    }
+}
+
+#[test]
+fn reward_claim_rejects_wrong_xor_shape_with_transaction_rollback() {
+    use iroha_data_model::asset::AssetBalancePolicy;
+    use iroha_primitives::numeric::NumericSpec;
+    for (spec, scope) in [
+        (NumericSpec::default(), AssetBalancePolicy::Global),
+        (NumericSpec::fractional(18), AssetBalancePolicy::Global),
+        (
+            NumericSpec::fractional(9),
+            AssetBalancePolicy::DataspaceRestricted,
+        ),
+    ] {
+        let state = setup_state();
+        let mut block = state.block(block_header_with_height(1));
+        let lane = LaneId::new(9);
+        let (recipient, source, claim, nexus, before) = {
+            let mut stx = block.transaction_for_callback_testing();
+            let (sink, recipient, source, _) = configure_reward_fixture(&mut stx, lane, 100);
+            RecordPublicLaneRewards {
+                lane_id: lane,
+                epoch: 0,
+                reward_asset: source.clone(),
+                total_reward: Quantity::from(25_u64),
+                shares: vec![PublicLaneRewardShare {
+                    account: recipient.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Quantity::from(25_u64),
+                }],
+                metadata: Metadata::default(),
+            }
+            .execute(&sink, &mut stx)
+            .unwrap();
+            let claim = ClaimPublicLaneRewards {
+                lane_id: lane,
+                account: recipient.clone(),
+                claim_plan: fixture_reward_claim_plan(&stx, lane, &recipient, None),
+            };
+            let before = stx.world.assets.get(&source).unwrap().clone();
+            let nexus = stx.nexus.clone();
+            stx.apply();
+            (recipient, source, claim, nexus, before)
+        };
+        {
+            let mut rejected = block.transaction_for_callback_testing();
+            rejected.nexus = nexus.clone();
+            let currency = rejected
+                .world
+                .asset_definitions
+                .get_mut(source.definition())
+                .unwrap();
+            currency.spec = spec;
+            currency.balance_scope_policy = scope;
+            let error = claim
+                .clone()
+                .execute(&recipient, &mut rejected)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+            assert_eq!(rejected.world.assets.get(&source), Some(&before));
+            assert_eq!(
+                rejected.world.public_lane_reward_reserves.get(&source),
+                Some(&Quantity::from(25_u64))
+            );
+            assert!(
+                rejected
+                    .world
+                    .public_lane_reward_claims
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+            assert!(
+                rejected
+                    .world
+                    .public_lane_reward_accruals
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+        let mut accepted = block.transaction_for_callback_testing();
+        accepted.nexus = nexus;
+        assert_eq!(accepted.world.assets.get(&source), Some(&before));
+        claim.execute(&recipient, &mut accepted).unwrap();
+        assert!(
+            accepted
+                .world
+                .public_lane_reward_reserves
+                .get(&source)
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn staking_and_reward_configuration_reject_registered_xor_lookalike() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));

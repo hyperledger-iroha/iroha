@@ -67,12 +67,13 @@ This document contains the help content for the `kagami` command-line program.
 
 ## `kagami`
 
-Task-first Iroha operator tooling for guided setup, local devnets, genesis work, and diagnostics.
+Start local networks, attach private dataspaces, and deploy Iroha contracts.
 
 **Usage:** `kagami [OPTIONS] <COMMAND>`
 
 Common tasks:
   kagami localnet up
+  kagami dataspace up acme --network taira
   kagami contract deploy hello.ko
   kagami context list
   kagami wizard

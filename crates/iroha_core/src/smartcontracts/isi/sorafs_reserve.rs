@@ -40,23 +40,23 @@ use iroha_data_model::{
             ReserveMovementKindV1, ReserveMovementPageV1, ReserveMovementRecordV1,
             ReserveMovementStatusV1, ReserveProviderAccountPageV1, ReserveProviderAccountV1,
             ReserveTier,
+            history::{
+                ReserveEventJournalHeadV1, ReserveStateV1, STATE_LIMITS, STATE_MAX_BYTES,
+                reserve_state_key,
+            },
         },
     },
 };
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_canonical_with_limits};
+use norito::decode_canonical_with_limits;
 use sorafs_manifest::deal::XorQuantity;
-use std::{str::FromStr, sync::OnceLock};
-const RESERVE_STATE_KEY: &str = "sorafs_reserve_state_v1";
+use std::str::FromStr;
 const PROVIDER_STATE_KEY_PREFIX: &str = "sorafs_reserve_provider_v1_";
 const MOVEMENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_movement_v1_";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_reserve_appeal_v1_";
 const EVENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_event_v1_";
-const STATE_MAX_BYTES: usize = 2 * 1024 * 1024;
-const STATE_LIMITS: DecodeLimits =
-    DecodeLimits::new(4_096, STATE_MAX_BYTES, 32_768, STATE_MAX_BYTES * 2, 64);
 #[derive(
     Clone,
     Debug,
@@ -72,30 +72,6 @@ struct ReservePersistedEventV1 {
     target_block_height: u64,
     event_index: u32,
     event: SorafsReserveLedgerEvent,
-}
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveEventJournalHeadV1"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
-struct ReserveEventJournalHeadV1 {
-    last_sequence: u64,
-    last_target_block_height: u64,
-    last_event_index: u32,
-}
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::NoritoSerialize,
-    norito::NoritoDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1")]
-struct ReserveStateV1 {
-    policy: ReserveAuthorityPolicyRecordV1,
-    journal_head: ReserveEventJournalHeadV1,
 }
 /// Non-reusable proof that the reserve state machine approved one exact
 /// provider withdrawal from protocol custody.
@@ -246,10 +222,6 @@ fn require_governance(
             "CanSetSorafsReservePolicy is required for authoritative reserve governance",
         ))
     }
-}
-fn reserve_state_key() -> &'static StatePath {
-    static KEY: OnceLock<StatePath> = OnceLock::new();
-    KEY.get_or_init(|| StatePath::from_str(RESERVE_STATE_KEY).expect("static state key is valid"))
 }
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
@@ -810,31 +782,10 @@ fn decode_reserve_state_with_current(
         Some(current) => decode_state_for_current(bytes, "reserve state", current)?,
         None => decode_state(bytes, "reserve state")?,
     };
-    validate_policy_record(&state.policy)?;
-    if state.journal_head.last_sequence == 0 || state.journal_head.last_target_block_height == 0 {
-        return Err(corrupt_state(
-            "stored reserve event journal head is invalid",
-        ));
-    }
-    Ok(state)
-}
-fn validate_policy_record(
-    record: &ReserveAuthorityPolicyRecordV1,
-) -> Result<(), InstructionExecutionError> {
-    record
-        .policy
+    state
         .validate()
-        .map_err(|error| corrupt_state(format!("invalid stored reserve policy: {error}")))?;
-    let digest = record
-        .policy
-        .digest()
-        .map_err(|error| corrupt_state(format!("failed to digest reserve policy: {error}")))?;
-    if digest != record.policy_digest || record.activated_at_unix == 0 {
-        return Err(corrupt_state(
-            "stored reserve policy digest or activation timestamp is invalid",
-        ));
-    }
-    Ok(())
+        .map_err(|error| corrupt_state(error.to_string()))?;
+    Ok(state)
 }
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,

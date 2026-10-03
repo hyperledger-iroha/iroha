@@ -5,6 +5,12 @@
 //! by the signed seven-seat ceiling. A selected seat withholds fresh Pasta keys in the
 //! retention cases; the eight-candidate case specifically withholds an incumbent. The
 //! current exact quorum must cancel that immutable attempt without losing finality.
+//! Retention scenarios restart every process, then authenticate a paid successor signed
+//! by the unchanged generation and a fresh, separately identified future attempt.
+//! The complete rotation also reserves existing real XOR for a bounded reward claim
+//! and withdraws a departing seat's full bond only after replacement and liability
+//! expiry. Its genuine Parliament pulse consumes current credentials while the next
+//! committee remains pending. Retail monthly policy and network slashing remain separate gates.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::{sandbox, sync::rebind_blocking_client};
@@ -87,10 +93,18 @@ struct NativeProviderManifest {
     policy_digest: [u8; 32],
 }
 
+#[path = "support/committee_parliament.rs"]
+mod committee_parliament;
+#[path = "support/committee_staking.rs"]
+mod committee_staking;
 #[path = "support/committee_status.rs"]
 mod committee_status;
+#[path = "support/parliament_submission.rs"]
+mod parliament_submission;
 
-const EPOCH: u64 = 24;
+// Paid citizen setup precedes selection; one full preparation epoch then covers every seat.
+const EPOCH: u64 = 64;
+const MAX_QUALIFICATION_HEIGHT: u64 = EPOCH * 8;
 const SELECTION: u64 = EPOCH;
 const CUTOFF: u64 = EPOCH * 2;
 const TARGET_FIRST: u64 = EPOCH * 2 + 1;
@@ -207,7 +221,7 @@ fn finality_limits() -> NativeFinalityLimits {
     NativeFinalityLimits {
         block_bytes: 32 * 1024 * 1024,
         journal_bytes: 64 * 1024 * 1024,
-        block_count: 256,
+        block_count: usize::try_from(MAX_QUALIFICATION_HEIGHT).expect("bounded fixture history"),
         allocated_bytes: 512 * 1024 * 1024,
     }
 }
@@ -227,6 +241,129 @@ fn verify_equal_vote_context(proof: &CertifiedBlock, expected: &BTreeSet<PeerId>
                 .commit_qc()
                 .is_some_and(|qc| qc.signers.count_ones() == quorum),
         "native finality is not an exact equal-vote certificate for the expected roster"
+    );
+    Ok(())
+}
+
+async fn prove_retained_successor_after_restart(
+    network: &sandbox::SerializedNetwork,
+    admin: &Client,
+    genesis_voters: &BTreeSet<PeerId>,
+    cancelled: &ValidatorCommitteePreparationV1,
+    cutoff: &CertifiedBlock,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+) -> Result<()> {
+    let boundary = cutoff
+        .commitment()
+        .schedule
+        .boundary
+        .as_ref()
+        .ok_or_else(|| eyre!("retention cutoff lacks its authenticated boundary"))?;
+    let replacement = boundary
+        .preparation
+        .as_ref()
+        .ok_or_else(|| eyre!("cancelled attempt lacks a fresh E+3 selection"))?;
+    ensure!(
+        cutoff.height() == CUTOFF
+            && boundary.next.authorization.decision
+                == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            && boundary.next.authority == cutoff.commitment().schedule.current.authority
+            && boundary.next.committee == cutoff.commitment().schedule.current.committee
+            && replacement.target_epoch == 3
+            && replacement.selection_height == CUTOFF
+            && replacement.transition_id().map_err(|error| eyre!(error))?
+                != cancelled.transition_id().map_err(|error| eyre!(error))?
+            && replacement
+                .beacon_session_id()
+                .map_err(|error| eyre!(error))?
+                != cancelled
+                    .beacon_session_id()
+                    .map_err(|error| eyre!(error))?,
+        "cancelled preparation cannot be shrunk or reused as the next attempt"
+    );
+    network.shutdown().await;
+    network.start_all().await?;
+    network.ensure_blocks(CUTOFF).await?;
+    let restarted = read_validator_committee(admin, 2).await?;
+    ensure!(
+        restarted.selected.as_ref().is_some_and(|row| {
+            row.transition.preparation == *cancelled
+                && row.transition.outcome.as_ref() == Some(&boundary.next.authorization)
+        }),
+        "all-seat restart lost the immutable cancelled transition"
+    );
+    let transaction = committee_staking::submit_signed(
+        admin,
+        Log::new(
+            Level::INFO,
+            "prove retained generation after all-seat restart".to_owned(),
+        )
+        .into(),
+        true,
+    )
+    .await?;
+    network.ensure_blocks(TARGET_FIRST).await?;
+    let (_, chain) = read_on_dedicated_thread({
+        let admin = admin.clone();
+        let network_id = network.network_id();
+        move || {
+            read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, TARGET_FIRST)
+        }
+    })
+    .await
+    .wrap_err("restarted retained-generation finality worker failed")?;
+    let successor = chain
+        .last()
+        .ok_or_else(|| eyre!("retained generation did not certify its successor"))?;
+    verify_equal_vote_context(successor, genesis_voters)?;
+    let current = &successor.commitment().schedule.current;
+    ensure!(
+        genesis_voters.len() == 4
+            && chain.iter().any(|block| {
+                block.height() == CUTOFF && block.block_hash() == cutoff.block_hash()
+            })
+            && successor.height() == TARGET_FIRST
+            && current.authority.generation == 0
+            && current.authorization.epoch == 2
+            && current == &boundary.next,
+        "restarted successor must use the exact retained generation and ordered original four seats"
+    );
+    let block = successor.block();
+    ensure!(
+        block.network_entrypoint_count() == 1
+            && matches!(block.network_entrypoint_at(0),
+                Some(TransactionEntrypoint::External(input)) if input == &transaction),
+        "retained successor must execute exactly the newly signed paid input"
+    );
+    let (_, output) = block
+        .network_output_at(0)
+        .ok_or_else(|| eyre!("retained successor lost its paid Network output"))?;
+    let receipt = output
+        .result
+        .nexus_fee_receipt()
+        .ok_or_else(|| eyre!("retained successor omitted actual fee settlement"))?;
+    ensure!(
+        output.result.0.is_ok()
+            && receipt.source_id == *Hash::from(transaction.hash_as_entrypoint()).as_ref()
+            && receipt.block_height == TARGET_FIRST
+            && receipt.fee_asset_id == cancelled.eligibility.xor_asset_definition_id
+            && receipt.debit_source
+                == iroha::data_model::nexus::FeeDebitSource::Account(
+                    transaction.authority().clone()
+                )
+            && matches!(
+                receipt.settlement,
+                iroha::data_model::block::consensus::NexusFeeSettlementV1::Burn
+            )
+            && !receipt.fee_amount.is_zero(),
+        "retained-generation progress must settle its separate actual XOR fee"
+    );
+    let fresh = read_validator_committee(admin, 3).await?;
+    ensure!(
+        fresh.selected.as_ref().is_some_and(|row| {
+            row.transition.preparation == *replacement && row.transition.outcome.is_none()
+        }),
+        "retained-generation restart must preserve the exact fresh E+3 preparation"
     );
     Ok(())
 }
@@ -471,6 +608,40 @@ fn publish_selected(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressAction {
+    Complete,
+    AwaitCatchup,
+    SubmitAt(u64),
+}
+
+/// Spend one progress transaction only after every voter has applied the prior one.
+fn progress_action(
+    heights: &[u64],
+    target: u64,
+    pending_height: Option<u64>,
+) -> Result<ProgressAction> {
+    let minimum = *heights
+        .iter()
+        .min()
+        .ok_or_else(|| eyre!("no progress voters"))?;
+    let maximum = *heights.iter().max().expect("nonempty voter heights");
+    if minimum >= target {
+        return Ok(ProgressAction::Complete);
+    }
+    if maximum >= target
+        || minimum != maximum
+        || pending_height.is_some_and(|height| minimum < height)
+    {
+        return Ok(ProgressAction::AwaitCatchup);
+    }
+    Ok(ProgressAction::SubmitAt(
+        minimum
+            .checked_add(1)
+            .ok_or_else(|| eyre!("progress height overflow"))?,
+    ))
+}
+
 async fn advance_to_height(
     network: &sandbox::SerializedNetwork,
     voters: &[PeerId],
@@ -479,32 +650,53 @@ async fn advance_to_height(
     let peers = exact_process_roster(network, voters)?;
     let deadline = Instant::now() + WAIT;
     let mut tick = 0_u64;
+    let mut pending_height = None;
     loop {
         let mut heights = Vec::new();
         for peer in &peers {
             heights.push(committee_status::height_until(peer.client().client(), deadline).await?);
         }
-        let reached = heights.iter().filter(|height| **height >= target).count();
-        if reached == peers.len() {
-            return Ok(());
-        }
         ensure!(
             Instant::now() < deadline,
             "current validator quorum stalled before height {target}; heights={heights:?}"
         );
-        let client = peers[usize::try_from(tick)? % peers.len()].client();
-        let message = format!("committee transition progress {target}:{tick}");
-        read_on_dedicated_thread(move || {
-            committee_status::submit_until(client, deadline, |bounded| {
-                bounded.submit(
-                    Log::new(Level::INFO, message),
-                    FeePaymentIntent::authority(Vec::new(), None),
-                )
-            })
-        })
-        .await
-        .wrap_err("progress submit worker failed")?;
-        tick += 1;
+        match progress_action(&heights, target, pending_height)? {
+            ProgressAction::Complete => return Ok(()),
+            ProgressAction::AwaitCatchup => {}
+            ProgressAction::SubmitAt(height) => {
+                let client = peers[usize::try_from(tick)? % peers.len()].client();
+                let account = client.account_client();
+                let message = format!("committee transition progress {target}:{tick}");
+                pending_height = Some(height);
+                tokio::time::timeout_at(deadline.into(), async {
+                    let mut payload = account.prepare_transaction(
+                        iroha::client::AccountTransactionDraft::new(
+                            vec![Log::new(Level::INFO, message)],
+                            FeePaymentIntent::authority(Vec::new(), None),
+                            Metadata::default(),
+                        ),
+                    )?;
+                    let quote = account
+                        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                            payload: &payload,
+                        })
+                        .await?;
+                    ensure!(
+                        payload
+                            .fee_payment
+                            .has_same_payer_and_gas_bound(&quote.intent),
+                        "progress fee quote changed the signed payer"
+                    );
+                    payload.fee_payment = quote.intent;
+                    let transaction = account.sign_transaction(payload)?;
+                    account.submit_transaction_and_wait(&transaction).await?;
+                    Ok::<_, eyre::Report>(())
+                })
+                .await
+                .wrap_err("progress transaction exceeded its original deadline")??;
+                tick += 1;
+            }
+        }
         sleep(POLL).await;
     }
 }
@@ -708,7 +900,7 @@ fn finality_chain_from_proofs(
     ) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
 ) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
     ensure!(
-        (2..=256).contains(&end),
+        (2..=MAX_QUALIFICATION_HEIGHT).contains(&end),
         "committee proof cut exceeds its explicit disposable bound"
     );
     ensure!(
@@ -1363,6 +1555,7 @@ async fn run_custody_or_activation_scenario(
     pool: &BTreeSet<PeerId>,
     first_preparation: &ValidatorCommitteePreparationV1,
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    parliament_proposal: Option<iroha::data_model::governance::types::ProposalKind>,
 ) -> Result<()> {
     ensure!(
         !scenario.withholds_keys(),
@@ -1398,6 +1591,29 @@ async fn run_custody_or_activation_scenario(
         first.target.len() == 7 && first.prepared.len() == 7 - usize::from(missing.is_some()),
         "first target custody preparation did not preserve exact seven-seat membership"
     );
+    let governance_pulse = if scenario == QualificationScenario::ActivateSevenThenReturnFour {
+        Some(
+            committee_parliament::exercise(
+                network,
+                admin,
+                genesis_voters,
+                first_preparation,
+                &genesis_dkg.public_session,
+                &first._dkg.public_session,
+                signed_genesis_hash,
+                parliament_proposal.ok_or_else(|| {
+                    eyre!("complete rotation lacks its admitted Parliament proposal")
+                })?,
+            )
+            .await?,
+        )
+    } else {
+        ensure!(
+            parliament_proposal.is_none(),
+            "retention-only scenario acquired an unrelated proposal"
+        );
+        None
+    };
     let initial_roster = network
         .validators()
         .iter()
@@ -1424,7 +1640,7 @@ async fn run_custody_or_activation_scenario(
                     ExitPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: owner.account,
-                        release_at_ms: u64::MAX,
+                        release_at_ms: committee_staking::finite_release_deadline()?,
                     },
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1459,6 +1675,9 @@ async fn run_custody_or_activation_scenario(
     })
     .await
     .wrap_err("first cutoff finality worker failed")?;
+    if let Some(pulse) = &governance_pulse {
+        committee_parliament::verify_boundary(&cutoff_chain, pulse, &genesis_dkg.public_session)?;
+    }
     let cutoff = cutoff_chain
         .last()
         .ok_or_else(|| eyre!("first cutoff lacks authenticated finality"))?;
@@ -1508,7 +1727,15 @@ async fn run_custody_or_activation_scenario(
                 && transition.outcome.as_ref() == Some(decision),
             "certified retention must name exactly the missing target custody seat"
         );
-        return Ok(());
+        return prove_retained_successor_after_restart(
+            network,
+            admin,
+            genesis_voters,
+            first_preparation,
+            cutoff,
+            signed_genesis_hash,
+        )
+        .await;
     }
     ensure!(
         decision.decision == KagemushaMintFinalityEpochDecisionV1::Activate
@@ -1564,6 +1791,21 @@ async fn run_custody_or_activation_scenario(
             && return_target.len() == 4,
         "genuine eight-candidate election must freeze the four non-exiting seats for E+3"
     );
+    let departing = seven_set
+        .difference(&return_target)
+        .next()
+        .ok_or_else(|| eyre!("seven-seat committee has no departing validator"))?;
+    let lifecycle = committee_staking::fund_rewards_and_schedule_withdrawal(
+        network,
+        admin,
+        operators
+            .get(departing)
+            .ok_or_else(|| eyre!("departing seat has no real owner"))?,
+        genesis_voters.contains(departing),
+        &return_preparation,
+        signed_genesis_hash,
+    )
+    .await?;
     read_on_dedicated_thread({
         let operators = operators.clone();
         let processes = network
@@ -1594,6 +1836,7 @@ async fn run_custody_or_activation_scenario(
         second.target.len() == 4 && second.prepared.len() == 4,
         "return attempt must prove all four target custodians"
     );
+    lifecycle.verify_retained_after_restart().await?;
     let second_cutoff = TARGET_LAST;
     advance_to_height(network, &first.target, second_cutoff).await?;
     let (_, return_chain) = read_on_dedicated_thread({
@@ -1650,6 +1893,9 @@ async fn run_custody_or_activation_scenario(
         four.commitment().schedule.current.authority.generation == 2,
         "4→7→4 did not complete the second authenticated signing generation"
     );
+    lifecycle
+        .complete_withdrawal(network, &second.target, &return_target)
+        .await?;
     Ok(())
 }
 
@@ -1738,6 +1984,11 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
         )));
+    let builder = if scenario == QualificationScenario::ActivateSevenThenReturnFour {
+        committee_parliament::genesis(builder)?
+    } else {
+        builder
+    };
     let network = sandbox::build_network_or_skip(builder, scenario.seed()).ok_or_else(|| {
         eyre!("committee qualification requires an actual {pool_size}-process disposable network")
     })?;
@@ -1890,6 +2141,14 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .await
         .wrap_err("candidate admission worker failed")?;
         ensure!(initial_height < SELECTION, "candidate pool did not enter the selecting prestate");
+        let parliament_proposal = if scenario == QualificationScenario::ActivateSevenThenReturnFour {
+            committee_parliament::fund_and_register_citizens(
+                &network, &admin, &xor, genesis_bundle.block_hash,
+            ).await?;
+            Some(committee_parliament::stage_proposal(&admin).await?)
+        } else {
+            None
+        };
         let initial_roster = network.validators().iter().map(|peer| peer.id()).collect::<Vec<_>>();
         advance_to_height(&network, &initial_roster, SELECTION).await?;
         let before = read_validator_committee(&admin, 2).await?;
@@ -1985,6 +2244,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 &pool,
                 &preparation,
                 genesis_bundle.block_hash,
+                parliament_proposal,
             )
             .await;
         }
@@ -2025,18 +2285,6 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 && cutoff_snapshot.next.committee == selection_proof.commitment().schedule.current.committee,
             "a missing target key must cancel this exact attempt while retaining all four incumbent seats"
         );
-        let replacement = cutoff_snapshot
-            .preparation
-            .as_ref()
-            .ok_or_else(|| eyre!("next selection must create a new E+3 attempt"))?;
-        ensure!(
-            replacement.target_epoch == 3
-                && replacement.selection_height == CUTOFF
-                && replacement.transition_id().map_err(|error| eyre!(error))? != selected_id
-                && replacement.beacon_session_id().map_err(|error| eyre!(error))?
-                    != preparation.beacon_session_id().map_err(|error| eyre!(error))?,
-            "cancelled preparation cannot be shrunk or reused as the next attempt"
-        );
         let terminal = read_validator_committee(&admin, 2).await?;
         ensure!(
             terminal.selected.as_ref().is_some_and(|row| {
@@ -2045,7 +2293,15 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             }),
             "retained transition outcome must match its finality-certified body"
         );
-        Ok(())
+        prove_retained_successor_after_restart(
+            &network,
+            &admin,
+            &genesis_voters,
+            &preparation,
+            &cutoff_proof,
+            genesis_bundle.block_hash,
+        )
+        .await
     }
     .await;
     network.shutdown_and_release().await;
@@ -2076,6 +2332,51 @@ async fn complete_keys_and_dkg_but_missing_target_custody_certifies_four_retaine
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_real_xor_committee_rotates_four_to_seven_to_four() -> Result<()> {
     run_overfull_qualification(QualificationScenario::ActivateSevenThenReturnFour).await
+}
+
+#[test]
+fn progress_waits_for_each_submitted_height_and_stops_at_the_first_target_observation() -> Result<()>
+{
+    let target = 24;
+    let observations = [
+        [22, 22, 22, 22],
+        [22, 22, 22, 22], // submission remains outstanding
+        [23, 22, 22, 22],
+        [23, 23, 23, 22],
+        [23, 23, 23, 23],
+        [23, 23, 23, 23], // the final progress input remains outstanding
+        [23, 24, 23, 23],
+        [24, 24, 23, 24],
+        [24, 24, 24, 24],
+    ];
+    let mut pending = None;
+    let mut submitted = Vec::new();
+    for (index, heights) in observations.iter().enumerate() {
+        match progress_action(heights, target, pending)? {
+            ProgressAction::SubmitAt(height) => {
+                assert!(
+                    index == 0 || index == 4,
+                    "duplicate progress submission while catching up"
+                );
+                submitted.push(height);
+                pending = Some(height);
+            }
+            ProgressAction::AwaitCatchup => assert_ne!(index, observations.len() - 1),
+            ProgressAction::Complete => assert_eq!(index, observations.len() - 1),
+        }
+    }
+    assert_eq!(submitted, [23, 24]);
+    assert_eq!(
+        progress_action(&[24, 23, 23, 23], 24, None)?,
+        ProgressAction::AwaitCatchup,
+        "a peer reaching the cutoff suppresses further work even without a local pending input"
+    );
+    assert_eq!(
+        progress_action(&[23, 22, 22, 22], 24, None)?,
+        ProgressAction::AwaitCatchup
+    );
+    assert!(progress_action(&[], 24, None).is_err());
+    Ok(())
 }
 
 #[test]

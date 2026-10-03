@@ -2816,6 +2816,52 @@ fn prove_recursive_state_step(
 }
 
 #[test]
+fn ordinary_finalized_statement_is_bound_by_neutral_finality_membership() {
+    // Same existing public Model fixture; its Mint113/AEAD bytes are inert and create no
+    // pre-debit/Node/Native authority. The maintained certificate fixture signs the exact
+    // neutral statement with real known-public Pasta test signers, without generating a proof.
+    let request =
+        iroha_data_model::testing::ordinary_mint::kagemusha_ordinary_mint_codec_fixture_v1()
+            .request;
+    let statement = request
+        .authorization
+        .finalized_credit_statement(1020)
+        .unwrap();
+    let funding = FundingCertificate::from_statement(statement.clone());
+    funding.finalized.validate_shape().unwrap();
+    assert!(certificate_signature_equations(&funding.finalized));
+    assert_eq!(
+        funding.finalized.membership.leaf.statement_digest,
+        statement.canonical_digest().unwrap()
+    );
+    assert_eq!(
+        funding.finalized.membership.leaf.amount,
+        request.authorization.statement.context.amount
+    );
+    let mut other_request = request;
+    other_request.authorization.proof.eq_proof[0] ^= 1;
+    other_request.canonical_bytes().unwrap();
+    let changed_statement = other_request
+        .authorization
+        .finalized_credit_statement(1020)
+        .unwrap();
+    assert_eq!(
+        changed_statement.lifecycle.credit_id,
+        statement.lifecycle.credit_id
+    );
+    assert_ne!(
+        changed_statement.mint_authorization_digest,
+        statement.mint_authorization_digest
+    );
+    let mut substituted = funding.finalized;
+    substituted.statement = changed_statement;
+    assert!(
+        substituted.validate_shape().is_err(),
+        "the old certified leaf cannot carry a different complete ordinary authorization original"
+    );
+}
+
+#[test]
 fn funding_certificate_preflight_has_exact_real_quorum_and_positive_membership() {
     let (_, state, funding) = funding_fixture();
     assert_eq!(

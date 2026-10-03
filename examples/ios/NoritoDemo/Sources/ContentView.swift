@@ -58,10 +58,28 @@ final class DemoConnectViewModel: ObservableObject {
 
   private var webSocketTask: URLSessionWebSocketTask?
   private let session = URLSession(configuration: .default)
+  private let randomBytes: (UnsafeMutableRawBufferPointer) -> OSStatus
   private var nextSeq: UInt64 = 1
+  private var sessionGeneration: UInt64 = 0
   private var launchNonce = Data()
   private var signedApprovalPermissionsJSON: Data?
   private var signedApprovalProofJSON: Data?
+#if canImport(IrohaSwift)
+  private struct ApprovalBinding {
+    let network: NetworkId
+    let sessionID: Data
+    let appPublicKey: Data
+    let nonce: Data
+    let relayToken: String
+  }
+  private var approvalBinding: ApprovalBinding?
+  private var approvalAccepted = false
+  private var approvalRejected = false
+  private var walletOpenAccepted = false
+  private var walletRequest: ConnectWalletRequest?
+  private var walletRequestPublicKey: Data?
+  private var signedWalletApproval: ConnectApprove?
+#endif
   private let defaultsVerifiedKey = "NoritoDemo.VerifiedAccount"
   #if canImport(CryptoKit)
   private var localPriv: Curve25519.KeyAgreement.PrivateKey?
@@ -90,7 +108,10 @@ final class DemoConnectViewModel: ObservableObject {
     return components.string ?? ""
   }
 
-  init() {
+  init(randomBytes: @escaping (UnsafeMutableRawBufferPointer) -> OSStatus = {
+    SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!)
+  }) {
+    self.randomBytes = randomBytes
     addressPreview = DemoConnectViewModel.generateAddressPreview()
     loadVerifiedAccount()
     applyEnvironmentDefaults()
@@ -199,6 +220,65 @@ final class DemoConnectViewModel: ObservableObject {
     }
   }
 
+  // The OS launch handler and tests use this SDK-owned parser; no URI is logged.
+  @discardableResult
+  func importWalletLaunch(_ literal: String) -> Bool {
+#if canImport(IrohaSwift) && canImport(CryptoKit)
+    do {
+      guard webSocketTask == nil, walletRequest == nil, approvalBinding == nil,
+            !walletOpenAccepted, !approvalRejected else {
+        throw ConnectSessionError.protocolViolation("Reset the current session before importing a launch.")
+      }
+      guard let node = URL(string: baseURL) else {
+        throw ConnectSessionError.protocolViolation("Configure the trusted wallet node first.")
+      }
+      let request = try ConnectWalletRequest.parse(literal,
+        expectedNetworkID: NetworkId(literal: networkId), baseURL: node)
+      let pair = try ConnectCrypto.generateKeyPair()
+      let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: pair.privateKey)
+      guard privateKey.publicKey.rawRepresentation == pair.publicKey else {
+        throw ConnectSessionError.protocolViolation("Wallet key generation failed.")
+      }
+      resetSessionHandshake()
+      role = .wallet
+      walletRequest = request
+      walletRequestPublicKey = pair.publicKey
+      localPriv = privateKey
+      localPubB64 = pair.publicKey.base64EncodedString()
+      launchNonce = request.nonce
+      lastAppPubB64 = request.appPublicKey.base64EncodedString()
+      sid = request.sid
+      // The request owns launch credentials; do not publish them to editable UI fields.
+      tokenApp = ""
+      tokenWallet = ""
+      tokenRelay = ""
+      peerPubB64 = ""
+      handshakeStatus = "Wallet launch imported; awaiting Open"
+      log("Wallet launch imported")
+      return true
+    } catch {
+      rejectApproval("Wallet launch refused")
+      return false
+    }
+#else
+    log("Wallet launch requires IrohaSwift and CryptoKit")
+    return false
+#endif
+  }
+
+#if canImport(IrohaSwift) && canImport(CryptoKit)
+  private func requireWalletRequest() throws -> ConnectWalletRequest {
+    guard role == .wallet, !approvalRejected, let request = walletRequest,
+          networkId == request.networkID.literal, baseURL == request.baseURL.absoluteString,
+          sid == request.sid, launchNonce == request.nonce,
+          lastAppPubB64 == request.appPublicKey.base64EncodedString(),
+          localPriv?.publicKey.rawRepresentation == walletRequestPublicKey else {
+      throw ConnectSessionError.protocolViolation("The original wallet launch is no longer current.")
+    }
+    return request
+  }
+#endif
+
   func createSession() {
 #if canImport(CryptoKit)
     if localPriv == nil { generateEphemeral() }
@@ -210,15 +290,19 @@ final class DemoConnectViewModel: ObservableObject {
       log("CONNECT_NETWORK_ID must be a canonical NetworkId")
       return
     }
+    let launchNetwork = networkId
     var nonce = Data(count: 16)
-    _ = nonce.withUnsafeMutableBytes {
-      SecRandomCopyBytes(kSecRandomDefault, nonce.count, $0.baseAddress!)
+    let entropyStatus = nonce.withUnsafeMutableBytes(randomBytes)
+    guard entropyStatus == errSecSuccess else {
+      log("Secure nonce generation failed")
+      return
     }
     guard nonce.contains(where: { $0 != 0 }),
           let sidBytes = computeSid(networkId: networkIdBytes, appPk: appPk, nonce: nonce) else {
       log("Failed to derive an exact Connect SID")
       return
     }
+    resetSessionHandshake()
     launchNonce = nonce
     lastAppPubB64 = appPk.base64EncodedString()
     let sidB64 = base64url(sidBytes)
@@ -229,7 +313,7 @@ final class DemoConnectViewModel: ObservableObject {
     req.setValue("application/json", forHTTPHeaderField: "Accept")
     let body: [String: Any] = [
       "sid": sidB64,
-      "network_id": networkId,
+      "network_id": launchNetwork,
       "app_pk": base64url(appPk),
       "nonce": base64url(nonce),
       "node": baseURL,
@@ -244,7 +328,7 @@ final class DemoConnectViewModel: ObservableObject {
       do {
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
           guard (json["sid"] as? String) == sidB64,
-                (json["network_id"] as? String) == self.networkId,
+                (json["network_id"] as? String) == launchNetwork,
                 (json["app_pk"] as? String) == self.base64url(appPk),
                 (json["nonce"] as? String) == self.base64url(nonce) else {
             self.log("Session response substituted the launch identity")
@@ -254,29 +338,62 @@ final class DemoConnectViewModel: ObservableObject {
           let tokApp = (json["token_app"] as? String) ?? ""
           let tokWal = (json["token_wallet"] as? String) ?? ""
           let tokRelay = (json["token_relay"] as? String) ?? ""
-          DispatchQueue.main.async { self.sid = sidEcho; self.tokenApp = tokApp; self.tokenWallet = tokWal; self.tokenRelay = tokRelay }
-          self.log("Session created. sid=\(sidEcho)")
+          DispatchQueue.main.async {
+            _ = self.publishSessionResponse(network: launchNetwork, appPublicKey: appPk,
+              nonce: nonce, sessionID: sidEcho, appToken: tokApp,
+              walletToken: tokWal, relayToken: tokRelay)
+          }
         } else { self.log("Unexpected JSON format") }
       } catch { self.log("Decode error: \(error.localizedDescription)") }
     }.resume()
   }
 
+  // Used by the true main-queue HTTP completion and the stale-response regression.
+  @discardableResult
+  func publishSessionResponse(network: String, appPublicKey: Data, nonce: Data,
+                              sessionID: String, appToken: String,
+                              walletToken: String, relayToken: String) -> Bool {
+    guard networkId == network, launchNonce == nonce,
+          localPriv?.publicKey.rawRepresentation == appPublicKey,
+          lastAppPubB64 == appPublicKey.base64EncodedString(),
+          let networkBytes = decodeNetworkId(network),
+          let derived = computeSid(networkId: networkBytes, appPk: appPublicKey, nonce: nonce),
+          base64url(derived) == sessionID else {
+      log("Ignored a superseded session response")
+      return false
+    }
+    sid = sessionID
+    tokenApp = appToken
+    tokenWallet = walletToken
+    tokenRelay = relayToken
+    log("Session created")
+    return true
+  }
+
+  // The real join path and tests share request preparation; credentials stay in the header.
+  func prepareWebSocketRequest() throws -> URLRequest {
+#if canImport(IrohaSwift)
+    if role == .wallet, walletRequest != nil {
+      let request = try requireWalletRequest().makeWebSocketRequest()
+      log("WS connect requested")
+      return request
+    }
+    guard let node = URL(string: baseURL) else { throw ToriiClientError.invalidURL(baseURL) }
+    let request = try ConnectClient.makeWebSocketRequest(baseURL: node, sid: sid,
+      role: role == .app ? .app : .wallet, token: role == .app ? tokenApp : tokenWallet)
+    log("WS connect requested")
+    return request
+#else
+    throw NSError(domain: "NoritoDemo.Connect", code: 1)
+#endif
+  }
+
   func joinWebSocket() {
-    guard !sid.isEmpty else { log("No sid — create session first"); return }
-    guard var comps = URLComponents(string: baseURL) else { log("Bad base URL"); return }
-    comps.path = "/v1/connect/ws"
-    let token = (role == .app) ? tokenApp : tokenWallet
-    comps.queryItems = [
-      URLQueryItem(name: "sid", value: sid),
-      URLQueryItem(name: "role", value: role.rawValue),
-      URLQueryItem(name: "token", value: token),
-    ]
-    if token.isEmpty { log("Warning: token is empty; WS may be rejected") }
-    if comps.scheme == "http" { comps.scheme = "ws" }
-    if comps.scheme == "https" { comps.scheme = "wss" }
-    guard let wsURL = comps.url else { log("Bad WS URL"); return }
-    log("WS connect → \(wsURL.absoluteString)")
-    let task = session.webSocketTask(with: wsURL)
+    guard webSocketTask == nil else { log("Disconnect the current socket first"); return }
+    let request: URLRequest
+    do { request = try prepareWebSocketRequest() }
+    catch { log("WS request rejected before connection"); return }
+    let task = session.webSocketTask(with: request)
     webSocketTask = task
     task.resume()
     DispatchQueue.main.async { self.wsStatus = "Connected" }
@@ -296,6 +413,7 @@ final class DemoConnectViewModel: ObservableObject {
   func disconnect() {
     webSocketTask?.cancel(with: .normalClosure, reason: nil)
     webSocketTask = nil
+    resetSessionHandshake()
     DispatchQueue.main.async { self.wsStatus = "Disconnected" }
     DispatchQueue.main.async { self.handshakeStatus = "Idle" }
     log("WS disconnected")
@@ -359,7 +477,7 @@ final class DemoConnectViewModel: ObservableObject {
   }
   private func aadV1(sid: Data, dir: UInt8, seq: UInt64) -> Data {
     var out = Data(); out.append("connect:v1".data(using: .utf8)!); out.append(sid); out.append(Data([dir]))
-    var le = seq.littleEndian; withUnsafeBytes(of: &le) { out.append($0) }
+    var le = seq.littleEndian; withUnsafeBytes(of: &le) { out.append(contentsOf: $0) }
     out.append(Data([1]))
     return out
   }
@@ -372,104 +490,221 @@ final class DemoConnectViewModel: ObservableObject {
   // Control frames via bridge (optional)
   private let ctrlKindOpen: UInt16 = 1
   private let ctrlKindApprove: UInt16 = 2
+  // The actual outbound path retains the exact inputs before accepting an approval.
+  func prepareControlOpenFrame() throws -> Data {
+#if canImport(IrohaSwift)
+    guard role == .app, nextSeq == 1, approvalBinding == nil,
+          let sk = localPriv, let sidData = dataFromBase64OrBase64URL(sid),
+          let network = try? NetworkId(literal: networkId), launchNonce.count == 16,
+          try ConnectCrypto.deriveSessionID(networkID: network,
+            appPublicKey: sk.publicKey.rawRepresentation, nonce: launchNonce) == sidData else {
+      throw ConnectSessionError.protocolViolation("Open requires the original launch identity")
+    }
+    _ = try ConnectCrypto.relayAuthHash(sessionID: sidData, relayToken: tokenRelay)
+    let frame = try NoritoBridgeKit().encodeControlOpenExt(
+      sid: sidData, dir: 0, seq: 1, appPub: sk.publicKey.rawRepresentation,
+      nonce: launchNonce, appMetaJson: nil, networkId: network.bytes,
+      permissionsJson: permsJson(request: true)
+    )
+    approvalBinding = ApprovalBinding(network: network, sessionID: sidData,
+      appPublicKey: sk.publicKey.rawRepresentation, nonce: launchNonce, relayToken: tokenRelay)
+    approvalAccepted = false
+    approvalRejected = false
+    nextSeq = 2
+    return frame
+#else
+    throw NSError(domain: "NoritoDemo.Connect", code: 1)
+#endif
+  }
+
   func sendControlOpen() {
     guard let task = webSocketTask else { return }
-    guard let sk = localPriv else { log("No local key; generate before Open"); return }
-    guard let sidData = dataFromBase64OrBase64URL(sid), sidData.count == 32 else { log("sid invalid for Open"); return }
-    guard launchNonce.count == 16, let networkIdBytes = decodeNetworkId(networkId) else {
-      log("Open requires the exact NetworkId and launch nonce")
-      return
-    }
-    let bridge = NoritoBridgeKit()
     do {
-      let frame = try bridge.encodeControlOpenExt(
-        sid: sidData, dir: 0, seq: nextSeq,
-        appPub: Data(sk.publicKey.rawRepresentation), nonce: launchNonce,
-        appMetaJson: nil, networkId: networkIdBytes,
-        permissionsJson: permsJson(request: true)
-      )
-      nextSeq &+= 1
+      let frame = try prepareControlOpenFrame()
       task.send(.data(frame)) { [weak self] err in
-        if let err = err { self?.log("Open send error: \(err.localizedDescription)") }
-        else { self?.log("Sent identity-bound Open control"); self?.handshakeStatus = "Open sent" }
+        DispatchQueue.main.async {
+          guard let self else { return }
+          if let err {
+            self.rejectApproval("Open send error: \(err.localizedDescription)")
+          } else {
+            self.log("Sent identity-bound Open control")
+            if !self.approvalAccepted && !self.approvalRejected { self.handshakeStatus = "Open sent" }
+          }
+        }
       }
     } catch { log("Open encode not available: \(error)") }
   }
+
+  // The real send path uses these exact canonical bytes; tests inspect the same result.
+  func prepareControlApproveFrame() throws -> Data {
+#if canImport(IrohaSwift) && canImport(CryptoKit)
+    let request = try requireWalletRequest()
+    guard walletOpenAccepted, nextSeq == 1, let approval = signedWalletApproval,
+          approval.walletPublicKey == localPriv?.publicKey.rawRepresentation,
+          approval.accountID == approveAccountId,
+          approval.walletSignature.signature.base64EncodedString() == approveSigB64 else {
+      throw ConnectSessionError.protocolViolation("Sign the original wallet approval before sending it.")
+    }
+    let bytes = try request.prepareApproval(approval)
+    nextSeq = 2
+    return bytes
+#else
+    throw NSError(domain: "NoritoDemo.Connect", code: 1)
+#endif
+  }
+
   func sendControlApprove() {
     guard let task = webSocketTask else { return }
-    guard let sk = localPriv else { log("No local key; generate before Approve"); return }
-    guard let sidData = dataFromBase64OrBase64URL(sid), sidData.count == 32 else { log("sid invalid for Approve"); return }
-    let bridge = NoritoBridgeKit()
     do {
-      guard let sig = dataFromBase64OrBase64URL(approveSigB64), sig.count == 64 else { log("Approve signature must be 64 bytes (base64)"); return }
-      let frame = try bridge.encodeControlApproveExt(
-        sid: sidData, dir: 1, seq: nextSeq,
-        walletPub: Data(sk.publicKey.rawRepresentation), accountId: approveAccountId,
-        permissionsJson: signedApprovalPermissionsJSON ?? permsJson(request: false),
-        proofJson: signedApprovalProofJSON ?? proofJson(), sig: sig
-      )
-      nextSeq &+= 1
+      let frame = try prepareControlApproveFrame()
+      let generation = sessionGeneration
       task.send(.data(frame)) { [weak self] err in
-        if let err = err { self?.log("Approve send error: \(err.localizedDescription)") }
-        else { self?.log("Sent identity-bound Approve control"); self?.handshakeStatus = "Approve sent" }
+        DispatchQueue.main.async {
+          guard let self, self.sessionGeneration == generation,
+                self.webSocketTask === task, !self.approvalRejected else { return }
+          if err != nil { self.rejectApproval("Approval send failed") }
+          else { self.log("Sent identity-bound Approve control"); self.handshakeStatus = "Approve sent" }
+        }
       }
-    } catch { log("Approve encode not available: \(error)") }
+    } catch { rejectApproval("Approval could not be prepared") }
   }
-  private func tryHandleControl(_ data: Data) {
-    let bridge = NoritoBridgeKit()
+
+  private func clearApprovalState() {
+    clearDerivedKeys()
+    signedApprovalPermissionsJSON = nil
+    signedApprovalProofJSON = nil
+    approveSigB64 = ""
+#if canImport(IrohaSwift)
+    signedWalletApproval = nil
+#endif
+    approveSigValid = nil
+    approvePermsJson = ""
+    approveProofJson = ""
+    lastApproveAccount = ""
+    lastApproveSigB64 = ""
+    lastApproveAccountName = ""
+    lastApproveAccountDomain = ""
+    verifiedAccount = ""
+    UserDefaults.standard.removeObject(forKey: defaultsVerifiedKey)
+  }
+
+  private func resetSessionHandshake() {
+    sessionGeneration &+= 1
+    clearApprovalState()
+#if canImport(IrohaSwift)
+    approvalBinding = nil
+    approvalAccepted = false
+    approvalRejected = false
+    walletOpenAccepted = false
+    walletRequest = nil
+    walletRequestPublicKey = nil
+#endif
+    nextSeq = 1
+  }
+
+  private func rejectApproval(_ reason: String) {
+    clearApprovalState()
+#if canImport(IrohaSwift)
+    approvalRejected = true
+#endif
+    approveSigValid = false
+    log("Approval rejected: \(reason)")
+  }
+
+  // Called on the main queue by the real WebSocket receive path and by XCTest.
+  func handleIncomingFrame(_ data: Data) {
+#if canImport(IrohaSwift)
     do {
-      let (sidOut, _, _, kind) = try bridge.decodeControlKind(data)
-      guard sidOut == (dataFromBase64OrBase64URL(sid) ?? Data()) else { return }
-      switch kind {
-      case ctrlKindOpen:
-        if role == .wallet {
-          let appPk = try bridge.decodeControlOpenPub(data)
-          self.lastAppPubB64 = Data(appPk).base64EncodedString()
-          self.handshakeStatus = "Open received"
-          self.log("Got Open; deriving keys…")
-          self.deriveKeysFromPeerPub(appPk)
-          if let json = try? bridge.decodeControlOpenPermissionsJson(data) { self.openRequestedPermsJson = json }
+      let frame = try ConnectCodec.decode(data)
+      guard case .control(let control) = frame.kind else {
+        tryDecodeIncoming(data)
+        return
+      }
+      switch control {
+      case .open:
+        let request = try requireWalletRequest()
+        guard !walletOpenAccepted, let sk = localPriv else {
+          throw ConnectSessionError.protocolViolation("Unexpected Open identity")
         }
-      case ctrlKindApprove:
-        if role == .app {
-          let walletPk = try bridge.decodeControlApprovePub(data)
-          self.log("Got Approve; deriving keys…")
-          self.deriveKeysFromPeerPub(walletPk)
-          if let pjson = try? bridge.decodeControlApprovePermissionsJson(data) { self.approvePermsJson = pjson }
-          if let prjson = try? bridge.decodeControlApproveProofJson(data) { self.approveProofJson = prjson }
-          if let acct = try? bridge.decodeControlApproveAccount(data) {
-            self.lastApproveAccount = String(data: acct, encoding: .utf8) ?? acct.base64EncodedString()
-            if let sig = try? bridge.decodeControlApproveSig(data) {
-              self.lastApproveSigB64 = sig.base64EncodedString()
-              self.verifyApproveSignature(walletPk: walletPk, acct: acct, sig: sig)
-            }
-          }
-          if let json = try? bridge.decodeControlApproveAccountJson(data),
-             let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] {
-            if let name = obj["name"] as? String { self.lastApproveAccountName = name }
-            let dom = (obj["domain"] as? String) ?? (obj["domain_id"] as? String) ?? (obj["domainId"] as? String)
-            if let dom { self.lastApproveAccountDomain = dom }
-          }
-          if self.lastApproveAccountName.isEmpty && self.lastApproveAccountDomain.isEmpty {
-            let raw = self.lastApproveAccount
-            if let at = raw.firstIndex(of: "@") {
-              self.lastApproveAccountName = String(raw[..<at])
-              self.lastApproveAccountDomain = String(raw[raw.index(after: at)...])
-            }
-          }
-          self.handshakeStatus = "Approve received"
+        let open = try request.acceptOpen(data)
+        let permissions = try open.permissions.map {
+          String(decoding: try JSONEncoder().encode($0), as: UTF8.self)
+        } ?? ""
+        try installDirectionKeys(privateKey: sk.rawRepresentation,
+          peerPublicKey: open.appPublicKey, sessionID: frame.sessionID)
+        walletOpenAccepted = true
+        lastAppPubB64 = open.appPublicKey.base64EncodedString()
+        openRequestedPermsJson = permissions
+        handshakeStatus = "Open accepted; keys ready"
+      case .approve(let approval):
+        guard role == .app, !approvalAccepted, !approvalRejected,
+              let binding = approvalBinding, let sk = localPriv,
+              frame.direction == .walletToApp, frame.sequence == 1,
+              frame.sessionID == binding.sessionID,
+              dataFromBase64OrBase64URL(sid) == binding.sessionID,
+              try NetworkId(literal: networkId) == binding.network,
+              sk.publicKey.rawRepresentation == binding.appPublicKey,
+              launchNonce == binding.nonce, tokenRelay == binding.relayToken else {
+          throw ConnectSessionError.protocolViolation("Unexpected, replayed, or substituted approval")
         }
+        let relayAuth = try ConnectCrypto.relayAuthHash(
+          sessionID: binding.sessionID, relayToken: binding.relayToken)
+        try ConnectCrypto.verifyApprovalSignature(
+          networkID: binding.network, sessionID: binding.sessionID,
+          appPublicKey: binding.appPublicKey, walletPublicKey: approval.walletPublicKey,
+          accountID: approval.accountID, permissions: approval.permissions, proof: approval.proof,
+          relayAuthHash: relayAuth, walletSignature: approval.walletSignature
+        )
+        let permissions = try approval.permissions.map {
+          String(decoding: try JSONEncoder().encode($0), as: UTF8.self)
+        } ?? ""
+        let proof = try approval.proof.map {
+          String(decoding: try JSONEncoder().encode($0), as: UTF8.self)
+        } ?? ""
+        // No key or success state is published until all validation has succeeded.
+        try installDirectionKeys(privateKey: sk.rawRepresentation,
+          peerPublicKey: approval.walletPublicKey, sessionID: binding.sessionID)
+        approvalAccepted = true
+        approveSigValid = true
+        approvePermsJson = permissions
+        approveProofJson = proof
+        lastApproveAccount = approval.accountID
+        lastApproveSigB64 = approval.walletSignature.signature.base64EncodedString()
+        persistVerifiedAccount(approval.accountID)
+        handshakeStatus = "Approved; keys ready"
+        log("Approve signature valid; direction keys installed")
+      case .reject, .close:
+        rejectApproval("Peer refused or closed the session")
       default:
         break
       }
     } catch {
-      // Not a control frame or helpers unavailable
+      rejectApproval(error.localizedDescription)
     }
+#else
+    rejectApproval("Exact approval verification requires IrohaSwift")
+#endif
   }
+
 #endif
 
+  // Captured before the actual receive callback; a retired session cannot consume new state.
+  func makeIncomingFrameConsumer() -> (Data) -> Bool {
+    let generation = sessionGeneration
+    let task = webSocketTask
+    return { [weak self] data in
+      guard let self, self.sessionGeneration == generation,
+            self.webSocketTask === task else { return false }
+      self.handleIncomingFrame(data)
+      return true
+    }
+  }
+
   private func receiveLoop() {
-    webSocketTask?.receive { [weak self] result in
+    guard let task = webSocketTask else { return }
+    let generation = sessionGeneration
+    let consume = makeIncomingFrameConsumer()
+    task.receive { [weak self] result in
       guard let self = self else { return }
       switch result {
       case .success(let msg):
@@ -478,15 +713,20 @@ final class DemoConnectViewModel: ObservableObject {
         case .data(let d):
           self.log("WS binary (\(d.count) bytes)")
 #if canImport(NoritoBridge)
-          self.tryDecodeIncoming(d)
-          self.tryHandleControl(d)
+          DispatchQueue.main.async { _ = consume(d) }
 #endif
         @unknown default: self.log("WS unknown message")
         }
-        self.receiveLoop()
+        DispatchQueue.main.async {
+          guard self.sessionGeneration == generation, self.webSocketTask === task else { return }
+          self.receiveLoop()
+        }
       case .failure(let err):
         self.log("WS recv error: \(err.localizedDescription)")
-        DispatchQueue.main.async { self.wsStatus = "Disconnected" }
+        DispatchQueue.main.async {
+          guard self.sessionGeneration == generation, self.webSocketTask === task else { return }
+          self.wsStatus = "Disconnected"
+        }
       }
     }
   }
@@ -499,83 +739,53 @@ final class DemoConnectViewModel: ObservableObject {
   // MARK: - Key derivation (X25519 + HKDF-SHA256)
   #if canImport(CryptoKit)
   func generateEphemeral() {
+    resetSessionHandshake()
     let sk = Curve25519.KeyAgreement.PrivateKey()
     localPriv = sk
     localPubB64 = Data(sk.publicKey.rawRepresentation).base64EncodedString()
     log("Generated X25519 keypair; pub exported (base64)")
   }
+  private func clearDerivedKeys() {
+    keySend = nil
+    keyRecv = nil
+    sendKeyB64 = ""
+    recvKeyB64 = ""
+    saltIsBlake2b = false
+    handshakeStatus = "Keys unavailable"
+  }
+
+  private func installDirectionKeys(privateKey: Data, peerPublicKey: Data, sessionID: Data) throws {
+#if canImport(IrohaSwift)
+    let keys = try ConnectCrypto.deriveDirectionKeys(
+      localPrivateKey: privateKey, peerPublicKey: peerPublicKey, sessionID: sessionID
+    )
+    let kApp = SymmetricKey(data: keys.appToWallet)
+    let kWallet = SymmetricKey(data: keys.walletToApp)
+    if role == .app { keySend = kApp; keyRecv = kWallet } else { keySend = kWallet; keyRecv = kApp }
+    sendKeyB64 = exportKeyB64(keySend)
+    recvKeyB64 = exportKeyB64(keyRecv)
+    saltIsBlake2b = true
+#else
+    throw NSError(domain: "NoritoDemo.Connect", code: 1, userInfo: [
+      NSLocalizedDescriptionKey: "Connect key derivation requires the IrohaSwift package"
+    ])
+#endif
+  }
+
   func deriveKeys() {
+    clearDerivedKeys()
     guard let sidRaw = dataFromBase64OrBase64URL(sid), sidRaw.count == 32 else { log("sid must be base64/base64url (32 bytes)"); return }
     guard let sk = localPriv else { log("Generate local key first"); return }
     guard let peerRaw = dataFromBase64OrBase64URL(peerPubB64), peerRaw.count == 32 else { log("Peer pub must be base64/base64url (32 bytes)"); return }
-    guard let peer = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerRaw) else { log("Invalid peer public key"); return }
     do {
-      let shared = try sk.sharedSecretFromKeyAgreement(with: peer)
-      guard let salt = computeSalt(sid: sidRaw) else { return }
-      let infoApp = Data("iroha-connect|k_app".utf8)
-      let infoWallet = Data("iroha-connect|k_wallet".utf8)
-      let kApp = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoApp, outputByteCount: 32)
-      let kWallet = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoWallet, outputByteCount: 32)
-      if role == .app { keySend = kApp; keyRecv = kWallet } else { keySend = kWallet; keyRecv = kApp }
-      sendKeyB64 = exportKeyB64(keySend)
-      recvKeyB64 = exportKeyB64(keyRecv)
+      try installDirectionKeys(privateKey: sk.rawRepresentation, peerPublicKey: peerRaw, sessionID: sidRaw)
       log("Derived direction keys via HKDF-SHA256 (BLAKE2b-256 salt)")
-      DispatchQueue.main.async { self.handshakeStatus = "Keys ready (manual)" }
+      handshakeStatus = "Keys ready (manual)"
     } catch {
       log("Key agreement failed: \(error.localizedDescription)")
     }
   }
-  private func deriveKeysFromPeerPub(_ peerRaw: Data) {
-    guard let sidRaw = dataFromBase64OrBase64URL(sid), sidRaw.count == 32 else { log("sid must be 32 bytes"); return }
-    guard let sk = localPriv else { log("Generate local key first"); return }
-    guard let peer = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerRaw) else { log("Invalid peer public key"); return }
-    do {
-      let shared = try sk.sharedSecretFromKeyAgreement(with: peer)
-      guard let salt = computeSalt(sid: sidRaw) else { return }
-      let infoApp = Data("iroha-connect|k_app".utf8)
-      let infoWallet = Data("iroha-connect|k_wallet".utf8)
-      let kApp = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoApp, outputByteCount: 32)
-      let kWallet = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoWallet, outputByteCount: 32)
-      if role == .app { keySend = kApp; keyRecv = kWallet } else { keySend = kWallet; keyRecv = kApp }
-      sendKeyB64 = exportKeyB64(keySend)
-      recvKeyB64 = exportKeyB64(keyRecv)
-      log("Derived keys from peer pubkey")
-      DispatchQueue.main.async { self.handshakeStatus = "Keys ready" }
-    } catch { log("Key agreement failed: \(error.localizedDescription)") }
-  }
 
-  private func verifyApproveSignature(walletPk: Data, acct: Data, sig: Data) {
-#if canImport(IrohaSwift)
-    guard let sidRaw = dataFromBase64OrBase64URL(sid), sidRaw.count == 32 else { log("sid invalid for verify"); self.approveSigValid = false; return }
-    guard let appPk = localPriv?.publicKey.rawRepresentation else { log("no app ephemeral for verify"); self.approveSigValid = false; return }
-    guard let exactNetwork = try? NetworkId(literal: networkId), !tokenRelay.isEmpty,
-          let account = String(data: acct, encoding: .utf8) else {
-      log("Approve verification requires exact network/account/relay inputs")
-      approveSigValid = false
-      return
-    }
-    do {
-      let permissions = approvePermsJson.isEmpty ? nil : try JSONDecoder().decode(ConnectPermissions.self, from: Data(approvePermsJson.utf8))
-      let proof = approveProofJson.isEmpty ? nil : try JSONDecoder().decode(ConnectSignInProof.self, from: Data(approveProofJson.utf8))
-      let relayAuth = try ConnectCrypto.relayAuthHash(sessionID: sidRaw, relayToken: tokenRelay)
-      try ConnectCrypto.verifyApprovalSignature(
-        networkID: exactNetwork, sessionID: sidRaw, appPublicKey: appPk,
-        walletPublicKey: walletPk, accountID: account, permissions: permissions,
-        proof: proof, relayAuthHash: relayAuth,
-        walletSignature: ConnectWalletSignature(algorithm: "ed25519", signature: sig)
-      )
-      approveSigValid = true
-      log("Approve signature valid")
-      persistVerifiedAccount(account)
-    } catch {
-      approveSigValid = false
-      log("Verify error: \(error.localizedDescription)")
-    }
-#else
-    approveSigValid = false
-    log("Exact approval verification requires the IrohaSwift package")
-#endif
-  }
 
   private func permsJson(request: Bool) -> Data? {
     var methods = [String]()
@@ -607,40 +817,17 @@ final class DemoConnectViewModel: ObservableObject {
 
   // MARK: - Helpers
   func dataFromBase64OrBase64URL(_ s: String) -> Data? {
-    if let d = Data(base64Encoded: s, options: [.ignoreUnknownCharacters]) { return d }
+    if let d = Data(base64Encoded: s), d.base64EncodedString() == s { return d }
     var t = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
     let rem = t.count % 4
     if rem != 0 { t.append(String(repeating: "=", count: 4-rem)) }
-    return Data(base64Encoded: t, options: [.ignoreUnknownCharacters])
-  }
-
-  private func computeSalt(sid: Data) -> Data? {
-    var input = Data("iroha-connect|salt|".utf8); input.append(sid)
-    typealias BlakeFn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>) -> Int32
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_blake2b_256") else {
-      log("NoritoBridge BLAKE2b-256 is required for Connect key derivation")
-      saltIsBlake2b = false
-      return nil
-    }
-    let fn = unsafeBitCast(sym, to: BlakeFn.self)
-    var out = Data(count: 32)
-    let rc = input.withUnsafeBytes { ip in
-      out.withUnsafeMutableBytes { op in
-        fn(ip.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(input.count), op.bindMemory(to: UInt8.self).baseAddress!)
-      }
-    }
-    guard rc == 0 else {
-      log("NoritoBridge BLAKE2b-256 failed (\(rc))")
-      saltIsBlake2b = false
-      return nil
-    }
-    saltIsBlake2b = true
-    return out
+    guard let d = Data(base64Encoded: t), base64url(d) == s else { return nil }
+    return d
   }
 
   private func computeSid(networkId: Data, appPk: Data, nonce: Data) -> Data? {
     guard networkId.count == 32, appPk.count == 32, nonce.count == 16,
-          let sym = dlsym(RTLD_DEFAULT, "connect_norito_connect_derive_session_id") else {
+          let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_connect_derive_session_id") else {
       return nil
     }
     typealias DeriveFn = @convention(c) (
@@ -656,7 +843,7 @@ final class DemoConnectViewModel: ObservableObject {
             fn(np.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(networkId.count),
                ap.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(appPk.count),
                op.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(nonce.count),
-               sp.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(out.count))
+               sp.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(sp.count))
           }
         }
       }
@@ -705,17 +892,16 @@ final class DemoConnectViewModel: ObservableObject {
 
   func signApprove() {
 #if canImport(IrohaSwift)
-    guard role == .wallet else { log("Sign Approve used in wallet role"); return }
-    guard let sidRaw = dataFromBase64OrBase64URL(sid), sidRaw.count == 32 else { log("sid invalid (need 32 bytes)"); return }
-    guard let appPk = dataFromBase64OrBase64URL(lastAppPubB64), appPk.count == 32 else { log("Missing/invalid app pub (32 bytes)"); return }
-    guard let sk = localPriv else { log("Generate local key first"); return }
-    let walletPk = Data(sk.publicKey.rawRepresentation)
-    guard let privRaw = dataFromBase64OrBase64URL(approvePrivKeyB64), privRaw.count == 32 else { log("Paste 32-byte Ed25519 private key (base64)"); return }
-    guard let exactNetwork = try? NetworkId(literal: networkId), !tokenRelay.isEmpty else {
-      log("Signing requires the exact NetworkId and relay token")
-      return
-    }
+    signedWalletApproval = nil
+    approveSigB64 = ""
+    signedApprovalPermissionsJSON = nil
+    signedApprovalProofJSON = nil
     do {
+      let request = try requireWalletRequest()
+      guard walletOpenAccepted, let sk = localPriv,
+            let privRaw = dataFromBase64OrBase64URL(approvePrivKeyB64), privRaw.count == 32 else {
+        throw ConnectSessionError.protocolViolation("Approval requires the original Open and a signing key.")
+      }
       let methods = ([reqPermSignRaw ? "SIGN_REQUEST_RAW" : nil, reqPermSignTx ? "SIGN_REQUEST_TX" : nil]).compactMap { $0 }
       let events = ([reqEventDisplay ? "DISPLAY_REQUEST" : nil]).compactMap { $0 }
       let permissions = methods.isEmpty && events.isEmpty ? nil : ConnectPermissions(methods: methods, events: events)
@@ -723,19 +909,19 @@ final class DemoConnectViewModel: ObservableObject {
         domain: proofDomain, uri: proofUri, statement: proofStatement,
         issuedAt: ISO8601DateFormatter().string(from: Date()), nonce: proofNonce
       )
+      let walletKey = sk.publicKey.rawRepresentation
+      let preimage = try request.buildApprovalPreimage(walletPublicKey: walletKey,
+        accountID: approveAccountId, permissions: permissions, proof: proof)
+      let signer = try SigningKey.ed25519(privateKey: privRaw)
+      let signature = try signer.sign(preimage)
+      signedWalletApproval = ConnectApprove(walletPublicKey: walletKey, accountID: approveAccountId,
+        permissions: permissions, proof: proof,
+        walletSignature: ConnectWalletSignature(algorithm: "ed25519", signature: signature))
       signedApprovalPermissionsJSON = try permissions.map { try JSONEncoder().encode($0) }
       signedApprovalProofJSON = try proof.map { try JSONEncoder().encode($0) }
-      let relayAuth = try ConnectCrypto.relayAuthHash(sessionID: sidRaw, relayToken: tokenRelay)
-      let preimage = try ConnectCrypto.buildApprovalPreimage(
-        networkID: exactNetwork, sessionID: sidRaw, appPublicKey: appPk,
-        walletPublicKey: walletPk, accountID: approveAccountId,
-        permissions: permissions, proof: proof, relayAuthHash: relayAuth
-      )
-      let priv = try Curve25519.Signing.PrivateKey(rawRepresentation: privRaw)
-      let sig = try priv.signature(for: preimage)
-      approveSigB64 = sig.base64EncodedString()
+      approveSigB64 = signature.base64EncodedString()
       log("Identity- and relay-bound Approve signature generated")
-    } catch { log("Sign error: \(error.localizedDescription)") }
+    } catch { log("Approval signing refused") }
 #else
     log("Exact approval signing requires the IrohaSwift package")
 #endif
@@ -766,6 +952,19 @@ struct QRCodeView: View {
 }
 
 #if canImport(IrohaSwift)
+enum AddressCopyMode: String {
+  case i105 = "i105"
+}
+
+final class AddressCopyTelemetry {
+  static let shared = AddressCopyTelemetry()
+  private let logger = Logger(subsystem: "org.hyperledger.iroha.norito-demo", category: "address-copy")
+
+  func record(mode: AddressCopyMode) {
+    logger.info("address_copy_mode=\(mode.rawValue, privacy: .public)")
+  }
+}
+
 struct AddressPreviewCard: View {
   let address: DemoConnectViewModel.AddressPreview
   @State private var copyStatus: CopyStatus?
@@ -931,18 +1130,6 @@ struct ContentView: View {
       }
 #endif
 
-enum AddressCopyMode: String {
-  case i105 = "i105"
-}
-
-final class AddressCopyTelemetry {
-  static let shared = AddressCopyTelemetry()
-  private let logger = Logger(subsystem: "org.hyperledger.iroha.norito-demo", category: "address-copy")
-
-  func record(mode: AddressCopyMode) {
-    logger.info("address_copy_mode=\(mode.rawValue, privacy: .public)")
-  }
-}
 
       if !vm.tokenApp.isEmpty || !vm.tokenWallet.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
@@ -1094,7 +1281,6 @@ final class AddressCopyTelemetry {
             Text("Signature (base64)").font(.footnote)
             ScrollView(.horizontal) { Text(vm.lastApproveSigB64).font(.system(.caption, design: .monospaced)) }
     }
-    .sheet(isPresented: $showShareSheet) { ActivityView(activityItems: shareItems) }
   }
 }
       #else
@@ -1108,6 +1294,8 @@ final class AddressCopyTelemetry {
         }
       }
     }.padding()
+    .onOpenURL { _ = vm.importWalletLaunch($0.absoluteString) }
+    .sheet(isPresented: $showShareSheet) { ActivityView(activityItems: shareItems) }
   }
 
   var status: String {
