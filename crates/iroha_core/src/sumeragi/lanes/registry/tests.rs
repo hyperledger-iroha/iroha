@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry() {
-    use crate::{state::StateReadOnly, sumeragi::runtime_availability::NativeLaneStoreAuthorities};
+    use crate::sumeragi::runtime_availability::NativeLaneStoreAuthorities;
     use std::{future::Future, pin::pin, task::Context};
     let (chain, record, _epoch) =
         crate::sumeragi::runtime_availability::tests::npos_fixed_lane_chain_at(4);

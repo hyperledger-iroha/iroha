@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 secure-device bridge
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 This document fixes the only V1 ABI between the audited KAGEMUSHA native core
 and a qualified non-forking hardware service. A missing service, incomplete
 profile, invalid credential, malformed frame, unsupported operation, or failed

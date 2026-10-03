@@ -473,10 +473,10 @@ fn rfc_private_inverse_window_matches_full_maximum_material_and_reports_both_cos
     let der = der_challenges_v1();
     let challenges = challenges_v1();
     let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
-    let scalar_scratch = aux_replay::scratch_payload_bytes_v1();
+    let scalar_scratch = aux_replay::scalar_scratch_payload_bytes_v1();
     let window_scratch = aux_replay::inverse_window_tests::scratch_payload_bytes_v1();
     println!(
-        "rfc_inverse_window_header rows={rows} columns=280 max_width=8 rounds=3 expected_records=210 scalar_scratch_bytes={scalar_scratch} window_scratch_bytes={window_scratch} material=maximum_depth3_disclosures4 public_pair_capacity=24 production_selected=false"
+        "rfc_inverse_window_header rows={rows} columns=280 max_width=8 rounds=3 expected_records=210 scalar_scratch_bytes={scalar_scratch} window_scratch_bytes={window_scratch} material=maximum_depth3_disclosures4 public_pair_capacity=24 production_selected=true"
     );
     let mut records = 0;
     for first in (0..280).step_by(8) {
@@ -514,7 +514,7 @@ fn rfc_private_inverse_window_matches_full_maximum_material_and_reports_both_cos
                     )
                     .unwrap();
                 } else {
-                    aux_replay::fill_columns_v1(
+                    aux_replay::fill_scalar_columns_for_testing_v1(
                         &material, der, challenges, first, &mut refs, &centers,
                     )
                     .unwrap();

@@ -5,7 +5,6 @@
 fn ordinary_mint_permission_requires_live_asset_owner_and_cannot_delegate() {
     use crate::smartcontracts::isi::kagemusha::ordinary_mint_permission::world_has_exact_ordinary_mint_issuer_permission_v1;
     use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1;
-    use iroha_executor_data_model::permission::kagemusha::CanAuthorizeKagemushaOrdinaryMint;
 
     let mut policy = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false).issuer_policy;
     let owner = checked_account_id();

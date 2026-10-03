@@ -355,7 +355,7 @@ impl Drop for OutputGuardV1<'_, '_> {
 
 /// Named resident stack owners; output payload is charged by the caller's existing batch.
 /// No heap scratch, additional field column, or parallel replay task is created.
-pub(super) const fn scratch_payload_bytes_v1() -> usize {
+pub(super) const fn scalar_scratch_payload_bytes_v1() -> usize {
     core::mem::size_of::<RowContextV1>()
         + core::mem::size_of::<[ColumnStateV1; BATCH]>()
         + core::mem::size_of::<OutputGuardV1<'static, 'static>>()
@@ -364,8 +364,33 @@ pub(super) const fn scratch_payload_bytes_v1() -> usize {
         + core::mem::size_of::<[F; 4]>()
 }
 
-/// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
+/// Complete resident scratch for the selected bounded inverse-window route.
+pub(super) const fn scratch_payload_bytes_v1() -> usize {
+    inverse_window::scratch_payload_bytes_v1()
+}
+
+/// Fill the admitted public column span with bounded inverse windows where needed.
 pub(super) fn fill_columns_v1(
+    material: &ZkX509Rfc5280StarkBaseMaterialV1,
+    der_challenges: ZkX509DerStarkChallengesV1,
+    challenges: ZkX509Rfc5280StarkChallengesV1,
+    first: usize,
+    outputs: &mut [&mut [F]],
+    sha_union: &ZkX509ShaUnionCentersV1,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    inverse_window::fill_columns_v1(
+        material,
+        der_challenges,
+        challenges,
+        first,
+        outputs,
+        sha_union,
+    )
+}
+
+/// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
+#[cfg(test)]
+pub(super) fn fill_scalar_columns_for_testing_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
     challenges: ZkX509Rfc5280StarkChallengesV1,
@@ -394,6 +419,7 @@ pub(super) fn fill_columns_v1(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn fill_with_v1(
     rows: usize,
@@ -938,8 +964,12 @@ mod tests {
     }
 }
 
-// TODO: Keep the private batch inversion experimental until native parity,
-// complete same-shape timings and enclosing resource/erasure review succeed.
+// TODO: Qualify the selected bounded inverse window with the complete current
+// proof/resource gates; surrounding private row construction remains a separate
+// whole-prover side-channel obligation.
+#[path = "rfc5280_inverse_window.rs"]
+mod inverse_window;
+
 #[cfg(test)]
 #[path = "rfc5280_inverse_window_tests.rs"]
 pub(super) mod inverse_window_tests;

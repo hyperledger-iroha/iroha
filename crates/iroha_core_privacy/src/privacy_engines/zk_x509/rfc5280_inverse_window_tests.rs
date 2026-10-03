@@ -1,277 +1,11 @@
-//! Test-only fixed-window inversion with bounded, clearing private ownership.
-//!
-//! The production provider still selects scalar inversion. Pair order and count
-//! depend only on public column descriptors; no private equality deduplicates work.
-//! TODO: Require complete native parity, real same-shape timing and resource/erasure
-//! review before considering production admission. This is not a constant-time
-//! claim for the existing private row constructors or the whole prover.
-
+//! Native and adversarial controls of the same production window owner.
 use super::super::super::private_table::inspection;
+use super::inverse_window::{
+    DENOMINATOR, GATE, InverseWindowV1, NEUTRAL, PAIRS, fill_with_v1, pairs_for_column_v1,
+    step_window_v1,
+};
+pub(in super::super) use super::inverse_window::{fill_columns_v1, scratch_payload_bytes_v1};
 use super::*;
-
-const PAIRS: usize = 3 * BATCH;
-const GATE: usize = 0;
-const DENOMINATOR: usize = 1;
-const ACTIVE: usize = 2;
-const NONZERO: usize = 3;
-const NEUTRAL: usize = 4;
-const PREFIX: usize = 5;
-const INVERSE: usize = 6;
-const ZERO: usize = 7;
-
-/// Each gate, denominator, normalized factor, prefix and result has one owner.
-/// The four working cells own product, inverse product, temporary inverse and mask.
-struct InverseWindowV1 {
-    pairs: [[F; 8]; PAIRS],
-    work: [F; 4],
-    count: usize,
-    cursor: usize,
-}
-impl InverseWindowV1 {
-    fn new_v1() -> Self {
-        Self {
-            pairs: [[F::ZERO; 8]; PAIRS],
-            work: [F::ZERO; 4],
-            count: 0,
-            cursor: 0,
-        }
-    }
-    fn collect_v1(&mut self, gate: F, denominator: F) -> (F, F) {
-        assert!(self.count < PAIRS, "public inverse window capacity");
-        let pair = &mut self.pairs[self.count];
-        pair[GATE] = gate;
-        pair[DENOMINATOR] = denominator;
-        self.count += 1;
-        // Preserve the original panic and its ordering for malformed nonzero
-        // factors. Inactive noncanonical factors are ignored by the old helper.
-        // Bitwise OR evaluates both predicates; valid factors never take this path.
-        assert!(
-            (gate == F::ZERO) | (F::canonical(denominator.0).is_some()),
-            "nonzero canonical Goldilocks value is invertible"
-        );
-        (F::ZERO, F::ZERO)
-    }
-    fn invert_v1(&mut self) {
-        // The empty-window branch is determined solely by public descriptors.
-        if self.count == 0 {
-            return;
-        }
-        self.work[0] = F::ONE;
-        for pair in &mut self.pairs[..self.count] {
-            pair[ACTIVE] = F(u64::from(pair[GATE] != F::ZERO));
-            pair[NONZERO] = F(u64::from(pair[DENOMINATOR] != F::ZERO));
-            self.work[3].0 = 0_u64.wrapping_sub(pair[ACTIVE].0 & pair[NONZERO].0);
-            // A private inactive/noncanonical denominator never enters field
-            // arithmetic. Every factor actually multiplied here is canonical nonzero.
-            pair[NEUTRAL].0 = (pair[DENOMINATOR].0 & self.work[3].0) | (1 & !self.work[3].0);
-            pair[PREFIX] = self.work[0];
-            self.work[0] = self.work[0].mul(pair[NEUTRAL]);
-        }
-        self.work[1] = self.work[0].inverse_or_zero_canonical_v1();
-        for pair in self.pairs[..self.count].iter_mut().rev() {
-            self.work[2] = self.work[1].mul(pair[PREFIX]);
-            self.work[1] = self.work[1].mul(pair[NEUTRAL]);
-            pair[INVERSE] = self.work[2].mul(pair[ACTIVE]).mul(pair[NONZERO]);
-            pair[ZERO] = pair[ACTIVE].mul(F::ONE.sub(pair[NONZERO]));
-        }
-    }
-    fn replay_v1(&mut self, gate: F, denominator: F) -> (F, F) {
-        assert!(
-            self.cursor < self.count,
-            "public inverse window replay count"
-        );
-        let pair = &self.pairs[self.cursor];
-        self.cursor += 1;
-        // Invariant check only: the same immutable row and public descriptor
-        // must reproduce both inputs. Never print private fields on a failure.
-        assert!(
-            (pair[GATE] == gate) & (pair[DENOMINATOR] == denominator),
-            "inverse replay inputs changed"
-        );
-        (pair[ZERO], pair[INVERSE])
-    }
-    fn finish_v1(&self) {
-        assert_eq!(self.cursor, self.count);
-    }
-}
-impl Drop for InverseWindowV1 {
-    fn drop(&mut self) {
-        for pair in &mut self.pairs {
-            zeroize_fields_v1(pair);
-        }
-        zeroize_fields_v1(&mut self.work);
-    }
-}
-
-fn pairs_for_column_v1(column: usize) -> usize {
-    if (AUX_NUMERIC_INVERSE..AUX_NUMERIC_ZERO_SUM + numeric::LOOKUP_LANES_V1).contains(&column) {
-        1
-    } else if profile_lookup_aux_column_descriptor_v1(column).is_some() {
-        3
-    } else if grammar_lookup_aux_column_descriptor_v1(column).is_some()
-        || lookup_aux_column_descriptor_v1(column).is_some()
-    {
-        2
-    } else {
-        0
-    }
-}
-
-/// Additional resident private storage is counted explicitly; the existing
-/// output batch, row context, numeric event and recurrence values remain charged.
-pub(in super::super) const fn scratch_payload_bytes_v1() -> usize {
-    super::scratch_payload_bytes_v1()
-        + core::mem::size_of::<InverseWindowV1>()
-        + core::mem::size_of::<ColumnStateV1>()
-        + core::mem::size_of::<F>()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn step_window_v1(
-    states: &mut [ColumnStateV1; BATCH],
-    first: usize,
-    outputs: &mut [&mut [F]],
-    index: usize,
-    context: &RowContextV1,
-    last: bool,
-    der: ZkX509DerStarkChallengesV1,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-    centers: &ZkX509ShaUnionCentersV1,
-) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    let mut window = InverseWindowV1::new_v1();
-    for (offset, (state, target)) in states.iter_mut().zip(outputs.iter_mut()).enumerate() {
-        let column = first + offset;
-        if pairs_for_column_v1(column) != 0 {
-            // Every temporary recurrence cell uses the same clearing owner.
-            // Factors depend on the row/challenges, not these prefix sums.
-            let mut copy = ColumnStateV1 {
-                product: state.product,
-                sums: state.sums,
-            };
-            let before = window.count;
-            let mut discarded = copy.step_with_inverse_v1(
-                column,
-                context,
-                last,
-                der,
-                challenges,
-                centers,
-                &mut |gate, factor| window.collect_v1(gate, factor),
-            )?;
-            discarded.zeroize_v1();
-            assert_eq!(window.count - before, pairs_for_column_v1(column));
-        } else {
-            // Execute noninverse columns once, in their original order. This
-            // preserves an earlier product/shape error before a later malformed
-            // inverse factor. OutputGuard clears these outputs if any later step fails.
-            target[index] = state.step_v1(column, context, last, der, challenges, centers)?;
-        }
-    }
-    window.invert_v1();
-    for (offset, (state, target)) in states.iter_mut().zip(outputs.iter_mut()).enumerate() {
-        if pairs_for_column_v1(first + offset) != 0 {
-            target[index] = state.step_with_inverse_v1(
-                first + offset,
-                context,
-                last,
-                der,
-                challenges,
-                centers,
-                &mut |gate, factor| window.replay_v1(gate, factor),
-            )?;
-        }
-    }
-    window.finish_v1();
-    Ok(())
-}
-
-/// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
-pub(in super::super) fn fill_columns_v1(
-    material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-    first: usize,
-    outputs: &mut [&mut [F]],
-    sha_union: &ZkX509ShaUnionCentersV1,
-) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    fill_with_v1(
-        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
-        first,
-        outputs,
-        der_challenges,
-        challenges,
-        sha_union,
-        |index| {
-            // Adopt the private row before another fallible source operation.
-            let mut context = RowContextV1 {
-                base: material.base_row(index)?,
-                fixed: [F::ZERO; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1],
-                family: ZkX509Rfc5280StarkFamilyV1::Padding,
-            };
-            context.fixed = material.fixed_row(index)?;
-            context.family = material.schedule.family_and_ordinal(index)?.0;
-            Ok(context)
-        },
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn fill_with_v1(
-    rows: usize,
-    first: usize,
-    outputs: &mut [&mut [F]],
-    der_challenges: ZkX509DerStarkChallengesV1,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-    sha_union: &ZkX509ShaUnionCentersV1,
-    mut row_at: impl FnMut(usize) -> Result<RowContextV1, ZkX509Rfc5280StarkErrorV1>,
-) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    der_challenges.validate()?;
-    challenges.validate()?;
-    sha_union.validate_v1()?;
-    let end = first
-        .checked_add(outputs.len())
-        .filter(|&end| end <= ZK_X509_RFC5280_STARK_AUX_WIDTH_V1)
-        .ok_or(ZkX509Rfc5280StarkErrorV1::Shape)?;
-    if rows == 0
-        || rows > ZK_X509_RFC5280_STARK_TRACE_SIZE_V1
-        || outputs.is_empty()
-        || outputs.len() > BATCH
-        || outputs.iter().any(|output| output.len() != rows)
-    {
-        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
-    }
-    let mut output = OutputGuardV1 {
-        outputs,
-        committed: false,
-    };
-    let mut states: [ColumnStateV1; BATCH] = core::array::from_fn(|_| ColumnStateV1::new_v1());
-    if first >= AUX_SHA_UNION_CENTERS && end <= AUX_SERIAL_SOURCE_BEFORE {
-        for (column, target) in (first..end).zip(output.outputs.iter_mut()) {
-            let index = column - AUX_SHA_UNION_CENTERS;
-            target.fill(sha_union.products[index / 4][index % 4]);
-        }
-    } else {
-        for index in 0..rows {
-            let context = row_at(index)?;
-            step_window_v1(
-                &mut states,
-                first,
-                output.outputs,
-                index,
-                &context,
-                index + 1 == rows,
-                der_challenges,
-                challenges,
-                sha_union,
-            )?;
-        }
-    }
-    for ((column, target), state) in (first..end).zip(output.outputs.iter()).zip(states.iter()) {
-        state.finish_v1(column, target[rows - 1])?;
-    }
-    output.committed = true;
-    Ok(())
-}
 
 fn challenges_v1() -> ZkX509Rfc5280StarkChallengesV1 {
     ZkX509Rfc5280StarkChallengesV1 {
@@ -304,6 +38,8 @@ fn private_inverse_window_preserves_zero_any_nonzero_gate_and_canonical_domain()
     let cases = [
         (F::ZERO, F::ZERO),
         (F::ZERO, F(u64::MAX)),
+        (F::ZERO, F(modulus)),
+        (F::ZERO, F(modulus + 1)),
         (F::ONE, F::ZERO),
         (F(2), F::ZERO),
         (F(u64::MAX), F::ZERO),
@@ -318,6 +54,18 @@ fn private_inverse_window_preserves_zero_any_nonzero_gate_and_canonical_domain()
             for index in 0..count {
                 let (gate, denominator) = cases[(index + shift) % cases.len()];
                 assert_eq!(window.collect_v1(gate, denominator), (F::ZERO, F::ZERO));
+                assert_eq!(window.count, index + 1);
+                assert_eq!(window.cursor, 0);
+                assert_eq!(window.pairs[index][GATE], gate);
+                assert_eq!(window.pairs[index][DENOMINATOR], denominator);
+                assert_eq!(
+                    window.pairs[index][NEUTRAL],
+                    if gate == F::ZERO {
+                        F::ZERO
+                    } else {
+                        denominator
+                    }
+                );
             }
             window.invert_v1();
             for index in 0..count {
@@ -393,7 +141,7 @@ fn private_inverse_window_all_widths_descriptors_and_resource_cells_match() {
         (PAIRS * 8 + 4) * core::mem::size_of::<F>() + 2 * core::mem::size_of::<usize>()
     );
     assert_eq!(
-        scratch_payload_bytes_v1() - super::scratch_payload_bytes_v1(),
+        scratch_payload_bytes_v1() - super::scalar_scratch_payload_bytes_v1(),
         core::mem::size_of::<InverseWindowV1>() + 4 * core::mem::size_of::<F>()
     );
     assert!(scratch_payload_bytes_v1() < 8192);
@@ -657,5 +405,53 @@ fn private_inverse_window_preserves_geometry_and_earliest_original_error() {
         };
         assert_eq!(result, Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim));
         assert!(columns.iter().flatten().all(|value| *value == F::ZERO));
+    }
+}
+
+#[test]
+fn private_inverse_window_public_noninverse_spans_skip_window_owners() {
+    let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
+    // Every admitted public span, including all mixed and constant-center boundaries.
+    for width in 1..=BATCH {
+        for first in 0..=ZK_X509_RFC5280_STARK_AUX_WIDTH_V1 - width {
+            let rows = 3;
+            let mut actual = vec![vec![F(91); rows]; width];
+            let mut expected = actual.clone();
+            let mut expected_refs: Vec<_> = expected.iter_mut().map(Vec::as_mut_slice).collect();
+            super::fill_with_v1(
+                rows,
+                first,
+                &mut expected_refs,
+                der_v1(),
+                challenges_v1(),
+                &centers,
+                |_| Ok(row_v1()),
+            )
+            .unwrap();
+            let mut actual_refs: Vec<_> = actual.iter_mut().map(Vec::as_mut_slice).collect();
+            let (result, observed) = inspection::observe_v1(|| {
+                fill_with_v1(
+                    rows,
+                    first,
+                    &mut actual_refs,
+                    der_v1(),
+                    challenges_v1(),
+                    &centers,
+                    |_| Ok(row_v1()),
+                )
+            });
+            result.unwrap();
+            assert_eq!(actual, expected, "public first{first}");
+            assert!(observed.iter().all(|item| item.nonzero_after == 0));
+            let pairs = (first..first + width)
+                .map(pairs_for_column_v1)
+                .sum::<usize>();
+            let owned_pairs = observed.iter().filter(|item| item.cells == 8).count();
+            assert_eq!(
+                owned_pairs,
+                if pairs == 0 { 0 } else { rows * PAIRS },
+                "public first{first} width{width}"
+            );
+        }
     }
 }

@@ -1874,6 +1874,11 @@ CRDT/commutative precompiles (optional)
 
 ## KAGEMUSHA V1 (protocol-bound aggregate balance)
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) §6 defines
+> load, unload and fee settlement. The text below describes the instructions
+> that exist today and is replaced together with the implementing change.
+
 The first release does not expose generic deposit, transfer, or withdrawal
 instructions. Its sole KAGEMUSHA settlement surface is:
 

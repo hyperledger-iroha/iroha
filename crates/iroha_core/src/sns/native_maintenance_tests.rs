@@ -1,7 +1,7 @@
 //! Genuine signed-genesis SNS source, rollback, no-effect and deterministic replay controls.
 
 use super::*;
-use crate::state::{State, StateReadOnly};
+use crate::state::State;
 use crate::sumeragi::{
     startup,
     test_chain::{CertifiedTestChain, TestChainConfig},

@@ -7247,9 +7247,10 @@ pub mod tests {
             state_height_for_routing(&state),
         )
         .expect("independent current elastic routing plan");
+        assert_eq!(expected_current.coordinator_route(), expected);
         assert_eq!(
-            expected_current.coordinator_route(),
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+            original, original_input,
+            "queue admission preserves the exact pre-push transaction bytes"
         );
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();

@@ -385,7 +385,6 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
 fn activation_allows_v1_in_same_block() {
     use iroha_core::{
         smartcontracts::ivm::cache::IvmCache,
-        state::StateReadOnly as _,
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     let kp = checked_keypair();

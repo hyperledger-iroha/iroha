@@ -830,7 +830,14 @@ fn parliament_kagemusha_retirement_publishes_only_exact_certified_standby_remova
             );
         }
         let mut forged_certificate = fixture.certificate.clone();
-        forged_certificate.proposal_content_id[0] ^= 1;
+        let mut forged_content_id = *forged_certificate.proposal_content_id.as_bytes();
+        forged_content_id[0] ^= 1;
+        forged_certificate.proposal_content_id =
+            iroha_data_model::governance::types::ProposalContentId::new(forged_content_id);
+        assert_ne!(
+            forged_certificate.proposal_content_id,
+            fixture.certificate.proposal_content_id
+        );
         assert!(
             crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
                 attempt,

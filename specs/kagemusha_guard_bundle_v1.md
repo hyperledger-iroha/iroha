@@ -1,5 +1,12 @@
 # KAGEMUSHA V1 normalized GuardBundle
 
+> **Superseded design authority (2026-10-03).** The
+> [single implementation draft](kagemusha_single_design_proposal.md) supersedes
+> this document's monetary protocol, provider assumptions and release prerequisites.
+> This file records existing interfaces or evidence during migration; it defines
+> no additional payment protocol or integration/use gate. Update retained contracts
+> with their implementing patches; preserve the observations below as evidence.
+
 The `GuardBundle` is the circuit-normalized contract between KAGEMUSHA's
 recursive monetary relations and an approved non-forking hardware provider. It
 is the only offline hardware-authority path. A platform signature, raw

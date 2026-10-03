@@ -148,6 +148,14 @@ pub fn assemble_with_merges(
     let minimum = parent_time
         .checked_add(assembly.cadence)
         .ok_or(PayloadError::TimeOverflow)?;
+    // The merge section already supplies an original canonical clock floor. Include it
+    // before the expensive State/parent-certificate build, while leaving the final
+    // canonical check below intact. No section means no merge-derived time authority.
+    let minimum = if merges.merges.is_empty() {
+        minimum
+    } else {
+        minimum.max(Duration::from_millis(merges.time_floor_ms))
+    };
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
         build_at(state, assembly, transactions, merges, time)
     };
@@ -168,6 +176,8 @@ fn build_at(
     merges: &MergeProposal,
     time: Duration,
 ) -> Result<SignedBlock, PayloadError> {
+    #[cfg(test)]
+    work_tests::record_build_at();
     let height = assembly.parent.header().height().get().saturating_add(1);
     let (_, time_source) = TimeSource::new_mock(time);
     let accepted = transactions.iter().cloned().collect::<Vec<_>>();

@@ -1,7 +1,7 @@
 //! Bounded native identity output from existing owner-private typed inventories.
 //!
 //! This module is test-only. Explicit ignored maintenance tests print public
-//! identities; ordinary captured-fixture assertions never call this path.
+//! identities; ordinary checks compare the same bounded typed documents without printing.
 
 use super::{Case, NoritoDeserialize, NoritoSchema, NoritoSerialize};
 use norito::json::{self, Value};
@@ -118,6 +118,14 @@ pub fn print_owner(cases: &[Case], owner: &str) {
 macro_rules! owner_printer {
     ($cases:expr) => {
         #[test]
+        fn current_native_codec_identities_match_paired_capture() {
+            $crate::captured_schema_tests::native_capture::assert_current_owner(
+                $cases,
+                module_path!(),
+            );
+        }
+
+        #[test]
         #[ignore = "explicit maintenance capture of current typed codec identities"]
         fn print_native_codec_capture_v1() {
             $crate::captured_schema_tests::native_capture::print_owner($cases, module_path!());
@@ -171,4 +179,182 @@ fn owner_capture_rejects_duplicates_wrong_identity_and_output_bounds() {
             .is_err()
     );
     assert!(std::panic::catch_unwind(|| callback("wrong-name")).is_err());
+}
+
+fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value> {
+    use std::{collections::BTreeMap, sync::OnceLock};
+    static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let source =
+            include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
+        assert_eq!(
+            hex::encode(Sha256::digest(source.as_bytes())),
+            "8ad59d9c2eb062a8a09eca7bdc9e3ad4bbd9b32aa7fe99511d5f278d137be4b3"
+        );
+        let document: Value = json::from_str(source).expect("paired native owner inventory");
+        assert_eq!(
+            document
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["schema", "owners"])
+        );
+        assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
+        let owners = document.get("owners").and_then(Value::as_array).unwrap();
+        assert_eq!(owners.len(), 105, "complete current compiler owner census");
+        let mut result = BTreeMap::new();
+        let mut roots = BTreeMap::new();
+        let mut directions = BTreeMap::new();
+        for owner in owners {
+            assert_eq!(
+                owner
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["schema", "owner", "rows"])
+            );
+            assert_eq!(owner.get("schema").and_then(Value::as_u64), Some(1));
+            let name = owner.get("owner").and_then(Value::as_str).unwrap();
+            assert!(!name.is_empty() && name.len() <= MAX_IDENTITY_BYTES);
+            let rows = owner.get("rows").and_then(Value::as_array).unwrap();
+            assert!(!rows.is_empty() && rows.len() <= MAX_OWNER_ROWS);
+            let mut names = BTreeSet::new();
+            for row in rows {
+                let nominal = row.get("nominal").and_then(Value::as_str).unwrap();
+                let root = row.get("root").and_then(Value::as_str).unwrap();
+                assert!(!nominal.is_empty() && nominal.len() <= MAX_IDENTITY_BYTES);
+                assert!(!root.is_empty() && root.len() <= MAX_IDENTITY_BYTES);
+                assert!(names.insert(nominal), "duplicate owner-local nominal");
+                if let Some(previous) = roots.insert(nominal.to_owned(), root.to_owned()) {
+                    assert_eq!(previous, root);
+                }
+                let mut keys = BTreeSet::from(["nominal", "root"]);
+                for direction in ["serialize_hash", "deserialize_hash"] {
+                    if row.get(direction).is_some() {
+                        keys.insert(direction);
+                        let hash = super::expected_hash(row, direction);
+                        if let Some(previous) =
+                            directions.insert((nominal.to_owned(), direction), hash)
+                        {
+                            assert_eq!(previous, hash);
+                        }
+                    }
+                }
+                assert!(keys.len() > 2, "each typed owner supplies an actual codec");
+                assert_eq!(
+                    row.as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
+                    keys
+                );
+            }
+            assert!(
+                result.insert(name.to_owned(), owner.clone()).is_none(),
+                "duplicate captured owner"
+            );
+        }
+        assert_eq!(roots.len(), 1_555, "complete current nominal inventory");
+        result
+    })
+}
+
+/// Compare this exact typed inventory with its separately retained paired native output.
+/// Historical captures retain their original bytes; retired owners are not revived.
+pub fn assert_current_owner(cases: &[Case], owner: &str) {
+    let bytes = owner_document(cases, owner);
+    let actual: Value = json::from_slice(&bytes).expect("current typed owner document");
+    let expected = current_owner_fixture()
+        .get(owner)
+        .expect("every current owner is captured");
+    let expected = owner_for_governance_feature(expected, cfg!(feature = "governance"));
+    assert_eq!(
+        actual, expected,
+        "current codec owner or directional identity changed"
+    );
+}
+
+#[test]
+fn current_native_fixture_has_complete_owner_inventory() {
+    assert_eq!(current_owner_fixture().len(), 105);
+}
+
+// These are the only row-level feature conditions in the captured printer inventories.
+// Filter by this closed source declaration, never by whichever rows the current code emits.
+fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
+    if governance {
+        return owner.clone();
+    }
+    let name = owner.get("owner").and_then(Value::as_str).unwrap();
+    let removed: &[&str] = match name {
+        "iroha_data_model::captured_schema_tests::current_release_capture" => &[
+            "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1",
+            "iroha_data_model::parliament_types::KagemushaVerifierReleaseInstallProposalV1",
+            "iroha_data_model::parliament_types::KagemushaVerifierReleaseActivateProposalV1",
+            "iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1",
+            "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1",
+            "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1",
+        ],
+        "iroha_data_model::fraud::types::captured_types_schema_tests" => &[
+            "iroha_data_model::fraud::types::GovernanceExport",
+            "iroha_data_model::fraud::types::DecisionAggregate",
+        ],
+        _ => return owner.clone(),
+    };
+    let rows = owner.get("rows").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        rows.len(),
+        9,
+        "both complete feature-shaped source inventories have nine rows"
+    );
+    let actual_removed = rows
+        .iter()
+        .filter_map(|row| {
+            let nominal = row.get("nominal").and_then(Value::as_str).unwrap();
+            removed.contains(&nominal).then_some(nominal)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_removed, removed.iter().copied().collect());
+    let rows = rows
+        .iter()
+        .filter(|row| {
+            let nominal = row.get("nominal").and_then(Value::as_str).unwrap();
+            !removed.contains(&nominal)
+        })
+        .cloned()
+        .collect();
+    json::object([
+        ("schema", owner.get("schema").unwrap().clone()),
+        ("owner", owner.get("owner").unwrap().clone()),
+        ("rows", Value::Array(rows)),
+    ])
+    .expect("explicit governance feature projection")
+}
+
+#[test]
+fn current_owner_feature_shapes_use_only_closed_declared_governance_rows() {
+    let owners = current_owner_fixture();
+    for (name, owner) in owners {
+        assert_eq!(owner_for_governance_feature(owner, true), *owner);
+        let minimal = owner_for_governance_feature(owner, false);
+        let expected = match name.as_str() {
+            "iroha_data_model::captured_schema_tests::current_release_capture" => 3,
+            "iroha_data_model::fraud::types::captured_types_schema_tests" => 7,
+            _ => {
+                assert_eq!(minimal, *owner);
+                continue;
+            }
+        };
+        assert_eq!(
+            minimal.get("rows").and_then(Value::as_array).unwrap().len(),
+            expected
+        );
+        assert_eq!(minimal.get("owner"), owner.get("owner"));
+        assert_eq!(minimal.get("schema"), owner.get("schema"));
+    }
 }

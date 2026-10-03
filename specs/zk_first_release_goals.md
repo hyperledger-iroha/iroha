@@ -46,11 +46,18 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current `optimizations` checkout contains the resolved, staged Core/SDK merge
-and the reviewed repair cohort. The merge commit is still pending; validation
-must bind the exact working source, HEAD, resolved merge parent and index entries.
-The staged merge is preserved. No historical run qualifies this combined source.
+The Core/SDK merge and reviewed repair cohort are committed as
+`ab6d83b7216f4e8ec00b29a31baeed0637929600` on `optimizations`. The commit
+changed Git identity during a native producer's terminal check while leaving
+all source bytes and modes unchanged. That failed terminal check is retained.
+Follow-up repairs and fresh validation bind this commit, the exact working
+source and semantic index; historical runs do not qualify the combined candidate.
 
+The repaired sixteen-target Core/Kagami compilation passes with stock Rust
+1.93.1. A typed `ProposalContentId` mutation preserves the negative authorization
+fixture. Unrelated documentation changes fail the wrapper's later source guard;
+the actual successful compiler output and all sixteen immutable artifacts are
+retained. Their selected controls and a fresh lifetime doctest remain required.
 The preceding fixed candidate's sixteen-target Core/Kagami build and original
 lifetime compile-fail test pass. Its 3,520 planned executions end with 3,393
 passes, 32 fixture failures and 70 controls left unexecuted by a default-stack
@@ -59,8 +66,10 @@ authorities, capacity checks and assertions; their fresh native replay remains
 required. Full Mint/Guard/receiver, genuine proof/export and full-State authority
 remain incomplete; the unresolved runtime-verifier schema is not replaced by a
 diagnostic schema. Governed standby retirement and original-context publication
-repairs are applied, but genuine retirement fixtures, captured codec identities
-and native replay remain pending.
+repairs and paired native retirement fixtures are applied. A separate current
+fixture captures all 105 typed codec owners and 1,555 nominal identities; the
+1,551 still-active historical rows retain their exact hashes. The new ordinary
+checks, reduced-feature checks and native publication replay remain pending.
 
 An earlier fixed candidate passes 78 native private-dispatch controls and
 seven public MEAN controls, 137 ordinary RFC controls, both actual ignored RFC
@@ -79,12 +88,22 @@ original failures. The FFT benchmark completes 13 cases and 156 records; its
 parser correction preserves the original inventory failure. The applied shared
 coarse CPU scheduler still requires native and complete-proof validation. The
 first fixed-work inverse retains a compiled private-gate branch. Its successor
-is applied, masks before validation and passes extracted native semantic controls plus
-independent AArch64 inspection; integrated and whole-prover evidence remains open.
-The preceding native X509 resource admission fails before proving: expanded RFC
-columns expose incorrect simultaneous-lifetime accounting. The applied phase-aware repair must
-pass all original resource controls, the current private-note profile check and
-a complete bounded proof. Earlier immutable full-suite processes finish naturally and retain
+is applied, masks before validation and passes extracted native semantic controls.
+Integrated AArch64 inspection confirms that helper repair; surrounding private
+recurrences and whole-prover evidence remain open. The inverse-window collector
+uses the same masking order. Its rebuilt artifact passes all ten
+parity/arithmetic/resource prerequisites and all 210 benchmark records; the sum
+of per-span medians improves from 64.412 to 32.902 seconds (1.958 times).
+Integrated AArch64 inspection covers the repaired collector. The bounded window
+is selected in the source with one shared clearing owner; fresh production-route
+controls and a complete bounded proof remain required. The original
+documentation-drift wrapper failure is preserved. These results establish
+component evidence, not quiet-host or whole-proof performance.
+The phase-aware X509 resource repair compiles. Its native producer captures all
+27 selected outcomes: 22 passes, four stale assertions and one native success
+rejected by the resource observer. Numeric and digest pins are regenerated from
+actual emissions. All original controls, the private-note profile check and a
+complete bounded proof remain required under unchanged limits. Earlier immutable full-suite processes finish naturally and retain
 source-drift outcomes; no earlier result qualifies this combined source.
 
 The last complete X509 maximum remains the source17 diagnostic: 9,412,912 bytes
@@ -127,9 +146,14 @@ errors; strict all-target Clippy finds 43 diagnostics. Reviewed corrections are
 applied and require replay. The daemon, CLI and all three integration harnesses
 build. Four-validator transaction commitment passes. The lane restart scenario
 stalls after lane height 1 commits while global height remains 3; an exact-source
-repeat reproduces it. FASTPQ and wallet network scenarios fail before their proof
+repeat reproduces it. Initial payload construction now includes a nonempty lane
+merge section's canonical time floor, avoiding a second parent-certificate build.
+Exact-wire/build-count controls and the unchanged network scenario still need
+fresh execution. FASTPQ and wallet network scenarios fail before their proof
 assertions on asset-domain and initial-executor admission. Their repairs retain
-proof validation and require fresh network execution. The complete workspace,
+proof validation and require fresh network execution. The authored OpenAPI
+copies include the same closed retirement schema; source-guard and native route
+validation remain required. The complete workspace,
 selected controls, authentic fixtures and all four network scenarios remain
 required. Historical failures are preserved. No goal ZK03–ZK08 is closed by
 partial tests or review.
@@ -258,9 +282,13 @@ pass. MEAN owns exact 65-bit signed addition and truncation toward zero, 44 resu
 cells, 21 original ports and native two-gas/three-cycle behavior. The newly applied
 ISQRT relation constrains the 32-bit floor root and exact remainder in the existing
 product bank; DIV_CEIL constrains signed correction in the shared MEAN bank.
-Their original tags, history ports and native gas/cycles are retained, but the
-11 new private controls and original shared public controls need a fresh native
-run. Complete instruction/region semantics and finalized State binding remain
+Their original tags, history ports and native gas/cycles are retained. All 97
+private-dispatch controls pass on the rebuilt artifact, including the repaired
+inventories and padding control. The newly applied successful LOAD64 and STORE64
+relations bind the original memory, initialization, frame, control and history
+ports in four phases. Closed opcode selection rejects other running opcodes;
+the new nineteen LOAD/STORE and inverse-route controls need fresh native execution.
+Complete instruction/region semantics and finalized State binding remain
 open; these components do not enable IVM proof admission.
 
 ### ZK04 — FASTPQ

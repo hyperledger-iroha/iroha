@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 use iroha_core::{
     pipeline::overlay::TxOverlay,
-    state::{StateReadOnly, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::{

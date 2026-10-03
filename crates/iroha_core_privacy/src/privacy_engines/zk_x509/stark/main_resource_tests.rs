@@ -208,17 +208,16 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
     );
-    // The maximum RFC registration also charges 102 Vec headers (2,448),
-    // eight borrowed column targets (128), fixed replay scratch (2,272),
-    // and the one-entry public denominator owner (48): 4,896 additional bytes.
-    // The larger FRI stage still dominates. Adjacent-chunk blinding retains
-    // one additional Fp4 mask scratch element; all caps/reserves stay fixed.
+    // The current RFC stripe is the largest registration phase. It retains
+    // the full 147-column fixed stripe, all quotient originals and the outer
+    // chunks; interpolation and incoming chunks are charged in their own phase.
+    // The unchanged FRI envelope still dominates the global arithmetic bound.
     assert_eq!(core::mem::size_of::<E>(), 32);
     assert_eq!(
         super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
         core::mem::size_of::<E>()
     );
-    assert_eq!(plan.quotient_stage, 3_158_315_808);
+    assert_eq!(plan.quotient_stage, 3_166_719_416);
     assert_eq!(
         plan.maximum_live_buffers,
         3_697_993_152 + core::mem::size_of::<E>()
@@ -653,26 +652,28 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     assert_eq!(native_cells, 2_116_723_200);
     assert_eq!(masked_cells, 2_127_275_976);
     assert_eq!(quotient_rows, 53_215_232);
-    // Exact local registration census after private endpoint equations
-    // replaced public claims and six metadata plus23 key-source RFC equations
-    // were added: 23 *2^21 =48,234,496 extra local residue evaluations.
-    // The RFC private-output slice then removes 24 local constraints, saving
-    // 24 * 2^21 = 50,331,648 evaluations. Joined-link replay work has its
-    // separate source-bound owner census.
-    // Four SHA registrations each remove eight unconsumed public endpoint
-    // constraints, saving 4 * 8 * 2^22 = 134,217,728 evaluations.
-    // Replacing 24 raw aggregate constraints by 16 bridge constraints, and
-    // removing 16 RFC and 64 SHA public scalar bindings, removes a further
-    // 24 * 2^21 + 4 * 16 * 2^22 local evaluations. The 20 new private
-    // quotient terms and 32 original-column replays are counted separately.
-    // The final original-polynomial CA joins retire 208 further scalar
-    // constraints per SHA registration and four RFC root-SPKI constraints.
-    // Their 108 private joint quotients have a separate original-owner census.
+    // Per-adapter local residue work from the complete 49-registration census:
+    // reduction, low-S, scalar-bit, projection, window, value, byte-memory,
+    // strict-DER, RFC5280, SHA-call and P-256 arithmetic, in that order.
     assert_eq!(
-        28_245_204_992_u64 - 4 * 208 * (1 << 22) - 4 * (1 << 21),
-        24_747_155_456
+        [
+            11_796_480_u64,
+            770_048,
+            2_744_320,
+            39_190_528,
+            367_001_600,
+            2_803_630_080,
+            95_420_416,
+            3_732_930_560,
+            4_070_572_032,
+            9_462_349_824,
+            4_771_020_800,
+        ]
+        .into_iter()
+        .sum::<u64>(),
+        25_357_426_688
     );
-    assert_eq!(residues, 24_747_155_456);
+    assert_eq!(residues, 25_357_426_688);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
@@ -682,19 +683,18 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         buffers.remaining_source_and_runtime_envelope,
         9_186_908_736 - core::mem::size_of::<E>()
     );
-    // Both level-four cut owners remain live in every registration. The exact
-    // 25,165,984-byte charge removes six cached columns from each of five
-    // arithmetic registrations and from RFC: 36 fewer retained columns.
-    // Each has four stripes, so this adds 36 * (4 - 1) = 108 native IFFTs.
-    assert_eq!(cached_columns, 3_400);
-    assert_eq!(quotient_native_iffts, 7_512);
-    assert_eq!(quotient_native_butterflies, 28_489_527_808);
-    assert_eq!(quotient_forward_butterflies, 138_440_286_208);
+    // Both cut owners remain live. Phase-specific accounting admits all 283
+    // P-256 arithmetic columns in each of five registrations, while the RFC
+    // registration retains only its first 26 base columns across four stripes.
+    assert_eq!(cached_columns, 3_428);
+    assert_eq!(quotient_native_iffts, 7_428);
+    assert_eq!(quotient_native_butterflies, 28_071_145_984);
+    assert_eq!(quotient_forward_butterflies, 139_336_818_688);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_069_183_488);
-    assert_eq!(fixed_native_butterflies, 8_223_168_960);
-    assert_eq!(fixed_recovery_iffts, 6_535);
-    assert_eq!(fixed_recovery_butterflies, 32_549_109_760);
+    assert_eq!(fixed_native_butterflies, 8_447_302_080);
+    assert_eq!(fixed_recovery_iffts, 6_670);
+    assert_eq!(fixed_recovery_butterflies, 33_221_509_120);
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
     assert_eq!(commitment_forward_butterflies, 536_208_211_968);

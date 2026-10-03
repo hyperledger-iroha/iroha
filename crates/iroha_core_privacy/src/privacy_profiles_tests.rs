@@ -567,11 +567,11 @@ mod tests {
             // and the corresponding exact native proof descriptors.
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "b00b724769457ed4cc6640b8246bfb8e9a8c2dde5010882ec8d3d7730cac61ba".to_owned(),
-                    "99f257e4b6217fcef2472438bb031847df6f943bfc07db7943f99553a8800123".to_owned(),
-                    "db1fec434a430dab7014e9c8f14139d0835083865f3575e27c2033737217ae92".to_owned(),
+                    "b0c21b543f231dbf44462c66a59259bbcac43ad560d5c83b7bd0a138de5c1660".to_owned(),
+                    "3f5cb64afd9758719b46a2a3b855dcb19384014cd50c213eff5335b1cfdddcf7".to_owned(),
+                    "22fa8b0543dec76865723cbe079d510eb05d75e47e0a0e3dba2205166c9357c5".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
-                    "bd98d6356de6f2ec3cb67ac5f66aad6a79a47cf56e357c9dedfa0172e7939b19".to_owned(),
+                    "3a7a880faf2b32775c1d0db22fef3543fadeddc3db8bcad21e4e3df0f87ae09e".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
                     "31beb12e9a6eb02355375b0b91af88aaf1183cf659a8851f478e2d4f88e3f8f6".to_owned(),
