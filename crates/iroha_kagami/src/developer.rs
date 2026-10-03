@@ -132,10 +132,66 @@ pub struct ResetArgs {
 pub(crate) enum DataspaceCommand {
     /// Create, fund, register, and select four private validators without supplying configuration.
     Up(DataspaceUpArgs),
+    /// Prepare a detached private cohort; parent registration remains separate.
+    PreparePrivateRoot(PreparePrivateRootArgs),
+    /// Capture a fresh live receipt for an independently selected private root.
+    StartupReceipt(DataspaceStartupReceiptArgs),
     /// Observe local validators and independently verified parent attachment separately.
     Status(ContextShowArgs),
     /// List the independently pinned network profiles supplied by this installation.
     Networks(NetworksArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PreparePrivateRootArgs {
+    /// Exact canonical SNS alias whose native name hash selects the full dataspace identifier.
+    alias: String,
+    /// Independently selected parent NetworkId; never inferred from a remote response.
+    #[arg(long)]
+    parent_network_id: iroha_data_model::NetworkId,
+    /// Complete local preparation and readiness budget in seconds.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=600))]
+    timeout: u64,
+    #[command(flatten)]
+    store: StoreArgs,
+}
+
+fn detached_private_root_spec(
+    args: &PreparePrivateRootArgs,
+) -> Result<iroha_deploy::localnet::PrivateRootSpec> {
+    use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
+    let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, &args.alias)?;
+    ensure!(
+        selector.normalized_label() == args.alias,
+        "detached private alias must be canonical"
+    );
+    let spec = iroha_deploy::localnet::PrivateRootSpec {
+        parent_network_id: args.parent_network_id,
+        dataspace_id: iroha_model_base::topology::DataSpaceId::from_hash(&selector.name_hash()),
+        dataspace_alias: args.alias.clone(),
+    };
+    spec.validate()?;
+    Ok(spec)
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DataspaceStartupReceiptArgs {
+    /// Exact existing managed context; no workspace-selection fallback.
+    name: String,
+    /// Independently authenticated parent NetworkId.
+    #[arg(long)]
+    parent_network_id: iroha_data_model::NetworkId,
+    /// Full-width native SNS-derived private dataspace identifier.
+    #[arg(long)]
+    dataspace_id: u64,
+    /// Independently selected canonical paid alias.
+    #[arg(long)]
+    dataspace_alias: String,
+    /// Fresh independently generated 32-byte lowercase hexadecimal challenge.
+    #[arg(long)]
+    challenge: String,
+    #[command(flatten)]
+    store: StoreArgs,
 }
 
 #[derive(Debug, Args)]
@@ -338,6 +394,29 @@ impl<T: Write> RunArgs<T> for ContextCommand {
 impl<T: Write> RunArgs<T> for DataspaceCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
+            Self::PreparePrivateRoot(args) => {
+                let spec = detached_private_root_spec(&args)?;
+                let runtime = InstalledRuntime::discover()?;
+                let store = args.store.open()?;
+                let request =
+                    runtime.localnet_request(&args.alias, Duration::from_secs(args.timeout));
+                let status = store.up_private_root(&request, &spec)?;
+                ensure!(
+                    status.phase == ManagedPhase::Ready,
+                    "detached private cohort is not ready"
+                );
+                write_json(
+                    writer,
+                    &norito::json!({
+                        "schema": "iroha-managed-detached-private-root",
+                        "schema_version": 1,
+                        "detached": true,
+                        "parent_attachment": "parent_unconfirmed",
+                        "private_root": spec,
+                        "local": status,
+                    }),
+                )
+            }
             Self::Up(args) => {
                 let runtime = InstalledRuntime::discover()?;
                 let store = args.store.open()?;
@@ -370,6 +449,19 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
                     )
                 })?;
                 print_dataspace_status(writer, &status, args.store.json)
+            }
+            Self::StartupReceipt(args) => {
+                let spec = iroha_deploy::localnet::PrivateRootSpec {
+                    parent_network_id: args.parent_network_id,
+                    dataspace_id: iroha_model_base::topology::DataSpaceId::new(args.dataspace_id),
+                    dataspace_alias: args.dataspace_alias,
+                };
+                let receipt = args.store.open()?.private_startup_receipt(
+                    &args.name,
+                    &spec,
+                    &args.challenge,
+                )?;
+                write_json(writer, &receipt)
             }
             Self::Networks(args) => {
                 let profiles = InstalledRuntime::discover()?.network_profiles()?;
@@ -717,6 +809,66 @@ mod tests {
         }
         assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "status", "--json"]).is_ok());
         assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "networks", "--json"]).is_ok());
+    }
+
+    #[test]
+    fn detached_private_candidate_derives_native_is_identity_without_parent_admission() {
+        let parent = "hash:B2D63D8AE5A9415319B219D9BC0E72B44FC88ED67F89BF35E400F8E5BFEC6F7B#B780";
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "dataspace",
+            "prepare-private-root",
+            "is",
+            "--parent-network-id",
+            parent,
+            "--json",
+        ])
+        .unwrap();
+        let crate::Command::Dataspace(DataspaceCommand::PreparePrivateRoot(args)) = cli.command
+        else {
+            panic!("expected detached private root candidate");
+        };
+        let spec = detached_private_root_spec(&args).unwrap();
+        assert_eq!(spec.dataspace_alias, "is");
+        assert_eq!(spec.dataspace_id.as_u64(), 6_647_857_470_246_403_404);
+        assert_eq!(spec.parent_network_id.to_string(), parent);
+        assert!(
+            crate::Cli::try_parse_from([
+                "kagami",
+                "dataspace",
+                "prepare-private-root",
+                "is",
+                "--json",
+            ])
+            .is_err()
+        );
+        assert!(
+            crate::Cli::try_parse_from([
+                "kagami",
+                "dataspace",
+                "prepare-private-root",
+                "is",
+                "--parent-network-id",
+                parent,
+                "--dataspace-id",
+                "7",
+            ])
+            .is_err()
+        );
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "dataspace",
+            "prepare-private-root",
+            "IS",
+            "--parent-network-id",
+            parent,
+        ])
+        .unwrap();
+        let crate::Command::Dataspace(DataspaceCommand::PreparePrivateRoot(args)) = cli.command
+        else {
+            unreachable!()
+        };
+        assert!(detached_private_root_spec(&args).is_err());
     }
 
     #[test]

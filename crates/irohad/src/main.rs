@@ -5923,6 +5923,19 @@ pub fn read_config_and_genesis(
     read_config_and_genesis_with_filesystem_space(args, filesystem_space)
 }
 
+// Parser errors can quote secret-bearing input lines; retain only the selected source path.
+fn parse_integrity_bound_config_toml(
+    raw_utf8: &str,
+    path: &Path,
+) -> ReportResult<toml::Table, ConfigError> {
+    raw_utf8.parse::<toml::Table>().map_err(|_| {
+        Report::new(ConfigError::ReadConfig).attach(format!(
+            "failed to parse integrity-bound configuration {}: invalid TOML",
+            path.display()
+        ))
+    })
+}
+
 // The public startup owner always uses the real filesystem-space observation.
 // Tests inject only capacity; path, identity, managed-byte and budget checks stay real.
 fn read_config_and_genesis_with_filesystem_space(
@@ -5963,12 +5976,7 @@ fn read_config_and_genesis_with_filesystem_space(
                     path.display()
                 ))
             })?;
-            let table = raw_utf8.parse::<toml::Table>().map_err(|error| {
-                Report::new(ConfigError::ReadConfig).attach(format!(
-                    "failed to parse integrity-bound configuration {}: {error}",
-                    path.display()
-                ))
-            })?;
+            let table = parse_integrity_bound_config_toml(raw_utf8, path)?;
             if table.contains_key("extends") {
                 return Err(Report::new(ConfigError::ReadConfig).attach(format!(
                     "integrity-bound configuration {} must be flattened and cannot use `extends`",

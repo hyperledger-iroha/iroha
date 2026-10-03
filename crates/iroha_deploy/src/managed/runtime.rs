@@ -82,7 +82,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     let readiness_cancelled = Arc::clone(&cancelled);
-    let prepared = retained.prepared;
+    let prepared = retained.prepared.clone();
     let readiness_prepared = prepared.clone();
     let progress = Arc::new(readiness::Progress::default());
     let readiness_progress = Arc::clone(&progress);
@@ -107,6 +107,27 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                 match request.action.as_str() {
                     "status" => {
                         let _ = connection.reply(&status);
+                    }
+                    action if action.starts_with("startup_receipt:") => {
+                        if status.phase == ManagedPhase::Ready
+                            && !processes.any_exited()?
+                            && let Some(challenge) = action.strip_prefix("startup_receipt:")
+                        {
+                            let children = processes.live_children()?;
+                            if let Some(launch) = processes.launch_snapshot.as_ref()
+                                && let Ok(receipt) = startup_receipt::capture(
+                                    store.root(),
+                                    &directory,
+                                    &retained,
+                                    challenge,
+                                    &children,
+                                    launch,
+                                )
+                                && !processes.any_exited()?
+                            {
+                                let _ = connection.reply(&receipt);
+                            }
+                        }
                     }
                     "attachment_start" => {
                         if status.phase == ManagedPhase::Ready
@@ -249,6 +270,8 @@ fn same_token(left: &str, right: &str) -> bool {
 #[derive(Default)]
 struct PeerProcesses {
     children: Vec<Child>,
+    launch_argv: Vec<Vec<String>>,
+    launch_snapshot: Option<startup_receipt::LaunchSnapshot>,
 }
 
 impl PeerProcesses {
@@ -258,19 +281,40 @@ impl PeerProcesses {
         retained: &RetainedLocalnet,
         ownership: &File,
     ) -> Result<()> {
+        if matches!(retained.root_kind, RootKind::Private { .. }) {
+            // Select every original before any child can start. A descriptor stays owned until
+            // that child's cleanup; the daemon hashes and parses exactly the selected bytes.
+            self.launch_snapshot = Some(startup_receipt::LaunchSnapshot::retain(
+                directory, retained,
+            )?);
+        }
         for (index, peer) in retained.prepared.peers.iter().enumerate() {
             let log = directory.open_append(&peer.log_name)?;
+            let config_digest = self
+                .launch_snapshot
+                .as_ref()
+                .map(|launch| launch.config(index).map(|config| config.blake3.as_str()))
+                .transpose()?;
             let mut command = daemon_command(
                 &retained.daemon.path,
                 &peer.config_path,
                 &retained.root_kind,
+                config_digest,
             )?;
             command
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
-            self.children
-                .push(spawn_with_launch_fence(directory, index, &mut command)?);
+            let child = spawn_with_launch_fence(directory, index, &mut command)?;
+            self.children.push(child);
+            let argv = command_argv(&command)?;
+            self.launch_argv.push(argv);
+            if let Some(launch) = &self.launch_snapshot {
+                launch.config(index)?;
+            }
+        }
+        if let Some(launch) = &self.launch_snapshot {
+            launch.validate()?;
         }
         Ok(())
     }
@@ -282,6 +326,20 @@ impl PeerProcesses {
             }
         }
         Ok(false)
+    }
+
+    fn live_children(&mut self) -> Result<Vec<(u32, Vec<String>)>> {
+        if self.children.len() != 4 || self.launch_argv.len() != 4 || self.any_exited()? {
+            return Err(Error::Invalid(
+                "startup receipt requires four live owned child handles".into(),
+            ));
+        }
+        Ok(self
+            .children
+            .iter()
+            .zip(&self.launch_argv)
+            .map(|(child, argv)| (child.id(), argv.clone()))
+            .collect())
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -318,14 +376,17 @@ impl PeerProcesses {
             child.wait()?;
         }
         self.children.clear();
+        self.launch_argv.clear();
+        self.launch_snapshot = None;
         Ok(())
     }
 }
 
-fn daemon_command(
+pub(super) fn daemon_command(
     daemon: &std::path::Path,
     config: &std::path::Path,
     root_kind: &RootKind,
+    config_digest: Option<&str>,
 ) -> Result<Command> {
     let mut command = Command::new(daemon);
     if matches!(root_kind, RootKind::Private { .. }) {
@@ -338,7 +399,34 @@ fn daemon_command(
             .parent()
             .ok_or_else(|| Error::Invalid("node configuration has no parent".into()))?,
     );
+    match (root_kind, config_digest) {
+        (RootKind::Private { .. }, Some(digest))
+            if digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            command.arg("--config-blake3").arg(digest);
+        }
+        (RootKind::Global, None) => {}
+        _ => {
+            return Err(Error::Invalid(
+                "private launch requires its original configuration digest".into(),
+            ));
+        }
+    }
     Ok(command)
+}
+
+pub(super) fn command_argv(command: &Command) -> Result<Vec<String>> {
+    std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|part| {
+            part.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| Error::Invalid("managed startup argv is not canonical UTF-8".into()))
+        })
+        .collect()
 }
 
 fn spawn_with_launch_fence(
@@ -399,7 +487,8 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let daemon = temporary.path().join("iroha3d");
         let config = temporary.path().join("peer0.toml");
-        let global = daemon_command(&daemon, &config, &RootKind::Global).unwrap();
+        let digest = "a".repeat(64);
+        let global = daemon_command(&daemon, &config, &RootKind::Global, None).unwrap();
         assert_eq!(
             global.get_args().collect::<Vec<_>>(),
             ["--config".as_ref(), config.as_os_str()]
@@ -410,13 +499,34 @@ mod tests {
             &RootKind::Private {
                 spec: super::super::tests::private_spec(),
             },
+            Some(&digest),
         )
         .unwrap();
         assert_eq!(
             private.get_args().collect::<Vec<_>>(),
-            ["--sora".as_ref(), "--config".as_ref(), config.as_os_str()]
+            [
+                "--sora".as_ref(),
+                "--config".as_ref(),
+                config.as_os_str(),
+                "--config-blake3".as_ref(),
+                digest.as_ref()
+            ]
         );
         assert_eq!(private.get_current_dir(), Some(temporary.path()));
+        let private_kind = RootKind::Private {
+            spec: super::super::tests::private_spec(),
+        };
+        let uppercase = "A".repeat(64);
+        let short = "a".repeat(63);
+        for invalid in [
+            None,
+            Some("ready"),
+            Some(uppercase.as_str()),
+            Some(short.as_str()),
+        ] {
+            assert!(daemon_command(&daemon, &config, &private_kind, invalid).is_err());
+        }
+        assert!(daemon_command(&daemon, &config, &RootKind::Global, Some(&digest)).is_err());
     }
 
     #[test]
@@ -519,9 +629,13 @@ mod tests {
         let other = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let mut owned = PeerProcesses {
             children: vec![child],
+            launch_argv: vec![],
+            launch_snapshot: None,
         };
         let mut sentinel = PeerProcesses {
             children: vec![other],
+            launch_argv: vec![],
+            launch_snapshot: None,
         };
         drop(ownership);
         assert!(matches!(

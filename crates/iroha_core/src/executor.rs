@@ -2456,7 +2456,11 @@ fn evaluate_fee_sponsor_capacity(
     beneficiary: &AccountId,
     block_height: u64,
     charges: &[FeeChargeBound],
-) -> Result<BTreeMap<AssetDefinitionId, FeeSponsorCapacity>, NexusFeeAdmissionError> {
+    route_dataspace_id: Option<DataSpaceId>,
+) -> Result<
+    BTreeMap<AssetDefinitionId, FeeSponsorCapacity>,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
     for charge in charges {
         let total = totals
@@ -2470,18 +2474,15 @@ fn evaluate_fee_sponsor_capacity(
     }
     let mut capacities = BTreeMap::new();
     for (asset_definition_id, amount) in totals {
-        let definition = world.asset_definition(&asset_definition_id).map_err(|_| {
-            NexusFeeAdmissionError::sponsor(
-                FeeRejectionCode::InvalidProgramConfiguration,
-                format!("fee sponsor asset `{asset_definition_id}` is not registered"),
-            )
-        })?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Err(NexusFeeAdmissionError::sponsor(
-                FeeRejectionCode::InvalidProgramConfiguration,
-                format!("fee sponsor asset `{asset_definition_id}` must use Global balance scope"),
-            ));
-        }
+        private_fees::sponsor_asset_scope(world, &asset_definition_id, route_dataspace_id)
+            .map_err(|error| {
+                error.map_rejection(|error| {
+                    NexusFeeAdmissionError::sponsor(
+                        FeeRejectionCode::InvalidProgramConfiguration,
+                        error.reason().to_owned(),
+                    )
+                })
+            })?;
         let budget = resolved
             .revision
             .asset_budgets
@@ -2503,7 +2504,7 @@ fn evaluate_fee_sponsor_capacity(
                     "fee sponsor per-transaction budget for `{asset_definition_id}` is {}; requires {amount}",
                     budget.per_transaction
                 ),
-            ));
+            ).into());
         }
         let epoch = block_height.saturating_sub(1) / budget.epoch_length_blocks.get();
         let block_key = FeeSponsorBudgetCounterKey {
@@ -2538,7 +2539,8 @@ fn evaluate_fee_sponsor_capacity(
             return Err(NexusFeeAdmissionError::sponsor(
                 FeeRejectionCode::ProgramBlockBudgetExhausted,
                 format!("fee sponsor block budget for `{asset_definition_id}` is exhausted"),
-            ));
+            )
+            .into());
         }
         let program_after = checked_quantity_add(&program_spent, &amount, "program epoch budget")?;
         if program_after > budget.per_program_epoch {
@@ -2547,7 +2549,8 @@ fn evaluate_fee_sponsor_capacity(
                 format!(
                     "fee sponsor program epoch budget for `{asset_definition_id}` is exhausted"
                 ),
-            ));
+            )
+            .into());
         }
         let beneficiary_after =
             checked_quantity_add(&beneficiary_spent, &amount, "beneficiary epoch budget")?;
@@ -2557,7 +2560,8 @@ fn evaluate_fee_sponsor_capacity(
                 format!(
                     "fee sponsor beneficiary epoch budget for `{asset_definition_id}` is exhausted"
                 ),
-            ));
+            )
+            .into());
         }
         let vault_key = FeeSponsorVaultKey {
             program_id: resolved.id.clone(),
@@ -2574,7 +2578,7 @@ fn evaluate_fee_sponsor_capacity(
                 format!(
                     "fee sponsor vault for `{asset_definition_id}` requires {required}; available {vault_balance}"
                 ),
-            ));
+            ).into());
         }
         capacities.insert(
             asset_definition_id,
@@ -4220,16 +4224,7 @@ fn evaluate_nexus_fee_admission_payload(
 > {
     require_direct_fee_settlement(nexus)?;
     let fees = private_fees::effective(world, &nexus.fees)?;
-    // TODO: Private sponsorship needs vaults with exact dataspace custody. Public
-    // sponsor-program identifiers alone cannot authorize a private monetary debit.
-    if private_fees::private_scope(world, route_dataspace_id)?.is_some()
-        && payload.fee_payment.sponsor_program().is_some()
-    {
-        return Err(NexusFeeAdmissionError::ConfigInvalid(
-            "private-root fee sponsors require a scoped vault owner".into(),
-        )
-        .into());
-    }
+    private_fees::private_scope(world, route_dataspace_id)?;
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
     let fee = compute_nexus_fee_amount(&fees, tx_bytes_len, instruction_count, gas_used)
@@ -4304,6 +4299,12 @@ fn evaluate_nexus_fee_admission_payload(
             })
         }
         Some((program_id, program_revision)) => {
+            private_fees::validate_sponsor_custody(
+                world,
+                &nexus.fees.sponsor_vault_custody_account_id,
+                route_dataspace_id,
+                &charges,
+            )?;
             let resolved = resolve_fee_sponsor_program(
                 world,
                 nexus,
@@ -4320,6 +4321,7 @@ fn evaluate_nexus_fee_admission_payload(
                 &payload.authority,
                 next_block_height,
                 &charges,
+                route_dataspace_id,
             )?;
             Ok(FeeAdmissionQuote {
                 charges,
@@ -4941,6 +4943,23 @@ impl Executor {
             asset_definition_id: asset_definition_id.clone(),
             max_bound: amount.clone(),
         };
+        private_fees::validate_sponsor_custody(
+            &state_transaction.world,
+            &state_transaction
+                .nexus
+                .fees
+                .sponsor_vault_custody_account_id,
+            state_transaction.current_dataspace_id,
+            core::slice::from_ref(&charge),
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                nexus_fee_admission_error_to_validation_fail(error)
+            }
+        })?;
         validate_signed_charge_limits(
             transaction.fee_payment_intent(),
             core::slice::from_ref(&charge),
@@ -4952,8 +4971,16 @@ impl Executor {
             authority,
             state_transaction.block_height(),
             core::slice::from_ref(&charge),
+            state_transaction.current_dataspace_id,
         )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                nexus_fee_admission_error_to_validation_fail(error)
+            }
+        })?;
         let budget = resolved
             .revision
             .asset_budgets
@@ -5178,11 +5205,6 @@ impl Executor {
                 nexus_fee_admission_error_to_validation_fail(error)
             }
         })?;
-        if private_scope.is_some() && sponsor.is_some() {
-            return Err(ValidationFail::NotPermitted(
-                "private-root fee sponsors require a scoped vault owner".into(),
-            ));
-        }
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
@@ -16331,9 +16353,22 @@ mod tests {
             asset_definition_id,
             max_bound: Quantity::from(1_u32),
         };
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         let world = world.block();
-        let error = evaluate_fee_sponsor_capacity(&world, &resolved, &sponsor, 1, &[charge])
-            .expect_err("sponsor accounting must reject dataspace-scoped fee assets");
+        let error = evaluate_fee_sponsor_capacity(
+            &world,
+            &resolved,
+            &sponsor,
+            1,
+            &[charge],
+            Some(DataSpaceId::UNIVERSAL),
+        )
+        .expect_err("sponsor accounting must reject dataspace-scoped fee assets");
+        let error = crate::execution_attempt::expect_completed_rejection(error);
         assert_eq!(error.code(), FeeRejectionCode::InvalidProgramConfiguration);
         assert!(error.reason().contains("Global balance scope"));
     }

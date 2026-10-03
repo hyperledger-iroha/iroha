@@ -9,6 +9,7 @@ use iroha_data_model::{
     parameter::{Parameter, Parameters},
     sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
 };
+use iroha_executor_data_model::permission::governance::CanManageVerifyingKeys;
 use norito::{JsonDeserialize, JsonSerialize};
 
 const PREPARED: &str = "private-root-prepared.json";
@@ -276,6 +277,31 @@ pub(crate) fn verify_retained(
         &root.join("genesis.signed.nrt"),
         SIGNED_GENESIS_MAX_BYTES_V1,
     )?;
+    let manifest_bytes = iroha_fs::read_private(
+        root.join("genesis.json"),
+        iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
+    )?;
+    validate_genesis_manifest_json(&manifest_bytes).map_err(|_| invalid())?;
+    let manifest =
+        RawGenesisTransaction::from_json_slice_at_path(&manifest_bytes, root.join("genesis.json"))
+            .map_err(|_| invalid())?;
+    let config_bytes = iroha_fs::read_private(root.join("peer0.toml"), 1024 * 1024)?;
+    let config = parse_private_peer_config(
+        std::str::from_utf8(&config_bytes).map_err(|_| invalid())?,
+        Some(&root.join("peer0.toml")),
+    )
+    .map_err(|_| invalid())?;
+    // A startup receipt commits the original manifest as well as signed genesis.
+    // Authenticate their native binding here before either digest can become authority.
+    crate::genesis::staging::ensure_peer_config_matches_manifest(&config, &manifest)
+        .map_err(|_| invalid())?;
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &bytes,
+        &manifest,
+        &config.genesis.public_key,
+        config.genesis.expected_hash,
+    )
+    .map_err(|_| invalid())?;
     let block =
         iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| invalid())?;
     iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
@@ -726,6 +752,59 @@ fn private_fee_configuration(policy: &PrivateRootFeePolicy, gas_account: &str) -
     .collect()
 }
 
+/// The freshly owned child pays for native application preparation and privacy bootstrap.
+/// This finite set adds the current release's native lifecycle operations to the generic
+/// onboarding recipe. Contract calls must use the application's exact deployed selectors.
+fn private_bootstrap_fee_revision(
+    program_id: FeeSponsorProgramId,
+    fee_asset: AssetDefinitionId,
+) -> Result<FeeSponsorProgramRevision> {
+    use iroha_data_model::isi::{
+        privacy::{BootstrapPrivacyOrchardPoolV1, RegisterPrivacyProtocolActivationV1},
+        smart_contract_code::{
+            CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
+            RegisterSmartContractCode, UploadSmartContractCodeChunk,
+        },
+        verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey},
+    };
+    fn native<T: 'static>() -> Result<FeeSponsorRuleSelector> {
+        let wire_id = iroha_data_model::isi::registry::default()
+            .wire_id(std::any::type_name::<T>())
+            .ok_or_else(|| {
+                eyre!("private bootstrap instruction lacks a current registry identity")
+            })?;
+        Ok(FeeSponsorRuleSelector::NativeInstruction(
+            FeeSponsorNativeInstructionSelector {
+                wire_id: wire_id.into(),
+                asset_definition_id: None,
+            },
+        ))
+    }
+    let mut revision = localnet_fee_sponsor_revision(program_id, fee_asset);
+    revision.rules[0].id = "private_application_bootstrap".parse()?;
+    revision.rules[0].selectors.extend([
+        native::<MintBox>()?,
+        native::<SetKeyValueBox>()?,
+        native::<CreateFeeSponsorProgram>()?,
+        native::<StageFeeSponsorProgramRevision>()?,
+        native::<FundFeeSponsorProgram>()?,
+        native::<ActivateFeeSponsorProgramRevision>()?,
+        native::<RegisterVerifyingKey>()?,
+        native::<UpdateVerifyingKey>()?,
+        native::<RegisterPrivacyProtocolActivationV1>()?,
+        native::<BootstrapPrivacyOrchardPoolV1>()?,
+        native::<RegisterSmartContractCode>()?,
+        native::<RegisterSmartContractBytes>()?,
+        native::<UploadSmartContractCodeChunk>()?,
+        native::<FinalizeSmartContractCodeUpload>()?,
+        native::<CommitContractDeployment>()?,
+    ]);
+    revision
+        .validate()
+        .map_err(|error| eyre!("private bootstrap fee revision: {error}"))?;
+    Ok(revision)
+}
+
 fn private_genesis(
     spec: &PrivateRootSpec,
     chain: &str,
@@ -832,8 +911,42 @@ fn private_genesis(
                 ),
             ));
     }
+    // The private root owns this vault and funds it only from its newly minted, exact scoped
+    // gas balance. The parent's XOR asset, sponsor programs and account custody are absent.
+    let fee_asset = private_fee_policy(spec)?.asset_definition_id;
+    let program_id = localnet_fee_sponsor_program_id(owner);
+    let revision = private_bootstrap_fee_revision(program_id.clone(), fee_asset.clone())?;
+    revision
+        .validate()
+        .map_err(|error| eyre!("invalid private sponsor revision: {error}"))?;
+    builder = builder
+        .append_instruction(CreateFeeSponsorProgram {
+            program: FeeSponsorProgram::new(program_id.clone(), owner.clone()),
+        })
+        .append_instruction(StageFeeSponsorProgramRevision { revision })
+        .append_instruction(EnrollFeeSponsorBeneficiary {
+            program_id: program_id.clone(),
+            beneficiary: owner.clone(),
+        })
+        .append_instruction(FundFeeSponsorProgram {
+            program_id: program_id.clone(),
+            asset_definition_id: fee_asset,
+            amount: Quantity::from(LOCALNET_FEE_SPONSOR_VAULT_BALANCE),
+        })
+        .append_instruction(ActivateFeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            activate_at_height: 1,
+        })
+        .append_instruction(Grant::account_permission(
+            CanEnrollFeeSponsorProgram { program_id },
+            owner.clone(),
+        ));
     builder = builder.next_transaction();
     for permission in [
+        // Privacy administration is local to this freshly signed private World.
+        Permission::from(CanEnactGovernance),
+        Permission::from(CanManageVerifyingKeys),
         Permission::from(CanManageSmartContractCode),
         Permission::from(CanGrantSmartContractCodeManagement),
         Permission::from(CanReadAllLedgerData),
@@ -867,6 +980,52 @@ fn private_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_bootstrap_fee_revision_covers_exact_current_native_lifecycle() {
+        let owner = localnet_ephemeral_identity(None, b"private-bootstrap-fee-test").unwrap();
+        let domain = DomainId::parse_fully_qualified("app.privateapp").unwrap();
+        let asset = AssetDefinitionId::derive_from_components(domain, "gas".parse().unwrap());
+        let owner_id = owner.account_id.clone();
+        let revision =
+            private_bootstrap_fee_revision(localnet_fee_sponsor_program_id(&owner_id), asset)
+                .unwrap();
+        assert_eq!(revision.eligibility, FeeSponsorEligibility::EnrolledOnly);
+        let selectors = &revision.rules[0].selectors;
+        assert_eq!(selectors.len(), 21);
+        let wire_ids = selectors
+            .iter()
+            .map(|selector| {
+                let FeeSponsorRuleSelector::NativeInstruction(native) = selector else {
+                    panic!("bootstrap cannot wildcard any deployed contract call");
+                };
+                native.wire_id.as_str()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(wire_ids.len(), selectors.len());
+        for wire_id in [
+            "iroha.mint",
+            "nexus::CreateFeeSponsorProgram",
+            "nexus::FundFeeSponsorProgram",
+            "iroha.privacy.register_protocol_activation.v1",
+            "iroha.privacy.bootstrap_orchard_pool.v1",
+        ] {
+            assert!(
+                wire_ids.contains(wire_id),
+                "missing native bootstrap operation {wire_id}"
+            );
+        }
+        assert_eq!(revision.asset_budgets.len(), 1);
+        let budget = &revision.asset_budgets[0];
+        assert_eq!(
+            budget.per_transaction,
+            Quantity::from(LOCALNET_FEE_SPONSOR_PER_TRANSACTION)
+        );
+        assert_eq!(
+            budget.reserve_floor,
+            Quantity::from(LOCALNET_FEE_SPONSOR_RESERVE_FLOOR)
+        );
+    }
 
     fn spec() -> PrivateRootSpec {
         let alias = "privateapp";
@@ -1065,6 +1224,27 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(code_grants, vec![owner.clone()]);
+        for permission in [
+            Permission::from(CanEnactGovernance),
+            Permission::from(CanManageVerifyingKeys),
+        ] {
+            let recipients = manifest
+                .instructions()
+                .filter_map(|instruction| {
+                    let GrantBox::Permission(grant) =
+                        instruction.as_any().downcast_ref::<GrantBox>()?
+                    else {
+                        return None;
+                    };
+                    (grant.object() == &permission).then(|| grant.destination().clone())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                recipients,
+                vec![owner.clone()],
+                "private privacy administration belongs only to retained child owner"
+            );
+        }
         let definitions = manifest
             .instructions()
             .filter_map(|instruction| {

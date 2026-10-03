@@ -16360,6 +16360,29 @@ pub mod isi {
             definition.id()
         )))
     }
+    // Local private custody never relaxes the separate global relay allocation guard.
+    fn ensure_local_fee_sponsor_asset(
+        definition: &AssetDefinition,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::executor::private_fees::sponsor_asset_scope(
+            &state_transaction.world,
+            definition.id(),
+            state_transaction.current_dataspace_id,
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                invalid_fee_sponsor_program(error.reason())
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                let _ = state_transaction.defer_execution(reason);
+                InstructionExecutionError::InvariantViolation(
+                    "local fee sponsor policy read did not complete".into(),
+                )
+            }
+        })?;
+        Ok(())
+    }
     fn ensure_fee_sponsor_program_owner(
         authority: &AccountId,
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
@@ -16454,7 +16477,7 @@ pub mod isi {
     }
     fn validate_fee_sponsor_revision(
         revision: &iroha_data_model::nexus::FeeSponsorProgramRevision,
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         use iroha_data_model::nexus::{FeeSponsorRuleEffect, FeeSponsorRuleSelector};
         revision
@@ -16563,13 +16586,14 @@ pub mod isi {
                 .world
                 .asset_definitions
                 .get(&budget.asset_definition_id)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_fee_sponsor_program(format!(
                         "fee sponsor budget references unknown asset definition `{}`",
                         budget.asset_definition_id
                     ))
                 })?;
-            ensure_global_fee_sponsor_asset(definition, "fee sponsor program revision")?;
+            ensure_local_fee_sponsor_asset(&definition, state_transaction)?;
             if budget.per_transaction.is_zero()
                 || budget.per_block.is_zero()
                 || budget.per_program_epoch.is_zero()
@@ -17060,7 +17084,7 @@ pub mod isi {
                 .get(self.asset_definition_id())
                 .cloned()
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
-            ensure_global_fee_sponsor_asset(&definition, "fee sponsor vault funding")?;
+            ensure_local_fee_sponsor_asset(&definition, state_transaction)?;
             if state_transaction
                 .world
                 .accounts
@@ -17172,6 +17196,7 @@ pub mod isi {
                 .get(self.asset_definition_id())
                 .cloned()
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
+            ensure_local_fee_sponsor_asset(&definition, state_transaction)?;
             let key = FeeSponsorVaultKey {
                 program_id: program_id.clone(),
                 asset_definition_id: self.asset_definition_id().clone(),

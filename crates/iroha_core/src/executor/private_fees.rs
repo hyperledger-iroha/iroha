@@ -121,12 +121,80 @@ pub(super) fn permits_public_exemption(
     )
 }
 
+/// Select exact protocol vault custody. A private root has its own World and sole committed
+/// fee currency, so its program/vault keys cannot address a parent World or another root.
+/// Restricted currencies on a global root still require a separate scoped-vault protocol.
+pub(crate) fn sponsor_asset_scope(
+    world: &impl WorldReadOnly,
+    asset: &AssetDefinitionId,
+    route: Option<DataSpaceId>,
+) -> Result<AssetBalanceScope, ExecutionAttemptError<NexusFeeAdmissionError>> {
+    // Preserve the existing native policy reader's Deferred carrier.
+    if let Some((dataspace, policy)) = policy(world)? {
+        if route != Some(dataspace) || asset != &policy.asset_definition_id {
+            return Err(invalid(
+                "private sponsor vault requires the exact root route and committed local fee currency",
+            ).into());
+        }
+        return Ok(AssetBalanceScope::Dataspace(dataspace));
+    }
+    let definition = world
+        .asset_definition(asset)
+        .map_err(|_| invalid("sponsor vault currency is not registered"))?;
+    if definition.balance_scope_policy() != AssetBalancePolicy::Global {
+        return Err(invalid(format!(
+            "fee sponsor asset `{asset}` must use Global balance scope"
+        ))
+        .into());
+    }
+    Ok(AssetBalanceScope::Global)
+}
+
+pub(super) fn validate_sponsor_custody(
+    world: &impl WorldReadOnly,
+    custody: &AccountId,
+    route: Option<DataSpaceId>,
+    charges: &[FeeChargeBound],
+) -> Result<(), ExecutionAttemptError<NexusFeeAdmissionError>> {
+    let Some((dataspace, policy)) = policy(world)? else {
+        return Ok(());
+    };
+    if world.account(custody).is_err() {
+        return Err(invalid(
+            "private sponsor vault custody account is not registered in this root",
+        )
+        .into());
+    }
+    let mut required = Quantity::zero();
+    for charge in charges {
+        sponsor_asset_scope(world, &charge.asset_definition_id, route)?;
+        required = checked_quantity_add(&required, &charge.max_bound, "private vault custody")?;
+    }
+    let asset = AssetId::with_scope(
+        policy.asset_definition_id,
+        custody.clone(),
+        AssetBalanceScope::Dataspace(dataspace),
+    );
+    let available = world
+        .assets()
+        .get(&asset)
+        .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
+    if available < required {
+        return Err(NexusFeeAdmissionError::sponsor(
+            FeeRejectionCode::VaultInsufficient,
+            "private sponsor custody has insufficient exact scoped currency",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{State, StateReadOnly as _, World},
     };
     use iroha_data_model::{
         Registrable,
@@ -139,7 +207,7 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use iroha_model_base::domain::DomainId;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 
     fn fixture(with_policy: bool, restricted: bool) -> (State, DataSpaceId, AssetDefinitionId) {
         let ds = DataSpaceId::new(u64::MAX - 19);
@@ -160,7 +228,10 @@ mod tests {
         definition.total_quantity = Quantity::from(1000_u32);
         let world = World::with_assets(
             [Domain::new(domain).build(&ALICE_ID)],
-            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
             [definition],
             [Asset::new(
                 AssetId::with_scope(
@@ -223,11 +294,28 @@ mod tests {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.routing_policy.default_dataspace = ds;
         nexus.fees.fee_asset_id = asset.canonical_address();
+        nexus.fees.sponsor_vault_custody_account_id = BOB_ID.clone();
         (
             State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test()),
             ds,
             asset,
         )
+    }
+
+    fn bind_signed_source(
+        tx: &mut StateTransaction<'_, '_>,
+        signed: &iroha_data_model::transaction::SignedTransaction,
+        ds: DataSpaceId,
+    ) {
+        // Direct component fixtures own the exact signed execution that the
+        // Network producer normally captures before any balance mutation.
+        tx.current_entrypoint_index = Some(0);
+        tx.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+        tx.current_tx_hash = Some(signed.hash());
+        tx.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
+        tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+        tx.current_dataspace_id = Some(ds);
+        tx.world.current_dataspace_id = Some(ds);
     }
 
     #[test]
@@ -275,7 +363,7 @@ mod tests {
         let (state, ds, asset) = fixture(true, true);
         let view = state.view();
         let original = policy(view.world()).unwrap();
-        for reader in 0..4 {
+        for reader in 0..6 {
             let refused = norito::with_decode_limits_scope(
                 norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
                 || {
@@ -283,7 +371,9 @@ mod tests {
                         0 => policy(view.world()).map(|_| ()),
                         1 => effective(view.world(), &view.nexus().fees).map(|_| ()),
                         2 => currency(view.world(), &view.nexus().fees, 0).map(|_| ()),
-                        _ => private_scope(view.world(), Some(ds)).map(|_| ()),
+                        3 => private_scope(view.world(), Some(ds)).map(|_| ()),
+                        4 => sponsor_asset_scope(view.world(), &asset, Some(ds)).map(|_| ()),
+                        _ => validate_sponsor_custody(view.world(), &BOB_ID, Some(ds), &[]),
                     }
                     .unwrap_err()
                 },
@@ -451,10 +541,233 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error,
-            NexusFeeAdmissionError::ConfigInvalid(
-                "private-root fee sponsors require a scoped vault owner".into()
+            NexusFeeAdmissionError::sponsor(
+                FeeRejectionCode::VaultInsufficient,
+                "private sponsor custody has insufficient exact scoped currency"
             )
             .into()
+        );
+    }
+
+    #[test]
+    fn private_vault_funding_paid_execution_and_withdrawal_preserve_exact_local_scope() {
+        use iroha_data_model::{isi::nexus::*, nexus::*};
+        let (state, ds, asset) = fixture(true, true);
+        let network_id = *state.view().network_id();
+        let mut block = state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
+        let program_id = FeeSponsorProgramId::new(ALICE_ID.clone(), "local".parse().unwrap());
+        let fund = FundFeeSponsorProgram {
+            program_id: program_id.clone(),
+            asset_definition_id: asset.clone(),
+            amount: 200_u32.into(),
+        };
+        let setup = TransactionBuilder::new(
+            network_id,
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(vec![], None),
+        )
+        .with_instructions([fund.clone()])
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut tx = block.transaction_for_fastpq_testing(Hash::from(setup.hash_as_entrypoint()));
+        bind_signed_source(&mut tx, &setup, ds);
+        CreateFeeSponsorProgram {
+            program: FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        let instruction =
+            iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_logger::Level::INFO,
+                "scoped sponsor work".into(),
+            ));
+        let revision = FeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            eligibility: FeeSponsorEligibility::EnrolledOnly,
+            rules: vec![FeeSponsorRule {
+                id: "log".parse().unwrap(),
+                effect: FeeSponsorRuleEffect::Allow,
+                selectors: vec![FeeSponsorRuleSelector::NativeInstruction(
+                    FeeSponsorNativeInstructionSelector {
+                        wire_id: iroha_data_model::isi::instruction_wire_id(&instruction)
+                            .unwrap()
+                            .into(),
+                        asset_definition_id: None,
+                    },
+                )],
+            }],
+            asset_budgets: vec![FeeSponsorAssetBudget {
+                asset_definition_id: asset.clone(),
+                per_transaction: 150_u32.into(),
+                per_block: 300_u32.into(),
+                per_program_epoch: 600_u32.into(),
+                per_beneficiary_epoch: 300_u32.into(),
+                reserve_floor: 10_u32.into(),
+                epoch_length_blocks: std::num::NonZeroU64::new(10).unwrap(),
+            }],
+        };
+        let mut zero = revision.clone();
+        zero.asset_budgets[0].per_transaction = Quantity::zero();
+        assert!(
+            StageFeeSponsorProgramRevision { revision: zero }
+                .execute(&ALICE_ID, &mut tx)
+                .is_err()
+        );
+        StageFeeSponsorProgramRevision { revision }
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        EnrollFeeSponsorBeneficiary {
+            program_id: program_id.clone(),
+            beneficiary: ALICE_ID.clone(),
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        fund.execute(&ALICE_ID, &mut tx).unwrap();
+        ActivateFeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            activate_at_height: 2,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        tx.apply();
+        let signed = TransactionBuilder::new(
+            network_id,
+            ALICE_ID.clone(),
+            FeePaymentIntent::sponsor(
+                program_id.clone(),
+                1,
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    asset.clone(),
+                    150_u32.into(),
+                )],
+                None,
+            ),
+        )
+        .with_instructions([instruction])
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut tx = block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+        bind_signed_source(&mut tx, &signed, ds);
+        let quoted = quote_nexus_fee_admission_draft(
+            &tx.world,
+            &tx.nexus,
+            &Pipeline::default(),
+            signed.payload(),
+            1000,
+            2,
+            Some(ds),
+        )
+        .unwrap();
+        assert_eq!(
+            quoted.quote.debit_source,
+            FeeDebitSource::SponsorProgram(program_id.clone())
+        );
+        assert!(
+            quote_nexus_fee_admission_draft(
+                &tx.world,
+                &tx.nexus,
+                &Pipeline::default(),
+                signed.payload(),
+                1000,
+                2,
+                Some(DataSpaceId::UNIVERSAL)
+            )
+            .is_err()
+        );
+        Executor::charge_nexus_fees(
+            &mut tx,
+            &ALICE_ID,
+            &signed,
+            Some(program_id.clone()),
+            norito::canonical_frame_len(signed.payload()).unwrap(),
+            1,
+            1,
+        )
+        .unwrap();
+        let owner_balance = AssetId::with_scope(
+            asset.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(ds),
+        );
+        let custody_balance = AssetId::with_scope(
+            asset.clone(),
+            BOB_ID.clone(),
+            AssetBalanceScope::Dataspace(ds),
+        );
+        assert_eq!(
+            tx.world.assets().get(&owner_balance).unwrap().as_ref(),
+            &Quantity::from(800_u32)
+        );
+        assert_eq!(
+            tx.world.assets().get(&custody_balance).unwrap().as_ref(),
+            &Quantity::from(191_u32)
+        );
+        let vault_key = FeeSponsorVaultKey {
+            program_id: program_id.clone(),
+            asset_definition_id: asset.clone(),
+        };
+        assert_eq!(
+            tx.world
+                .fee_sponsor_vaults()
+                .get(&vault_key)
+                .unwrap()
+                .balance,
+            Quantity::from(191_u32)
+        );
+        tx.apply();
+        let pause = PauseFeeSponsorProgram {
+            program_id: program_id.clone(),
+        };
+        let withdraw = WithdrawFeeSponsorProgram {
+            program_id,
+            asset_definition_id: asset.clone(),
+            amount: 20_u32.into(),
+        };
+        let withdrawal = TransactionBuilder::new(
+            network_id,
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(vec![], None),
+        )
+        .with_instructions([
+            iroha_data_model::isi::InstructionBox::from(pause.clone()),
+            iroha_data_model::isi::InstructionBox::from(withdraw.clone()),
+        ])
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(withdrawal.hash_as_entrypoint()));
+        bind_signed_source(&mut tx, &withdrawal, ds);
+        pause.execute(&ALICE_ID, &mut tx).unwrap();
+        withdraw.execute(&ALICE_ID, &mut tx).unwrap();
+        assert_eq!(
+            tx.world.assets().get(&owner_balance).unwrap().as_ref(),
+            &Quantity::from(820_u32)
+        );
+        assert_eq!(
+            tx.world.assets().get(&custody_balance).unwrap().as_ref(),
+            &Quantity::from(171_u32)
+        );
+        assert_eq!(
+            tx.world.asset_definition(&asset).unwrap().total_quantity(),
+            &Quantity::from(991_u32)
+        );
+        assert!(
+            tx.world
+                .assets()
+                .get(&AssetId::new(asset.clone(), BOB_ID.clone()))
+                .is_none()
+        );
+        assert!(sponsor_asset_scope(&tx.world, &asset, Some(DataSpaceId::UNIVERSAL)).is_err());
+        assert!(
+            sponsor_asset_scope(
+                &tx.world,
+                &AssetDefinitionId::derive_from_components(
+                    DomainId::parse_fully_qualified("app.universal").unwrap(),
+                    "gas".parse().unwrap()
+                ),
+                Some(ds)
+            )
+            .is_err()
         );
     }
 

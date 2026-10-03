@@ -1,5 +1,23 @@
 // Runtime storage-budget and fail-closed daemon configuration regressions.
 #[test]
+fn integrity_bound_config_parse_error_never_exposes_private_body() {
+    const PRIVATE_MARKER: &str = "synthetic-private-config-marker-never-log";
+    let malformed = format!("private_key = \"{PRIVATE_MARKER}\" invalid_trailing_input\n");
+    let path = Path::new("selected-private-peer.toml");
+    let report = parse_integrity_bound_config_toml(&malformed, path)
+        .expect_err("malformed private configuration must be refused");
+    let diagnostic = format!("{report:?}");
+    assert!(diagnostic.contains("selected-private-peer.toml"));
+    assert!(diagnostic.contains("invalid TOML"));
+    for rendered in [diagnostic, format!("{report}")] {
+        assert!(!rendered.contains(PRIVATE_MARKER));
+        assert!(!rendered.contains(&malformed));
+        assert!(!rendered.contains("private_key"));
+        assert!(!rendered.contains("invalid_trailing_input"));
+    }
+}
+
+#[test]
 fn runtime_budget_rejects_zero_underflow_and_overflow() {
     for probe in [
         storage_budget_probe(1_000, 200, 0),

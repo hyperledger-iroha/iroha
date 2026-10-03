@@ -901,7 +901,10 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     let mut authority_preimage = b"iroha:fastpq:v1:authority|".to_vec();
     authority_preimage.extend_from_slice(&norito::codec::Encode::encode(&*BOB_ID));
     assert_eq!(transcript.authority_digest, Hash::new(authority_preimage));
-    assert_ne!(transcript.authority_digest, crate::fastpq::authority_digest(&ALICE_ID));
+    assert_ne!(
+        transcript.authority_digest,
+        crate::fastpq::authority_digest(&ALICE_ID)
+    );
     assert_eq!(transcript.deltas.len(), 1);
     let delta = &transcript.deltas[0];
     assert_eq!(delta.from_account, *ALICE_ID);
@@ -1641,8 +1644,16 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
+    // This scope component fixture uses explicit Global root metadata;
+    // it does not authenticate a signed genesis or native history.
+    let world = World::default();
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let state = State::new_for_testing(
-        World::default(),
+        world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -1934,8 +1945,16 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
         },
     };
     use iroha_model_base::topology::DataSpaceId;
+    // This scope component fixture uses explicit Global root metadata;
+    // it does not authenticate a signed genesis or native history.
+    let world = World::default();
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let state = State::new_for_testing(
-        World::default(),
+        world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -1985,14 +2004,17 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     }
     .execute(&authority, &mut stx)
     .expect_err("restricted fee asset revision must fail");
-    let is_restricted_asset_error = |error: &Error| {
+    let is_restricted_asset_error = |error: &Error, expected: &str| {
         matches!(
             error,
             Error::InvalidParameter(InvalidParameterError::SmartContract(message))
-                if message.contains("requires global-balance")
+                if message.contains(expected)
         )
     };
-    assert!(is_restricted_asset_error(&stage_error));
+    assert!(is_restricted_asset_error(
+        &stage_error,
+        "must use Global balance scope"
+    ));
     assert!(
         stx.world
             .fee_sponsor_program_revisions
@@ -2006,7 +2028,10 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     }
     .execute(&authority, &mut stx)
     .expect_err("restricted fee asset funding must fail");
-    assert!(is_restricted_asset_error(&fund_error));
+    assert!(is_restricted_asset_error(
+        &fund_error,
+        "must use Global balance scope"
+    ));
     let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
         program_id,
         program_revision: 1,
@@ -2025,7 +2050,10 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     }
     .execute(&authority, &mut stx)
     .expect_err("restricted fee asset allocation must fail");
-    assert!(is_restricted_asset_error(&allocation_error));
+    assert!(is_restricted_asset_error(
+        &allocation_error,
+        "requires global-balance"
+    ));
 }
 
 #[derive(Clone)]
