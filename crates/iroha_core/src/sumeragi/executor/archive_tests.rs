@@ -226,6 +226,7 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         beacon: None,
         archives: Some(archives),
         pending_commit: None,
+        replay_completion: None,
         attestation: None,
         quarantine_context: None,
     }

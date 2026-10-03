@@ -44,7 +44,7 @@ impl Client {
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::account_read::VerifiedAccountReadProviderV1>{
         let proof = self.read_provider_discovery_frame(provider, block)?;
         let verified = proof.verify_account_read(
-            &self.chain.to_string(),
+            self.chain.as_ref(),
             self.network_id,
             provider,
             native_schema,
@@ -55,7 +55,7 @@ impl Client {
         Ok(verified)
     }
 
-    /// Read current native StreamToken control for an independently selected signer binding.
+    /// Read current native `StreamToken` control for an independently selected signer binding.
     ///
     /// The caller supplies the complete expected binding, qualified World schema and fresh
     /// certified decision. This reuses the bounded provider-discovery transport and returns only
@@ -656,7 +656,7 @@ impl Client {
             verifier,
             proof,
             compiled_schema,
-            snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
+            &snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
             signatory.into_key_value(),
             wallet.into_key_value(),
             nodes,

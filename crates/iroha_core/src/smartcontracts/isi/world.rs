@@ -17376,6 +17376,10 @@ pub mod isi {
             // and recipient accounts for definitions owned by another domain.
             // Apply the same retail guard as individual account teardown.
             for account_id in &relabeled_accounts {
+                if crate::sumeragi::amx::retained_account(&state_transaction.world, account_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "domain teardown would remove an original native AMX party or custody account".into()));
+                }
                 crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
                     state_transaction,
                     account_id,
@@ -17390,6 +17394,10 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            crate::sumeragi::amx::ensure_retained_definitions(
+                &state_transaction.world,
+                &remove_asset_definitions,
+            )?;
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
                 state_transaction,
                 &remove_asset_definitions,
@@ -22590,7 +22598,6 @@ pub mod isi {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn verifier_registry_bootstrap_requires_original_input_and_remains_genesis_only() {
-            use crate::state::StateReadOnly as _;
             use crate::sumeragi::{
                 startup,
                 test_chain::{CertifiedTestChain, TestChainConfig},
@@ -23065,7 +23072,7 @@ pub mod isi {
                 0,
             );
             let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            let state_transaction = block.transaction();
             let (authority, authorization) =
                 crate::state::validator_committee::current_authority(&state_transaction)
                     .expect("the incumbent owns authenticated native finality");
@@ -27651,63 +27658,6 @@ seiyaku GovernanceLifecycle {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             stx.world.space_directory_manifests.insert(uaid, set);
-        }
-        fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
-            seed_live_peer_with_role(stx, keypair, ConsensusKeyRole::Validator)
-        }
-        fn seed_live_peer_with_role(
-            stx: &mut StateTransaction<'_, '_>,
-            keypair: &KeyPair,
-            role: ConsensusKeyRole,
-        ) -> PeerId {
-            let peer = PeerId::new(keypair.public_key().clone());
-            if stx.world.peers.iter().all(|existing| existing != &peer) {
-                let _ = stx.world.peers.push(peer.clone());
-            }
-            let id = match role {
-                ConsensusKeyRole::Validator => {
-                    crate::state::derive_validator_key_id(keypair.public_key())
-                }
-                ConsensusKeyRole::Committee => {
-                    crate::state::derive_committee_key_id(keypair.public_key())
-                }
-                ConsensusKeyRole::Endorsement => {
-                    panic!("lane relay peers cannot use endorsement keys")
-                }
-            };
-            let record = ConsensusKeyRecord {
-                id,
-                public_key: keypair.public_key().clone(),
-                pop: Some(
-                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                        .expect("generate pop for test peer"),
-                ),
-                activation_height: 0,
-                expiry_height: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Active,
-            };
-            let record_id = record.id.clone();
-            upsert_consensus_key(&mut stx.world, &record_id, record);
-            peer
-        }
-        fn register_multisig_authority(
-            stx: &mut StateTransaction<'_, '_>,
-            threshold: u16,
-            member_count: usize,
-        ) -> AccountId {
-            let mut members = Vec::with_capacity(member_count);
-            for _ in 0..member_count {
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let member = MultisigMember::new(kp.public_key().clone(), 1).expect("member");
-                members.push(member);
-            }
-            let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
-            let multisig_id = AccountId::new_multisig(policy);
-            Register::account(Account::new(multisig_id.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register multisig authority");
-            multisig_id
         }
         world_test!(unregister_domain_rejects_native_kaigi_state_atomically {
             use iroha_data_model::kaigi::{

@@ -569,13 +569,6 @@ fn live_fixture_in_memory_signer(
     .expect("move the DKG share into the zeroizing runtime provider")
 }
 
-fn live_fixture_signer(
-    fixture: &AdaptiveBeaconFixture,
-    recipient_index: u16,
-) -> Arc<dyn GlobalThresholdBeaconPartialSignerV1> {
-    Arc::new(live_fixture_in_memory_signer(fixture, recipient_index))
-}
-
 struct FailOnceBeaconSigner {
     inner: Arc<dyn GlobalThresholdBeaconPartialSignerV1>,
     attempts: Arc<AtomicUsize>,
@@ -1660,4 +1653,80 @@ fn threshold_beacon_canonical_decoders_reject_trailing_wire_data() {
         Err(GlobalThresholdBeaconError::InvalidEncoding)
             | Err(GlobalThresholdBeaconError::NonCanonicalEncoding)
     ));
+}
+
+#[test]
+fn finalized_validated_session_preserves_transcript_before_lifecycle_checks() {
+    let (validated, _) = validated_threshold_session();
+    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+        session: validated.record().clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
+    assert_eq!(record.validated_session().unwrap(), validated);
+    assert_eq!(record.validate(), Ok(()));
+
+    let mut invalid = record.clone();
+    invalid.retired_at_height = Some(record.session.adaptive_dkg.finalized_at_height);
+    assert_eq!(
+        invalid.validated_session(),
+        Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
+    );
+    assert_eq!(
+        invalid.validate(),
+        Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
+    );
+    invalid.session.group_public_key = [0; 96];
+    assert_eq!(
+        invalid.validated_session(),
+        Err(GlobalThresholdBeaconError::ThresholdBls(
+            ThresholdBlsError::InvalidPublicKey
+        ))
+    );
+    assert_eq!(
+        invalid.validate(),
+        Err(GlobalThresholdBeaconError::ThresholdBls(
+            ThresholdBlsError::InvalidPublicKey
+        ))
+    );
+}
+
+#[test]
+fn validated_session_binding_checks_match_original_admission_and_error_order() {
+    let (session, expected) = validated_threshold_session();
+    assert_eq!(session.validate_binding(&expected), Ok(()));
+    let mut wrong = expected;
+    wrong.network_id = beacon_fixture_network_id(0x82);
+    wrong.session_id[0] ^= 1;
+    wrong.roster_hash[0] ^= 1;
+    wrong.transcript_hash[0] ^= 1;
+    for error in [
+        GlobalThresholdBeaconError::NetworkMismatch,
+        GlobalThresholdBeaconError::SessionMismatch,
+        GlobalThresholdBeaconError::RosterMismatch,
+        GlobalThresholdBeaconError::TranscriptMismatch,
+    ] {
+        assert_eq!(session.validate_binding(&wrong), Err(error));
+        assert_eq!(
+            validate_global_threshold_beacon_session_v1(session.record().clone(), &wrong),
+            Err(error)
+        );
+        match error {
+            GlobalThresholdBeaconError::NetworkMismatch => wrong.network_id = expected.network_id,
+            GlobalThresholdBeaconError::SessionMismatch => wrong.session_id = expected.session_id,
+            GlobalThresholdBeaconError::RosterMismatch => wrong.roster_hash = expected.roster_hash,
+            GlobalThresholdBeaconError::TranscriptMismatch => {
+                wrong.transcript_hash = expected.transcript_hash
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(session.validate_binding(&wrong), Ok(()));
+    let mut unsupported = session.record().clone();
+    unsupported.version = 0;
+    wrong.network_id = beacon_fixture_network_id(0x82);
+    assert_eq!(
+        validate_global_threshold_beacon_session_binding_v1(&unsupported, &wrong),
+        Err(GlobalThresholdBeaconError::UnsupportedVersion { actual: 0 })
+    );
 }

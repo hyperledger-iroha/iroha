@@ -306,7 +306,13 @@ impl<'state> PreparedWorldCommit<'state> {
 
 impl StateBlock<'_> {
     /// Project the four persisted pin indexes through the same pure admission plan as commit.
+    #[cfg(test)]
     pub(crate) fn json_serialize_committed_da_pin_indexes(&self) -> [Option<String>; 4] {
+        // Finalized snapshots borrow the exact already-applied tail. Recomputing this
+        // plan would require an executing block and could substitute its original effects.
+        if self.has_finalized_world_tail_for_snapshot() {
+            return Default::default();
+        }
         if self.pending_da_pin_intents.is_none() && self.pending_autoscale_lifecycle.is_none() {
             return Default::default();
         }

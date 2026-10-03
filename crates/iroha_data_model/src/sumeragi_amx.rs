@@ -567,3 +567,9 @@ pub const fn amx_record_witness_key(
 
 #[cfg(test)]
 mod tests;
+
+mod native;
+pub use native::{
+    AmxTransferEscrowV1, AmxTransferLegV1, NativeAmxParticipantStateV1,
+    native_transfer_effects_hash,
+};

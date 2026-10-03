@@ -172,8 +172,9 @@ pub(super) fn append_evidence_sources(
         .iter()
         .map(|r| r.key.clone())
         .collect::<BTreeSet<_>>();
-    for binding in crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
-        .map_err(|error| error.map_rejection(|error| error.to_string()))?
+    if let Some(binding) =
+        crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
     {
         for account in &aliases {
             let key = alias_key(&binding, account)?;

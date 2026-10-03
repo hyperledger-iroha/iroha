@@ -2,16 +2,10 @@ use super::*;
 use axum::http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute as _,
-    state::{State, World},
-    sumeragi::network_topology::Topology,
-    tx::AcceptedTransaction,
+    kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute as _, state::World,
+    sumeragi::network_topology::Topology, tx::AcceptedTransaction,
 };
 use iroha_data_model::prelude as dm;
-use iroha_primitives::const_vec::ConstVec;
 use std::{borrow::Cow, sync::Arc};
 // use tower::ServiceExt; // not needed in this module
 const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
@@ -305,14 +299,14 @@ async fn account_transactions_get_rejects_limit_above_cap() {
 #[tokio::test]
 async fn account_transactions_get_filters_by_asset_id() {
     use iroha_crypto::Algorithm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Prepare world: domain + account
     let leader0 = checked_smoke_keypair(
         0x42,
@@ -388,7 +382,7 @@ async fn account_transactions_get_filters_by_asset_id() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx_asset, tx_log]);
     let params = AccountTransactionsGetParams {
         limit: Some(10),
@@ -425,14 +419,14 @@ async fn account_transactions_get_filters_by_asset_id() {
 #[tokio::test]
 async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     use iroha_crypto::Algorithm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let leader0 = checked_smoke_keypair(
         0x46,
         Algorithm::BlsNormal,
@@ -532,7 +526,7 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![transfer_tx]);
     let bob_literal = bob_id
         .account()
@@ -646,14 +640,14 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
 #[tokio::test]
 async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     use iroha_crypto::Algorithm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let leader0 = checked_smoke_keypair(
         0x4B,
         Algorithm::BlsNormal,
@@ -662,7 +656,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader0.public_key().clone(),
     )]);
-    let mut st_block0 = state.block(iroha_data_model::block::BlockHeader::new(
+    let st_block0 = state.block(iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(native_chain.height() + 1).unwrap(),
         state.view().latest_block_hash(),
         None,
@@ -724,7 +718,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx]);
+    let _committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx]);
     let resp = handle_v1_contracts_activity_get(
         state,
         DataspaceReadVisibility::all_for_tests(),
@@ -771,14 +765,14 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
 }
 #[tokio::test]
 async fn handle_v1_account_transactions_returns_and_sorts() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Prepare world: domain + two accounts
     // Apply domain + accounts in a state transaction, then insert an empty
     // transactions block before committing to satisfy state invariants.
@@ -884,7 +878,7 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx_a, tx_b, tx_c]);
     // Now query via handler with sorting by timestamp_ms ascending, tie-break by entrypoint_hash asc
     let timestamp_filter = crate::filter::FilterExpr::Gte(
@@ -980,14 +974,14 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
 #[tokio::test]
 async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
     use iroha_crypto::Algorithm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Register domain + operator + target account
     let leader0 = checked_smoke_keypair(
         0x51,
@@ -1050,7 +1044,7 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, accepted);
+    let _committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, accepted);
     // Query with fetch_size smaller than total to ensure streaming totals kick in.
     let authority_literal = actor_id.account().to_string();
     let env = crate::filter::QueryEnvelope {
@@ -1090,14 +1084,14 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
     let _debug_env = DebugEnvGuard::enable();
     use iroha_data_model::prelude as dm;
     // State and topology
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Ensure domain and accounts exist before committing txs
     let kp_a = checked_smoke_keypair(
         0x55,
@@ -1184,7 +1178,7 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Filter: result_ok == true AND entrypoint_hash != entry_hash1_str AND timestamp_ms >= 1500
     // Sort: result_ok desc, timestamp_ms asc, entrypoint_hash asc
@@ -1250,20 +1244,17 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
 }
 #[tokio::test]
 async fn handle_v1_account_transactions_emits_requested_format() {
-    use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        tx::AcceptedTransaction,
-    };
+    use iroha_core::tx::AcceptedTransaction;
     use iroha_data_model::prelude as dm;
     use std::borrow::Cow;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp = checked_smoke_keypair(
         0x5A,
@@ -1281,12 +1272,12 @@ async fn handle_v1_account_transactions_emits_requested_format() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp.private_key());
     let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-    let leader = checked_smoke_keypair(
+    let _leader = checked_smoke_keypair(
         0x5B,
         iroha_crypto::Algorithm::BlsNormal,
         "derive requested-format block leader fixture key",
     );
-    let committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx]);
+    let _committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx]);
     let i105_literal = account
         .to_account_address()
         .and_then(|address| address.to_i105())
@@ -1325,14 +1316,14 @@ async fn handle_v1_account_transactions_emits_requested_format() {
 #[tokio::test]
 async fn authority_and_timestamp_bounds_filter_local_and_handler() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x5C,
@@ -1386,7 +1377,7 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Build filter: authority == acc_b AND 1500 <= timestamp_ms <= 2500
     let expr = crate::filter::FilterExpr::And(vec![
@@ -1442,14 +1433,14 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
 #[tokio::test]
 async fn or_union_matches_both_authority_or_timestamp() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Build two transactions: A at 1500ms, A at 900ms
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
@@ -1496,7 +1487,7 @@ async fn or_union_matches_both_authority_or_timestamp() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Filter: authority == acc_a_str OR timestamp_ms < 1000
     let expr = crate::filter::FilterExpr::Or(vec![
@@ -1553,14 +1544,14 @@ async fn or_union_matches_both_authority_or_timestamp() {
 #[tokio::test]
 async fn typed_tx_predicate_matches_all_filter() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x61,
@@ -1604,7 +1595,7 @@ async fn typed_tx_predicate_matches_all_filter() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Filter that should match all: Exists(authority) OR Lt(timestamp_ms, very large)
     let expr = crate::filter::FilterExpr::Or(vec![
@@ -1655,14 +1646,14 @@ async fn typed_tx_predicate_matches_all_filter() {
 #[tokio::test]
 async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x63,
@@ -1747,7 +1738,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed = crate::test_utils::commit_native_accepted_inputs(
+    let _committed = crate::test_utils::commit_native_accepted_inputs(
         &mut native_chain,
         vec![tx1, tx2, tx3, tx4],
     );
@@ -1830,14 +1821,14 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
 #[tokio::test]
 async fn typed_tx_predicate_handles_authority_equality_sets() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x67,
@@ -1907,7 +1898,7 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2, tx3]);
     // 1) Eq(authority == A) => all
     let env_eq = crate::filter::QueryEnvelope {
@@ -2037,14 +2028,14 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
 #[tokio::test]
 async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6B,
@@ -2092,7 +2083,7 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Eq(entrypoint_hash == entry1) => 1
     let env_eq = crate::filter::QueryEnvelope {
@@ -2249,14 +2240,14 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
 #[tokio::test]
 async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     use iroha_data_model::prelude as dm;
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6D,
@@ -2297,12 +2288,12 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         .sign(kp_a.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
     // Commit
-    let leader = checked_smoke_keypair(
+    let _leader = checked_smoke_keypair(
         0x6E,
         iroha_crypto::Algorithm::BlsNormal,
         "derive tx-predicate nullability block leader fixture key",
     );
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2]);
     // Exists(entrypoint_hash) => 2 (always present)
     let env_exists_entry = crate::filter::QueryEnvelope {

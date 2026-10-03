@@ -383,7 +383,10 @@ impl AccountService {
         expectation: Option<private_root::BoundedOperationExpectation<'_>>,
     ) -> Result<OperationReport> {
         self.run_transaction_with_expectation(
-            path, expected, submit, expectation.map(OperationExpectation::PrivateRoot),
+            path,
+            expected,
+            submit,
+            expectation.map(OperationExpectation::PrivateRoot),
         )
     }
     fn run_transaction_with_expectation(
@@ -502,10 +505,15 @@ impl TransactionJournal {
         let bytes = hex::decode(&self.signed_transaction_hex)?;
         let transaction = SignedTransaction::decode_all_versioned(&bytes)?;
         transaction.verify_signature()?;
-        if matches!(self.operation, NativeOperation::StreamTokenCustodyConfigure { .. } | NativeOperation::StreamTokenCustodyEnroll { .. })
-            && (transaction.attachments().is_some() || transaction.multisig_signatures().is_some())
+        if matches!(
+            self.operation,
+            NativeOperation::StreamTokenCustodyConfigure { .. }
+                | NativeOperation::StreamTokenCustodyEnroll { .. }
+        ) && (transaction.attachments().is_some() || transaction.multisig_signatures().is_some())
         {
-            eyre::bail!("custody operations require the sole account-signature instruction profile");
+            eyre::bail!(
+                "custody operations require the sole account-signature instruction profile"
+            );
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             eyre::bail!("transfer must contain native instructions");
@@ -612,8 +620,14 @@ enum NativeOperation {
         anchor: Box<PrivateDataspaceAnchor>,
         terms: BoundedTerms,
     },
-    StreamTokenCustodyConfigure { plan: Vec<u8>, terms: BoundedTerms },
-    StreamTokenCustodyEnroll { plan: Vec<u8>, terms: BoundedTerms },
+    StreamTokenCustodyConfigure {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    StreamTokenCustodyEnroll {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
 }
 impl NativeOperation {
     fn bounded_terms(&self) -> Option<&BoundedTerms> {
@@ -621,7 +635,8 @@ impl NativeOperation {
             Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
                 Some(terms)
             }
-            Self::StreamTokenCustodyConfigure { terms, .. } | Self::StreamTokenCustodyEnroll { terms, .. } => Some(terms),
+            Self::StreamTokenCustodyConfigure { terms, .. }
+            | Self::StreamTokenCustodyEnroll { terms, .. } => Some(terms),
             Self::AliasSetup {
                 bounds: AliasFeeBounds::Bounded(terms),
                 ..
@@ -631,10 +646,10 @@ impl NativeOperation {
     }
     fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
         match self {
-            Self::PrivateRootRegistration { .. } | Self::PrivateRootAnchor { .. }
-            | Self::StreamTokenCustodyConfigure { .. } | Self::StreamTokenCustodyEnroll { .. } => {
-                Ok(BTreeMap::new())
-            }
+            Self::PrivateRootRegistration { .. }
+            | Self::PrivateRootAnchor { .. }
+            | Self::StreamTokenCustodyConfigure { .. }
+            | Self::StreamTokenCustodyEnroll { .. } => Ok(BTreeMap::new()),
             Self::Transfer { amount, .. } => Ok(BTreeMap::from([(
                 AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone()),
                 amount.clone(),
@@ -658,13 +673,16 @@ impl NativeOperation {
             Self::AliasSetup { .. } => NativeOperationKind::AliasSetup,
             Self::PrivateRootRegistration { .. } => NativeOperationKind::PrivateRootRegistration,
             Self::PrivateRootAnchor { .. } => NativeOperationKind::PrivateRootAnchor,
-            Self::StreamTokenCustodyConfigure { .. } => NativeOperationKind::StreamTokenCustodyConfigure,
+            Self::StreamTokenCustodyConfigure { .. } => {
+                NativeOperationKind::StreamTokenCustodyConfigure
+            }
             Self::StreamTokenCustodyEnroll { .. } => NativeOperationKind::StreamTokenCustodyEnroll,
         }
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
-            Self::StreamTokenCustodyConfigure { plan, terms } | Self::StreamTokenCustodyEnroll { plan, terms } => {
+            Self::StreamTokenCustodyConfigure { plan, terms }
+            | Self::StreamTokenCustodyEnroll { plan, terms } => {
                 terms.validate()?;
                 stream_token_custody::instructions(config, plan, self.kind(), terms.deadline_ms)
             }
@@ -737,10 +755,12 @@ fn transfer_report(
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
         NativeOperation::StreamTokenCustodyConfigure { terms, .. } => (
-            "stream_token_custody_configure", norito::json!({"terms": terms}),
+            "stream_token_custody_configure",
+            norito::json!({"terms": terms}),
         ),
         NativeOperation::StreamTokenCustodyEnroll { terms, .. } => (
-            "stream_token_custody_enroll", norito::json!({"terms": terms}),
+            "stream_token_custody_enroll",
+            norito::json!({"terms": terms}),
         ),
         NativeOperation::PrivateRootRegistration {
             alias,

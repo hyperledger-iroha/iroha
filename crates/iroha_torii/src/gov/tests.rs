@@ -548,7 +548,7 @@ struct GovHarness {
     native_chain: parking_lot::Mutex<CertifiedTestChain>,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     authority: AccountId,
     authority_keypair: KeyPair,
 }
@@ -681,7 +681,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         native_chain: parking_lot::Mutex::new(native_chain),
         state,
         queue,
-        chain_id: Arc::new(chain_id),
+        _chain_id: Arc::new(chain_id),
         authority,
         authority_keypair,
     }
@@ -2080,7 +2080,7 @@ async fn gov_get_tally_rejects_missing_referendum() {
 async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     use iroha_data_model::governance::conviction::PlainVotingResultV1;
 
-    let mut state = State::new_for_testing(
+    let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
@@ -2269,7 +2269,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
                     ds_asset_id: state.gov.voting_asset_id.clone(),
                     xor_asset_id: state.gov.voting_asset_id.clone(),
                     reward_pool_account_id: ALICE_ID.clone(),
-                    validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+                    validator_lane_id: iroha_model_base::topology::LaneId::new(0),
                 },
             },
         },

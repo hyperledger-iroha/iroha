@@ -82,7 +82,7 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
     if matches!(case, ExecutionRefundCase::RetainedDrop) {
         let fields = block.fields.as_mut().unwrap();
         let effects = fields
-            .ivm_refunds
+            ._ivm_refunds
             .with_scope(|_| {
                 crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
                     &mut fields.world,

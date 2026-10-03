@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    state::{StateReadOnly, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_crypto::{Algorithm, HashOf, KeyPair};

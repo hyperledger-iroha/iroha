@@ -30,4 +30,4 @@ iroha_primitives = { workspace = true, default-features = false, features = ["si
 # Pure compiled type descriptions (no IO): the consensus wire root of the release wire-schema
 # identity (`iroha_core::release_identity::wire_schema_hash`).
 iroha_schema = { workspace = true }
-norito = { workspace = true, default-features = false, features = ["base-codec"] }
+norito = { workspace = true, default-features = false, features = ["base-codec", "simd-accel"] }

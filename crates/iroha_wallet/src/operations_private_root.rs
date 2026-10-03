@@ -131,9 +131,11 @@ impl BoundedTerms {
         self.validate()?;
         options.fee_payment.validate()?;
         Ok(self.max_total_fees.len() == options.max_total_fees.len()
-            && self.max_total_fees.iter().zip(&options.max_total_fees).all(|(saved, (asset, maximum))| {
-                &saved.asset_definition_id == asset && &saved.max_amount == maximum
-            }))
+            && self.max_total_fees.iter().zip(&options.max_total_fees).all(
+                |(saved, (asset, maximum))| {
+                    &saved.asset_definition_id == asset && &saved.max_amount == maximum
+                },
+            ))
     }
 }
 

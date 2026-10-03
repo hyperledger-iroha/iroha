@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "app_api"))]
+#[cfg(test)]
 pub(crate) mod tests_runtime_handlers {
     // Textual chunks remain in this module, preserving every item namespace.
     include!("lib_runtime_handlers/part_1.rs");

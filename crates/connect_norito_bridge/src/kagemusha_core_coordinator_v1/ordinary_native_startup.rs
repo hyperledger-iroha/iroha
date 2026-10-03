@@ -917,7 +917,10 @@ impl BoundNativeAccountSessionV1 {
     // It neither renews S/W nor admits an FI token/session or financial operation.
     pub(super) fn fi_http_endpoint_originals(&self) -> Result<(String, String), Error> {
         self.recheck_retained_account_identity()?;
-        let originals = self.startup.inventory.fi_http_endpoint_originals()
+        let originals = self
+            .startup
+            .inventory
+            .fi_http_endpoint_originals()
             .map_err(|_| Error::Rejected)?;
         self.recheck_retained_account_identity()?;
         Ok(originals)

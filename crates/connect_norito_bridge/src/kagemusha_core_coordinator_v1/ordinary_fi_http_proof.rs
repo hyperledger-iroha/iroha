@@ -47,14 +47,15 @@ fn require_backend_originals(backend: &Arc<OrdinaryBackend>) -> Result<(), Error
         return Err(Error::Unavailable);
     }
     let active = ACTIVE.get().ok_or(Error::Unavailable)?;
-    if !Arc::ptr_eq(active, backend)
-        || installed.attempted_path.as_deref() != backend.path.to_str()
+    if !Arc::ptr_eq(active, backend) || installed.attempted_path.as_deref() != backend.path.to_str()
     {
         return Err(Error::Rejected);
     }
     // Unlike fresh ledger/financial signing, HTTP app-key possession does not
     // renew or consume a finite S/W observation. Actual retirement remains strict.
-    backend.source.recheck_retained_owner_originals(&backend.path)
+    backend
+        .source
+        .recheck_retained_owner_originals(&backend.path)
 }
 
 fn require_endpoint_originals(
@@ -114,7 +115,9 @@ pub fn prepare_kagemusha_native_ordinary_fi_http_proof_v1(
     .map_err(|_| Error::Rejected)?;
     require_endpoint_originals(
         &backend,
-        prepared.request_data(pending, possession).map_err(|_| Error::Rejected)?,
+        prepared
+            .request_data(pending, possession)
+            .map_err(|_| Error::Rejected)?,
     )?;
     require_backend_originals(&backend)?;
     drop(owner);
@@ -139,7 +142,10 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
             .retained_pending_identity()
             .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let request = self.prepared.request_data(pending, possession).map_err(|_| Error::Rejected)?;
+        let request = self
+            .prepared
+            .request_data(pending, possession)
+            .map_err(|_| Error::Rejected)?;
         require_endpoint_originals(&self.backend, request)?;
         require_backend_originals(&self.backend)
     }
@@ -170,11 +176,19 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
     ) -> Result<(), Error> {
         let owner = self.backend.owner.lock().map_err(|_| Error::Rejected)?;
         self.require_current_with_owner(&owner)?;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let request = self.prepared.request_data(pending, possession).map_err(|_| Error::Rejected)?;
-        if request.method != method || request.htu != htu
+        let request = self
+            .prepared
+            .request_data(pending, possession)
+            .map_err(|_| Error::Rejected)?;
+        if request.method != method
+            || request.htu != htu
             || request.access_token.as_slice() != access_token
             || request.original_request_id != original_request_id
             || request.operation_reference.as_slice() != operation_reference
@@ -191,11 +205,18 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
     pub fn purpose_headers(&self) -> Result<(&'static str, &'static str), Error> {
         let owner = self.backend.owner.lock().map_err(|_| Error::Rejected)?;
         self.require_current_with_owner(&owner)?;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let purpose = self.prepared.request_data(pending, possession)
-            .map_err(|_| Error::Rejected)?.purpose;
+        let purpose = self
+            .prepared
+            .request_data(pending, possession)
+            .map_err(|_| Error::Rejected)?
+            .purpose;
         self.require_current_with_owner(&owner)?;
         Ok((purpose.authorization_scheme(), purpose.proof_header_name()))
     }
@@ -206,10 +227,18 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
     pub fn jkt(&self) -> Result<String, Error> {
         let owner = self.backend.owner.lock().map_err(|_| Error::Rejected)?;
         self.require_current_with_owner(&owner)?;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let original = self.prepared.jkt(pending, possession).map_err(|_| Error::Rejected)?.to_owned();
+        let original = self
+            .prepared
+            .jkt(pending, possession)
+            .map_err(|_| Error::Rejected)?
+            .to_owned();
         self.require_current_with_owner(&owner)?;
         Ok(original)
     }
@@ -220,10 +249,18 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
     pub fn jti(&self) -> Result<String, Error> {
         let owner = self.backend.owner.lock().map_err(|_| Error::Rejected)?;
         self.require_current_with_owner(&owner)?;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let original = self.prepared.jti(pending, possession).map_err(|_| Error::Rejected)?.to_owned();
+        let original = self
+            .prepared
+            .jti(pending, possession)
+            .map_err(|_| Error::Rejected)?
+            .to_owned();
         self.require_current_with_owner(&owner)?;
         Ok(original)
     }
@@ -233,7 +270,9 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
     /// caller alias enters this method. This start has no restart-safe fsync claim.
     /// # Errors
     /// Refuses a previous start/completion/failure, retirement or changed originals.
-    pub fn begin_original_key_loan(&mut self) -> Result<KagemushaNativeOrdinaryFiHttpKeyLoanV1<'_>, Error> {
+    pub fn begin_original_key_loan(
+        &mut self,
+    ) -> Result<KagemushaNativeOrdinaryFiHttpKeyLoanV1<'_>, Error> {
         let owner = self.backend.owner.lock().map_err(|_| Error::Rejected)?;
         self.require_current_with_owner(&owner)?;
         if !matches!(self.stage, Stage::Prepared) {
@@ -242,20 +281,35 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
         // A projection or postcheck failure after this mark permanently freezes
         // this Native holder. It cannot expose another possible hardware call.
         self.stage = Stage::Failed;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let core = self.prepared.begin_platform(pending, possession).map_err(|_| Error::Rejected)?;
-        let signing_input = Zeroizing::new(core.signing_input().map_err(|_| Error::Rejected)?.to_vec());
-        let alias = core.original_alias().map_err(|_| Error::Rejected)?.to_owned();
+        let core = self
+            .prepared
+            .begin_platform(pending, possession)
+            .map_err(|_| Error::Rejected)?;
+        let signing_input =
+            Zeroizing::new(core.signing_input().map_err(|_| Error::Rejected)?.to_vec());
+        let alias = core
+            .original_alias()
+            .map_err(|_| Error::Rejected)?
+            .to_owned();
         let point = *core.public_key().map_err(|_| Error::Rejected)?;
         let key_id = core.attested_key_id().map_err(|_| Error::Rejected)?;
         let challenge = core.attestation_challenge().map_err(|_| Error::Rejected)?;
         let security_level = core.security_level().map_err(|_| Error::Rejected)?;
         drop(core);
         require_backend_originals(&self.backend)?;
-        require_endpoint_originals(&self.backend,
-            self.prepared.request_data(pending, possession).map_err(|_| Error::Rejected)?)?;
+        require_endpoint_originals(
+            &self.backend,
+            self.prepared
+                .request_data(pending, possession)
+                .map_err(|_| Error::Rejected)?,
+        )?;
         self.stage = Stage::PlatformStarted;
         drop(owner);
         Ok(KagemushaNativeOrdinaryFiHttpKeyLoanV1 {
@@ -284,13 +338,25 @@ impl KagemushaNativePreparedOrdinaryFiHttpProofV1 {
             return Err(Error::Rejected);
         }
         self.stage = Stage::Failed;
-        let pending = owner.attempt.as_ref().ok_or(Error::Unavailable)?
-            .retained_pending_identity().map_err(|_| Error::Rejected)?;
+        let pending = owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
         let possession = owner.possession.as_ref().ok_or(Error::Unavailable)?;
-        let compact = Zeroizing::new(self.prepared.complete_original(pending, possession, original_der)
-            .map_err(|_| Error::Rejected)?.to_owned());
-        require_endpoint_originals(&self.backend,
-            self.prepared.request_data(pending, possession).map_err(|_| Error::Rejected)?)?;
+        let compact = Zeroizing::new(
+            self.prepared
+                .complete_original(pending, possession, original_der)
+                .map_err(|_| Error::Rejected)?
+                .to_owned(),
+        );
+        require_endpoint_originals(
+            &self.backend,
+            self.prepared
+                .request_data(pending, possession)
+                .map_err(|_| Error::Rejected)?,
+        )?;
         require_backend_originals(&self.backend)?;
         self.stage = Stage::Completed;
         Ok(compact)
@@ -323,25 +389,43 @@ impl KagemushaNativeOrdinaryFiHttpKeyLoanV1<'_> {
     /// Exact Core JOSE ASCII input for the sole original SHA256withECDSA call.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn signing_input(&self) -> Result<&[u8], Error> { self.require_current()?; Ok(self.signing_input.as_slice()) }
+    pub fn signing_input(&self) -> Result<&[u8], Error> {
+        self.require_current()?;
+        Ok(self.signing_input.as_slice())
+    }
     /// Actual original generation alias; callers cannot substitute another alias.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn original_alias(&self) -> Result<&str, Error> { self.require_current()?; Ok(&self.alias) }
+    pub fn original_alias(&self) -> Result<&str, Error> {
+        self.require_current()?;
+        Ok(&self.alias)
+    }
     /// Authentic original uncompressed P256 point.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn public_key(&self) -> Result<&[u8; 65], Error> { self.require_current()?; Ok(&self.point) }
+    pub fn public_key(&self) -> Result<&[u8; 65], Error> {
+        self.require_current()?;
+        Ok(&self.point)
+    }
     /// SHA256 of that genuine original point.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn attested_key_id(&self) -> Result<[u8; 32], Error> { self.require_current()?; Ok(self.key_id) }
+    pub fn attested_key_id(&self) -> Result<[u8; 32], Error> {
+        self.require_current()?;
+        Ok(self.key_id)
+    }
     /// Original generation-time certificate challenge.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn attestation_challenge(&self) -> Result<[u8; 32], Error> { self.require_current()?; Ok(self.challenge) }
+    pub fn attestation_challenge(&self) -> Result<[u8; 32], Error> {
+        self.require_current()?;
+        Ok(self.challenge)
+    }
     /// Genuine TEE/StrongBox metadata, without a single-use requirement.
     /// # Errors
     /// Refuses stale Native custody.
-    pub fn security_level(&self) -> Result<KagemushaAppKeySecurityLevelV1, Error> { self.require_current()?; Ok(self.security_level) }
+    pub fn security_level(&self) -> Result<KagemushaAppKeySecurityLevelV1, Error> {
+        self.require_current()?;
+        Ok(self.security_level)
+    }
 }

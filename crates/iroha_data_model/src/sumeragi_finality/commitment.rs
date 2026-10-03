@@ -370,6 +370,23 @@ impl ExecutionResultCommitment {
         preimage: &[u8],
         validation: &mut EpochValidationScope,
     ) -> Result<Self, CommitmentError> {
+        Self::decode_with_validation_into(preimage, validation, |decoded| decoded)
+    }
+
+    /// Fully decode and validate the original canonical result before transferring it to a
+    /// consuming owner. The consumer runs exactly once after all checks succeed, and never
+    /// on a malformed frame or local decoder refusal. It confers no source or certificate trust.
+    /// This permits a prepaid destination to receive the value without another large result
+    /// return temporary in its caller.
+    ///
+    /// # Errors
+    /// Preserves the same format bounds, inherited resource refusal and complete validation
+    /// errors as [`Self::decode_with_validation`].
+    pub fn decode_with_validation_into<Output>(
+        preimage: &[u8],
+        validation: &mut EpochValidationScope,
+        finish: impl FnOnce(Self) -> Output,
+    ) -> Result<Output, CommitmentError> {
         if preimage.len() > MAX_RESULT_PREIMAGE_BYTES {
             return Err(CommitmentError::PreimageLength(preimage.len()));
         }
@@ -402,7 +419,7 @@ impl ExecutionResultCommitment {
             CommitmentError::Encoding(error.to_string())
         })?;
         decoded.validate_with_validation(validation)?;
-        Ok(decoded)
+        Ok(finish(decoded))
     }
 
     /// `R` of this commitment.

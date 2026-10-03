@@ -182,7 +182,13 @@ fn abandoned_runtime_children_and_blocks_do_not_publish() {
 #[test]
 fn actual_replacement_uses_retained_runtime_including_retired_lineage() {
     let state = state();
-    let predecessor = state.canonical_runtime.view().get().clone();
+    let original_runtime = state.canonical_runtime.view();
+    let original_view = state.view();
+    let predecessor = original_runtime.get().clone();
+    assert!(std::ptr::eq(
+        original_view.canonical_runtime.get(),
+        original_runtime.get()
+    ));
     // Explicit retained-metadata fixture: no SignedBlock/finality/publication is fabricated.
     let mut retained = state.canonical_runtime.block();
     retained
@@ -195,8 +201,35 @@ fn actual_replacement_uses_retained_runtime_including_retired_lineage() {
             activation_height: 0,
         });
     retained.commit();
-    let tip = state.canonical_runtime.view().get().clone();
+    let tip_runtime = state.canonical_runtime.view();
+    let tip_view = state.view();
+    let tip = tip_runtime.get().clone();
     assert_ne!(tip, predecessor);
+    assert_eq!(original_view.canonical_runtime.get(), &predecessor);
+    assert!(std::ptr::eq(
+        original_view.canonical_runtime.get(),
+        original_runtime.get()
+    ));
+    assert!(std::ptr::eq(
+        tip_view.canonical_runtime.get(),
+        tip_runtime.get()
+    ));
+    assert!(!std::ptr::eq(
+        tip_view.canonical_runtime.get(),
+        original_view.canonical_runtime.get()
+    ));
+    assert!(
+        tip_view
+            .canonical_runtime
+            .get()
+            .lane_incarnation_lineage
+            .iter()
+            .any(|lineage| lineage.lane_id == LaneId::new(7))
+    );
+    assert_eq!(
+        tip_view.canonical_runtime_predecessor.get(),
+        &Some(predecessor.clone())
+    );
     {
         let ordinary = state.merge_preexecution_block(header());
         assert_eq!(ordinary.canonical_runtime.get(), &tip);
@@ -253,6 +286,47 @@ fn unowned_runtime_projection_change_cannot_publish() {
 }
 
 #[test]
+fn active_runtime_projections_do_not_copy_retired_lineage_trees() {
+    let state = state();
+    let mut runtime = state.canonical_runtime.view().get().clone();
+    let active = runtime.lane_incarnation_lineage[0].clone();
+    // Read projection fixture only: these retained entries confer no execution authority.
+    for id in 1_u32..=2048 {
+        runtime
+            .lane_incarnation_lineage
+            .push(SnapshotLaneIncarnationLineage {
+                lane_id: LaneId::new(id),
+                generation: 1,
+                incarnation: Hash::new(id.to_be_bytes()),
+                activation_height: u64::from(id),
+            });
+    }
+    let mut incarnations = None;
+    let incarnation_allocations = crate::test_allocations::allocations_during(|| {
+        incarnations = Some(runtime.active_incarnations());
+    });
+    let mut activations = None;
+    let activation_allocations = crate::test_allocations::allocations_during(|| {
+        activations = Some(runtime.active_activation_heights());
+    });
+    assert_eq!(
+        incarnations.unwrap().unwrap(),
+        BTreeMap::from([(active.lane_id, active.incarnation)])
+    );
+    assert_eq!(
+        activations.unwrap().unwrap(),
+        BTreeMap::from([(active.lane_id, active.activation_height)])
+    );
+    assert_eq!(
+        (incarnation_allocations, activation_allocations),
+        (1, 1),
+        "each one-lane result needs only its own output leaf, regardless of retired history"
+    );
+    assert_eq!(runtime.lane_incarnation_lineage.len(), 2049);
+    assert_eq!(runtime.lane_incarnation_lineage[0], active);
+}
+
+#[test]
 fn incomplete_runtime_lineage_is_a_fallible_error_and_cannot_replace_owner() {
     let state = state();
     let original = state.canonical_runtime.view().get().clone();
@@ -274,6 +348,29 @@ fn incomplete_runtime_lineage_is_a_fallible_error_and_cannot_replace_owner() {
             )
             .is_err()
     );
+    let mut duplicate = original.clone();
+    duplicate
+        .lane_incarnation_lineage
+        .push(duplicate.lane_incarnation_lineage[0].clone());
+    let mut unordered = original.clone();
+    unordered
+        .lane_incarnation_lineage
+        .push(SnapshotLaneIncarnationLineage {
+            lane_id: LaneId::new(7),
+            generation: 1,
+            incarnation: Hash::new(b"retained unordered lineage fixture"),
+            activation_height: 1,
+        });
+    unordered.lane_incarnation_lineage.swap(0, 1);
+    for invalid in [&duplicate, &unordered] {
+        assert!(invalid.active_incarnations().is_err());
+        assert!(invalid.active_activation_heights().is_err());
+        assert!(
+            state
+                .project_canonical_runtime(invalid, &state.world.view())
+                .is_err()
+        );
+    }
     assert_eq!(state.canonical_runtime.view().get(), &original);
     assert!(state.canonical_runtime.predecessor_view().is_none());
 }

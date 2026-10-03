@@ -1086,17 +1086,19 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     assert!(caps.crypto.sm.acceleration.scalar);
     assert!(caps.query.aggregate.v1);
     assert!(caps.query.aggregate.exact_results);
-    assert_eq!(
-        caps.query.aggregate.supported_resources,
-        if cfg!(feature = "app_api") {
+    assert_eq!(caps.query.aggregate.supported_resources, {
+        #[cfg(feature = "app_api")]
+        {
             crate::generic_query::aggregate_supported_resources()
                 .iter()
                 .map(|resource| (*resource).to_owned())
                 .collect::<Vec<_>>()
-        } else {
-            Vec::new()
         }
-    );
+        #[cfg(not(feature = "app_api"))]
+        {
+            Vec::<String>::new()
+        }
+    });
     assert!(caps.query.indexed_snapshot_marker);
     assert!(
         caps.query
@@ -1131,7 +1133,8 @@ async fn runtime_metrics_and_node_capabilities_ok() {
             .metadata_keys
             .contains(&"query_projection.locator".to_string())
     );
-    if cfg!(feature = "app_api") {
+    #[cfg(feature = "app_api")]
+    {
         assert_eq!(
             caps.query.projection.export_supported_resources,
             crate::generic_query::projection_export_supported_resources()
@@ -1139,9 +1142,9 @@ async fn runtime_metrics_and_node_capabilities_ok() {
                 .map(|resource| (*resource).to_owned())
                 .collect::<Vec<_>>()
         );
-    } else {
-        assert!(caps.query.projection.export_supported_resources.is_empty());
     }
+    #[cfg(not(feature = "app_api"))]
+    assert!(caps.query.projection.export_supported_resources.is_empty());
     assert!(
         caps.query
             .projection
@@ -1546,6 +1549,29 @@ async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
     let mut req = mk_push_request(&canonical_account, "t-alias");
     bind_account_alias_for_test(&app, &canonical_account, "wallet@universal");
     req.account_id = "wallet@universal".to_string();
+    let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+    let (method, uri, headers, body) =
+        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
+    let rejected =
+        super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    let error = extract_error(rejected).await;
+    assert_eq!(error.code(), "invalid_account");
+    assert_eq!(
+        app.push
+            .as_ref()
+            .expect("push bridge configured")
+            .device_count(),
+        0
+    );
+    let resolved = routing::resolve_account_alias_with_exact_permission_for_test(
+        &app.state,
+        &canonical_account,
+        "wallet@universal",
+    );
+    assert_eq!(resolved, canonical_account);
+    let mut req = mk_push_request(&resolved, "t-alias");
+    req.account_id = resolved.to_string();
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);

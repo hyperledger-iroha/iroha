@@ -10,26 +10,6 @@ where
     }
 }
 #[cfg(feature = "app_api")]
-fn torii_read_fanout_request(
-    endpoint: ToriiReadEndpointV1,
-    route_scope: ToriiFanoutRouteScopeV1,
-    merge: ToriiReadFanoutMergeV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-    response_format: ToriiProxyResponseFormatV1,
-) -> ToriiReadFanoutProxyRequestV1 {
-    ToriiReadFanoutProxyRequestV1 {
-        endpoint,
-        route_scope,
-        merge,
-        path_args,
-        query_string,
-        body,
-        response_format,
-    }
-}
-#[cfg(feature = "app_api")]
 fn bounded_space_directory_manifest_shard_query(
     mut query: routing::SpaceDirectoryManifestQuery,
     page_offset: u64,

@@ -48,6 +48,14 @@ fn frozen_map_read_trait_borrows_complete_original_trees_while_writers_are_free(
             .try_write()
             .expect("original current writer released");
         assert_reads(&original);
+        assert_eq!(
+            original
+                .original_undo_entries()
+                .map(|(key, value)| (*key, value.as_deref()))
+                .collect::<Vec<_>>(),
+            [(2, Some("two")), (3, Some("three")), (9, None)],
+            "undo includes deletion and absent insertion, but no untouched rows",
+        );
         assert_eq!(original.publication_identity(), identity);
         assert_eq!(original.get(&2).unwrap().as_ptr(), pointer);
         assert_eq!(original.get_before_block(&2).unwrap().as_ptr(), before);
@@ -77,6 +85,13 @@ fn frozen_map_read_trait_borrows_complete_original_trees_while_writers_are_free(
     let prepared = original
         .try_prepare_publication(&target, |journal, _| {
             assert_reads(journal);
+            assert_eq!(
+                journal
+                    .original_undo_entries()
+                    .map(|(key, value)| (*key, value.as_deref()))
+                    .collect::<Vec<_>>(),
+                [(2, Some("two")), (3, Some("three")), (9, None)],
+            );
             Ok::<_, ()>(())
         })
         .unwrap_or_else(|(_, error, _)| panic!("original same-cut retry: {error:?}"));
@@ -129,6 +144,13 @@ fn frozen_replacement_map_keeps_exact_cut_and_borrowed_key_reads_without_target(
         let mut replacement = target.block_and_revert();
         replacement.insert("one".into(), 12);
         let original = replacement.try_detach(|_| Ok::<_, ()>(())).unwrap();
+        assert_eq!(
+            original
+                .original_undo_entries()
+                .map(|(key, value)| (key.as_str(), *value))
+                .collect::<Vec<_>>(),
+            [("one", Some(10))],
+        );
         assert_eq!(target.view().get("one"), Some(&11));
         assert_eq!(original.mode(), BlockMode::Replace);
         original

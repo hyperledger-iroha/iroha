@@ -1234,6 +1234,7 @@ fn scan_unsorted_transaction_page(
         filter,
         anchor,
         history_cursor,
+        scan_byte_limit,
         |projection_work, source_bytes| {
             let next_items = processed_items
                 .get()
@@ -1384,6 +1385,7 @@ fn collect_sorted_transaction_prefix(
         filter,
         anchor,
         None,
+        scan_byte_limit,
         |projection_work, source_bytes| {
             let next_items = processed_items
                 .get()

@@ -564,6 +564,8 @@ CORE_MUTATIONS = [
       ['sumeragi::runtime_availability::history::source_refusal_tests::original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix', 'sumeragi::runtime_availability::history::source_refusal_tests::original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier', 'sumeragi::runtime_availability::history::source_refusal_tests::original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut', 'sumeragi::lanes::registry::tests::original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry', 'sumeragi::evidence::tests::original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection', 'sumeragi::executor::publication_tests::original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry']),
     m("HC55", "stake-index quantities: release original magnitude charges before their physical owners",
       ["smartcontracts::isi::staking::tests::stake_index_quantities_prepaid_and_borrowed_from_original_pool"]),
+    m("HC56", "replay completion: accept replacement source configuration after receipt retirement",
+      ["sumeragi::executor::publication_tests::replay_completion_retirement_keeps_exact_source_and_original_pool_retry"]),
     m("HC53", "network time: omit host suspension from admission time and probe custody",
       ['time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes', 'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip']),
     m("HC48", "incumbent authority and key lifecycle: turn local read refusal into completed instruction failure",
@@ -575,6 +577,8 @@ CORE_MUTATIONS = [
       ['sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source']),
     m("HC54", "beacon custody: accept a genuine same-roster DKG from another authority generation",
       ['state::validator_committee::tests::generation::committee_bootstrap_rejects_genuine_dkg_from_another_generation', 'state::validator_committee::tests::generation::committee_restore_rejects_genuine_dkg_from_another_generation']),
+    m("HC57", "native AMX participant: let a certified Begin authorize a different signed debit source",
+      ["sumeragi::amx::native::tests::native_amx_paid_commit_survives_certified_restart_and_rejects_bypass"]),
 
 
 ]

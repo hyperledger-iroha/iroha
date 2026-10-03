@@ -2728,7 +2728,6 @@ pub mod extractors {
                 .map_err(KagemushaCanonicalNoritoDecodeError::Norito)
             }
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_account(seed: u8) -> iroha_data_model::account::AccountId {
             use iroha_crypto::{Algorithm, KeyPair};
 
@@ -2738,7 +2737,6 @@ pub mod extractors {
                     .clone(),
             )
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_network() -> iroha_data_model::NetworkId {
             use iroha_crypto::{Hash, HashOf};
 
@@ -2748,7 +2746,6 @@ pub mod extractors {
                 Hash::new(b"kagemusha-v1-ingress-test-network"),
             ))
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 iroha_model_base::domain::DomainId::try_new("offline", "universal")
@@ -2756,7 +2753,6 @@ pub mod extractors {
                 "ingress".parse().expect("fixture asset name"),
             )
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_asset_incarnation() -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
             use iroha_crypto::Hash;
 
@@ -2765,7 +2761,6 @@ pub mod extractors {
             )
             .expect("canonical asset incarnation")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_device_public_key(
             key: &p256::ecdsa::SigningKey,
         ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
@@ -2774,7 +2769,6 @@ pub mod extractors {
             )
             .expect("canonical P-256 device key")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_sign(
             key: &p256::ecdsa::SigningKey,
             bytes: &[u8],
@@ -2788,7 +2782,6 @@ pub mod extractors {
             )
             .expect("canonical low-S P-256 signature")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_encrypted_credit(recipient_key: [u8; 32], tag: u8) -> Vec<u8> {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
@@ -2812,7 +2805,6 @@ pub mod extractors {
             .canonical_bytes_against_recipient_key(recipient_key)
             .expect("canonical encrypted credit")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_paired_proof(
             semantic_digest: [u8; 32],
             proof_len: usize,
@@ -2838,7 +2830,6 @@ pub mod extractors {
                 ep_history: vec![tag.wrapping_add(9); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
             }
         }
-        #[cfg(feature = "app_api")]
         pub(crate) fn kagemusha_ingress_top_up_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
             use iroha_data_model::kagemusha::{
@@ -2935,7 +2926,6 @@ pub mod extractors {
                 })
                 .expect("attach mint authorization")
         }
-        #[cfg(feature = "app_api")]
         pub(crate) fn kagemusha_ingress_redemption_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
             use iroha_data_model::kagemusha::{

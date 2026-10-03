@@ -6229,9 +6229,7 @@ fn refresh_sumeragi_mode(metrics: &Metrics, state: &State) {
     let schedule = view.world().consensus_schedule();
     let mode_tag = u64::try_from(view.height())
         .ok()
-        .filter(|height| schedule.tip() == Some(*height) && schedule.is_well_formed())
-        .and_then(|height| height.checked_add(1))
-        .and_then(|height| schedule.ready(height).ok())
+        .and_then(|height| schedule.ready_after_tip(height))
         .map(|config| match config.epoch.mode {
             ConsensusMode::Permissioned => "permissioned",
             ConsensusMode::Npos => "npos",

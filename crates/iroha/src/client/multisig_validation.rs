@@ -278,9 +278,7 @@ pub(super) fn validate_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        prelude::*, transaction::FeePaymentIntent, validation_fee::RetailFeeAssessmentV1,
-    };
+    use iroha_data_model::{transaction::FeePaymentIntent, validation_fee::RetailFeeAssessmentV1};
     use iroha_primitives::json::Json;
 
     fn assessment() -> RetailFeeAssessmentV1 {

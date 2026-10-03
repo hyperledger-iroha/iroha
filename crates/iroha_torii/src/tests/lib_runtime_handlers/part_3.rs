@@ -593,17 +593,6 @@ fn torii_proxy_authenticated_deadline_rejects_expiry_and_excess_horizon() {
         super::torii_proxy_remaining_budget(NOW_UNIX_MS + max_horizon_ms + 1, NOW_UNIX_MS).is_err()
     );
 }
-#[cfg(feature = "connect")]
-fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
-    app.state
-        .append_committed_block_header_for_tests(BlockHeader::new(
-            NonZeroU64::new(height).expect("proxy fixture height must be non-zero"),
-            None,
-            None,
-            0,
-            0,
-        ));
-}
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread")]

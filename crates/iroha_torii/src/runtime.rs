@@ -50,8 +50,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 const CURVE_REGISTRY_VERSION: u32 = 1;
+#[cfg(feature = "app_api")]
 const QUERY_PROJECTION_SHARD_CATALOG_VERSION: u16 = 1;
+#[cfg(feature = "app_api")]
 const QUERY_PROJECTION_SHARD_CATALOG_DEFAULT_LIMIT: u32 = 1024;
+#[cfg(feature = "app_api")]
 const QUERY_PROJECTION_SHARD_CATALOG_MAX_LIMIT: u32 = 8192;
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::NodeCapabilitiesResponse")]
@@ -238,6 +241,7 @@ pub struct NodeProjectionCheckpointShardRef {
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the live projection shard catalog of one resource family.
 
+#[cfg(feature = "app_api")]
 pub struct NodeProjectionShardCatalogResponse {
     /// Catalog payload version.
     pub version: u16,
@@ -266,6 +270,7 @@ pub struct NodeProjectionShardCatalogResponse {
 #[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogEntry")]
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// One stable shard entry inside the live projection catalog.
+#[cfg(feature = "app_api")]
 pub struct NodeProjectionShardCatalogEntry {
     /// Stable partition identifier inside the resource family.
     pub partition_id: u32,

@@ -2,14 +2,14 @@
 async fn or_multi_field_with_ties_and_sorting() {
     use iroha_data_model::prelude as dm;
     // State
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Accounts and chain
     let network_id = *state.network_id_ref();
     let kp_b = checked_smoke_keypair(
@@ -111,7 +111,7 @@ async fn or_multi_field_with_ties_and_sorting() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed = crate::test_utils::commit_native_accepted_inputs(
+    let _committed = crate::test_utils::commit_native_accepted_inputs(
         &mut native_chain,
         vec![tx_success, tx_fail_c, tx_fail_d, tx_fail_e],
     );
@@ -195,14 +195,14 @@ async fn or_multi_field_with_ties_and_sorting() {
 async fn stable_ordering_with_multiple_keys() {
     use iroha_data_model::prelude as dm;
     // State
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
-    let kura = Arc::clone(native_chain.kura());
+    let _kura = Arc::clone(native_chain.kura());
     // Accounts and chain
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
@@ -299,7 +299,7 @@ async fn stable_ordering_with_multiple_keys() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let committed =
+    let _committed =
         crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2, tx3]);
     // Sort by 4 keys: result_ok desc, timestamp_ms asc, entrypoint_hash asc, authority asc
     let env = crate::filter::QueryEnvelope {

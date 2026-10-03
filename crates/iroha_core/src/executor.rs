@@ -101,6 +101,16 @@ mod execution_effects;
 pub(crate) use execution_effects::ExecutionEffects;
 #[path = "executor_fastpq_rejection_tail.rs"]
 mod fastpq_rejection_tail;
+/// Signature-bound inputs already captured before executable dispatch.
+struct RawIvmTransactionInputs {
+    metadata: Metadata,
+    gas_limit_md: Option<u64>,
+    gas_asset_opt: Option<String>,
+    fee_sponsor: Option<FeeSponsorProgramId>,
+    skip_nexus_fee: bool,
+    tx_bytes_len: usize,
+}
+
 /// One-shot proof that the executor debited one exact sponsored fee charge.
 pub(crate) struct VerifiedFeeSponsorCharge {
     submitting_authority: AccountId,
@@ -7166,261 +7176,92 @@ impl Executor {
                     skip_nexus_fee,
                 )
             }
-            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
-                // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
-                // then apply them via the standard executor logic.
-                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
-                // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
-                // Read the signature-bound payer cap captured before moving the transaction.
-                let gas_limit_md = gas_limit_md.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "missing gas limit in fee payment intent".to_owned(),
-                    )
-                })?;
-                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
-                    u64::MAX
-                } else {
-                    state_transaction
-                        .gas_limit_per_block
-                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
-                };
-                let effective_limit = gas_limit_md.min(block_remaining);
-                let admitted = ivm_cache
-                    .summarize_executable(bytes.as_ref())
-                    .map_err(crate::smartcontracts::ivm::program_admission_error)?;
-                let summary = match admitted {
-                    ExecutableProgramSummary::Contract(summary) => summary,
-                    ExecutableProgramSummary::Generic(summary) => {
-                        let artifact =
-                            root_scope::captured_artifact_id(state_transaction, summary.code_hash)?;
-                        crate::smartcontracts::ivm::validate_generic_execution_context(
-                            &state_transaction.world,
-                            &md,
-                            artifact,
-                        )?;
-                        let effective_cycles = validate_prepared_ivm_execution_policy(
-                            state_transaction,
-                            &summary.metadata,
-                        )?;
-                        let prepared_contract_cache = ivm_cache.prepared_contract_cache();
-                        let amx_analysis =
-                            ivm_cache
-                                .analyze_generic_program(&summary)
-                                .map_err(|error| {
-                                    ValidationFail::InternalError(format!(
-                                        "invalid admitted generic-program analysis: {error}"
-                                    ))
-                                })?;
-                        let streaming_metadata =
-                            crate::pipeline::overlay::resolve_streaming_metadata(
-                                state_transaction,
-                                authority,
-                            );
-                        let bound_contract_records =
-                            code::snapshot_bound_contract_records_by_subject(state_transaction)
-                                .map_err(|error| {
-                                    state_transaction.attempt_error_to_validation_fail(error)
-                                })?;
-                        let heap_limit = state_transaction
-                            .world
-                            .parameters
-                            .get()
-                            .smart_contract()
-                            .memory()
-                            .get();
-                        let mut runtime = ivm_cache
-                            .checkout_generic_runtime(&summary, effective_limit, heap_limit)
-                            .map_err(|error| {
-                                state_transaction.vm_error_to_validation_fail(error, |error| {
-                                    ValidationFail::InternalError(error.to_string())
-                                })
-                            })?;
-                        runtime.set_max_cycles(effective_cycles.get());
-                        runtime.set_gas_limit(effective_limit);
-                        let accounts = state_transaction.accounts_snapshot();
-                        let mut host =
-                            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
-                        host.set_output_limits_from_parameters(
-                            state_transaction.world.parameters.get().smart_contract(),
-                        );
-                        host.set_generic_execution();
-                        host.set_prepared_contract_cache(prepared_contract_cache);
-                        host.set_amx_analysis(amx_analysis);
-                        host.set_amx_limits(
-                            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
-                                state_transaction.pipeline(),
-                            ),
-                        );
-                        host.hydrate_axt_state(state_transaction).map_err(|error| {
-                            ValidationFail::InternalError(format!(
-                                "invalid AXT policy snapshot: {error}"
-                            ))
-                        })?;
-                        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                        host.set_zk_config(&state_transaction.zk);
-                        host.set_public_inputs_from_parameters(
-                            state_transaction.world.parameters.get(),
-                        );
-                        host.set_vrf_epoch_seeds_from_state(state_transaction)
-                            .map_err(|error| {
-                                state_transaction.attempt_error_to_validation_fail(
-                                    error.map_rejection(ValidationFail::InternalError),
-                                )
-                            })?;
-                        host.set_query_state(state_transaction);
-                        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-                        crate::pipeline::overlay::apply_streaming_metadata(
-                            &mut host,
-                            streaming_metadata,
-                        );
-                        host.set_chain_id(&state_transaction.chain_id);
-                        #[cfg(feature = "telemetry")]
-                        host.set_telemetry(state_transaction.telemetry.clone());
-                        host.set_zk_snapshots_from_world(
-                            &state_transaction.world,
-                            &state_transaction.zk,
-                        )
-                        .map_err(|err| {
-                            ValidationFail::InternalError(format!(
-                                "invalid ZK snapshot state: {err}"
-                            ))
-                        })?;
-                        let run_result = match state_transaction.execution_cycle_budget()? {
-                            Some(budget) => {
-                                runtime.run_with_host_and_cycle_budget(&mut host, budget)
-                            }
-                            None => runtime.run_with_host(&mut host),
-                        };
-                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-                        if let Err(err) = run_result {
-                            if let Some(reason) =
-                                crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
-                            {
-                                drop(host);
-                                return Err(state_transaction.defer_execution(reason));
-                            }
-                            let error =
-                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &runtime, &err,
-                                );
-                            drop(host);
-                            // The actual VM consumed this work even though business effects
-                            // will roll back. Retain it before returning the original failure.
-                            state_transaction.last_tx_gas_used = gas_used;
-                            state_transaction.record_execution_fee_vm_work(gas_used)?;
-                            return Err(error);
-                        }
-                        let artifacts = host.into_execution_artifacts(None);
-                        // Consume the host borrow, then retain root work before artifact
-                        // validation/application can reject. Later nested work must not be
-                        // overwritten by a post-application root-gas assignment.
-                        state_transaction.last_tx_gas_used = gas_used;
-                        state_transaction.record_execution_fee_vm_work(gas_used)?;
-                        let artifacts = artifacts?;
-                        let _executed =
-                            artifacts.apply_to_transaction(state_transaction, authority)?;
-                        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-                        if should_charge_pipeline_gas_asset(
-                            skip_nexus_fee,
-                            &state_transaction.nexus.fees,
-                            &gas_asset_opt,
-                        ) && let Some(gas_asset_id_str) = gas_asset_opt
-                        {
-                            Self::charge_pipeline_gas_asset_fee(
-                                state_transaction,
-                                authority,
-                                &transaction_for_fee,
-                                &gas_asset_id_str,
-                                gas_used,
-                                fee_sponsor.as_ref(),
-                            )?;
-                        }
-                        if !skip_nexus_fee {
-                            Self::charge_nexus_fees(
-                                state_transaction,
-                                authority,
-                                &transaction_for_fee,
-                                fee_sponsor,
-                                tx_bytes_len,
-                                0,
-                                gas_used,
-                            )?;
-                        }
-                        return Ok(());
-                    }
-                };
+            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => self
+                .execute_raw_ivm_transaction(
+                    state_transaction,
+                    authority,
+                    &transaction_for_fee,
+                    ivm_cache,
+                    bytes,
+                    RawIvmTransactionInputs {
+                        metadata: md,
+                        gas_limit_md,
+                        gas_asset_opt,
+                        fee_sponsor,
+                        skip_nexus_fee,
+                        tx_bytes_len,
+                    },
+                ),
+        }
+    }
+    /// Run only the selected raw-IVM branch, retaining its original fee and effect order.
+    /// Native instructions do not reserve the runtime and host locals from this stage.
+    #[allow(clippy::too_many_lines)]
+    fn execute_raw_ivm_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction_for_fee: &SignedTransaction,
+        ivm_cache: &mut IvmCache,
+        bytes: iroha_data_model::transaction::executable::IvmBytecode,
+        inputs: RawIvmTransactionInputs,
+    ) -> Result<(), ValidationFail> {
+        let RawIvmTransactionInputs {
+            metadata: md,
+            gas_limit_md,
+            gas_asset_opt,
+            fee_sponsor,
+            skip_nexus_fee,
+            tx_bytes_len,
+        } = inputs;
+        // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
+        // then apply them via the standard executor logic.
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+        // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
+        // Read the signature-bound payer cap captured before moving the transaction.
+        let gas_limit_md = gas_limit_md.ok_or_else(|| {
+            ValidationFail::NotPermitted("missing gas limit in fee payment intent".to_owned())
+        })?;
+        let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+            u64::MAX
+        } else {
+            state_transaction
+                .gas_limit_per_block
+                .saturating_sub(state_transaction.gas_used_in_block_so_far)
+        };
+        let effective_limit = gas_limit_md.min(block_remaining);
+        let admitted = ivm_cache
+            .summarize_executable(bytes.as_ref())
+            .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+        let summary = match admitted {
+            ExecutableProgramSummary::Contract(summary) => summary,
+            ExecutableProgramSummary::Generic(summary) => {
+                let artifact =
+                    root_scope::captured_artifact_id(state_transaction, summary.code_hash)?;
+                crate::smartcontracts::ivm::validate_generic_execution_context(
+                    &state_transaction.world,
+                    &md,
+                    artifact,
+                )?;
                 let effective_cycles =
                     validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
-                crate::pipeline::overlay::validate_contract_binding(
+                let prepared_contract_cache = ivm_cache.prepared_contract_cache();
+                let amx_analysis =
+                    ivm_cache
+                        .analyze_generic_program(&summary)
+                        .map_err(|error| {
+                            ValidationFail::InternalError(format!(
+                                "invalid admitted generic-program analysis: {error}"
+                            ))
+                        })?;
+                let streaming_metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                     state_transaction,
-                    transaction_for_fee.payload(),
-                    &summary,
-                )
-                .map_err(|error| {
-                    overlay_build_error_to_attempt_validation_fail(state_transaction, error)
-                })?;
-                let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
-                            .to_owned(),
-                    )
-                })?;
-                let runtime_identity = require_raw_contract_runtime_identity(
-                    &state_transaction.world,
-                    summary.code_hash,
-                    &md,
-                )?;
-                code::ensure_contract_execution_allowed(
-                    &state_transaction.world,
-                    &runtime_identity.contract_address,
-                    state_transaction.block_height(),
-                )
-                .map_err(ValidationFail::NotPermitted)?;
-                let entrypoint_authorization = authorize_prepared_raw_contract_selector(
-                    &state_transaction.world,
                     authority,
-                    summary.prepared_contract(),
-                    &selector,
-                    &runtime_identity,
+                );
+                let bound_contract_records = code::snapshot_bound_contract_records_by_subject(
+                    state_transaction,
                 )
                 .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
-                let contract_subject = code::fetch_bound_contract_subject(
-                    state_transaction,
-                    &runtime_identity.contract_address,
-                )
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{}` has no valid subject binding",
-                        runtime_identity.contract_address
-                    ))
-                })?;
-                let transition = validate_prepared_contract_lifecycle_call(
-                    &state_transaction.world,
-                    &runtime_identity.contract_address,
-                    runtime_identity.code_hash,
-                    summary.prepared_contract(),
-                    &selector,
-                )?;
-                debug_assert!(
-                    transition.is_none(),
-                    "raw lifecycle selectors are rejected before state validation"
-                );
-                let mut contract_call_context = parse_prepared_contract_call_execution_context(
-                    &md,
-                    summary.prepared_contract(),
-                    effective_limit,
-                )?;
-                if let Some(context) = contract_call_context.as_mut() {
-                    context.bind_runtime_identity(runtime_identity, contract_subject);
-                }
-                if let Some(context) = contract_call_context.as_ref() {
-                    enforce_contract_entrypoint_permission(
-                        &state_transaction.world,
-                        authority,
-                        context,
-                    )
-                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
-                }
                 let heap_limit = state_transaction
                     .world
                     .parameters
@@ -7428,8 +7269,8 @@ impl Executor {
                     .smart_contract()
                     .memory()
                     .get();
-                let mut runtime = summary
-                    .checkout_runtime(effective_limit, heap_limit)
+                let mut runtime = ivm_cache
+                    .checkout_generic_runtime(&summary, effective_limit, heap_limit)
                     .map_err(|error| {
                         state_transaction.vm_error_to_validation_fail(error, |error| {
                             ValidationFail::InternalError(error.to_string())
@@ -7437,44 +7278,20 @@ impl Executor {
                     })?;
                 runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
-                if let Some(argument_record) = contract_call_context
-                    .as_ref()
-                    .and_then(ContractCallExecutionContext::prepared_argument_record)
-                {
-                    argument_record
-                        .precharge_vm(&mut runtime)
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
-                }
-                if let Some(context) = contract_call_context.as_ref() {
-                    if let Some(entrypoint_pc) = context.entrypoint_pc {
-                        let code_len = runtime.memory.code_len();
-                        runtime.set_register(1, code_len);
-                        runtime.set_program_counter(entrypoint_pc).map_err(|err| {
-                            let selector = context.entrypoint.as_deref().unwrap_or("main");
-                            ValidationFail::NotPermitted(format!(
-                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                            ))
-                        })?;
-                    }
-                }
-                let contract_runtime_context = contract_call_context
-                    .as_ref()
-                    .and_then(ContractCallExecutionContext::runtime_context);
-                // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = state_transaction.accounts_snapshot();
-                let mut host = if let Some(context) = contract_call_context {
-                    CoreCoreHost::with_accounts_and_argument_record(
-                        authority.clone(),
-                        Arc::clone(&accounts),
-                        context.argument_record,
-                    )
-                } else {
-                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
-                };
+                let mut host =
+                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
                 host.set_output_limits_from_parameters(
                     state_transaction.world.parameters.get().smart_contract(),
                 );
-                host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                host.set_generic_execution();
+                host.set_prepared_contract_cache(prepared_contract_cache);
+                host.set_amx_analysis(amx_analysis);
+                host.set_amx_limits(
+                    crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                        state_transaction.pipeline(),
+                    ),
+                );
                 host.hydrate_axt_state(state_transaction).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
                 })?;
@@ -7488,14 +7305,11 @@ impl Executor {
                         )
                     })?;
                 host.set_query_state(state_transaction);
-                host.set_contract_runtime_context(contract_runtime_context.clone());
-                host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
-                // hydration above installs the exact NetworkId used by VRF verification.
+                host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+                crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
-                // Thread ZK snapshots (roots, elections, verifying keys) for read/verify syscalls.
                 host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
@@ -7516,19 +7330,21 @@ impl Executor {
                         &runtime, &err,
                     );
                     drop(host);
+                    // The actual VM consumed this work even though business effects
+                    // will roll back. Retain it before returning the original failure.
                     state_transaction.last_tx_gas_used = gas_used;
                     state_transaction.record_execution_fee_vm_work(gas_used)?;
                     return Err(error);
                 }
-                // Retain completed root work before artifact validation/application;
-                // a rejected artifact must not make an executed raw contract free.
-                let artifacts = host.into_execution_artifacts(contract_runtime_context);
+                let artifacts = host.into_execution_artifacts(None);
+                // Consume the host borrow, then retain root work before artifact
+                // validation/application can reject. Later nested work must not be
+                // overwritten by a post-application root-gas assignment.
                 state_transaction.last_tx_gas_used = gas_used;
                 state_transaction.record_execution_fee_vm_work(gas_used)?;
                 let artifacts = artifacts?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-                // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
                     &state_transaction.nexus.fees,
@@ -7538,7 +7354,7 @@ impl Executor {
                     Self::charge_pipeline_gas_asset_fee(
                         state_transaction,
                         authority,
-                        &transaction_for_fee,
+                        transaction_for_fee,
                         &gas_asset_id_str,
                         gas_used,
                         fee_sponsor.as_ref(),
@@ -7548,16 +7364,216 @@ impl Executor {
                     Self::charge_nexus_fees(
                         state_transaction,
                         authority,
-                        &transaction_for_fee,
+                        transaction_for_fee,
                         fee_sponsor,
                         tx_bytes_len,
                         0,
                         gas_used,
                     )?;
                 }
-                Ok(())
+                return Ok(());
+            }
+        };
+        let effective_cycles =
+            validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        crate::pipeline::overlay::validate_contract_binding(
+            state_transaction,
+            transaction_for_fee.payload(),
+            &summary,
+        )
+        .map_err(|error| {
+            overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+        })?;
+        let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                    .to_owned(),
+            )
+        })?;
+        let runtime_identity = require_raw_contract_runtime_identity(
+            &state_transaction.world,
+            summary.code_hash,
+            &md,
+        )?;
+        code::ensure_contract_execution_allowed(
+            &state_transaction.world,
+            &runtime_identity.contract_address,
+            state_transaction.block_height(),
+        )
+        .map_err(ValidationFail::NotPermitted)?;
+        let entrypoint_authorization = authorize_prepared_raw_contract_selector(
+            &state_transaction.world,
+            authority,
+            summary.prepared_contract(),
+            &selector,
+            &runtime_identity,
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
+        let contract_subject = code::fetch_bound_contract_subject(
+            state_transaction,
+            &runtime_identity.contract_address,
+        )
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "contract instance `{}` has no valid subject binding",
+                runtime_identity.contract_address
+            ))
+        })?;
+        let transition = validate_prepared_contract_lifecycle_call(
+            &state_transaction.world,
+            &runtime_identity.contract_address,
+            runtime_identity.code_hash,
+            summary.prepared_contract(),
+            &selector,
+        )?;
+        debug_assert!(
+            transition.is_none(),
+            "raw lifecycle selectors are rejected before state validation"
+        );
+        let mut contract_call_context = parse_prepared_contract_call_execution_context(
+            &md,
+            summary.prepared_contract(),
+            effective_limit,
+        )?;
+        if let Some(context) = contract_call_context.as_mut() {
+            context.bind_runtime_identity(runtime_identity, contract_subject);
+        }
+        if let Some(context) = contract_call_context.as_ref() {
+            enforce_contract_entrypoint_permission(&state_transaction.world, authority, context)
+                .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
+        }
+        let heap_limit = state_transaction
+            .world
+            .parameters
+            .get()
+            .smart_contract()
+            .memory()
+            .get();
+        let mut runtime = summary
+            .checkout_runtime(effective_limit, heap_limit)
+            .map_err(|error| {
+                state_transaction.vm_error_to_validation_fail(error, |error| {
+                    ValidationFail::InternalError(error.to_string())
+                })
+            })?;
+        runtime.set_max_cycles(effective_cycles.get());
+        runtime.set_gas_limit(effective_limit);
+        if let Some(argument_record) = contract_call_context
+            .as_ref()
+            .and_then(ContractCallExecutionContext::prepared_argument_record)
+        {
+            argument_record
+                .precharge_vm(&mut runtime)
+                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+        }
+        if let Some(context) = contract_call_context.as_ref() {
+            if let Some(entrypoint_pc) = context.entrypoint_pc {
+                let code_len = runtime.memory.code_len();
+                runtime.set_register(1, code_len);
+                runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                    let selector = context.entrypoint.as_deref().unwrap_or("main");
+                    ValidationFail::NotPermitted(format!(
+                        "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                    ))
+                })?;
             }
         }
+        let contract_runtime_context = contract_call_context
+            .as_ref()
+            .and_then(ContractCallExecutionContext::runtime_context);
+        // Attach host with a snapshot of known accounts for vendor helpers when present.
+        let accounts = state_transaction.accounts_snapshot();
+        let mut host = if let Some(context) = contract_call_context {
+            CoreCoreHost::with_accounts_and_argument_record(
+                authority.clone(),
+                Arc::clone(&accounts),
+                context.argument_record,
+            )
+        } else {
+            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
+        };
+        host.set_output_limits_from_parameters(
+            state_transaction.world.parameters.get().smart_contract(),
+        );
+        host.set_prepared_contract_cache(summary.prepared_contract_cache());
+        host.hydrate_axt_state(state_transaction).map_err(|error| {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        })?;
+        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+        host.set_zk_config(&state_transaction.zk);
+        host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_state(state_transaction)
+            .map_err(|error| {
+                state_transaction.attempt_error_to_validation_fail(
+                    error.map_rejection(ValidationFail::InternalError),
+                )
+            })?;
+        host.set_query_state(state_transaction);
+        host.set_contract_runtime_context(contract_runtime_context.clone());
+        host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
+        // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
+        // hydration above installs the exact NetworkId used by VRF verification.
+        host.set_chain_id(&state_transaction.chain_id);
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(state_transaction.telemetry.clone());
+        // Thread ZK snapshots (roots, elections, verifying keys) for read/verify syscalls.
+        host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+            .map_err(|err| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+            })?;
+        let run_result = match state_transaction.execution_cycle_budget()? {
+            Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
+            None => runtime.run_with_host(&mut host),
+        };
+        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+        if let Err(err) = run_result {
+            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&err) {
+                drop(host);
+                return Err(state_transaction.defer_execution(reason));
+            }
+            let error =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
+            drop(host);
+            state_transaction.last_tx_gas_used = gas_used;
+            state_transaction.record_execution_fee_vm_work(gas_used)?;
+            return Err(error);
+        }
+        // Retain completed root work before artifact validation/application;
+        // a rejected artifact must not make an executed raw contract free.
+        let artifacts = host.into_execution_artifacts(contract_runtime_context);
+        state_transaction.last_tx_gas_used = gas_used;
+        state_transaction.record_execution_fee_vm_work(gas_used)?;
+        let artifacts = artifacts?;
+        let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+        // Charge gas fees: if a gas asset was provided and accepted by policy.
+        if should_charge_pipeline_gas_asset(
+            skip_nexus_fee,
+            &state_transaction.nexus.fees,
+            &gas_asset_opt,
+        ) && let Some(gas_asset_id_str) = gas_asset_opt
+        {
+            Self::charge_pipeline_gas_asset_fee(
+                state_transaction,
+                authority,
+                transaction_for_fee,
+                &gas_asset_id_str,
+                gas_used,
+                fee_sponsor.as_ref(),
+            )?;
+        }
+        if !skip_nexus_fee {
+            Self::charge_nexus_fees(
+                state_transaction,
+                authority,
+                transaction_for_fee,
+                fee_sponsor,
+                tx_bytes_len,
+                0,
+                gas_used,
+            )?;
+        }
+        Ok(())
     }
     /// Execute [`InstructionBox`].
     ///

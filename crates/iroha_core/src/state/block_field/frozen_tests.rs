@@ -66,6 +66,20 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
         let map_pointer = pair.map.get(&1).unwrap().as_ptr();
         let cell_before = pair.cell.get_before_block().as_ptr();
         let map_before = pair.map.get_before_block(&1).unwrap().as_ptr();
+        let cell_undo = pair.cell.original_undo().as_ref().unwrap().as_ptr();
+        let map_undo = pair
+            .map
+            .original_undo_entries()
+            .map(|(key, value)| (*key, value.as_ref().map(|text| text.as_ptr())))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            map_undo.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert!(
+            map_undo[2].1.is_none(),
+            "original insertion has an absent preimage"
+        );
         let cell_identity = pair.cell.publication_identity();
         let map_identity = pair.map.publication_identity();
         let expected_cell = json::to_json(&pair.cell).unwrap();
@@ -93,6 +107,17 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
         assert_eq!(pair.map.get(&1).unwrap().as_ptr(), map_pointer);
         assert_eq!(pair.cell.get_before_block().as_ptr(), cell_before);
         assert_eq!(pair.map.get_before_block(&1).unwrap().as_ptr(), map_before);
+        assert_eq!(
+            pair.cell.original_undo().as_ref().unwrap().as_ptr(),
+            cell_undo
+        );
+        assert_eq!(
+            pair.map
+                .original_undo_entries()
+                .map(|(key, value)| (*key, value.as_ref().map(|text| text.as_ptr())))
+                .collect::<Vec<_>>(),
+            map_undo
+        );
         assert_eq!(pair.cell.publication_identity(), cell_identity);
         assert_eq!(pair.map.publication_identity(), map_identity);
         assert_eq!(pair.cell.mode(), mode);

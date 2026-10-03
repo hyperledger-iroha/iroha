@@ -97,6 +97,9 @@ pub enum StateStorageAdmissionError {
     /// The original decoder scope or allocator refused while executing an AMX instruction.
     #[error("local AMX decoder resource refusal: {0}")]
     AmxDecode(norito::core::DecodeResourceError),
+    /// The original native participant graph or allocator refused before monetary execution.
+    #[error("local native AMX graph refusal: {0}")]
+    NativeAmx(crate::sumeragi::amx::NativeAmxAdmissionError),
     /// The original execution-root metadata decoder refused before instruction authority existed.
     #[error(transparent)]
     RootScopeDecode(RootScopeDecodeRefusal),
@@ -107,6 +110,10 @@ impl StateStorageAdmissionError {
     pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::World(error) => error.release_wait(),
+            Self::NativeAmx(crate::sumeragi::amx::NativeAmxAdmissionError::Admission(
+                iroha_allocation::AllocationRefusal::Capacity { release, .. },
+            )) => Some(release),
+            Self::NativeAmx(_) => None,
             Self::AmxDecode(_) | Self::RootScopeDecode(_) => None,
         }
     }

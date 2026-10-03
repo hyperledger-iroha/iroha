@@ -136,18 +136,6 @@ const MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES: usize =
     iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1 + 256;
 const MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES: usize = 64 * 1024;
 
-/// Decode one capped bare Kura sidecar under the canonical Norito resource budget.
-///
-/// Sidecar readers check their exact hard byte cap before calling this helper.
-/// Keeping the budget tied to the admitted byte length also rejects a short
-/// corrupt record that advertises a large nested collection before allocation.
-/// The direct slice decoder preserves `DecodeAll`'s fixed bare layout and
-/// complete-consumption check without copying the entire sidecar first.
-fn decode_bounded_kura_sidecar<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::Error> {
-    norito::with_decode_limits(norito::canonical_decode_limits(bytes.len()), || {
-        norito::codec::decode_adaptive(bytes)
-    })
-}
 include!("kura/storage_identity.rs");
 include!("kura/read_only_evidence.rs");
 include!("kura/bound_progress_and_retained_support.rs");

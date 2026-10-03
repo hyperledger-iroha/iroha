@@ -4,7 +4,7 @@ mod tests {
     use http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{Algorithm, Hash, HashOf};
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::BlockHeader,
         events::{
@@ -424,6 +424,48 @@ mod tests {
             "handler refreshes the committed cadence budget"
         );
         assert!(decoded.tx_queue_oldest_queued_age_ms >= 3_600_000);
+    }
+    #[test]
+    fn npos_diagnostics_refusal_retries_the_original_policy() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        };
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).expect("original signed NPoS genesis");
+        let view = chain.state().view();
+        let original = view
+            .world()
+            .parameters()
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .unwrap();
+        let bytes = original.payload().get().to_owned();
+        let expected = super::sumeragi_npos_diagnostics(view.world())
+            .unwrap()
+            .unwrap();
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || super::sumeragi_npos_diagnostics(view.world()),
+        );
+        assert!(matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ));
+        assert_eq!(original.payload().get(), &bytes);
+        let retry = super::sumeragi_npos_diagnostics(view.world())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.epoch_seed, expected.epoch_seed);
+        assert_eq!(retry.epoch_length_blocks, expected.epoch_length_blocks);
+        assert_eq!(original.payload().get(), &bytes);
     }
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {

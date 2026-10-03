@@ -16,7 +16,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    IntoKeyValue, NetworkId, Registrable,
+    NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
     isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -47,7 +47,7 @@ use iroha_torii_shared::{
 };
 use std::{
     collections::BTreeSet,
-    num::{NonZeroU8, NonZeroU64},
+    num::NonZeroU8,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -86,13 +86,15 @@ fn install_account_alias_policy(
 ) {
     let mut policy = iroha_data_model::sns::fixtures::default_policy();
     policy.suffix_id = iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID;
-    policy.suffix = "account-alias".to_owned();
+    "account-alias".clone_into(&mut policy.suffix);
     policy.steward = authority.clone();
     policy.fund_splitter_account = authority.clone();
     policy.payment_asset_id = payment_asset_id.to_string();
     for tier in &mut policy.pricing {
-        tier.label_regex = r"^[a-z0-9_@.-]{3,255}$".to_owned();
-        tier.base_price.asset_id = policy.payment_asset_id.clone();
+        r"^[a-z0-9_@.-]{3,255}$".clone_into(&mut tier.label_regex);
+        tier.base_price
+            .asset_id
+            .clone_from(&policy.payment_asset_id);
     }
     world.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID),
@@ -151,8 +153,8 @@ fn build_onboarding_test_context_at(
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = tempfile::tempdir().expect("create isolated onboarding Torii data directory");
     cfg.torii.sorafs_storage.data_dir = data_dir.path().join("sorafs");
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let validator_keys: Vec<_> = (0xD2..=0xD5)
         .map(|seed| checked_key_pair(seed, Algorithm::BlsNormal, "derive onboarding validator"))
         .collect();
@@ -263,7 +265,7 @@ fn build_onboarding_test_context_at(
                 peer_id: PeerId::new(key_pair.public_key().clone()),
                 stake_account: validator.clone(),
                 initial_stake: Quantity::from(1_000_u32),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator.clone()),
                     AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
@@ -290,7 +292,7 @@ fn build_onboarding_test_context_at(
     );
     let state = chain.state().clone();
     let kura = chain.kura().clone();
-    let network_id = chain.network_id();
+    let _network_id = chain.network_id();
     let nexus = state.nexus_snapshot();
     let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
@@ -976,8 +978,11 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context =
-        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
+    let context = build_onboarding_test_context_at(
+        0xA1,
+        0xD1,
+        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+    );
     let anchor = context
         .state
         .view()
@@ -1056,8 +1061,11 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context =
-        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
+    let context = build_onboarding_test_context_at(
+        0xA1,
+        0xD1,
+        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+    );
     let anchor_hash = context
         .state
         .view()
@@ -1087,7 +1095,7 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
     let instruction: iroha_data_model::isi::InstructionBox =
         iroha_data_model::isi::alias_setup::EnsureAlias::new(
             receipt.body.resource.intent.clone(),
-            receipt.body.acquisition.clone(),
+            receipt.body.acquisition,
             receipt.body.quote_guard.clone(),
         )
         .into();
@@ -1161,8 +1169,11 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context =
-        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
+    let context = build_onboarding_test_context_at(
+        0xA1,
+        0xD1,
+        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+    );
     let target = AccountId::new(
         checked_key_pair(0xD9, Algorithm::Ed25519, "derive expiry target")
             .public_key()
@@ -1196,8 +1207,13 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
         Algorithm::Ed25519,
         "derive historical envelope signer",
     );
-    let creation = now - Duration::from_secs(120);
-    let deadline = u64::try_from((now - Duration::from_secs(60)).as_millis()).expect("deadline");
+    let creation = now.checked_sub(Duration::from_secs(120)).unwrap();
+    let deadline = u64::try_from(
+        now.checked_sub(Duration::from_secs(60))
+            .unwrap()
+            .as_millis(),
+    )
+    .expect("deadline");
     let historical = |offset: u64| {
         let mut envelope = template.clone();
         envelope.binding.execution_expires_at_unix_ms = deadline;

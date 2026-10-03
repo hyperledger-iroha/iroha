@@ -642,8 +642,9 @@ fn ensure_world_state_start_shape(
     }
     let peer_source = canonical_peer_source_shape(start, query_limits)?;
     let account_source = canonical_account_source_shape(start, query_limits)?;
-    if !peer_source && !account_source {
-        // TODO: Add query-specific borrowed adapters for the remaining 35
+    let trigger_source = canonical_trigger_source_shape(start, query_limits)?;
+    if !peer_source && !account_source && !trigger_source {
+        // TODO: Add query-specific borrowed adapters for the remaining 33
         // world producers. The three Kura producers additionally require an
         // authenticated fixed projection in the bounded reader.
         return Err(Error::Conversion(
@@ -701,6 +702,38 @@ fn canonical_account_source_shape(
         decoder.decode(predicate)?;
     let selector: SelectorTuple<iroha_data_model::account::AccountId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
+}
+fn canonical_trigger_source_shape(
+    start: &iroha_data_model::query::QueryWithParams,
+    query_limits: QueryLimits,
+) -> Result<bool, Error> {
+    use iroha_data_model::query::{
+        QueryItemKind,
+        dsl::{CompoundPredicate, SelectorTuple},
+        trigger::prelude::{FindActiveTriggerIds, FindTriggers},
+    };
+    use iroha_data_model::trigger::{Trigger, TriggerId};
+    let (item, predicate, selector, payload) = start.parts();
+    if !matches!(item, QueryItemKind::Trigger | QueryItemKind::TriggerId) {
+        return Ok(false);
+    }
+    let mut decoder =
+        super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
+    match item {
+        QueryItemKind::Trigger => {
+            let _: FindTriggers = decoder.decode(payload)?;
+            let predicate: CompoundPredicate<Trigger> = decoder.decode(predicate)?;
+            let selector: SelectorTuple<Trigger> = decoder.decode(selector)?;
+            Ok(predicate.is_pass() && selector.iter().next().is_none())
+        }
+        QueryItemKind::TriggerId => {
+            let _: FindActiveTriggerIds = decoder.decode(payload)?;
+            let predicate: CompoundPredicate<TriggerId> = decoder.decode(predicate)?;
+            let selector: SelectorTuple<TriggerId> = decoder.decode(selector)?;
+            Ok(predicate.is_pass() && selector.iter().next().is_none())
+        }
+        _ => unreachable!("trigger item kinds were checked before decoding"),
+    }
 }
 fn ensure_iterable_params(
     params: &QueryParams,

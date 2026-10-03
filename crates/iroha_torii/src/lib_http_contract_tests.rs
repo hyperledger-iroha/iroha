@@ -977,6 +977,8 @@ mod response_negotiation_middleware_tests {
         response::Response,
         routing::{get, post},
     };
+    #[cfg(not(feature = "app_api"))]
+    use http_body_util::BodyExt as _;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1458,6 +1460,8 @@ mod typed_error_contract_tests {
         response::Response,
         routing::get,
     };
+    #[cfg(not(feature = "app_api"))]
+    use http_body_util::BodyExt as _;
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }

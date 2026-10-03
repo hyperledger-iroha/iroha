@@ -6619,7 +6619,6 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 mod tests {
     use super::test_support::{execution_block, seed_active_contract};
     use super::*;
-    use crate::state::State;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,

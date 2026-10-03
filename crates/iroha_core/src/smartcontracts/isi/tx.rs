@@ -489,9 +489,12 @@ impl NetworkCarrierProjection {
     fn transaction_at(
         &self,
         input_index: u32,
+        max_row_bytes: u64,
         before_clone: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<CommittedTransaction, QueryExecutionFail> {
-        use norito::core::SerializePayload as _;
+        if max_row_bytes == 0 {
+            return Err(QueryExecutionFail::GasBudgetExceeded);
+        }
         let block = self.block.as_ref();
         let entrypoint = block
             .network_entrypoint_at(input_index as usize)
@@ -526,18 +529,11 @@ impl NetworkCarrierProjection {
             output,
         ];
         let borrowed = super::query::BorrowedSingularStruct::new(fields);
-        let measured = borrowed
-            .encoded_len_exact()
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        // Exact-length hints are optional, including for valid rejection reasons.
+        // Count the actual borrowed wire under the caller's finite row ceiling;
+        // then admit its exact bytes before cloning the entrypoint or output.
+        let measured = super::query::bounded_bare_encoded_len(&borrowed, max_row_bytes)?;
         before_clone(measured)?;
-        // A real counting serialization confirms the borrowed layout without an
-        // encoded buffer or source-sized clone; a length hint alone is not admission.
-        if super::query::bounded_bare_encoded_len(&borrowed, measured)? != measured {
-            return Err(canonical_transaction_history_error(
-                "projected row length changed",
-            ));
-        }
         Ok(CommittedTransaction {
             block_hash,
             entrypoint_hash,
@@ -589,7 +585,7 @@ impl FinalizedExecutionCarrier {
             return Err(QueryExecutionFail::GasBudgetExceeded);
         }
         let projection = NetworkCarrierProjection::new(std::sync::Arc::clone(&self.block))?;
-        projection.transaction_at(input_index, |bytes| {
+        projection.transaction_at(input_index, max_row_bytes, |bytes| {
             if bytes > max_row_bytes {
                 return Err(QueryExecutionFail::GasBudgetExceeded);
             }
@@ -736,7 +732,7 @@ fn block_committed_transactions(
     let projection = NetworkCarrierProjection::new(std::sync::Arc::new(block.clone()))?;
     (0..projection.count)
         .rev()
-        .map(|index| projection.transaction_at(index, |_| Ok(())))
+        .map(|index| projection.transaction_at(index, TRANSACTION_HISTORY_MAX_BYTES, |_| Ok(())))
         .collect()
 }
 /// Immutable canonical prefix bound to a Kaigi signal-history cursor.
@@ -1077,13 +1073,17 @@ pub fn indexed_kaigi_signal_candidates_page(
         let (_, carrier_timestamp_ms, projection) = cached_carrier
             .as_ref()
             .ok_or_else(|| canonical_transaction_history_error("admitted carrier is missing"))?;
-        let projected = projection.transaction_at(position.network_input_index(), |bytes| {
-            if work.try_charge(limits, bytes, 1, 0) {
-                Ok(())
-            } else {
-                Err(QueryExecutionFail::GasBudgetExceeded)
-            }
-        });
+        let projected = projection.transaction_at(
+            position.network_input_index(),
+            limits.max_carrier_bytes.saturating_sub(work.carrier_bytes),
+            |bytes| {
+                if work.try_charge(limits, bytes, 1, 0) {
+                    Ok(())
+                } else {
+                    Err(QueryExecutionFail::GasBudgetExceeded)
+                }
+            },
+        );
         let transaction = match projected {
             Ok(transaction) => transaction,
             Err(QueryExecutionFail::GasBudgetExceeded) if !candidates.is_empty() => break,
@@ -1166,6 +1166,7 @@ pub(crate) fn visit_committed_transactions(
     filter: &CompoundPredicate<CommittedTransaction>,
     anchor: TransactionHistoryAnchor,
     resume: Option<TransactionHistoryCursor>,
+    max_row_bytes: u64,
     before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     mut visitor: impl FnMut(
         CommittedTransaction,
@@ -1232,9 +1233,10 @@ pub(crate) fn visit_committed_transactions(
                 }
                 for index in transaction_offset..transaction_count {
                     let input_index = projection.count - 1 - index as u32;
-                    let transaction = projection.transaction_at(input_index, |bytes| {
-                        before_project.borrow_mut()(0, bytes)
-                    })?;
+                    let transaction =
+                        projection.transaction_at(input_index, max_row_bytes, |bytes| {
+                            before_project.borrow_mut()(0, bytes)
+                        })?;
                     let matches =
                         transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
                     let next_cursor = if index + 1 < transaction_count {
@@ -1310,6 +1312,7 @@ pub fn visit_committed_transactions_with_work_budget(
         &filter,
         TransactionHistoryAnchor::capture(state_ro),
         None,
+        max_history_bytes,
         |items, bytes| {
             // A carrier's first item is reserved before its row count is known.
             // The second charge contains exactly the remaining rows.
@@ -1576,7 +1579,9 @@ pub(crate) mod tests {
         let block = canonical_query_carrier(&empty_query_block(None), 2, true, 0);
         let full = block_committed_transactions(&block).unwrap();
         let projection = NetworkCarrierProjection::new(Arc::clone(&block)).unwrap();
-        let exact = projection.transaction_at(0, |_| Ok(())).unwrap();
+        let exact = projection
+            .transaction_at(0, TRANSACTION_HISTORY_MAX_BYTES, |_| Ok(()))
+            .unwrap();
         assert_eq!(exact, full[1]);
         assert_eq!(exact.entrypoint_proof.leaf_index(), 0);
         assert_eq!(exact.output_proof.leaf_index(), 0);
@@ -1588,7 +1593,11 @@ pub(crate) mod tests {
             &exact.output_hash,
             &block.output_merkle_commitment().unwrap()
         ));
-        assert!(projection.transaction_at(2, |_| Ok(())).is_err());
+        assert!(
+            projection
+                .transaction_at(2, TRANSACTION_HISTORY_MAX_BYTES, |_| Ok(()))
+                .is_err()
+        );
     }
     #[test]
     fn kaigi_signal_candidate_work_charges_all_dimensions_cumulatively() {
@@ -2077,6 +2086,64 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn finalized_carrier_projects_rejected_registration_without_an_exact_length_hint() {
+        use crate::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{account::Account, isi::Register};
+        use norito::{codec::Encode as _, core::SerializePayload as _};
+        let config = TestChainConfig::new(World::new(), 1_000);
+        let key = config.genesis_key.clone();
+        let existing = AccountId::new(key.public_key().clone());
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        let signed = chain.sign(
+            &key,
+            [Register::account(Account::new(existing)).into()],
+            1_001,
+        );
+        let hash = signed.hash_as_entrypoint();
+        assert_eq!(chain.commit(vec![signed]), [false]);
+        let (work, bytes) = super::native_carrier_reader_tests::bounds(&chain, 2);
+        let carrier = chain
+            .state()
+            .read_finalized_execution_carrier(NonZeroUsize::new(2).unwrap(), work, bytes)
+            .unwrap();
+        let index = carrier
+            .block()
+            .network_entrypoints()
+            .position(|entry| entry.hash() == hash)
+            .unwrap() as u32;
+        let (_, original) = carrier.block().network_output_at(index).unwrap();
+        assert!(original.result.is_err());
+        assert_eq!(
+            original.encoded_len_exact(),
+            None,
+            "this real rejected output has no exact hint"
+        );
+        let projected = carrier
+            .transaction_at(index, bytes)
+            .expect("a missing optional hint does not exhaust the admitted row budget");
+        assert_eq!(projected.entrypoint_hash, hash);
+        assert!(projected.result().is_err());
+        let exact = projected.encode().len() as u64;
+        assert_eq!(carrier.transaction_at(index, exact).unwrap(), projected);
+        for cap in [0, exact - 1] {
+            assert!(matches!(
+                carrier.transaction_at(index, cap),
+                Err(QueryExecutionFail::GasBudgetExceeded)
+            ));
+        }
+        assert!(projected.entrypoint_proof.verify(
+            &projected.entrypoint_hash,
+            &carrier.block().network_input_merkle_commitment().unwrap(),
+        ));
+        assert!(projected.output_proof.verify(
+            &projected.output_hash,
+            &carrier.block().output_merkle_commitment().unwrap(),
+        ));
+    }
+    #[test]
     fn finalized_carrier_reader_denies_before_body_io_and_returns_no_partial_rows() {
         let chain = super::native_carrier_reader_tests::chain();
         let height = NonZeroUsize::new(2).unwrap();
@@ -2255,6 +2322,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| Ok(()),
             |_, _, _| Ok(ControlFlow::Continue(())),
         )
@@ -2402,6 +2470,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| Ok(()),
             |transaction, matches, _| {
                 assert!(matches);
@@ -2684,6 +2753,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |work, bytes| {
                 charges.push((work, bytes));
                 Err(QueryExecutionFail::GasBudgetExceeded)
@@ -2708,6 +2778,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| Ok(()),
             |transaction, matches, _| {
                 assert!(matches);
@@ -2748,6 +2819,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| Ok(()),
             |_, matches, _| {
                 assert!(matches);
@@ -2767,6 +2839,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| Ok(()),
             |_, _, _| Ok(ControlFlow::Continue(())),
         )

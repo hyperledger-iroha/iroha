@@ -1,3 +1,4 @@
+//! Funded reward custody and claim ownership across repeated beneficiary rekeys.
 use super::*;
 use iroha_data_model::{IntoKeyValue, fee_evidence::FeeEvidencePayloadV1};
 #[test]

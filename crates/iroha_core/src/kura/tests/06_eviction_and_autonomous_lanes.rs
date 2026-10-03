@@ -1,6 +1,5 @@
 // Generic Kura fixtures retain complete original native execution and certificates.
 type DefaultKuraFixture = (TempDir, KuraConfig, Arc<Kura>);
-type ConfiguredKuraFixture = (TempDir, KuraConfig, RuntimeLaneConfig, Arc<Kura>);
 
 struct NativeBlocks {
     chain: crate::sumeragi::test_chain::CertifiedTestChain,
@@ -158,16 +157,6 @@ fn read_block(store: &mut BlockStore, index: usize) -> eyre::Result<SignedBlock>
     Ok(block)
 }
 
-fn two_lane_runtime_config() -> RuntimeLaneConfig {
-    let lane0 = ModelLaneConfig::default();
-    let lane1 = ModelLaneConfig {
-        id: LaneId::from(1),
-        alias: "beta".to_string(),
-        ..ModelLaneConfig::default()
-    };
-    let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
-    RuntimeLaneConfig::from_catalog(&catalog)
-}
 
 fn kura_storage_fixture(
     temp_context: &str,
@@ -218,36 +207,9 @@ fn unwrapped_inline_kura_fixture_with_fsync(fsync_mode: FsyncMode) -> (TempDir, 
     (temp_dir, kura)
 }
 
-fn expect_configured_kura_fixture(
-    temp_context: &str,
-    blocks_in_memory: NonZeroUsize,
-    open_context: &str,
-) -> ConfiguredKuraFixture {
-    let (temp_dir, config) = kura_storage_fixture(temp_context, blocks_in_memory);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect(open_context);
-    establish_configured_lane_markers_for_test(&kura, &lane_config);
-    (temp_dir, config, lane_config, kura)
-}
 
-fn temporary_kura_fixture() -> ConfiguredKuraFixture {
-    expect_configured_kura_fixture(
-        "temporary Kura directory",
-        BLOCKS_IN_MEMORY,
-        "initialize Kura",
-    )
-}
 
-fn expect_two_lane_storage_fixture(temp_context: &str) -> (TempDir, KuraConfig, RuntimeLaneConfig) {
-    let (temp_dir, config) = kura_storage_fixture(temp_context, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    (temp_dir, config, lane_config)
-}
 
-fn two_lane_storage_fixture() -> (TempDir, KuraConfig, RuntimeLaneConfig) {
-    expect_two_lane_storage_fixture("create temp dir")
-}
 
 fn blank_kura_with_next_block() -> (Arc<Kura>, Arc<SignedBlock>) {
     let kura = Kura::blank_kura_for_testing();
@@ -302,14 +264,6 @@ fn test_kura_with_default_lane_markers(
     (kura, block_count)
 }
 
-fn reopen_test_kura_with_default_lane_geometry(
-    config: &Config,
-    lane_config: &RuntimeLaneConfig,
-) -> Result<(Arc<Kura>, BlockCount)> {
-    let (kura, count) = Kura::open_test_kura_with_configured_lane_config(config, lane_config)?;
-    kura.restore_published_lane_geometry_for_test(lane_config)?;
-    Ok((kura, count))
-}
 
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
     publish_initial_configured_lane_geometry_for_test(kura, lane_config, &BTreeMap::new());
@@ -401,25 +355,6 @@ fn publish_initial_configured_lane_geometry_for_test(
     .expect("publish the fixture's exact lane geometry for restart");
 }
 
-fn active_fixture_geometry_maps(
-    kura: &Kura,
-    lane_config: &RuntimeLaneConfig,
-) -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-    lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            let (incarnation, activation) = kura
-                .active_lane_incarnation_marker(
-                    &kura
-                        .lane_storage_entry(entry.lane_id)
-                        .expect("exact active identity"),
-                )
-                .expect("authenticate each original journal-published route");
-            ((entry.lane_id, incarnation), (entry.lane_id, activation))
-        })
-        .unzip()
-}
 
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {
     let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);

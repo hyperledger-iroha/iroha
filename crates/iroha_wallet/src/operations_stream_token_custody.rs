@@ -35,6 +35,7 @@ const MAX_PLAN_BYTES: usize = 128 * 1024;
 /// This is an untrusted request value. Constructing it proves neither native execution nor
 /// current finality. The caller must authenticate the current record before preparing an action.
 #[derive(Clone, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_wallet::operations::StreamTokenCustodySelection")]
 pub struct StreamTokenCustodySelection {
     /// Exact governed provider.
     pub provider_id: ProviderId,
@@ -83,6 +84,7 @@ pub struct StreamTokenCustodyEnrollRequest {
 }
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_wallet::operations::stream_token_custody::Action")]
 enum Action {
     Configure(SignerCustodyPolicyV1),
     Enroll {
@@ -94,6 +96,7 @@ enum Action {
     },
 }
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_wallet::operations::stream_token_custody::Plan")]
 struct Plan {
     selection: StreamTokenCustodySelection,
     action: Action,
@@ -102,75 +105,119 @@ struct Plan {
 }
 
 fn encode_bounded<T: norito::core::NoritoSerialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
-    eyre::ensure!(norito::canonical_frame_len(value)? <= maximum, "custody frame exceeds its byte bound");
+    eyre::ensure!(
+        norito::canonical_frame_len(value)? <= maximum,
+        "custody frame exceeds its byte bound"
+    );
     Ok(norito::encode_canonical(value)?)
 }
 fn decode_bounded<T>(bytes: &[u8], maximum: usize) -> Result<T>
 where
     T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
 {
-    eyre::ensure!(!bytes.is_empty() && bytes.len() <= maximum, "custody frame exceeds its byte bound");
-    Ok(norito::decode_canonical_with_limits(bytes,
-        norito::DecodeLimits::new(4096, maximum, maximum, 16 * 1024 * 1024, 32))?)
+    eyre::ensure!(
+        !bytes.is_empty() && bytes.len() <= maximum,
+        "custody frame exceeds its byte bound"
+    );
+    Ok(norito::decode_canonical_with_limits(
+        bytes,
+        norito::DecodeLimits::new(4096, maximum, maximum, 16 * 1024 * 1024, 32),
+    )?)
 }
 
 fn validate_options(options: &BoundedTransactionOptions) -> Result<()> {
     // Admit container cardinalities before cloning any caller-controlled fee authorization.
-    eyre::ensure!(options.max_total_fees.len() <= 16 && options.fee_payment.charge_limits().len() <= 16,
-        "custody fee authorization exceeds sixteen entries");
-    eyre::ensure!(matches!(options.fee_payment, FeePaymentIntent::Authority(_)),
-        "custody operations require explicit manager-paid fees");
+    eyre::ensure!(
+        options.max_total_fees.len() <= 16 && options.fee_payment.charge_limits().len() <= 16,
+        "custody fee authorization exceeds sixteen entries"
+    );
+    eyre::ensure!(
+        matches!(options.fee_payment, FeePaymentIntent::Authority(_)),
+        "custody operations require explicit manager-paid fees"
+    );
     options.fee_payment.validate()?;
-    eyre::ensure!(options.max_total_fees.values().all(|value| !value.is_zero()),
-        "custody aggregate fee maxima must be positive");
+    eyre::ensure!(
+        options
+            .max_total_fees
+            .values()
+            .all(|value| !value.is_zero()),
+        "custody aggregate fee maxima must be positive"
+    );
     Ok(())
 }
 
 impl StreamTokenCustodySelection {
     fn validate(&self, config: &Config) -> Result<Option<SignerCustodyControlStateV1>> {
         self.binding.validate()?;
-        eyre::ensure!(self.binding.chain_id == config.chain.to_string()
-            && self.binding.network_id == *config.network_id.as_bytes()
-            && self.binding.role == SignerRoleV1::StreamToken
-            && self.binding.purpose == SignerPurposeBindingV1::StreamToken { provider_id: *self.provider_id.as_bytes() }
-            && self.expected_revision < STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1,
-            "custody target differs from the selected network, provider, role or revision bound");
+        eyre::ensure!(
+            self.binding.chain_id == config.chain.to_string()
+                && self.binding.network_id == *config.network_id.as_bytes()
+                && self.binding.role == SignerRoleV1::StreamToken
+                && self.binding.purpose
+                    == SignerPurposeBindingV1::StreamToken {
+                        provider_id: *self.provider_id.as_bytes()
+                    }
+                && self.expected_revision < STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1,
+            "custody target differs from the selected network, provider, role or revision bound"
+        );
         match &self.current {
             None => {
-                eyre::ensure!(self.expected_revision == 0 && self.expected_digest == [0; 32],
-                    "initial custody configuration requires the absent predecessor CAS");
+                eyre::ensure!(
+                    self.expected_revision == 0 && self.expected_digest == [0; 32],
+                    "initial custody configuration requires the absent predecessor CAS"
+                );
                 Ok(None)
             }
             Some(record) => {
-                eyre::ensure!(record.provider_id == self.provider_id && record.revision > 0
-                    && record.revision == self.expected_revision
-                    && (record.revision == 1) == (record.predecessor_digest == [0; 32])
-                    && record.request_digest != [0; 32] && record.execution_height > 0
-                    && record.recorded_at_unix_ms > 0 && record.recorded_at_unix_ms != u64::MAX,
-                    "custody predecessor has inconsistent native provenance");
-                eyre::ensure!(record.canonical_digest()? == self.expected_digest,
-                    "custody predecessor differs from the independently selected digest");
-                let state: SignerCustodyControlStateV1 = decode_bounded(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
+                eyre::ensure!(
+                    record.provider_id == self.provider_id
+                        && record.revision > 0
+                        && record.revision == self.expected_revision
+                        && (record.revision == 1) == (record.predecessor_digest == [0; 32])
+                        && record.request_digest != [0; 32]
+                        && record.execution_height > 0
+                        && record.recorded_at_unix_ms > 0
+                        && record.recorded_at_unix_ms != u64::MAX,
+                    "custody predecessor has inconsistent native provenance"
+                );
+                eyre::ensure!(
+                    record.canonical_digest()? == self.expected_digest,
+                    "custody predecessor differs from the independently selected digest"
+                );
+                let state: SignerCustodyControlStateV1 =
+                    decode_bounded(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
                 state.validate()?;
                 record.validate_active_enrollment(&state)?;
                 // Configuration may rotate keys, but can never replace the immutable role scope.
                 let old = &state.policy.binding;
-                eyre::ensure!(old.chain_id == self.binding.chain_id && old.network_id == self.binding.network_id
-                    && old.role == self.binding.role && old.purpose == self.binding.purpose,
-                    "custody predecessor belongs to another role scope");
+                eyre::ensure!(
+                    old.chain_id == self.binding.chain_id
+                        && old.network_id == self.binding.network_id
+                        && old.role == self.binding.role
+                        && old.purpose == self.binding.purpose,
+                    "custody predecessor belongs to another role scope"
+                );
                 Ok(Some(state))
             }
         }
     }
     fn admit(&self) -> Result<()> {
         if let Some(record) = &self.current {
-            eyre::ensure!(record.control_state.len() <= SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1
-                && record.active_enrollment.as_ref().is_none_or(|bytes| bytes.len() <= SIGNER_CUSTODY_MAX_BYTES_V1)
-                && norito::canonical_frame_len(record)? <= STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
-                "custody predecessor exceeds its native record bound");
+            eyre::ensure!(
+                record.control_state.len() <= SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1
+                    && record
+                        .active_enrollment
+                        .as_ref()
+                        .is_none_or(|bytes| bytes.len() <= SIGNER_CUSTODY_MAX_BYTES_V1)
+                    && norito::canonical_frame_len(record)?
+                        <= STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
+                "custody predecessor exceeds its native record bound"
+            );
         }
-        eyre::ensure!(norito::canonical_frame_len(&self.binding)? <= SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1,
-            "custody binding exceeds its byte bound");
+        eyre::ensure!(
+            norito::canonical_frame_len(&self.binding)? <= SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1,
+            "custody binding exceeds its byte bound"
+        );
         Ok(())
     }
 }
@@ -179,24 +226,48 @@ impl Plan {
     fn instruction(&self, config: &Config) -> Result<InstructionBox> {
         self.selection.admit()?;
         let current = self.selection.validate(config)?;
-        eyre::ensure!(self.validated_at_unix_ms > 0 && self.deadline_unix_ms > self.validated_at_unix_ms,
-            "custody operation has no original finite UTC interval");
+        eyre::ensure!(
+            self.validated_at_unix_ms > 0 && self.deadline_unix_ms > self.validated_at_unix_ms,
+            "custody operation has no original finite UTC interval"
+        );
         let action = match &self.action {
             Action::Configure(policy) => {
-                eyre::ensure!(policy.binding == self.selection.binding, "custody policy differs from selected signer");
+                eyre::ensure!(
+                    policy.binding == self.selection.binding,
+                    "custody policy differs from selected signer"
+                );
                 configure_signer_custody_policy_v1(current.as_ref(), policy.clone())?;
-                SorafsStreamTokenCustodyActionV1::Configure(encode_bounded(policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?)
+                SorafsStreamTokenCustodyActionV1::Configure(encode_bounded(
+                    policy,
+                    SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1,
+                )?)
             }
-            Action::Enroll { anchor, anchor_observed_at_unix_ms, issued_at_unix_ms, expires_at_unix_ms, enrollment } => {
-                let current = current.ok_or_else(|| eyre!("custody enrollment requires a configured predecessor"))?;
-                let predecessor = self.selection.current.as_ref().ok_or_else(|| eyre!("missing custody predecessor"))?;
-                eyre::ensure!(current.policy.binding == self.selection.binding
-                    && anchor.state_digest == self.selection.expected_digest
-                    && anchor.height >= predecessor.execution_height
-                    && self.deadline_unix_ms <= *expires_at_unix_ms,
-                    "custody enrollment differs from selected current state or original expiry");
-                let verified = verify_signer_custody_enrollment_v1(enrollment, &self.selection.binding,
-                    &current.policy.custody_trust(), &SignerCustodyEnrollmentContextV1 {
+            Action::Enroll {
+                anchor,
+                anchor_observed_at_unix_ms,
+                issued_at_unix_ms,
+                expires_at_unix_ms,
+                enrollment,
+            } => {
+                let current = current
+                    .ok_or_else(|| eyre!("custody enrollment requires a configured predecessor"))?;
+                let predecessor = self
+                    .selection
+                    .current
+                    .as_ref()
+                    .ok_or_else(|| eyre!("missing custody predecessor"))?;
+                eyre::ensure!(
+                    current.policy.binding == self.selection.binding
+                        && anchor.state_digest == self.selection.expected_digest
+                        && anchor.height >= predecessor.execution_height
+                        && self.deadline_unix_ms <= *expires_at_unix_ms,
+                    "custody enrollment differs from selected current state or original expiry"
+                );
+                let verified = verify_signer_custody_enrollment_v1(
+                    enrollment,
+                    &self.selection.binding,
+                    &current.policy.custody_trust(),
+                    &SignerCustodyEnrollmentContextV1 {
                         now_unix_ms: self.validated_at_unix_ms,
                         anchor_observed_at_unix_ms: *anchor_observed_at_unix_ms,
                         current_anchor: *anchor,
@@ -204,39 +275,66 @@ impl Plan {
                         predecessor_digest: current.predecessor_digest,
                         signer_revoked: current.signer_revoked,
                         attester_revoked: current.attester_revoked,
-                    })?;
-                eyre::ensure!(verified.statement().issued_at_unix_ms == *issued_at_unix_ms
-                    && verified.statement().expires_at_unix_ms == *expires_at_unix_ms,
-                    "custody enrollment differs from the independently requested UTC interval");
+                    },
+                )?;
+                eyre::ensure!(
+                    verified.statement().issued_at_unix_ms == *issued_at_unix_ms
+                        && verified.statement().expires_at_unix_ms == *expires_at_unix_ms,
+                    "custody enrollment differs from the independently requested UTC interval"
+                );
                 SorafsStreamTokenCustodyActionV1::Enroll(enrollment.clone())
             }
         };
-        let policy = match &self.action { Action::Configure(policy) => policy, Action::Enroll { .. } => &current_policy(&self.selection)? };
-        eyre::ensure!(config.key_pair.public_key() != &policy.binding.public_key
-            && config.key_pair.public_key() != &policy.attester_public_key,
-            "custody manager must be independent of signer and attester keys");
+        let policy = match &self.action {
+            Action::Configure(policy) => policy,
+            Action::Enroll { .. } => &current_policy(&self.selection)?,
+        };
+        eyre::ensure!(
+            config.key_pair.public_key() != &policy.binding.public_key
+                && config.key_pair.public_key() != &policy.attester_public_key,
+            "custody manager must be independent of signer and attester keys"
+        );
         Ok(MutateSorafsStreamTokenCustody {
             provider_id: self.selection.provider_id,
             expected_revision: self.selection.expected_revision,
             expected_digest: self.selection.expected_digest,
             action,
-        }.into())
+        }
+        .into())
     }
 }
 
 fn current_policy(selection: &StreamTokenCustodySelection) -> Result<SignerCustodyPolicyV1> {
-    let record = selection.current.as_ref().ok_or_else(|| eyre!("missing custody predecessor"))?;
-    let state: SignerCustodyControlStateV1 = decode_bounded(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
+    let record = selection
+        .current
+        .as_ref()
+        .ok_or_else(|| eyre!("missing custody predecessor"))?;
+    let state: SignerCustodyControlStateV1 =
+        decode_bounded(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
     Ok(state.policy)
 }
 
-pub(super) fn instructions(config: &Config, bytes: &[u8], kind: NativeOperationKind, deadline_ms: u64) -> Result<Vec<InstructionBox>> {
+pub(super) fn instructions(
+    config: &Config,
+    bytes: &[u8],
+    kind: NativeOperationKind,
+    deadline_ms: u64,
+) -> Result<Vec<InstructionBox>> {
     let plan: Plan = decode_bounded(bytes, MAX_PLAN_BYTES)?;
-    eyre::ensure!(matches!((&plan.action, kind),
-        (Action::Configure(_), NativeOperationKind::StreamTokenCustodyConfigure)
-        | (Action::Enroll { .. }, NativeOperationKind::StreamTokenCustodyEnroll))
-        && deadline_ms <= plan.deadline_unix_ms && deadline_ms > plan.validated_at_unix_ms,
-        "custody journal changed its purpose or original UTC deadline");
+    eyre::ensure!(
+        matches!(
+            (&plan.action, kind),
+            (
+                Action::Configure(_),
+                NativeOperationKind::StreamTokenCustodyConfigure
+            ) | (
+                Action::Enroll { .. },
+                NativeOperationKind::StreamTokenCustodyEnroll
+            )
+        ) && deadline_ms <= plan.deadline_unix_ms
+            && deadline_ms > plan.validated_at_unix_ms,
+        "custody journal changed its purpose or original UTC deadline"
+    );
     Ok(vec![plan.instruction(config)?])
 }
 
@@ -246,7 +344,10 @@ pub(super) enum CustodyExpectation<'a> {
 }
 impl CustodyExpectation<'_> {
     fn options(&self) -> &BoundedTransactionOptions {
-        match self { Self::Configure(request) => &request.options, Self::Enroll(request) => &request.options }
+        match self {
+            Self::Configure(request) => &request.options,
+            Self::Enroll(request) => &request.options,
+        }
     }
     fn plan(&self, validated_at_unix_ms: u64) -> Result<Plan> {
         validate_options(self.options())?;
@@ -254,20 +355,38 @@ impl CustodyExpectation<'_> {
             Self::Configure(request) => {
                 request.selection.admit()?;
                 encode_bounded(&request.policy, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
-                (&request.selection, Action::Configure(request.policy.clone()), request.deadline_unix_ms)
+                (
+                    &request.selection,
+                    Action::Configure(request.policy.clone()),
+                    request.deadline_unix_ms,
+                )
             }
             Self::Enroll(request) => {
                 request.selection.admit()?;
-                eyre::ensure!(!request.enrollment.is_empty() && request.enrollment.len() <= SIGNER_CUSTODY_MAX_BYTES_V1,
-                    "custody enrollment exceeds its canonical record bound");
-                (&request.selection, Action::Enroll {
-                    anchor: request.anchor, anchor_observed_at_unix_ms: request.anchor_observed_at_unix_ms,
-                    issued_at_unix_ms: request.issued_at_unix_ms, expires_at_unix_ms: request.expires_at_unix_ms,
-                    enrollment: request.enrollment.clone(),
-                }, request.deadline_unix_ms)
+                eyre::ensure!(
+                    !request.enrollment.is_empty()
+                        && request.enrollment.len() <= SIGNER_CUSTODY_MAX_BYTES_V1,
+                    "custody enrollment exceeds its canonical record bound"
+                );
+                (
+                    &request.selection,
+                    Action::Enroll {
+                        anchor: request.anchor,
+                        anchor_observed_at_unix_ms: request.anchor_observed_at_unix_ms,
+                        issued_at_unix_ms: request.issued_at_unix_ms,
+                        expires_at_unix_ms: request.expires_at_unix_ms,
+                        enrollment: request.enrollment.clone(),
+                    },
+                    request.deadline_unix_ms,
+                )
             }
         };
-        Ok(Plan { selection: selection.clone(), action, validated_at_unix_ms, deadline_unix_ms })
+        Ok(Plan {
+            selection: selection.clone(),
+            action,
+            validated_at_unix_ms,
+            deadline_unix_ms,
+        })
     }
     pub(super) fn verify(&self, record: &TransactionJournal) -> Result<()> {
         let bytes = match (self, &record.operation) {
@@ -277,16 +396,26 @@ impl CustodyExpectation<'_> {
         };
         let retained: Plan = decode_bounded(bytes, MAX_PLAN_BYTES)?;
         let expected = self.plan(retained.validated_at_unix_ms)?;
-        let terms = record.operation.bounded_terms().ok_or_else(|| eyre!("missing custody fee terms"))?;
-        eyre::ensure!(encode_bounded(&expected, MAX_PLAN_BYTES)? == *bytes
-            && record.requested_fee == self.options().fee_payment && terms.matches_options(self.options())?,
-            "custody journal differs from original request or fee authorization");
+        let terms = record
+            .operation
+            .bounded_terms()
+            .ok_or_else(|| eyre!("missing custody fee terms"))?;
+        eyre::ensure!(
+            encode_bounded(&expected, MAX_PLAN_BYTES)? == *bytes
+                && record.requested_fee == self.options().fee_payment
+                && terms.matches_options(self.options())?,
+            "custody journal differs from original request or fee authorization"
+        );
         Ok(())
     }
 }
 
 impl AccountService {
-    fn prepare_custody(&self, expected: CustodyExpectation<'_>, journal: &Path) -> Result<OperationReport> {
+    fn prepare_custody(
+        &self,
+        expected: CustodyExpectation<'_>,
+        journal: &Path,
+    ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let plan = expected.plan(current_unix_ms()?)?;
         plan.instruction(&self.config)?;
@@ -295,71 +424,128 @@ impl AccountService {
         terms.deadline_ms = terms.deadline_ms.min(plan.deadline_unix_ms);
         let bytes = encode_bounded(&plan, MAX_PLAN_BYTES)?;
         let operation = match plan.action {
-            Action::Configure(_) => NativeOperation::StreamTokenCustodyConfigure { plan: bytes, terms },
-            Action::Enroll { .. } => NativeOperation::StreamTokenCustodyEnroll { plan: bytes, terms },
+            Action::Configure(_) => {
+                NativeOperation::StreamTokenCustodyConfigure { plan: bytes, terms }
+            }
+            Action::Enroll { .. } => {
+                NativeOperation::StreamTokenCustodyEnroll { plan: bytes, terms }
+            }
         };
         operation.instructions(&self.config)?;
-        self.with_deadline(options.deadline)?.prepare_native(operation, options.fee_payment.clone(), journal)
+        self.with_deadline(options.deadline)?.prepare_native(
+            operation,
+            options.fee_payment.clone(),
+            journal,
+        )
     }
-    fn verify_custody_journal(&self, journal: &Path, expected: CustodyExpectation<'_>) -> Result<()> {
+    fn verify_custody_journal(
+        &self,
+        journal: &Path,
+        expected: CustodyExpectation<'_>,
+    ) -> Result<()> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let journal = Journal::open(journal)?;
         let record: TransactionJournal = journal.read_operation()?;
         record.verify(&self.config)?;
         expected.verify(&record)
     }
-    fn run_custody(&self, journal: &Path, expected: CustodyExpectation<'_>, submit: bool) -> Result<OperationReport> {
-        let kind = match expected { CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure, CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll };
-        self.with_deadline(expected.options().deadline)?.run_transaction_with_expectation(
-            journal, kind, submit, Some(OperationExpectation::Custody(expected)))
+    fn run_custody(
+        &self,
+        journal: &Path,
+        expected: CustodyExpectation<'_>,
+        submit: bool,
+    ) -> Result<OperationReport> {
+        let kind = match expected {
+            CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure,
+            CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll,
+        };
+        self.with_deadline(expected.options().deadline)?
+            .run_transaction_with_expectation(
+                journal,
+                kind,
+                submit,
+                Some(OperationExpectation::Custody(expected)),
+            )
     }
 
     /// Quote, sign and retain one exact Configure without submitting it.
     /// # Errors
     /// Rejects malformed policy/CAS, changed role, fees, deadline, unsafe custody or failed I/O.
-    pub fn prepare_stream_token_custody_configure(&self, request: &StreamTokenCustodyConfigureRequest, journal: &Path) -> Result<OperationReport> {
+    pub fn prepare_stream_token_custody_configure(
+        &self,
+        request: &StreamTokenCustodyConfigureRequest,
+        journal: &Path,
+    ) -> Result<OperationReport> {
         self.prepare_custody(CustodyExpectation::Configure(request), journal)
     }
     /// Quote, sign and retain one exactly attested Enroll without submitting it.
     /// # Errors
     /// Rejects wrong policy, signature, CAS, original interval, revocation, fees or unsafe custody.
-    pub fn prepare_stream_token_custody_enroll(&self, request: &StreamTokenCustodyEnrollRequest, journal: &Path) -> Result<OperationReport> {
+    pub fn prepare_stream_token_custody_enroll(
+        &self,
+        request: &StreamTokenCustodyEnrollRequest,
+        journal: &Path,
+    ) -> Result<OperationReport> {
         self.prepare_custody(CustodyExpectation::Enroll(request), journal)
     }
     /// Inspect an original Configure journal, including after its UTC deadline, without I/O to a node.
     /// # Errors
     /// Rejects substituted request, signed wire, network, fees or local custody.
-    pub fn verify_stream_token_custody_configure_journal(&self, journal: &Path, expected: &StreamTokenCustodyConfigureRequest) -> Result<()> {
+    pub fn verify_stream_token_custody_configure_journal(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyConfigureRequest,
+    ) -> Result<()> {
         self.verify_custody_journal(journal, CustodyExpectation::Configure(expected))
     }
     /// Inspect an original Enroll journal without renewing its attestation or transaction lifetime.
     /// # Errors
     /// Rejects substituted request, signed wire, original interval, fees or local custody.
-    pub fn verify_stream_token_custody_enroll_journal(&self, journal: &Path, expected: &StreamTokenCustodyEnrollRequest) -> Result<()> {
+    pub fn verify_stream_token_custody_enroll_journal(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyEnrollRequest,
+    ) -> Result<()> {
         self.verify_custody_journal(journal, CustodyExpectation::Enroll(expected))
     }
     /// Submit the original Configure at most once, comparing its request while holding the journal.
     /// # Errors
     /// Rejects substituted authorization, expired I/O budget or unsafe evidence before dispatch.
-    pub fn submit_stream_token_custody_configure(&self, journal: &Path, expected: &StreamTokenCustodyConfigureRequest) -> Result<OperationReport> {
+    pub fn submit_stream_token_custody_configure(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyConfigureRequest,
+    ) -> Result<OperationReport> {
         self.run_custody(journal, CustodyExpectation::Configure(expected), true)
     }
     /// Submit the original Enroll at most once; ambiguous attempts are only reconciled by hash.
     /// # Errors
     /// Rejects substituted authorization, expired I/O budget or unsafe evidence before dispatch.
-    pub fn submit_stream_token_custody_enroll(&self, journal: &Path, expected: &StreamTokenCustodyEnrollRequest) -> Result<OperationReport> {
+    pub fn submit_stream_token_custody_enroll(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyEnrollRequest,
+    ) -> Result<OperationReport> {
         self.run_custody(journal, CustodyExpectation::Enroll(expected), true)
     }
     /// Reconcile the original Configure without signing or submitting another transaction.
     /// # Errors
     /// Rejects changed request, expired read budget, unsafe custody or invalid node observations.
-    pub fn resume_stream_token_custody_configure(&self, journal: &Path, expected: &StreamTokenCustodyConfigureRequest) -> Result<OperationReport> {
+    pub fn resume_stream_token_custody_configure(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyConfigureRequest,
+    ) -> Result<OperationReport> {
         self.run_custody(journal, CustodyExpectation::Configure(expected), false)
     }
     /// Reconcile the original Enroll while preserving its original interval and signed transaction.
     /// # Errors
     /// Rejects changed request, expired read budget, unsafe custody or invalid node observations.
-    pub fn resume_stream_token_custody_enroll(&self, journal: &Path, expected: &StreamTokenCustodyEnrollRequest) -> Result<OperationReport> {
+    pub fn resume_stream_token_custody_enroll(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyEnrollRequest,
+    ) -> Result<OperationReport> {
         self.run_custody(journal, CustodyExpectation::Enroll(expected), false)
     }
 }

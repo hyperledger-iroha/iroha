@@ -245,6 +245,11 @@ enum Request {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     InspectPrepared(Hash32, PreparedInspection),
     Execute(AvailableBody, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
+    Replay(
+        AvailableBody,
+        Qc,
+        mpsc::SyncSender<Result<(), PublicationError>>,
+    ),
     Discard(u64, Vec<Hash32>),
     Prepare(
         AvailableBody,
@@ -483,25 +488,18 @@ impl StateExecutor {
     /// Re-apply a block Kura already holds (startup replay): execute it on the applied tip
     /// and require the certified result. The caller must admit any decoded witness to the
     /// original State pool before this retained handoff; KuraBlockStore does that explicitly.
+    /// Completed retries verify exact original fields and current native State authority
+    /// using fixed process-local evidence after the large receipt has been released.
     ///
     /// # Errors
     /// The block does not re-execute to its certified result, or a local failure.
     pub fn replay(&mut self, block: &AvailableBody, commit_qc: &Qc) -> Result<(), String> {
-        match self
-            .prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
-            .map_err(|error| error.to_string())?
-        {
-            Some(result) if result == commit_qc.result => {}
-            Some(_) => return Err("replayed block diverges from its certified result".into()),
-            None => return Err("replayed block no longer executes".into()),
-        }
-        self.commit(block, commit_qc)
+        require_body_admission(block, &self.execution_budget).map_err(|error| error.to_string())?;
+        require_qc_witness_admission(commit_qc, &self.execution_budget)
             .map_err(|error| error.to_string())?;
-        // Startup has no driver to retire its completed execution receipt. Release
-        // the original Published owner only after commit and archive completion;
-        // the serialized discard precedes archive binding or the next replay.
-        self.discard(block.header().height, &[]);
-        Ok(())
+        self.call(|reply| Request::Replay(block.clone(), commit_qc.clone(), reply))
+            .unwrap_or_else(|| Err(control::stopped()))
+            .map_err(|error| error.to_string())
     }
 
     fn prepare_with_origin(
@@ -736,6 +734,9 @@ mod control;
 #[path = "executor_attestation.rs"]
 mod local_attestation;
 
+#[path = "executor_replay.rs"]
+mod replay;
+
 /// Exact validation identity permitting transaction isolation; a control refusal never sets it.
 #[derive(Clone, Copy)]
 struct QuarantineContext {
@@ -790,6 +791,8 @@ struct Worker<'s> {
     recovery: Option<String>,
     archives: Option<FinalizedArchives>,
     pending_commit: Option<PendingCommit>,
+    /// Fixed original completion evidence survives retirement of the large replay receipt.
+    replay_completion: Option<replay::ReplayCompletion>,
 }
 
 fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
@@ -810,6 +813,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         beacon: None,
         archives: None,
         pending_commit: None,
+        replay_completion: None,
         attestation: None,
         quarantine_context: None,
     };
@@ -905,6 +909,9 @@ impl<'s> Worker<'s> {
             }
             Request::Execute(block, block_hash, reply) => {
                 let _ = reply.send(self.execute(&block, block_hash));
+            }
+            Request::Replay(block, qc, reply) => {
+                let _ = reply.send(self.replay(&block, &qc));
             }
             Request::Discard(height, keep) => self.discard(height, &keep),
             Request::Prepare(block, qc, origin, reply) => {
@@ -1571,6 +1578,7 @@ impl<'s> Worker<'s> {
     }
 
     /// Pin the original execution and exactly one certified frame for durable append.
+    #[cfg(test)]
     fn prepare(
         &mut self,
         block: &AvailableBody,
@@ -2134,6 +2142,14 @@ impl<'s> Worker<'s> {
             || self.publication_pending()
             || height != self.applied.0.saturating_add(1)
         {
+            iroha_logger::debug!(
+                height,
+                view,
+                applied_height = self.applied.0,
+                pending_commit = self.pending_commit.is_some(),
+                publication_pending = self.publication_pending(),
+                "sumeragi: payload selection awaits its original applied parent"
+            );
             return Ok((None, false));
         }
         if self.payload_build.as_ref().is_some_and(|build| {
@@ -2147,9 +2163,19 @@ impl<'s> Worker<'s> {
         // A fresh attempt reacquires from the same committed parent and queued work.
         self.payload_refusal = None;
         let Some(parent) = self.state.view().latest_block() else {
+            iroha_logger::debug!(
+                height,
+                view,
+                "sumeragi: payload selection has no published parent"
+            );
             return Ok((None, false));
         };
         let Some(scheduled) = self.scheduled(height) else {
+            iroha_logger::debug!(
+                height,
+                view,
+                "sumeragi: payload selection has no authenticated scheduled authority"
+            );
             return Ok((None, false));
         };
         let boundary_attestation = height == scheduled.epoch.authorization.last_height;
@@ -2195,6 +2221,14 @@ impl<'s> Worker<'s> {
                 return Err(PublicationError::Retryable(message));
             }
         };
+        iroha_logger::debug!(
+            height,
+            view,
+            transactions = selected.len(),
+            lane_merges = merges.merges.len(),
+            boundary_attestation,
+            "sumeragi: payload selection completed"
+        );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
             return Ok((None, false));
@@ -2287,6 +2321,12 @@ impl<'s> Worker<'s> {
             |source, writer| source.block.write_resultless_proposal_wire(writer),
         ) {
             Ok((source, payload)) => {
+                iroha_logger::debug!(
+                    height,
+                    view,
+                    bytes = payload.as_slice().len(),
+                    "sumeragi: original funded payload build completed"
+                );
                 self.last_built = Some((height, view, source.hashes));
                 Ok((Some(payload), source.attest))
             }

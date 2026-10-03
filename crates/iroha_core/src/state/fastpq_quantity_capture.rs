@@ -559,14 +559,17 @@ impl StateTransaction<'_, '_> {
             kinds.iter().map(|kind| Ok(kind.into())),
         )
     }
-    fn prepare_quantity_candidate_inputs<'a>(
+    fn prepare_quantity_candidate_inputs<'a, Inputs>(
         &self,
         authority: &AccountId,
         entry_hash: Hash,
         authorization_context: Hash,
-        kinds: impl Clone
-        + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
-    ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
+        kinds: Inputs,
+    ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue>
+    where
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+    {
         if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
             return Err(QuantityCaptureIssue::UnownedMutation);
         }

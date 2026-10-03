@@ -840,3 +840,15 @@ def test_beacon_generation_binding_has_genuine_dkg_kill_controls():
     assert not rule.scenarios
     assert gate.has_switch("HC54", core=True)
     assert not gate.has_switch("HC54")
+
+
+def test_native_amx_binding_has_a_distinct_original_paid_restart_kill_control():
+    rules = gate.index_mutations(gate.CORE_MUTATIONS)
+    rule = rules["HC57"]
+    assert rule.tests == (
+        "sumeragi::amx::native::tests::native_amx_paid_commit_survives_certified_restart_and_rejects_bypass",
+    )
+    assert not rule.scenarios
+    assert rule.id != rules["HC54"].id
+    assert gate.has_switch("HC57", core=True)
+    assert not gate.has_switch("HC57")

@@ -5,7 +5,6 @@
 fn ordinary_mint_permission_requires_live_asset_owner_and_cannot_delegate() {
     use crate::smartcontracts::isi::kagemusha::ordinary_mint_permission::world_has_exact_ordinary_mint_issuer_permission_v1;
     use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1;
-    use iroha_executor_data_model::permission::kagemusha::CanAuthorizeKagemushaOrdinaryMint;
 
     let mut policy = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false).issuer_policy;
     let owner = checked_account_id();
@@ -124,16 +123,26 @@ fn ordinary_mint_permission_requires_live_asset_owner_and_cannot_delegate() {
         )
         .expect_err("holder cannot delegate this separate purpose");
     let role: RoleId = "ordinary_mint_purpose".parse().unwrap();
+    let registration = Register::role(
+        Role::new(role.clone(), owner.clone()).add_permission(permission.clone()),
+    );
+    let denied = super::Executor::Initial
+        .execute_instruction(&mut transaction, &owner, registration.clone().into())
+        .expect_err("live asset ownership alone cannot administer roles");
+    assert!(matches!(denied, ValidationFail::NotPermitted(reason) if reason == "Can't register role"));
+    assert!(transaction.world.roles.get(&role).is_none());
+    // Seed the separate exact fixture permission; the original executor still
+    // verifies every ordinary Mint purpose and role-management condition.
+    Grant::account_permission(executor_permission::role::CanManageRoles, owner.clone())
+        .execute(&owner, &mut transaction)
+        .expect("fixture grants the independent role-management permission");
     super::Executor::Initial
         .execute_instruction(
             &mut transaction,
             &owner,
-            Register::role(
-                Role::new(role.clone(), owner.clone()).add_permission(permission.clone()),
-            )
-            .into(),
+            registration.into(),
         )
-        .expect("actual asset owner may create role with exact purpose");
+        .expect("actual asset owner with role management may create role with exact purpose");
     super::Executor::Initial
         .execute_instruction(
             &mut transaction,

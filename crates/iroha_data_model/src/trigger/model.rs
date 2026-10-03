@@ -134,10 +134,16 @@ mod candidate {
 
     impl<'de> norito::core::DeserializePayload<'de> for Trigger {
         fn deserialize(archived: &'de norito::core::Archived<Trigger>) -> Self {
-            let candidate = <TriggerCandidate as norito::core::DeserializePayload>::deserialize(
-                archived.cast(),
-            );
-            candidate.into_trigger()
+            Self::try_deserialize(archived).expect("invalid Trigger")
+        }
+        fn try_deserialize(
+            archived: &'de norito::core::Archived<Trigger>,
+        ) -> Result<Self, norito::core::Error> {
+            let candidate =
+                <TriggerCandidate as norito::core::DeserializePayload>::try_deserialize(
+                    archived.cast(),
+                )?;
+            Ok(candidate.into_trigger())
         }
     }
 
@@ -201,6 +207,20 @@ mod candidate {
             );
         }
 
+        #[test]
+        fn trigger_fallible_decode_preserves_allocation_refusal() {
+            let trigger = trigger_fixture();
+            let bytes = norito::to_bytes(&trigger).unwrap();
+            let limits = norito::DecodeLimits::new(4096, bytes.len(), 4096, 0, 64);
+            let error =
+                norito::decode_from_bytes_with_limits::<Trigger>(&bytes, limits).unwrap_err();
+            assert!(error.is_decode_resource_limit(), "{error:?}");
+            assert!(!matches!(error, norito::Error::DecodePanic { .. }));
+            assert_eq!(
+                norito::decode_from_bytes::<Trigger>(&bytes).unwrap(),
+                trigger
+            );
+        }
         #[test]
         fn manual_trigger_json_families_have_closed_bounds() {
             fn assert_bounded<T: json::JsonSerialize>(value: &T) {

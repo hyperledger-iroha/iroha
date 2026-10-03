@@ -1,3 +1,4 @@
+#[cfg(feature = "app_api")]
 fn install_test_local_read_runtime(app: &mut SharedAppState, runtime: TestLocalReadRuntime) {
     let torii_peer_id = runtime
         .local_peer_id
@@ -7,6 +8,7 @@ fn install_test_local_read_runtime(app: &mut SharedAppState, runtime: TestLocalR
     app.local_peer_id = torii_peer_id;
     app.soracloud_runtime = Some(Arc::new(runtime));
 }
+#[cfg(feature = "app_api")]
 fn install_unavailable_local_read_runtime(
     app: &mut SharedAppState,
     local_peer_id: Option<String>,
@@ -18,6 +20,7 @@ fn install_unavailable_local_read_runtime(
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_connection_driver_panic_is_contained_to_the_proxy_request() {
     let task = super::spawn_soracloud_hosted_connection_driver(async {
         assert!(
@@ -35,6 +38,7 @@ async fn hosted_connection_driver_panic_is_contained_to_the_proxy_request() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates_on_one_node() {
     use tower::ServiceExt as _;
     let TravelSplitTopologyFixture {
@@ -151,6 +155,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
     upstream_task.abort();
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() {
     use tower::ServiceExt as _;
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -172,6 +177,7 @@ async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritative_context() {
     use tower::ServiceExt as _;
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -265,6 +271,7 @@ async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritati
     assert_eq!(captured[0].authoritative_pending_mailbox_messages, 1);
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     use http_body_util::BodyExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -878,6 +885,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     assert_eq!(second_chunk.as_ref(), SECOND_SSE_FRAME);
     upstream_task.abort();
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_health_route(app: &SharedAppState) -> soracloud::HostedHttpRouteMatch {
     match soracloud::resolve_public_route(app, "portal.sora", "GET", "/app/v1/health")
         .expect("hosted route")
@@ -886,6 +894,7 @@ fn hosted_http_health_route(app: &SharedAppState) -> soracloud::HostedHttpRouteM
         other => panic!("expected hosted route match, got {other:?}"),
     }
 }
+#[cfg(feature = "app_api")]
 fn mutate_hosted_http_deployment(
     app: &mut SharedAppState,
     mutate: impl FnOnce(&mut iroha_data_model::soracloud::SoraServiceDeploymentStateV1),
@@ -902,6 +911,7 @@ fn mutate_hosted_http_deployment(
     mutate(&mut deployment);
     deployments.insert(service_name, deployment);
 }
+#[cfg(feature = "app_api")]
 fn mutate_authoritative_hosted_http_placement(
     world: &mut World,
     service_name: &str,
@@ -924,6 +934,7 @@ fn mutate_authoritative_hosted_http_placement(
     mutate(placement);
     placements.insert(key, record);
 }
+#[cfg(feature = "app_api")]
 fn mutate_authoritative_hosted_http_runtime(
     world: &mut World,
     service_name: &str,
@@ -945,6 +956,7 @@ fn mutate_authoritative_hosted_http_runtime(
     mutate(&mut runtime);
     runtimes.insert(key, runtime);
 }
+#[cfg(feature = "app_api")]
 fn inject_hosted_http_active_rollout(app: &mut SharedAppState) {
     mutate_hosted_http_deployment(app, |deployment| {
         let rollout = iroha_data_model::soracloud::SoraServiceRolloutStateV1 {
@@ -969,6 +981,7 @@ fn inject_hosted_http_active_rollout(app: &mut SharedAppState) {
     });
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn authoritative_hosted_http_version_uses_the_single_current_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app(
@@ -986,6 +999,7 @@ fn authoritative_hosted_http_version_uses_the_single_current_revision() {
     );
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn authoritative_hosted_http_revision_rejects_active_inrou_canary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1009,6 +1023,7 @@ fn authoritative_hosted_http_revision_rejects_active_inrou_canary() {
 }
 
 #[test]
+#[cfg(feature = "app_api")]
 fn hosted_http_ingress_and_exact_peer_reject_active_inrou_canary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1042,6 +1057,7 @@ fn hosted_http_ingress_and_exact_peer_reject_active_inrou_canary() {
     }
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_routes_only_the_current_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app(
@@ -1073,6 +1089,7 @@ async fn resolve_hosted_http_runtime_target_routes_only_the_current_revision() {
 }
 
 #[test]
+#[cfg(feature = "app_api")]
 fn resolve_exact_hosted_http_runtime_target_rejects_inactive_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app(
@@ -1092,6 +1109,7 @@ fn resolve_exact_hosted_http_runtime_target_rejects_inactive_revision() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_does_not_fall_back_to_an_inactive_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app(
@@ -1123,6 +1141,7 @@ async fn resolve_hosted_http_runtime_target_does_not_fall_back_to_an_inactive_re
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1231,6 +1250,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_rev
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_cross_keyed_and_invalid_placement_records() {
     for cross_keyed in [true, false] {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1292,6 +1312,7 @@ async fn hosted_http_runtime_target_rejects_cross_keyed_and_invalid_placement_re
     }
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_missing_or_expired_host_capability() {
     for remove_capability in [true, false] {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1355,6 +1376,7 @@ async fn hosted_http_runtime_target_rejects_missing_or_expired_host_capability()
     }
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capability() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1414,6 +1436,7 @@ async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capabil
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app_with_service_lease(
@@ -1466,6 +1489,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease()
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expires() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app_with_service_lease(
@@ -1501,6 +1525,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expi
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_exhausted() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app_with_service_lease(
@@ -1536,6 +1561,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_e
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hosts_within_revision()
 {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1606,6 +1632,7 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_authoritative_runtime_state_lags() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1660,6 +1687,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_authoritative_runt
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_matching_forged_runtime_and_local_bundle_hashes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1738,6 +1766,7 @@ async fn hosted_http_runtime_target_rejects_matching_forged_runtime_and_local_bu
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_unadmitted_bundle_for_remote_replica() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1802,6 +1831,7 @@ async fn hosted_http_runtime_target_rejects_unadmitted_bundle_for_remote_replica
     assert!(error.message.contains("no healthy authoritative"));
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_local_snapshot_bundle_mismatch() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1857,6 +1887,7 @@ async fn hosted_http_runtime_target_rejects_local_snapshot_bundle_mismatch() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_runtime_target_rejects_stale_local_process_generation() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -1976,6 +2007,7 @@ async fn hosted_http_runtime_target_rejects_stale_local_process_generation() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replica_targets() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = seed_public_hosted_http_current_app(
@@ -2023,6 +2055,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replic
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_rejects_snapshot_without_peer_identity() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
@@ -2064,6 +2097,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_without_peer_identi
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer() {
     let temp = tempfile::tempdir().expect("tempdir");
     let remote_peer_id =
@@ -2120,6 +2154,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
     let local_keypair = checked_torii_test_bls_keypair(
         0x4e,
@@ -2168,6 +2203,7 @@ async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
     let temp = tempfile::tempdir().expect("tempdir");
     let local_keypair =
@@ -2467,6 +2503,7 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
     }
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn hosted_http_origin_rejects_spoofed_or_duplicate_remote_served_revision_headers() {
     let target = super::ResolvedHostedHttpTarget {
         route_match: soracloud::HostedHttpRouteMatch {
@@ -2554,6 +2591,7 @@ fn hosted_http_origin_rejects_spoofed_or_duplicate_remote_served_revision_header
 }
 
 #[tokio::test]
+#[cfg(feature = "connect")]
 async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_routes() {
     let local_keypair =
         checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
@@ -2846,7 +2884,7 @@ struct AdminManagedLaneFixture {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 }
-fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
+fn admin_managed_lane_fixture(local_votes_globally: bool) -> AdminManagedLaneFixture {
     let local_validator_keypair = checked_torii_test_ed25519_keypair(
         0x5a,
         "derive authoritative-lane local validator fixture key",
@@ -2881,24 +2919,7 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
     let remote_peer_id = PeerId::from(remote_peer_keypair.public_key().clone());
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(1);
-    let mut app = mk_app_state_for_tests();
     let nexus = {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        online_tx
-            .send(std::collections::HashSet::from([
-                Peer::new(
-                    "127.0.0.1:10001".parse().expect("valid local address"),
-                    local_peer_keypair.public_key().clone(),
-                ),
-                Peer::new(
-                    "127.0.0.1:10002".parse().expect("valid remote address"),
-                    remote_peer_keypair.public_key().clone(),
-                ),
-            ]))
-            .expect("online peers update should succeed");
-        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-        app_mut.local_peer_id = Some(local_peer_id.clone());
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -2923,30 +2944,57 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
             },
         ])
         .expect("dataspace catalog");
-        let nexus = iroha_config::parameters::actual::Nexus {
+        iroha_config::parameters::actual::Nexus {
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            configured_lane_catalog: lane_catalog.clone(),
+            configured_dataspace_catalog: dataspace_catalog.clone(),
             lane_catalog,
             dataspace_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
-        };
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        state.set_nexus(nexus.clone()).expect("apply nexus config");
-        ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &remote_validator,
-            &remote_peer_keypair,
-            "remote",
-        );
-        for (index, (validator, peer_keypair)) in additional_remote_authorities.iter().enumerate() {
-            ensure_runtime_peer_binding_for_test(
-                state,
-                validator,
-                peer_keypair,
-                &format!("remote-{}", index + 2),
-            );
         }
-        nexus
     };
+    let mut original_members = vec![
+        (local_validator.clone(), local_peer_keypair.clone()),
+        (remote_validator.clone(), remote_peer_keypair.clone()),
+    ];
+    original_members.extend(additional_remote_authorities.iter().cloned());
+    let mut labels = vec![
+        "local".to_owned(),
+        "remote".to_owned(),
+        "remote-2".to_owned(),
+        "remote-3".to_owned(),
+        "remote-4".to_owned(),
+    ];
+    if !local_votes_globally {
+        // The receiver is an observer. Its original peer is registered through paid H2;
+        // the exact four remote peers are the genuine permissioned genesis committee.
+        let local = original_members.remove(0);
+        let local_label = labels.remove(0);
+        original_members.push(local);
+        labels.push(local_label);
+    }
+    let mut app = native_ingress_with_registered_route_peers_for_test(
+        World::default(),
+        nexus.clone(),
+        &original_members,
+        &labels,
+    );
+    let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+    online_tx
+        .send(std::collections::HashSet::from([
+            Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_peer_keypair.public_key().clone(),
+            ),
+            Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_peer_keypair.public_key().clone(),
+            ),
+        ]))
+        .expect("online peers update should succeed");
+    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+    app_mut.local_peer_id = Some(local_peer_id.clone());
     let additional_remote_authorities = additional_remote_authorities
         .into_iter()
         .map(|(validator, peer_keypair)| {
@@ -2991,8 +3039,48 @@ fn exact_remote_admin_committee(
     committee
 }
 #[cfg(feature = "connect")]
+fn sorted_admin_peer_ids_for_test(committee: &[(AccountId, PeerId)]) -> Vec<PeerId> {
+    let mut peers = committee
+        .iter()
+        .map(|(_, peer)| peer.clone())
+        .collect::<Vec<_>>();
+    peers.sort();
+    assert_eq!(peers.len(), 4);
+    peers
+}
+#[cfg(feature = "connect")]
+fn assert_physical_and_global_route_sources_for_test(
+    app: &SharedAppState,
+    route: RoutingDecision,
+    expected_physical: &[PeerId],
+    expected_global: &[PeerId],
+) {
+    let physical = app
+        .state
+        .resolve_lane_committee(super::lane_authority_route(route))
+        .expect("original physical admission committee");
+    let global = app
+        .state
+        .resolve_route_authority(super::lane_authority_route(route))
+        .expect("original scheduled global route committee");
+    assert_eq!(
+        physical.validators(),
+        expected_physical,
+        "physical admission retains original manifest or Nexus pin custody"
+    );
+    assert_eq!(
+        global.validators(),
+        expected_global,
+        "Torii route retains the actual scheduled global committee independently of manifest pools"
+    );
+    assert_eq!(
+        super::authoritative_lane_peers(app.as_ref(), route).authoritative,
+        expected_global
+    );
+}
+#[cfg(feature = "connect")]
 #[tokio::test]
-async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane() {
+async fn authoritative_lane_peers_use_scheduled_global_committee_for_admin_managed_lane() {
     let AdminManagedLaneFixture {
         mut app,
         nexus,
@@ -3003,7 +3091,7 @@ async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane
         additional_remote_authorities,
         lane_id,
         dataspace_id,
-    } = admin_managed_lane_fixture();
+    } = admin_managed_lane_fixture(true);
     let exact_committee = exact_admin_committee_with_local(
         &local_validator,
         &local_peer_id,
@@ -3013,7 +3101,7 @@ async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane
     );
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        let state = app_mut.state.as_ref();
         {
             let mut topology = state.commit_topology.block();
             topology.clear();
@@ -3021,33 +3109,55 @@ async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane
             topology.push(remote_peer_id.clone());
             topology.commit();
         }
-        install_lane_manifest_registry_for_test(state, &[(lane_id, exact_committee)]);
+        install_lane_manifest_registry_for_test(state, &[(lane_id, exact_committee.clone())]);
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
+    let expected_global = sorted_admin_peer_ids_for_test(&exact_committee);
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &expected_global,
+        &expected_global,
+    );
+    let remote_manifest = exact_remote_admin_committee(
+        &remote_validator,
+        &remote_peer_id,
+        &additional_remote_authorities,
+    );
+    let expected_native = sorted_admin_peer_ids_for_test(&remote_manifest);
+    assert!(!expected_native.contains(&local_peer_id));
+    install_lane_manifest_registry_for_test(&app.state, &[(lane_id, remote_manifest)]);
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &expected_native,
+        &expected_global,
+    );
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
     assert!(
         authoritative.contains(&local_peer_id),
-        "manifest-backed restricted lane should treat the local validator as authoritative"
+        "restricted route retains its scheduled global local validator after manifest replacement"
     );
     assert!(
         authoritative.contains(&remote_peer_id),
-        "manifest-backed restricted lane should include the remote validator"
+        "restricted route retains its scheduled global remote validator"
     );
     assert_eq!(
         authoritative.len(),
         4,
-        "f=1 restricted lane authority must resolve to exactly 3f+1 validators"
+        "f=1 scheduled global route authority must resolve to exactly 3f+1 validators"
     );
     assert!(
         super::is_local_authoritative_for_route(app.as_ref(), route),
-        "manifest-backed restricted lane should be routable without staking records"
+        "permissioned global routing uses genuine genesis voters without staking records"
     );
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activation() {
+async fn physical_route_keeps_scheduled_global_authority_across_native_autoscale_activation() {
+    use iroha_data_model::sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy};
     let local_keypair =
         checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
     let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
@@ -3065,122 +3175,270 @@ async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activatio
             checked_torii_test_bls_keypair(seed, "derive activated autoscale peer fixture key")
         })
         .collect::<Vec<_>>();
+    let mut pinned_peer_ids = pinned_keypairs
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    pinned_peer_ids.sort();
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::UNIVERSAL;
-    let mut app = mk_app_state_for_tests();
-    let pinned_peer_ids;
+    // The manual physical profile and the native elastic instance intentionally
+    // share a numeric ID. Neither representation grants the other's authority
+    // (sumeragi_lanes.md §5.1). No retired Nexus autoscale metadata is installed.
+    let physical_profile = iroha_data_model::nexus::LaneConfig {
+        id: lane_id,
+        alias: "manual-physical-profile".to_owned(),
+        ..iroha_data_model::nexus::LaneConfig::default()
+    };
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        NonZeroU32::new(2).unwrap(),
+        vec![
+            iroha_data_model::nexus::LaneConfig::default(),
+            physical_profile.clone(),
+        ],
+    )
+    .expect("independent manual physical lane catalog");
+    let nexus = iroha_config::parameters::actual::Nexus {
+        configured_lane_catalog: lane_catalog.clone(),
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        lane_catalog,
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+    let mut policy = SumeragiLanePolicy::for_chain(
+        iroha_data_model::parameter::system::SumeragiParameters::default(),
+        iroha_sumeragi::availability::recommended_data_availability_layout(),
+    );
+    policy.autoscale = Some(SumeragiLaneAutoscale {
+        min_lane: lane_id,
+        max_lane_exclusive: LaneId::new(2),
+        dataspace: dataspace_id,
+        committee_size: 4,
+        per_lane_target_tps: 10,
+        window: 6,
+        scale_out_permille: 300,
+        scale_in_permille: 150,
+        cooldown: 3,
+    });
+    policy
+        .validate()
+        .expect("original finite native autoscale policy");
+    let mut members = pinned_keypairs
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let validator = checked_torii_test_account_id(
+                0x90 + u8::try_from(index).unwrap(),
+                "derive independent pinned fixture validator account",
+            );
+            (validator, key.clone())
+        })
+        .collect::<Vec<_>>();
+    members.push((
+        authoritative_validator.clone(),
+        authoritative_peer_keypair.clone(),
+    ));
+    let labels = vec![
+        "pinned-0".to_owned(),
+        "pinned-1".to_owned(),
+        "pinned-2".to_owned(),
+        "pinned-3".to_owned(),
+        "authoritative".to_owned(),
+    ];
+    let (mut app, mut chain, genesis_key) =
+        native_ingress_with_registered_route_peers_and_chain_for_test(
+            World::default(),
+            nexus,
+            &members,
+            &labels,
+            vec![iroha_data_model::parameter::Parameter::Custom(
+                policy.into_custom_parameter(),
+            )],
+        );
     {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        online_tx
-            .send(std::collections::HashSet::from([
+        let unique = Arc::get_mut(&mut app).expect("unique real autoscale app fixture");
+        let (online_tx, online_rx) =
+            tokio::sync::watch::channel(std::collections::HashSet::from([
                 Peer::new(
-                    "127.0.0.1:10001".parse().expect("valid local address"),
+                    "127.0.0.1:10001".parse().unwrap(),
                     local_keypair.public_key().clone(),
                 ),
                 Peer::new(
-                    "127.0.0.1:10002"
-                        .parse()
-                        .expect("valid authoritative address"),
+                    "127.0.0.1:10002".parse().unwrap(),
                     authoritative_peer_keypair.public_key().clone(),
                 ),
-            ]))
-            .expect("online peers update should succeed");
-        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-        app_mut.local_peer_id = Some(local_peer_id.clone());
-        let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
-            id: lane_id,
-            alias: format!("elastic-lane-{}", lane_id.as_u32()),
-            ..iroha_data_model::nexus::LaneConfig::default()
-        };
-        autoscale_lane.metadata.insert(
-            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
-            "true".to_owned(),
-        );
-        autoscale_lane.metadata.insert(
-            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-            "7".to_owned(),
-        );
-        pinned_peer_ids =
-            pin_autoscale_lane_committee_for_test(&mut autoscale_lane, &pinned_keypairs);
-        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero lane count"),
-            vec![
-                iroha_data_model::nexus::LaneConfig::default(),
-                autoscale_lane,
-            ],
-        )
-        .expect("autoscale lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            lane_catalog,
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("non-zero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(2).expect("non-zero max lanes");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        {
-            let mut current = state.nexus.write();
-            *current = nexus.clone();
-        }
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_peer_keypair,
-            "authoritative",
-        );
-        {
-            let mut topology = state.commit_topology.block();
-            topology.clear();
-            topology.push(local_peer_id.clone());
-            topology.push(authoritative_peer_id.clone());
-            topology.commit();
-        }
-        install_lane_manifest_registry_for_test(
-            state,
-            &[(
-                lane_id,
-                vec![(authoritative_validator, authoritative_peer_id.clone())],
-            )],
-        );
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            0,
-            0,
-        ));
+            ]));
+        let _keep_online = online_tx;
+        unique.online_peers = OnlinePeersProvider::new(online_rx);
+        unique.local_peer_id = Some(local_peer_id.clone());
     }
-    let route = RoutingDecision::new(lane_id, dataspace_id);
-    assert!(
-        super::authoritative_lane_peers(app.as_ref(), route)
-            .authoritative
-            .is_empty(),
-        "future-created autoscale manifest bindings must not bypass active-height authority"
+    let mut physical_manifest = vec![(authoritative_validator, authoritative_peer_id.clone())];
+    physical_manifest.extend(
+        members
+            .iter()
+            .take(3)
+            .map(|(validator, key)| (validator.clone(), PeerId::new(key.public_key().clone()))),
     );
-    app.state
-        .update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(7).expect("non-zero height"),
-            None,
-            None,
-            0,
-            0,
-        ));
+    let physical_committee = sorted_admin_peer_ids_for_test(&physical_manifest);
+    assert_ne!(
+        physical_committee, pinned_peer_ids,
+        "physical manifest and native pin are independent"
+    );
+    install_lane_manifest_registry_for_test(&app.state, &[(lane_id, physical_manifest)]);
+    let route = RoutingDecision::new(lane_id, dataspace_id);
+    assert_eq!(app.state.view().height(), 3);
+    assert!(
+        app.state
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .lane(lane_id)
+            .is_none(),
+        "native lane cannot exist before its original six-interval load window"
+    );
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &physical_committee,
+        &pinned_peer_ids,
+    );
+    // Missing physical geometry and a mismatched physical dataspace remain refusals;
+    // the legitimate manual profile is not deactivated by an absent native record.
+    for inactive in [
+        RoutingDecision::new(LaneId::new(2), dataspace_id),
+        RoutingDecision::new(lane_id, DataSpaceId::new(1)),
+    ] {
+        assert!(
+            super::authoritative_lane_peers(app.as_ref(), inactive)
+                .authoritative
+                .is_empty()
+        );
+        assert!(
+            app.state
+                .resolve_lane_committee(super::lane_authority_route(inactive))
+                .is_err()
+        );
+        assert!(
+            app.state
+                .resolve_route_authority(super::lane_authority_route(inactive))
+                .is_err()
+        );
+    }
+    advance_registered_route_fixture_for_test(&mut chain, &genesis_key, 6);
+    assert!(
+        app.state
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .lane(lane_id)
+            .is_none(),
+        "native creation must wait until H7"
+    );
+    advance_registered_route_fixture_for_test(&mut chain, &genesis_key, 7);
+    let created = {
+        let view = app.state.view();
+        let record = view
+            .world()
+            .sumeragi_lanes()
+            .lane(lane_id)
+            .expect("actual autoscale step creates native lane at H7");
+        assert_eq!(record.created_at, 7);
+        assert_eq!(record.active_from, 9);
+        assert_eq!(record.dataspace, dataspace_id);
+        assert!(!record.admits_anchor(7));
+        assert!(!record.admits_anchor(8));
+        assert!(record.admits_anchor(9));
+        let peers = record
+            .committee
+            .iter()
+            .map(|member| member.peer.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            peers, pinned_peer_ids,
+            "native creation pins the original four genuine global voters"
+        );
+        for member in &record.committee {
+            let key = pinned_keypairs
+                .iter()
+                .find(|key| key.public_key() == member.peer.public_key())
+                .expect("original native voter key");
+            assert_eq!(
+                member.pop,
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("original native voter PoP")
+            );
+        }
+        assert_eq!(
+            view.nexus()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == lane_id),
+            Some(&physical_profile),
+            "native step preserves the exact independent physical profile"
+        );
+        record.clone()
+    };
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &physical_committee,
+        &pinned_peer_ids,
+    );
+    advance_registered_route_fixture_for_test(&mut chain, &genesis_key, 9);
+    assert_eq!(app.state.view().height(), 9);
+    assert_eq!(
+        app.state.view().world().sumeragi_lanes().lane(lane_id),
+        Some(&created),
+        "native activation retains the exact original creation record"
+    );
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &physical_committee,
+        &pinned_peer_ids,
+    );
+    install_lane_manifest_registry_for_test(
+        &app.state,
+        &[(
+            lane_id,
+            members
+                .iter()
+                .take(4)
+                .map(|(validator, key)| (validator.clone(), PeerId::new(key.public_key().clone())))
+                .collect(),
+        )],
+    );
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &pinned_peer_ids,
+        &pinned_peer_ids,
+    );
+    assert_eq!(
+        app.state.view().world().sumeragi_lanes().lane(lane_id),
+        Some(&created),
+        "mutable physical manifest cannot replace native custody"
+    );
+    {
+        let mut topology = app.state.commit_topology.block();
+        topology.clear();
+        topology.push(local_peer_id);
+        topology.push(authoritative_peer_id.clone());
+        topology.commit();
+    }
     assert_eq!(
         super::authoritative_lane_peers(app.as_ref(), route).authoritative,
         pinned_peer_ids,
-        "the immutable committee, not mutable manifest bindings, must become authoritative at the autoscale creation height"
+        "scheduled genuine global committee remains authoritative across native activation and local transport changes"
     );
     assert!(
         !pinned_peer_ids.contains(&authoritative_peer_id),
-        "fixture manifest authority must remain disjoint from the pinned committee"
+        "fixture manifest authority remains disjoint from native/global committee"
     );
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
+async fn scheduled_global_route_authority_ignores_local_commit_topology_filtering() {
     let AdminManagedLaneFixture {
         mut app,
         nexus,
@@ -3191,7 +3449,7 @@ async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filter
         additional_remote_authorities,
         lane_id,
         dataspace_id,
-    } = admin_managed_lane_fixture();
+    } = admin_managed_lane_fixture(false);
     let exact_remote_committee = exact_remote_admin_committee(
         &remote_validator,
         &remote_peer_id,
@@ -3199,24 +3457,34 @@ async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filter
     );
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        let state = app_mut.state.as_ref();
         {
             let mut topology = state.commit_topology.block();
             topology.clear();
             topology.push(local_peer_id.clone());
             topology.commit();
         }
-        install_lane_manifest_registry_for_test(state, &[(lane_id, exact_remote_committee)]);
+        install_lane_manifest_registry_for_test(
+            state,
+            &[(lane_id, exact_remote_committee.clone())],
+        );
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
+    let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &expected_global,
+        &expected_global,
+    );
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
     assert!(
         authoritative.authoritative.contains(&remote_peer_id),
-        "manifest-backed admin-managed lanes should keep remote authorities even when the local commit topology omits them"
+        "scheduled global route keeps remote authorities even when local transport topology omits them"
     );
     assert_eq!(
         authoritative.authoritative.len(),
@@ -3225,16 +3493,16 @@ async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filter
     );
     assert!(
         !super::is_local_authoritative_for_route(app.as_ref(), route),
-        "a peer outside the lane manifest should not become authoritative just because it is local"
+        "a peer outside the scheduled global committee cannot become authoritative just because it is local"
     );
     assert!(
         !super::should_execute_route_locally(app.as_ref(), route),
-        "restricted routes without local manifest authority should still proxy"
+        "restricted routes without scheduled global local authority still proxy"
     );
     assert_eq!(
         candidates.peers,
         vec![ToriiProxyCandidate::P2p(remote_peer_id)],
-        "Torii proxy candidate discovery should route to the manifest-backed remote authority"
+        "Torii proxy candidate discovery routes to the scheduled global remote authority"
     );
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
@@ -3250,7 +3518,7 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
         additional_remote_authorities,
         lane_id,
         dataspace_id,
-    } = admin_managed_lane_fixture();
+    } = admin_managed_lane_fixture(false);
     let exact_remote_committee = exact_remote_admin_committee(
         &remote_validator,
         &remote_peer_id,
@@ -3258,12 +3526,22 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
     );
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        install_lane_manifest_registry_for_test(state, &[(lane_id, exact_remote_committee)]);
+        let state = app_mut.state.as_ref();
+        install_lane_manifest_registry_for_test(
+            state,
+            &[(lane_id, exact_remote_committee.clone())],
+        );
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
+    let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);
+    assert_physical_and_global_route_sources_for_test(
+        &app,
+        route,
+        &expected_global,
+        &expected_global,
+    );
     assert!(
         !super::should_execute_route_locally(app.as_ref(), route),
         "test requires a route the receiver would otherwise re-forward"
@@ -3370,20 +3648,30 @@ async fn incoming_read_proxy_response_for_route(
     };
     super::execute_incoming_torii_proxy_request(&app, request, Some(ingress_peer_id)).await
 }
-#[cfg(all(feature = "app_api", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn incoming_verified_query_proxy_response_for_route(
     app: SharedAppState,
     route: RoutingDecision,
+) -> Response {
+    incoming_signed_query_proxy_response_for_route(app, route, |authority| {
+        iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::account::prelude::FindAccountById::new(authority.clone())
+                .into(),
+        )
+    })
+    .await
+}
+#[cfg(feature = "connect")]
+async fn incoming_signed_query_proxy_response_for_route(
+    app: SharedAppState,
+    route: RoutingDecision,
+    query: impl FnOnce(&AccountId) -> iroha_data_model::query::QueryRequest,
 ) -> Response {
     let key_pair =
         checked_torii_test_ed25519_keypair(0x69, "derive stale-route verified query key");
     let ingress_peer_id = PeerId::from(key_pair.public_key().clone());
     let authority = AccountId::new(key_pair.public_key().clone());
-    let signed_query = authorize_query_for_test(
-        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
-        authority,
-    )
-    .sign(&key_pair);
+    let signed_query = authorize_query_for_test(query(&authority), authority).sign(&key_pair);
     let request = ToriiProxyRequestV1 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V1,
         request_id: Hash::new(b"incoming-verified-query-proxy-stale-route"),
@@ -3399,7 +3687,7 @@ async fn incoming_verified_query_proxy_response_for_route(
     };
     super::execute_incoming_torii_proxy_request(&app, request, None).await
 }
-#[cfg(all(feature = "app_api", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn assert_incoming_proxy_stale_route_rejection(response: &Response, route: RoutingDecision) {
     let expected_lane = route.lane_id.as_u32().to_string();
     let expected_dataspace = route.dataspace_id.as_u64().to_string();

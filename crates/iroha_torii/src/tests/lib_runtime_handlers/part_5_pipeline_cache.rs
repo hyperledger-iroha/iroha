@@ -162,9 +162,25 @@ fn pipeline_status_cache_prunes_stale_entries() {
 fn pipeline_status_cache_eviction_respects_capacity() {
     let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(60));
     let (block_a, _) = make_signed_block(1, None);
-    let (block_b, _) = make_signed_block(2, None);
     let hash_a = block_a.external_transactions().next().expect("tx").hash();
-    let hash_b = block_b.external_transactions().next().expect("tx").hash();
+    let hash_b = checked_torii_test_transaction(
+        TransactionBuilder::new(
+            signed_query_test_network_id(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "distinct cache eviction input".to_owned(),
+        )]),
+        &iroha_test_samples::ALICE_KEYPAIR,
+        "sign the independent cache eviction input",
+    )
+    .hash();
+    assert_ne!(
+        hash_a, hash_b,
+        "capacity eviction requires distinct original inputs"
+    );
     let now = Instant::now();
     let stale = now
         .checked_sub(Duration::from_secs(5))
@@ -187,7 +203,24 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
     let (block_a, _) = make_signed_block(1, None);
     let (block_b, _) = make_signed_block(2, None);
     let hash_a = block_a.external_transactions().next().expect("tx").hash();
-    let hash_b = block_b.external_transactions().next().expect("tx").hash();
+    let hash_b = checked_torii_test_transaction(
+        TransactionBuilder::new(
+            signed_query_test_network_id(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "distinct live-count cache input".to_owned(),
+        )]),
+        &iroha_test_samples::ALICE_KEYPAIR,
+        "sign independent live-count cache input",
+    )
+    .hash();
+    assert_ne!(
+        hash_a, hash_b,
+        "live counts require two distinct original inputs"
+    );
     let height_a = NonZeroU64::new(1).expect("height");
     let now = Instant::now();
     cache.record_entry(

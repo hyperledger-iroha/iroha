@@ -168,8 +168,10 @@ impl NativeBeaconProducer {
             let record = world.global_beacon_key_sessions().get(&id).ok_or_else(|| {
                 NativeBeaconError::Source("active readiness session is absent".into())
             })?;
-            record
-                .validate()
+            // Validate the acquired record once within this probe. Every retry still
+            // reacquires its original State view and re-probes the installed custodian.
+            let session = record
+                .validated_session()
                 .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
             let binding = InstalledBeaconEpochBindingV1 {
                 session_id: id,
@@ -190,16 +192,14 @@ impl NativeBeaconProducer {
                 let roster_hash =
                     authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
                         .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
-                let session = validate_global_threshold_beacon_session_v1(
-                    record.session.clone(),
-                    &GlobalThresholdBeaconSessionBindingV1 {
+                session
+                    .validate_binding(&GlobalThresholdBeaconSessionBindingV1 {
                         network_id: current.network_id,
                         session_id: id,
                         roster_hash,
                         transcript_hash: record.session.transcript_hash,
-                    },
-                )
-                .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+                    })
+                    .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
                 horizon.session_covers_next_pulse =
                     next.is_some_and(|height| record.is_active_at(height));
                 horizon.local_provider_ready = record.is_active_at(context.height)

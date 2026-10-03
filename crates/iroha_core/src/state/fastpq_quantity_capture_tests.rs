@@ -1,10 +1,7 @@
 //! Actual owner capture, rollback and explicit refusal of incomplete quantity coverage.
 
 use super::*;
-use crate::{
-    execution_attempt::ExecutionAttemptError, kura::Kura, query::store::LiveQueryStore,
-    smartcontracts::Execute,
-};
+use crate::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute};
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
@@ -2738,7 +2735,8 @@ fn signed_account_removal_rolls_back_balance_supply_account_and_capture_on_later
 fn direct_account_removal_preserves_business_result_without_original_quantity_source() {
     let (state, alice, bob) = account_removal_fixture(Some(Quantity::from(3_u32)));
     let mut block = state.block(quantity_successor_header(&state));
-    let mut transaction = block.transaction_for_callback_testing();
+    let mut transaction = block.transaction();
+    assert!(transaction.tx_call_hash.is_none());
     Unregister::account(BOB_ID.clone())
         .execute(&BOB_ID, &mut transaction)
         .unwrap();

@@ -264,11 +264,8 @@ use iroha_core::{
         SignatureVerificationFail, external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     },
 };
-#[cfg(all(test, feature = "connect"))]
-use iroha_crypto::Signature;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, blake2::digest::Digest};
 use iroha_data_model::NetworkId;
-#[cfg(feature = "app_api")]
 #[cfg(test)]
 use iroha_data_model::alias::AliasIndex;
 #[cfg(test)]
@@ -1130,7 +1127,7 @@ mod connect;
 mod connect_status;
 #[cfg(feature = "app_api")]
 mod contract_sources;
-#[cfg(feature = "app_api")]
+#[cfg(any(feature = "app_api", test, feature = "test-fixtures"))]
 mod data_dir;
 #[cfg(feature = "app_api")]
 mod deployment_state;
@@ -1148,6 +1145,7 @@ mod gov;
 mod iso20022_bridge;
 mod limits;
 mod mcp;
+#[cfg(feature = "app_api")]
 mod musubi;
 #[cfg(feature = "app_api")]
 mod offline_asset_registration;
@@ -1168,7 +1166,7 @@ mod soracloud;
 mod soranet_privacy_ingress;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 mod telemetry;
-#[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_utils;
 #[cfg(feature = "app_api")]
 #[cfg(feature = "telemetry")]
@@ -1276,12 +1274,14 @@ pub use runtime::{
 };
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
 #[derive(Clone)]
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 struct GatewayFixtureTelemetry {
     version: String,
     profile_version: String,
     fixtures_digest: String,
     released_at_unix: u64,
 }
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
     let metadata = sorafs_manifest::gateway_fixture_metadata();
     GatewayFixtureTelemetry {
@@ -1295,7 +1295,9 @@ fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
 const ALIAS_METRIC_LANE: &str = "torii";
 #[cfg(feature = "app_api")]
 const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
+#[cfg(any(feature = "app_api", test))]
 const EXACT_ALIAS_LOOKUP_MAX_ITEMS: usize = 64;
+#[cfg(any(feature = "app_api", feature = "telemetry", test))]
 fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
@@ -1313,12 +1315,14 @@ where
     );
     Ok(resp)
 }
+#[cfg(any(feature = "app_api", feature = "telemetry", test))]
 fn json_ok<T>(payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_resolve_ok(
     alias: &str,
     account_id: &str,
@@ -1333,6 +1337,7 @@ fn alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_resolve_index_ok(
     index: u64,
     alias: &str,
@@ -1347,6 +1352,7 @@ fn alias_resolve_index_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_lookup_by_account_ok(
     account_id: &str,
     mut items: Vec<routing::AliasLookupByAccountItemDto>,
@@ -1377,6 +1383,7 @@ fn alias_lookup_by_account_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn asset_alias_resolve_ok(
     alias: &str,
     asset_definition_id: &str,
@@ -1397,6 +1404,7 @@ fn asset_alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn contract_alias_resolve_ok(
     contract_alias: &str,
     contract_address: &str,
@@ -1484,6 +1492,7 @@ fn resolve_alias_via_service(
         Err(err) => Err(map_alias_error(err)),
     }
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_account_alias_label_with_catalog(
     alias_input: &str,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1503,6 +1512,7 @@ fn parse_account_alias_label_with_catalog(
     Ok((canonical, alias_label))
 }
 #[derive(Clone, Debug)]
+#[cfg(any(feature = "app_api", test))]
 struct LiveResolvedAccountAlias {
     canonical: String,
     label: AccountAlias,
@@ -1535,6 +1545,7 @@ fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
         }
     }
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1569,6 +1580,7 @@ fn parse_account_alias_label_with_live_state(
         resolved,
     })
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_exact_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1721,6 +1733,7 @@ fn parse_exact_internal_asset_scope_query(
     let scope = parse_exact_asset_balance_scope_literal(&canonical)?;
     Ok((scope, canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn validate_exact_alias_lookup_filters(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -1770,6 +1783,7 @@ fn validate_exact_alias_lookup_filters(
     }
     Ok(dataspace_id)
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_label_on_chain(
     app: &SharedAppState,
     canonical: String,
@@ -1786,6 +1800,7 @@ fn resolve_alias_label_on_chain(
     .map_err(live_dataspace_resolution_error)?
     .map(|account_id| (canonical, account_id, "active_sns")))
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1841,6 +1856,7 @@ fn resolve_alias_index_on_chain(
     }
     Ok(None)
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_index_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1982,6 +1998,7 @@ fn resolve_contract_alias_on_chain(
         dataspace_alias,
     )))
 }
+#[cfg(any(feature = "app_api", test))]
 fn lookup_aliases_by_account_on_chain(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -2037,6 +2054,7 @@ fn lookup_aliases_by_account_on_chain(
     }
     Ok(Some((canonical_account_id, exact_items)))
 }
+#[cfg(any(feature = "app_api", test))]
 fn lookup_aliases_by_account_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2061,6 +2079,7 @@ fn lookup_aliases_by_account_on_route(
             .collect(),
     )))
 }
+#[cfg(any(feature = "app_api", test))]
 fn account_alias_not_found_response(alias: &str) -> AxResponse {
     let envelope = ErrorEnvelope::new(
         iroha_torii_shared::aliases::ACCOUNT_ALIAS_NOT_FOUND_CODE,
@@ -2074,6 +2093,7 @@ fn account_alias_not_found_response(alias: &str) -> AxResponse {
     });
     (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
 }
+#[cfg(any(feature = "app_api", test))]
 fn account_aliases_by_account_not_found_response(
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> AxResponse {
@@ -2093,6 +2113,7 @@ fn account_aliases_by_account_not_found_response(
     });
     (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2107,6 +2128,7 @@ fn execute_alias_resolve_local_read(
     }
     Ok(account_alias_not_found_response(&alias.canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_unrouted_local_read(
     app: &SharedAppState,
     canonical: String,
@@ -2120,6 +2142,7 @@ fn execute_alias_resolve_unrouted_local_read(
     }
     Ok(account_alias_not_found_response(&canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_index_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2133,6 +2156,7 @@ fn execute_alias_resolve_index_local_read(
     }
     Ok(StatusCode::NOT_FOUND.into_response())
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_lookup_by_account_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -6379,7 +6403,7 @@ pub(crate) struct QueryAdmissionPermit {
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl QueryAdmissionPermit {
-    #[cfg(all(test, feature = "app_api"))]
+    #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
         self
@@ -13615,7 +13639,7 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app
         .sumeragi
         .as_ref()
-        .is_some_and(|sumeragi| !sumeragi.ready())
+        .is_none_or(|sumeragi| !sumeragi.ready())
     {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -17161,7 +17185,7 @@ fn torii_proxy_remaining_budget(
 fn validate_torii_proxy_deadline(deadline_unix_ms: u64) -> Result<Duration, &'static str> {
     torii_proxy_remaining_budget(deadline_unix_ms, torii_proxy_now_unix_ms()?)
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "connect"))]
 fn torii_proxy_test_deadline_unix_ms() -> u64 {
     torii_proxy_now_unix_ms()
         .expect("test clock must be representable as Unix milliseconds")
@@ -17184,13 +17208,7 @@ fn forwarded_torii_proxy_request_owned(
     request.hop_count = request.hop_count.saturating_add(1);
     request
 }
-#[cfg(test)]
-fn forwarded_torii_proxy_request(
-    request: &ToriiProxyRequestV1,
-    local_peer_id: &PeerId,
-) -> ToriiProxyRequestV1 {
-    forwarded_torii_proxy_request_owned(request.clone(), local_peer_id)
-}
+
 fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-routed-by"),
@@ -18653,6 +18671,27 @@ include!("torii_app_routed_read_collect.rs");
 include!("torii_app_routed_read_merge.rs");
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_route_collect.rs");
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
+fn torii_read_fanout_request(
+    endpoint: ToriiReadEndpointV1,
+    route_scope: ToriiFanoutRouteScopeV1,
+    merge: ToriiReadFanoutMergeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+    response_format: ToriiProxyResponseFormatV1,
+) -> ToriiReadFanoutProxyRequestV1 {
+    ToriiReadFanoutProxyRequestV1 {
+        endpoint,
+        route_scope,
+        merge,
+        path_args,
+        query_string,
+        body,
+        response_format,
+    }
+}
+
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_execute.rs");
 #[cfg(test)]
@@ -18733,11 +18772,9 @@ async fn execute_incoming_torii_signed_query_route_scan(
             Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
         };
     let routing_decision: RoutingDecision = expected_route.into();
-    if let Err(response) =
-        validate_proxy_signed_query_route(&request.authority, &authorized_routes, routing_decision)
-    {
-        return hold_query_fanout_memory_in_response_body(response, permit);
-    }
+    // Scope authorization above remains mandatory. Diagnose a stale ingress hint
+    // before comparing it with the active route projection, which deliberately
+    // excludes retired and inactive lanes. An active unauthorized hint still refuses.
     let routing_decision = match validate_incoming_read_proxy_route(
         app,
         routing_decision,
@@ -18746,6 +18783,11 @@ async fn execute_incoming_torii_signed_query_route_scan(
         Ok(route) => route,
         Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
     };
+    if let Err(response) =
+        validate_proxy_signed_query_route(&request.authority, &authorized_routes, routing_decision)
+    {
+        return hold_query_fanout_memory_in_response_body(response, permit);
+    }
     let envelope = match exact_query_fanout_envelope(
         app.query_fanout_working_set_bytes,
         query_bytes.len(),
@@ -19520,7 +19562,7 @@ fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Respo
     );
     response
 }
-#[cfg(feature = "app_api")]
+#[cfg(any(feature = "app_api", test))]
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
     let status = error.status_code();
     let envelope = match error {
@@ -20073,23 +20115,7 @@ async fn execute_torii_proxy_request_via_peer(
         }
     }
 }
-#[cfg(test)]
-#[cfg(feature = "connect")]
-async fn execute_torii_proxy_request_via_http_bridge(
-    app: &SharedAppState,
-    target_peer_id: PeerId,
-    torii_url: String,
-    request: ToriiProxyRequestV1,
-) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
-    let request = SharedToriiProxyAttemptRequest::new(
-        request,
-        app.torii_proxy_http_ingress_envelope
-            .forwarding_transient_bytes,
-    )
-    .map_err(ToriiProxyAttemptError::before_dispatch)?;
-    execute_torii_proxy_request_via_http_bridge_shared(app, target_peer_id, torii_url, request)
-        .await
-}
+
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_http_bridge_shared(
     app: &SharedAppState,
@@ -31447,17 +31473,21 @@ fn parse_connect_ws_query(
     }
     Ok(routing::ConnectWsQuery { sid, role })
 }
+#[cfg(feature = "connect")]
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct ConnectWsToken {
     token: String,
     protocol: Option<String>,
 }
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct ProtocolToken {
     token: String,
     protocol: String,
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
@@ -31496,6 +31526,7 @@ fn resolve_connect_ws_token(
     )
         .into_response())
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
@@ -31545,6 +31576,7 @@ fn parse_authorization_token(
     }
     Ok(Some(token.to_owned()))
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
@@ -31578,6 +31610,7 @@ fn parse_protocol_token(
     }
     Ok(None)
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
@@ -34811,6 +34844,7 @@ fn onboarding_account_literal(account: &AccountId) -> Result<String, Error> {
         ))),
     })
 }
+#[cfg(feature = "app_api")]
 fn validate_account_onboarding_readiness(
     state: &CoreState,
     signer: &AccountOnboardingSigner,
@@ -37508,91 +37542,113 @@ where
     }
 }
 
-macro_rules! catalog_route_policy {
-    (canonical_account_delete($handler:path, $state:ident, $auth_limit:expr)) => {
+// Route-policy bodies compile with their actual route owners. Shared protocol
+// policies remain available in every build, including the disabled application API.
+macro_rules! define_catalog_route_policies {
+    ($( $(#[$guard:meta])* $policy:ident $pattern:tt => $body:tt; )*) => {
+        $($(#[$guard])* macro_rules! $policy { $pattern => $body; })*
+    };
+}
+
+define_catalog_route_policies! {
+    #[cfg(feature = "app_api")]
+    canonical_account_delete ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_delete($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
+    canonical_account_get ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_proof_get($handler:path, $state:ident)) => {
+    #[cfg(feature = "app_api")]
+    canonical_account_proof_get ($handler:path, $state:ident) => {
         catalog_get($handler).authenticated_canonical_account_proof_body($state.clone(), 0)
     };
-    (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    canonical_account_post ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_proof_post($handler:path, $state:ident, $proof_limit:expr)) => {
+    canonical_account_proof_post ($handler:path, $state:ident, $proof_limit:expr) => {
         catalog_post($handler)
             .authenticated_canonical_account_proof_body($state.clone(), $proof_limit)
     };
-    (canonical_signature_delete($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    canonical_signature_delete ($handler:path) => {
         catalog_delete($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (canonical_signature_get($handler:path)) => {
+    canonical_signature_get ($handler:path) => {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (optional_canonical_signature_get($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    optional_canonical_signature_get ($handler:path) => {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
-    (canonical_signature_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    canonical_signature_post ($handler:path) => {
         catalog_post($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (canonical_signed_post($handler:path)) => {
+    canonical_signed_post ($handler:path) => {
         catalog_post($handler).authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (layered_canonical_account_post($handler:path, $state:ident, $layer:ident, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_account_post ($handler:path, $state:ident, $layer:ident, $auth_limit:expr) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (layered_canonical_signature_get($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signature_get ($handler:path, $layer:ident) => {
         catalog_get($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (layered_canonical_signature_post($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signature_post ($handler:path, $layer:ident) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (layered_canonical_signed_post($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signed_post ($handler:path, $layer:ident) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (layered_public_get($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_public_get ($handler:path, $layer:ident) => {
         catalog_get($handler).layer($layer.clone())
     };
-    (limited_canonical_account_get($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_canonical_account_get ($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($body_limit))
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (limited_canonical_account_post($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+    limited_canonical_account_post ($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($body_limit))
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (limited_canonical_signature_post($handler:path, $limit:expr)) => {
+    limited_canonical_signature_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (limited_optional_canonical_signature_post($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_optional_canonical_signature_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
-    (limited_canonical_signed_post($handler:path, $limit:expr)) => {
+    limited_canonical_signed_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (limited_hardened_canonical_signature_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_hardened_canonical_signature_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .layer(axum::middleware::from_fn(
@@ -37600,77 +37656,89 @@ macro_rules! catalog_route_policy {
             ))
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (limited_operator_get($handler:path, $state:ident, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_operator_get ($handler:path, $state:ident, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_operator($state.clone())
     };
-    (limited_operator_post($handler:path, $state:ident, $limit:expr)) => {
+    limited_operator_post ($handler:path, $state:ident, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_operator($state.clone())
     };
-    (limited_protocol_handshake_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_protocol_handshake_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (limited_protocol_handshake_post($handler:path, $limit:expr)) => {
+    limited_protocol_handshake_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (limited_public_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_public_get ($handler:path, $limit:expr) => {
         catalog_get($handler).layer(DefaultBodyLimit::max($limit))
     };
-    (limited_unauthenticated_get($handler:path, $limit:expr)) => {
+    limited_unauthenticated_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .unauthenticated()
     };
-    (limited_public_post($handler:path, $limit:expr)) => {
+    limited_public_post ($handler:path, $limit:expr) => {
         catalog_post($handler).layer(DefaultBodyLimit::max($limit))
     };
-    (private_root_owner_get($handler:path)) => {
+    private_root_owner_get ($handler:path) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::PrivateRootOwnerToken)
     };
-    (onboarding_get($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    onboarding_get ($handler:path) => {
         catalog_get($handler).authenticated_onboarding()
     };
-    (onboarding_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    onboarding_post ($handler:path) => {
         catalog_post($handler).authenticated_onboarding()
     };
-    (operator_credential_post($handler:path)) => {
+    operator_credential_post ($handler:path) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max(
                 operator_auth::CREDENTIAL_EXCHANGE_BODY_LIMIT,
             ))
             .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange)
     };
-    (operator_delete($handler:path, $state:ident)) => {
+    operator_delete ($handler:path, $state:ident) => {
         catalog_delete($handler).authenticated_operator($state.clone())
     };
-    (operator_get($handler:path, $state:ident)) => {
+    operator_get ($handler:path, $state:ident) => {
         catalog_get($handler).authenticated_operator($state.clone())
     };
-    (operator_post($handler:path, $state:ident)) => {
+    operator_post ($handler:path, $state:ident) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    protocol_handshake_post ($handler:path) => {
         catalog_post($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (public_get($handler:path)) => {
+    public_get ($handler:path) => {
         catalog_get($handler)
     };
-    (public_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    public_post ($handler:path) => {
         catalog_post($handler)
     };
-    (unauthenticated_any($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    unauthenticated_any ($handler:path) => {
         catalog_any($handler).unauthenticated()
     };
-    (unauthenticated_get($handler:path)) => {
+    unauthenticated_get ($handler:path) => {
         catalog_get($handler).unauthenticated()
     };
+}
+
+macro_rules! catalog_route_policy {
+    ($policy:ident $arguments:tt) => { $policy! $arguments };
 }
 
 macro_rules! mount_catalog_route_rows {
@@ -38824,10 +38892,6 @@ impl Torii {
                 ))
                 .authenticated_operator(app_state),
         );
-    }
-    #[cfg(not(feature = "connect"))]
-    fn add_connect_routes(&self, _builder: &mut RouterBuilder) {
-        let _ = self;
     }
     /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
     fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
@@ -44642,7 +44706,7 @@ use iroha_crypto::SignatureOf;
 use iroha_data_model::account::AccountAddress;
 #[cfg(test)]
 use iroha_data_model::nexus::FeeSponsorProgram;
-#[cfg(all(test, feature = "app_api"))]
+#[cfg(test)]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {
     fn into_envelope(self) -> ErrorEnvelope {

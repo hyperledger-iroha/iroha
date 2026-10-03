@@ -15515,7 +15515,7 @@ impl AccountClient {
     ) -> Result<RetailFeeStatusResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("status");
@@ -15605,7 +15605,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("receipts");
@@ -15644,7 +15644,7 @@ impl AccountClient {
     ) -> Result<RetailFeeCurrentHeadResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement")
@@ -15676,7 +15676,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement");

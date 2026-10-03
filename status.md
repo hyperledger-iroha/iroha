@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-02. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-03. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -26,19 +26,16 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-Exact finalized-carrier retries now authenticate the original execution and
-acknowledge admission without requeueing or charging again. The embedded MCP
-descriptor size drift that prevented daemon startup is corrected with a bounded
-loader and compile-time guard. A fixed local daemon/harness candidate completes
-the Nexus smoke workload's financial, signed RS16 finality and exact-retry checks
-across all 16 peers and preserves the settlement through all 16 restarts. Its
-settlement takes 59.17 seconds. The campaign validator now recognizes the exact
-retry observer's canonical phase label and verifies the retained evidence.
-The rebuilt disjoint-committee workload also preserves progress while one lane
-stops and after every peer restarts, covering the applied-body pruning repair.
-Ten fresh paid-settlement runs also pass on that fixed candidate, each with 16
-signed RS16 observations, exact-retry checks and finality at height 9. Qualification
-of the combined source and the settlement latency target remain open.
+The proxied pipeline-status JSON accounting mismatch is repaired. The preceding
+integrated candidate passed repeated paid settlements, sixteen-peer settlement with
+restart, and disjoint lane isolation with restart. The latest paid 4→7→4 run certified
+the return boundary at height 72 after all-peer restart, but the next paid transaction
+remained queued and height 73 never applied. The transition, signed RS16
+loss/withholding and release qualification remain open. Combined Core component
+checks pass; the repaired Rust SDK passes all 954 unit controls and strict lint.
+Core strict lint and fresh qualification of the merged source remain open. Exact
+finalized-carrier retries retain original execution without requeueing or charging
+again; changed source requires fresh evidence.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
@@ -173,12 +170,10 @@ Vega timing requires an uncontended host and remains unqualified.
 
 Fresh canonical fixture generation, native SDK consumers, Swift/Android packages,
 workspace checks and four-validator tests still require one integrated candidate.
-Fresh network artifacts compile, but all four selected scenarios fail Torii
-startup on an alias-index authentication-marker mismatch. The correction preserves
-the existing required signature policy and passes all ten native alias-route
-controls. The next daemon build finds a missing type qualification in account
-removal; its one-line repair is applied. Fresh daemon/harness and four-validator
-reruns remain required.
+Native alias-route authentication and account-removal compilation repairs have
+scoped coverage. The rebuilt network now reaches the paid workload; its current
+pipeline-status accounting failure is described above. Fresh combined-source
+SDK and four-validator reruns remain required.
 Complete cryptographic/side-channel, physical-device and signed release evidence
 remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact boundaries.
 

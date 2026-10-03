@@ -223,96 +223,9 @@ pub fn read_authenticated_execution(
                     .map_err(|_| ChainReadError::NotCommitted { height: current })?,
             )
             .ok_or(ChainReadError::NotCommitted { height: current })?;
-        let storage = |error: crate::kura::Error| {
-            let rejected = |error: crate::kura::Error| NativeExecutionReadError::Storage {
-                height: current,
-                reason: error.to_string(),
-            };
-            let attempt = match error {
-                crate::kura::Error::NoritoFrame(error) => {
-                    norito_decode_attempt_error(error, |error| {
-                        rejected(crate::kura::Error::NoritoFrame(error))
-                    })
-                }
-                crate::kura::Error::VersionedCodec(error) => {
-                    crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                        rejected(crate::kura::Error::VersionedCodec(error))
-                    })
-                }
-                completed => ExecutionAttemptError::Rejected(rejected(completed)),
-            };
-            match attempt {
-                ExecutionAttemptError::Rejected(error) => error,
-                ExecutionAttemptError::Deferred(local) => NativeExecutionReadError::Deferred(local),
-            }
-        };
-        let source = kura
-            .native_frame_read(current, expected)
-            .map_err(storage)?
-            .ok_or(ChainReadError::NotInView { height: current })?;
-        let length = source.wire_len();
-        if current == height && length != limits.admitted_target_wire_bytes {
-            return Err(NativeExecutionReadError::Storage {
-                height: current,
-                reason: "native target length changed after consumer admission".into(),
-            });
-        }
-        admit_source(
-            NativeExecutionReadResource::FrameWireBytes,
-            length,
-            limits
-                .max_frame_wire_bytes
-                .min(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES),
-        )?;
-        let next = total
-            .checked_add(length)
-            .ok_or(NativeExecutionReadError::Capacity {
-                resource: NativeExecutionReadResource::SourceWireBytes,
-                actual: u64::MAX,
-                limit: limits.max_source_wire_bytes,
-            })?;
-        admit_source(
-            NativeExecutionReadResource::SourceWireBytes,
-            next,
-            limits.max_source_wire_bytes,
-        )?;
-        let wire = source
-            .read(length)
-            .map_err(storage)?
-            .ok_or(ChainReadError::NotInView { height: current })?;
-        let block =
-            iroha_data_model::block::decode_framed_signed_block(&wire).map_err(|error| {
-                match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                    NativeExecutionReadError::Storage {
-                        height: current,
-                        reason: error.to_string(),
-                    }
-                }) {
-                    ExecutionAttemptError::Rejected(error) => error,
-                    ExecutionAttemptError::Deferred(local) => {
-                        NativeExecutionReadError::Deferred(local)
-                    }
-                }
-            })?;
-        if block.header().height().get() != current || block.hash() != expected {
-            return Err(ChainReadError::NotInView { height: current }.into());
-        }
-        let identity =
-            block
-                .canonical_wire_identity()
-                .map_err(|error| NativeExecutionReadError::Storage {
-                    height: current,
-                    reason: error.to_string(),
-                })?;
-        if identity != (length, Hash::new(&wire)) {
-            return Err(ChainReadError::Malformed {
-                height: current,
-                reason: "stored native execution is not the exact canonical frame".into(),
-            }
-            .into());
-        }
+        let (block, wire, next) =
+            read_admitted_execution_frame(kura, current, expected, height, limits, total)?;
         total = next;
-        let block = Arc::new(block);
         if current == GENESIS_HEIGHT {
             prefix = Some(CertifiedPrefix::new(chain_id, network, block)?);
             if height == GENESIS_HEIGHT {
@@ -320,24 +233,17 @@ pub fn read_authenticated_execution(
             }
             continue;
         }
-        let (certified, genesis) = prefix
-            .as_mut()
-            .expect("genesis verified first")
-            .push(block)?
-            .into_parts();
-        if current == end {
-            let (authority, wire) = if height == GENESIS_HEIGHT {
-                (
-                    genesis
-                        .ok_or_else(|| ChainReadError::Malformed {
-                            height,
-                            reason: "H2 did not supply the genesis execution anchor".into(),
-                        })?
-                        .into_authenticated_execution(),
-                    retained_wire.take().expect("original genesis wire"),
-                )
+        let authority = advance_execution_read_prefix(
+            prefix.as_mut().expect("genesis verified first"),
+            block,
+            height,
+            current == end,
+        )?;
+        if let Some(authority) = authority {
+            let wire = if height == GENESIS_HEIGHT {
+                retained_wire.take().expect("original genesis wire")
             } else {
-                (certified.into_authenticated_execution()?, wire)
+                wire
             };
             // TODO: physically admit decoder/authority graphs and retained wire from the query
             // owner's original pool. Logical source ceilings are not that reservation.
@@ -350,6 +256,142 @@ pub fn read_authenticated_execution(
         }
     }
     unreachable!("the admitted prefix always includes H2")
+}
+
+// Decode only the original admitted physical frame. This compiler boundary keeps
+// its full value temporary off the caller's active prefix/result decoder stack.
+#[inline(never)]
+fn read_admitted_execution_frame(
+    kura: &Kura,
+    current: u64,
+    expected: HashOf<IrohaHeader>,
+    height: u64,
+    limits: NativeExecutionReadLimits,
+    total: u64,
+) -> Result<(Arc<SignedBlock>, Vec<u8>, u64), NativeExecutionReadError> {
+    let storage = |error: crate::kura::Error| {
+        let rejected = |error: crate::kura::Error| NativeExecutionReadError::Storage {
+            height: current,
+            reason: error.to_string(),
+        };
+        let attempt = match error {
+            crate::kura::Error::NoritoFrame(error) => norito_decode_attempt_error(error, |error| {
+                rejected(crate::kura::Error::NoritoFrame(error))
+            }),
+            crate::kura::Error::VersionedCodec(error) => {
+                crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+                    rejected(crate::kura::Error::VersionedCodec(error))
+                })
+            }
+            completed => ExecutionAttemptError::Rejected(rejected(completed)),
+        };
+        match attempt {
+            ExecutionAttemptError::Rejected(error) => error,
+            ExecutionAttemptError::Deferred(local) => NativeExecutionReadError::Deferred(local),
+        }
+    };
+    let source = kura
+        .native_frame_read(current, expected)
+        .map_err(storage)?
+        .ok_or(ChainReadError::NotInView { height: current })?;
+    let length = source.wire_len();
+    if current == height && length != limits.admitted_target_wire_bytes {
+        return Err(NativeExecutionReadError::Storage {
+            height: current,
+            reason: "native target length changed after consumer admission".into(),
+        });
+    }
+    admit_source(
+        NativeExecutionReadResource::FrameWireBytes,
+        length,
+        limits
+            .max_frame_wire_bytes
+            .min(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES),
+    )?;
+    let next = total
+        .checked_add(length)
+        .ok_or(NativeExecutionReadError::Capacity {
+            resource: NativeExecutionReadResource::SourceWireBytes,
+            actual: u64::MAX,
+            limit: limits.max_source_wire_bytes,
+        })?;
+    admit_source(
+        NativeExecutionReadResource::SourceWireBytes,
+        next,
+        limits.max_source_wire_bytes,
+    )?;
+    let wire = source
+        .read(length)
+        .map_err(storage)?
+        .ok_or(ChainReadError::NotInView { height: current })?;
+    let block = iroha_data_model::block::decode_framed_signed_block(&wire).map_err(|error| {
+        match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+            NativeExecutionReadError::Storage {
+                height: current,
+                reason: error.to_string(),
+            }
+        }) {
+            ExecutionAttemptError::Rejected(error) => error,
+            ExecutionAttemptError::Deferred(local) => NativeExecutionReadError::Deferred(local),
+        }
+    })?;
+    if block.header().height().get() != current || block.hash() != expected {
+        return Err(ChainReadError::NotInView { height: current }.into());
+    }
+    let identity =
+        block
+            .canonical_wire_identity()
+            .map_err(|error| NativeExecutionReadError::Storage {
+                height: current,
+                reason: error.to_string(),
+            })?;
+    if identity != (length, Hash::new(&wire)) {
+        return Err(ChainReadError::Malformed {
+            height: current,
+            reason: "stored native execution is not the exact canonical frame".into(),
+        }
+        .into());
+    }
+    Ok((Arc::new(block), wire, next))
+}
+
+// Borrow the verified cursor while its original complete push validates this frame.
+// The large unused pair is consumed after decoding, never on the active caller stack.
+#[inline(never)]
+fn advance_execution_read_prefix(
+    prefix: &mut CertifiedPrefix,
+    block: Arc<SignedBlock>,
+    requested_height: u64,
+    at_end: bool,
+) -> Result<Option<AuthenticatedExecutionBlock>, NativeExecutionReadError> {
+    prefix
+        .push_with_finish(block, None, |step| {
+            select_execution_read_receipt(step, requested_height, at_end)
+        })?
+        .map_err(Into::into)
+}
+
+#[inline(never)]
+fn select_execution_read_receipt(
+    step: CertifiedPrefixStep,
+    requested_height: u64,
+    at_end: bool,
+) -> Result<Option<AuthenticatedExecutionBlock>, ChainReadError> {
+    if !at_end {
+        return Ok(None);
+    }
+    let (certified, genesis) = step.into_parts();
+    let authority = if requested_height == GENESIS_HEIGHT {
+        genesis
+            .ok_or_else(|| ChainReadError::Malformed {
+                height: requested_height,
+                reason: "H2 did not supply the genesis execution anchor".into(),
+            })?
+            .into_authenticated_execution()
+    } else {
+        certified.into_authenticated_execution()?
+    };
+    Ok(Some(authority))
 }
 
 #[cfg(test)]
@@ -578,6 +620,86 @@ mod tests {
             ))
         ));
     }
+    #[test]
+    fn staged_native_h3_read_preserves_complete_prefix_and_exact_source_ceilings() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let frames = (1..=3)
+            .map(|height| chain.committed(height).block().encode_wire().unwrap())
+            .collect::<Vec<_>>();
+        let total = frames.iter().map(|wire| wire.len() as u64).sum::<u64>();
+        let maximum = frames.iter().map(|wire| wire.len() as u64).max().unwrap();
+        let limits = NativeExecutionReadLimits {
+            admitted_target_wire_bytes: frames[2].len() as u64,
+            max_source_blocks: 3,
+            max_source_wire_bytes: total,
+            max_frame_wire_bytes: maximum,
+        };
+        let read = read_authenticated_execution(
+            chain.kura(),
+            view.chain_id(),
+            *view.network_id(),
+            view.block_hashes(),
+            3,
+            limits,
+        )
+        .unwrap();
+        let original = chain.committed(3);
+        assert_eq!(read.wire, frames[2]);
+        assert_eq!(read.authority.block().encode_wire().unwrap(), frames[2]);
+        assert_eq!(
+            read.authority.committed().block_hash(),
+            original.block_hash()
+        );
+        assert_eq!(read.authority.committed().core_hash(), original.core_hash());
+        assert_eq!(read.authority.committed().result(), original.result());
+        assert_eq!(read.source_blocks, 3);
+        assert_eq!(read.source_wire_bytes, total);
+        for (limited, resource) in [
+            (
+                NativeExecutionReadLimits {
+                    max_source_blocks: 2,
+                    ..limits
+                },
+                NativeExecutionReadResource::SourceBlocks,
+            ),
+            (
+                NativeExecutionReadLimits {
+                    max_source_wire_bytes: total - 1,
+                    ..limits
+                },
+                NativeExecutionReadResource::SourceWireBytes,
+            ),
+            (
+                NativeExecutionReadLimits {
+                    max_frame_wire_bytes: maximum - 1,
+                    ..limits
+                },
+                NativeExecutionReadResource::FrameWireBytes,
+            ),
+        ] {
+            assert!(matches!(
+                read_authenticated_execution(chain.kura(), view.chain_id(), *view.network_id(), view.block_hashes(), 3, limited),
+                Err(NativeExecutionReadError::Capacity { resource: actual, .. }) if actual == resource
+            ));
+        }
+        // The exact H3 target remains unchanged: both earlier source identities are
+        // independently mandatory, even if the target and complete budgets still agree.
+        for changed_height in [1, 2] {
+            let mut cut = view.block_hashes().iter().copied().collect::<Vec<_>>();
+            cut[changed_height - 1] = HashOf::from_untyped_unchecked(Hash::new(
+                b"substituted intermediate execution source",
+            ));
+            assert!(matches!(
+                read_authenticated_execution(chain.kura(), view.chain_id(), *view.network_id(), &cut, 3, limits),
+                Err(NativeExecutionReadError::Storage { height, .. }) if height == changed_height as u64
+            ));
+        }
+    }
+
     #[test]
     fn target_length_substitution_is_refused_under_an_otherwise_sufficient_budget() {
         let mut chain =

@@ -1555,18 +1555,21 @@ pub struct RecordSoranetPrivacyShareDto {
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
 (crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::AssetAliasResolveRequestDto")]
+#[cfg(any(feature = "app_api", test))]
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/contracts/aliases/resolve`.
+#[cfg(any(feature = "app_api", test))]
 pub struct ContractAliasResolveRequestDto {
     /// Contract alias literal in `name::domain.dataspace` or `name::dataspace` form.
     pub contract_alias: String,
@@ -1574,6 +1577,7 @@ pub struct ContractAliasResolveRequestDto {
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Authenticated request accepted by `/v1/contracts/deployment-state`.
+#[cfg(any(feature = "app_api", test))]
 pub struct ContractDeploymentStateRequestDto {
     /// Canonical I105 account that will authorize the deployment transaction.
     pub authority: String,
@@ -1583,6 +1587,7 @@ pub struct ContractDeploymentStateRequestDto {
 ( Clone, Debug, PartialEq, Eq, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// One internally consistent smart-contract deployment CAS snapshot.
+#[cfg(any(feature = "app_api", test))]
 pub struct ContractDeploymentStateResponseDto {
     /// Canonical I105 deployment authority.
     pub authority: String,
@@ -2694,11 +2699,13 @@ fn kaigi_domain_counters(
 derived_items! {
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasResolveIndexRequestDto {
     pub index: u64,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasLookupByAccountRequestDto {
     pub account_id: String,
     #[norito(default)]
@@ -2709,6 +2716,7 @@ pub struct AliasLookupByAccountRequestDto {
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/retail/recipients/lookup`.
+#[cfg(any(feature = "app_api", test))]
 pub struct RetailRecipientLookupRequestDto {
     /// Canonical recipient account id, encoded as an I105 literal.
     pub account_id: String,
@@ -2718,12 +2726,14 @@ pub struct RetailRecipientLookupRequestDto {
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/retail/recipients/route`.
+#[cfg(any(feature = "app_api", test))]
 pub struct RetailRecipientRouteRequestDto {
     /// Canonical recipient account id, encoded as an I105 literal.
     pub account_id: String,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Privacy-minimized response returned by `/v1/retail/recipients/route`.
+#[cfg(any(feature = "app_api", test))]
 pub struct RetailRecipientRouteResponseDto {
     /// Canonical recipient account id supplied in the request.
     pub account_id: String,
@@ -2734,6 +2744,7 @@ pub struct RetailRecipientRouteResponseDto {
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasResolveResponseDto {
     pub alias: String,
     pub account_id: String,
@@ -2744,6 +2755,7 @@ pub struct AliasResolveResponseDto {
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasResolveIndexResponseDto {
     pub index: u64,
     pub alias: String,
@@ -2753,6 +2765,7 @@ pub struct AliasResolveIndexResponseDto {
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasLookupByAccountItemDto {
     pub alias: String,
     pub dataspace: String,
@@ -2762,6 +2775,7 @@ pub struct AliasLookupByAccountItemDto {
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
+#[cfg(any(feature = "app_api", test))]
 pub struct AliasLookupByAccountResponseDto {
     pub account_id: String,
     pub total: u64,
@@ -2801,6 +2815,7 @@ pub struct AccountAliasLeaseListResponseDto {
     pub items: Vec<AccountAliasLeaseDto>,
 }
 ( Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
+#[cfg(any(feature = "app_api", test))]
 pub struct AssetAliasBindingDto {
     pub alias: String,
     pub status: String,
@@ -2811,6 +2826,7 @@ pub struct AssetAliasBindingDto {
     pub bound_at_ms: u64,
 }
 }
+#[cfg(any(feature = "app_api", test))]
 fn asset_alias_binding_status_label(status: AssetDefinitionAliasLeaseStatus) -> &'static str {
     match status {
         AssetDefinitionAliasLeaseStatus::Permanent => "permanent",
@@ -2819,6 +2835,7 @@ fn asset_alias_binding_status_label(status: AssetDefinitionAliasLeaseStatus) -> 
         AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     }
 }
+#[cfg(any(feature = "app_api", test))]
 pub(crate) fn asset_alias_binding_dto(
     binding: &AssetDefinitionAliasBindingRecord,
     now_ms: u64,
@@ -2835,6 +2852,7 @@ derived_items! {
 ( Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Current on-chain lease metadata for a contract alias binding.
+#[cfg(any(feature = "app_api", test))]
 pub struct ContractAliasBindingDto {
     /// Canonical contract alias literal.
     pub alias: String,
@@ -2850,6 +2868,7 @@ pub struct ContractAliasBindingDto {
     pub bound_at_ms: u64,
 }
 }
+#[cfg(any(feature = "app_api", test))]
 fn contract_alias_binding_status_label(status: ContractAliasLeaseStatus) -> &'static str {
     match status {
         ContractAliasLeaseStatus::Permanent => "permanent",
@@ -2858,6 +2877,7 @@ fn contract_alias_binding_status_label(status: ContractAliasLeaseStatus) -> &'st
         ContractAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     }
 }
+#[cfg(any(feature = "app_api", test))]
 pub(crate) fn contract_alias_binding_dto(
     binding: &ContractAliasBindingRecord,
     now_ms: u64,
@@ -2872,6 +2892,7 @@ pub(crate) fn contract_alias_binding_dto(
 }
 derived_items! {
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
+#[cfg(any(feature = "app_api", test))]
 pub struct AssetAliasResolveResponseDto {
     pub alias: String,
     pub asset_definition_id: String,
@@ -2888,6 +2909,7 @@ pub struct AssetAliasResolveResponseDto {
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Response payload returned by `/v1/contracts/aliases/resolve`.
+#[cfg(any(feature = "app_api", test))]
 pub struct ContractAliasResolveResponseDto {
     /// Canonical contract alias literal that was resolved.
     pub contract_alias: String,
@@ -3576,7 +3598,7 @@ impl MaybeTelemetry {
         MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
     }
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 use crate::filter::FieldPath;
 #[cfg(feature = "app_api")]
 use crate::filter::{FilterExpr, QueryEnvelope, Selector};
@@ -8282,6 +8304,69 @@ fn grant_account_alias_resolve_for_test(
     block
         .commit_world_overlay_for_testing()
         .expect("commit account-alias resolve permission");
+}
+/// Exercise the real executor alias-permission boundary before a public canonical-ID read.
+#[cfg(all(test, feature = "app_api"))]
+pub(crate) fn resolve_account_alias_with_exact_permission_for_test(
+    state: &Arc<CoreState>,
+    authority: &AccountId,
+    alias_literal: &str,
+) -> AccountId {
+    use iroha_core::{
+        query::snapshot::{SnapshotQueryError, run_on_snapshot},
+        smartcontracts::isi::query::QueryLimits,
+    };
+    use iroha_data_model::query::{QueryRequest, QueryResponse, SingularQueryOutputBox};
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let alias = account::rekey::AccountAlias::from_literal(alias_literal, &catalog)
+        .expect("canonical fixture alias");
+    let request = || {
+        QueryRequest::Singular(
+            iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias.clone())
+                .into(),
+        )
+    };
+    let store = iroha_core::query::store::LiveQueryStore::start_test();
+    let denied = run_on_snapshot(state, &store, authority, request(), QueryLimits::default())
+        .expect_err("registered identity must not substitute for exact alias permission");
+    assert!(
+        matches!(
+            denied,
+            SnapshotQueryError::Validation(ValidationFail::NotPermitted(_))
+        ),
+        "original alias permission refusal: {denied:?}"
+    );
+    // The alias owner keeps its provisioned exact grant. An independent resolver
+    // receives only the same alias scope, without widening to its domain or dataspace.
+    let scope = iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(
+        iroha_data_model::alias_setup::ResolvedAccountAliasV1::resolve_catalog(
+            alias_literal,
+            &catalog,
+        )
+        .expect("canonical exact alias grant"),
+    );
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::account::CanResolveAccountAlias { scope }.into();
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    iroha_core::smartcontracts::Execute::execute(
+        iroha_data_model::isi::Grant::account_permission(permission, authority.clone()),
+        authority,
+        &mut tx,
+    )
+    .expect("grant original exact alias permission to independent resolver");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit exact alias permission");
+    let resolved = run_on_snapshot(state, &store, authority, request(), QueryLimits::default())
+        .expect("exact alias grant must authorize original executor resolution");
+    let QueryResponse::Singular(SingularQueryOutputBox::Account(account)) = resolved else {
+        panic!("alias query must return its original account");
+    };
+    account.id().clone()
 }
 #[cfg(all(test, feature = "app_api"))]
 mod zk_roots_selector_tests {
@@ -16137,6 +16222,21 @@ fn contract_vm_attempt_error<E>(
     }
 }
 
+
+// A projection refusal must stop local execution before the guest runs. Preserve the
+// original deferred owner while mapping only a completed source rejection to the DTO.
+fn hydrate_contract_vrf_epoch_seeds<
+    E,
+    QS: Default + iroha_core::smartcontracts::ivm::host::QueryStateAccess,
+>(
+    host: &mut iroha_core::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    state: &impl iroha_core::state::StateReadOnly,
+    rejected: impl FnOnce(String) -> E,
+) -> std::result::Result<(), iroha_core::execution_attempt::ExecutionAttemptError<E>> {
+    host.set_vrf_epoch_seeds_from_state(state)
+        .map_err(|error| error.map_rejection(rejected))
+}
+
 fn resolve_exact_contract_runtime_alias(
     world: &impl WorldReadOnly,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -16409,7 +16509,12 @@ fn execute_contract_view(
             vm_diagnostic: None,
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_state(&query_view);
+    hydrate_contract_vrf_epoch_seeds(&mut host, &query_view, |message| {
+        ContractViewExecutionError {
+            message: format!("invalid VRF epoch seed source: {message}"),
+            vm_diagnostic: None,
+        }
+    })?;
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -16617,7 +16722,15 @@ fn execute_contract_call_simulation(
             queued_instructions: Vec::new(),
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_state(&query_view);
+    hydrate_contract_vrf_epoch_seeds(&mut host, &query_view, |message| {
+        ContractCallSimulationError {
+            message: format!("invalid VRF epoch seed source: {message}"),
+            vm_diagnostic: None,
+            normalized_payload: normalized_payload.clone(),
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        }
+    })?;
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -18776,6 +18889,55 @@ mod multisig_contract_call_tests {
         drop(held);
         assert_eq!(pool.reserved_bytes(), 0);
         assert!(matches!(contract_vm_attempt_error(ivm::VMError::PermissionDenied, |error| error), ExecutionAttemptError::Rejected(ivm::VMError::PermissionDenied)));
+    }
+
+    #[test]
+    fn contract_seed_source_refusal_is_unfinished_and_retries_original_policy() {
+        use iroha_core::{
+            execution_attempt::ExecutionAttemptError,
+            smartcontracts::ivm::host::CoreHost,
+            state::{StateReadOnly, World, WorldReadOnly},
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        };
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).unwrap();
+        let view = chain.state().view();
+        let original = view.world().parameters().custom()
+            .get(&SumeragiNposParameters::parameter_id()).unwrap();
+        let bytes = original.payload().get().to_owned();
+        let prepared_cache = view.prepared_contract_cache();
+        let budget = prepared_cache.execution_budget();
+        let reserved = budget.reserved_bytes();
+        let mut host = CoreHost::new(sample_account_id());
+        let attempt = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || hydrate_contract_vrf_epoch_seeds::<(), _>(&mut host, &view, |_| {
+                panic!("unfinished seed projection became completed contract result")
+            }),
+        );
+        assert!(matches!(&attempt, Err(ExecutionAttemptError::Deferred(reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity));
+        assert_eq!(budget.reserved_bytes(), reserved);
+        assert!(matches!(contract_transport_attempt(attempt), Err(Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )
+        ))));
+        assert_eq!(original.payload().get(), &bytes);
+        let retry = hydrate_contract_vrf_epoch_seeds::<(), _>(&mut host, &view, |_| {
+            panic!("valid original source cannot become a completed rejection")
+        });
+        assert!(matches!(contract_transport_attempt(retry), Ok(Ok(()))));
+        assert_eq!(original.payload().get(), &bytes);
+        assert_eq!(budget.reserved_bytes(), reserved);
     }
 
     fn manifest_with_entrypoints(
@@ -21263,7 +21425,7 @@ mod multisig_selector_tests {
         let draft = base64::engine::general_purpose::STANDARD.decode(
             payload["transaction_payload_b64"].as_str().expect("canonical draft"),
         ).expect("decode payload");
-        let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
+        let _builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
 
     }
     fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
@@ -25513,7 +25675,7 @@ mod account_recovery_route_tests {
         ]).unwrap();
         let build_world = |record: AccountRekeyRecord| {
             let account = iroha_data_model::account::Account::new(active.clone()).build(&active);
-            let mut world = World::with([], [account], []);
+            let world = World::with([], [account], []);
             {
                 let mut block = world.block();
                 let mut transaction = block.transaction_without_telemetry(
@@ -29594,15 +29756,16 @@ mod sorafs_pin_tests {
         let query = iroha_core::query::store::LiveQueryStore::start_test();
         let key = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
         let account = dm::AccountId::new(key.public_key().clone());
-        let mut state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::with(
-                [],
-                [dm::Account::new(account.clone()).build(&account)],
-                [],
-            ),
-            kura,
-            query,
+        let mut world = iroha_core::state::World::with(
+            [],
+            [dm::Account::new(account.clone()).build(&account)],
+            [],
         );
+        crate::test_utils::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
         configure_state(&mut state);
         let state = Arc::new(state);
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -39490,7 +39653,7 @@ mod explorer_lookup_tests {
         let restricted_dataspace = DataSpaceId::new(8);
         let account = dm::Account::new(account_id.clone()).build(&account_id);
         let mut world = World::with([], [account], []);
-        crate::private_account_routing_tests::bind_fixture_root(
+        crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
@@ -39562,7 +39725,7 @@ mod explorer_lookup_tests {
             [escrow_asset],
             [],
         );
-        crate::private_account_routing_tests::bind_fixture_root(
+        crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
@@ -43267,7 +43430,11 @@ fn sumeragi_npos_diagnostics(
     let Some(params) = world
         .sumeragi_npos_parameters()
         .map_err(|error| match error {
-            ExecutionAttemptError::Deferred(_) => history_capacity_error(),
+            ExecutionAttemptError::Deferred(_) => {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                ))
+            }
             ExecutionAttemptError::Rejected(message) => {
                 Error::Query(iroha_data_model::ValidationFail::InternalError(message))
             }
@@ -44570,7 +44737,7 @@ mod validation_fee_torii_ingress_tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::{AccountId, MultisigMember, MultisigPolicy},
+        account::AccountId,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         events::{
@@ -44593,9 +44760,7 @@ mod validation_fee_torii_ingress_tests {
             ValidationFeeTreasuryPayoutBindingV1,
         },
     };
-    use iroha_executor_data_model::isi::multisig::{
-        MultisigAccountState, MultisigPropose, MultisigSpec,
-    };
+
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::topology::DataSpaceId;
@@ -44603,15 +44768,13 @@ mod validation_fee_torii_ingress_tests {
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
-    use sha2::Sha256;
+
     use std::{
-        collections::BTreeMap,
-        num::{NonZeroU16, NonZeroU64, NonZeroUsize},
+        num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::Duration,
     };
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
     const TEST_PROPOSAL_CREATED_HEIGHT: u64 = 1;
     const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 3_601;
     const TEST_POLICY_EFFECTIVE_HEIGHT: u64 = TEST_POLICY_ENACTMENT_HEIGHT + 100;
@@ -44851,7 +45014,7 @@ mod validation_fee_torii_ingress_tests {
             min_interval_ms: 60000,
             max_source_age_ms: 300000,
             max_slippage_bps: 100,
-            validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+            validator_lane_id: iroha_model_base::topology::LaneId::new(0),
             min_reward_claim_xor_minor: 1,
         }
     }
@@ -45010,9 +45173,7 @@ mod validation_fee_torii_ingress_tests {
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
         policy.ds_asset_id.clone()
     }
-    fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
-        policy.treasury_account_id.clone()
-    }
+
     fn parliament_test_root(tag: u8) -> [u8; 32] {
         [tag.max(1); 32]
     }
@@ -45903,7 +46064,7 @@ mod validation_fee_torii_ingress_tests {
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_metrics_tests {
     use super::*;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::World};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue};
     use iroha_logger::Level;
     use std::sync::Arc;
     routing_test! { async transaction_ingress_records_latency_histogram
@@ -51575,7 +51736,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
         iroha_model_base::peer::PeerId::new(leader.public_key().clone()),
     ]);
-    let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
+    let _unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, latest_block.as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
@@ -55760,14 +55921,20 @@ fn revalidate_onboarding_prepared_work(
     })
 }
 
+}
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
 pub(crate) fn validate_current_prepared_transaction_payload(
     payload: &iroha_data_model::transaction::TransactionPayload,
     queue: &Queue,
     state: &CoreState,
 ) -> Result<()> {
-
-    let plan = queue.route_payload_plan_with_state(payload, state)
-        .map_err(|error| conversion_error(format!("prepared transaction route is unavailable: {error}")))?;
+    let plan = queue
+        .route_payload_plan_with_state(payload, state)
+        .map_err(|error| {
+            conversion_error(format!(
+                "prepared transaction route is unavailable: {error}"
+            ))
+        })?;
     if !matches!(plan, RoutingPlan::Single(_)) {
         return Err(Error::AppQueryValidation {
             code: "prepared_transaction_route_unsupported",
@@ -55776,12 +55943,11 @@ pub(crate) fn validate_current_prepared_transaction_payload(
     }
     Ok(())
 }
-
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
 pub(crate) fn prepared_submit_outcome(
     app: &crate::SharedAppState,
     transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
-
     let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
@@ -55806,7 +55972,7 @@ pub(crate) fn prepared_submit_outcome(
     }
     Ok(None)
 }
-
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
 /// Admit an exact single-route prepared transaction through ordinary durable ingress.
 /// Accepted means pending local custody; only authenticated execution proves application.
 pub(crate) async fn submit_current_prepared_transaction(
@@ -55815,11 +55981,12 @@ pub(crate) async fn submit_current_prepared_transaction(
     telemetry: &MaybeTelemetry,
 ) -> Result<Response> {
     validate_current_prepared_transaction_payload(
-        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
+        transaction.payload(),
+        app.queue.as_ref(),
+        app.state.as_ref(),
     )?;
-    let compute_permit = crate::try_acquire_transaction_ingress_compute(
-        &app.transaction_ingress_compute_inflight,
-    )?;
+    let compute_permit =
+        crate::try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = telemetry.clone();
     let (accepted, compute_permit) = crate::run_transaction_ingress_compute_job(
@@ -55838,6 +56005,7 @@ pub(crate) async fn submit_current_prepared_transaction(
     )
     .await
 }
+app_api_items! {
 
 
 fn prepared_transaction_submit_response(
@@ -55911,6 +56079,8 @@ routing_test! { async prepared_transaction_submit_response_requires_real_accepta
     assert_eq!(body.as_ref(), b"quorum unavailable");
 }
 
+}
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
 fn prepared_outcome_from_pipeline_status(kind: crate::PipelineStatusKind) -> &'static str {
     match kind {
         crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => "Rejected",
@@ -55920,6 +56090,7 @@ fn prepared_outcome_from_pipeline_status(kind: crate::PipelineStatusKind) -> &'s
         | crate::PipelineStatusKind::Committed => "Pending",
     }
 }
+app_api_items! {
 
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync prepared_outcome_requires_exact_applied_status
@@ -57833,7 +58004,7 @@ mod space_directory_manifest_helper_tests {
             .iter()
             .map(|(id, value)| (*id, value.clone()))
             .collect();
-        crate::private_account_routing_tests::bind_fixture_root(
+        crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
@@ -61572,17 +61743,15 @@ mod explorer_asset_definition_econometrics_tests {
     use axum::http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        kura::Kura,
-        query::store::LiveQueryStore,
+        block::BlockBuilder,
         smartcontracts::Execute as _,
-        state::{State, World},
+        state::World,
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude as dm;
-    use std::{borrow::Cow, sync::Arc};
+    use std::borrow::Cow;
     fn checked_econometrics_keypair(
         seed: u8,
         algorithm: Algorithm,

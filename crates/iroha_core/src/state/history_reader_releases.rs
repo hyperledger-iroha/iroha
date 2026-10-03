@@ -61,6 +61,7 @@ impl<'state> StateViewReleases<'state> {
     }
 
     /// Hash the complete current State without delivering notices beneath its writers.
+    #[cfg(test)]
     pub(super) fn lane_execution_state_hash(
         &mut self,
     ) -> Result<HashOf<BlockHeader>, crate::snapshot::SnapshotCaptureError> {

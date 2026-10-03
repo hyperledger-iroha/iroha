@@ -194,9 +194,8 @@ pub use kagemusha_core_coordinator_v1::{
     register_kagemusha_native_redemption_finality_source_v1, verify_signed_app_preparation_v1,
 };
 pub use kagemusha_core_coordinator_v1::{
-    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryRuntimeStartupV1,
-    KagemushaNativeOrdinaryFiHttpKeyLoanV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
-    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryFiHttpKeyLoanV1,
+    KagemushaNativeOrdinaryRuntimeStartupV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
     KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
     KagemushaOrdinaryNativeIntegrityRefreshRequestV1,
     KagemushaOrdinaryNativeIntegrityRefreshResponseV1, KagemushaOrdinaryNativeStartupRequestV1,
@@ -204,6 +203,7 @@ pub use kagemusha_core_coordinator_v1::{
     install_kagemusha_native_ordinary_source_v1,
     invoke_kagemusha_native_ordinary_integrity_refresh_v1,
     invoke_kagemusha_native_ordinary_runtime_startup_v1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,
     recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,

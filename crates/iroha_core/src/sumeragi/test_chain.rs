@@ -1790,32 +1790,7 @@ pub(super) fn prepare_configured_genesis(
                 )),
             });
         }
-        let (mut state, kura) = if let Some(nexus) = nexus_config {
-            let (mut state, kura) =
-                State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-                    world,
-                    nexus.clone(),
-                    LiveQueryStore::start_test(),
-                    chain_id.clone(),
-                    network,
-                );
-            // The generic State fixture disables fees. Reinstall the explicit caller policy
-            // before the first staged genesis execution, preserving its authenticated geometry.
-            state
-                .set_nexus_from_config(nexus.clone())
-                .expect("configured fixture Nexus");
-            (state, kura)
-        } else {
-            let kura = Kura::blank_kura_for_testing();
-            let state = State::new_with_chain_and_network_id_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-                network,
-            );
-            (state, kura)
-        };
+        let (mut state, kura) = fixture_bootstrap_state(world, chain_id, network, nexus_config);
         if let Some(zk) = zk {
             if let Err(error) = state.set_zk(zk.clone()) {
                 return Err(StartFailure {
@@ -1837,31 +1812,14 @@ pub(super) fn prepare_configured_genesis(
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
         });
         state.install_lane_manifests_for_testing(&manifests);
-        let policies = {
-            let validation = crate::block::ValidBlock::validate_signed_genesis(
-                genesis.clone(),
-                &topology,
-                &account,
-                &TimeSource::new_system(),
-                &state,
-                mode.into(),
-            )
-            .unpack(|_| {});
-            match validation {
-                Ok((valid, overlay)) => {
-                    drop((valid, overlay));
-                    Ok(None)
-                }
-                Err((_, error)) => match *error {
-                    crate::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_execution,
-                        actual_nexus,
-                        ..
-                    } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
-                    error => Err(Box::new(error)),
-                },
-            }
-        };
+        let policies = validate_fixture_genesis_policy(
+            genesis.clone(),
+            &topology,
+            &account,
+            &state,
+            mode.into(),
+            attempt,
+        );
         let policies = match policies {
             Ok(policies) => policies,
             Err(error) => {
@@ -1914,6 +1872,78 @@ pub(super) fn prepare_configured_genesis(
         world = state.world;
     }
     unreachable!("second native validation either succeeds or returns its typed failure")
+}
+
+// Constructor temporaries retire before the original signed genesis executes. This helper
+// preserves the exact fresh State's network, Nexus geometry, fee policy and original owners.
+fn fixture_bootstrap_state(
+    world: World,
+    chain_id: &ChainId,
+    network: NetworkId,
+    nexus_config: Option<&iroha_config::parameters::actual::Nexus>,
+) -> (State, Arc<Kura>) {
+    if let Some(nexus) = nexus_config {
+        let (mut state, kura) =
+            State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                world,
+                nexus.clone(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                network,
+            );
+        // The generic State fixture disables fees. Reinstall the explicit caller policy
+        // before the first staged genesis execution, preserving its authenticated geometry.
+        state
+            .set_nexus_from_config(nexus.clone())
+            .expect("configured fixture Nexus");
+        (state, kura)
+    } else {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            network,
+        );
+        (state, kura)
+    }
+}
+
+// Complete original validation owners are destroyed before the caller adjusts signed policy.
+// This retains genuine genesis execution and its original rejection/refusal classification.
+fn validate_fixture_genesis_policy(
+    genesis: SignedBlock,
+    topology: &super::network_topology::Topology,
+    account: &AccountId,
+    state: &State,
+    mode: iroha_data_model::parameter::system::ConsensusMode,
+    attempt: u8,
+) -> Result<Option<(iroha_crypto::Hash, iroha_crypto::Hash)>, Box<crate::block::BlockValidationError>>
+{
+    let validation = crate::block::ValidBlock::validate_signed_genesis(
+        genesis,
+        topology,
+        account,
+        &TimeSource::new_system(),
+        state,
+        mode,
+    )
+    .unpack(|_| {});
+    match validation {
+        Ok((valid, overlay)) => {
+            drop((valid, overlay));
+            Ok(None)
+        }
+        Err((_, error)) => match *error {
+            crate::block::BlockValidationError::GenesisPolicyMismatch {
+                actual_execution,
+                actual_nexus,
+                ..
+            } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
+            error => Err(Box::new(error)),
+        },
+    }
 }
 
 /// Build a signed genesis with an explicit NPoS policy for authority-reader tests.
@@ -2539,6 +2569,32 @@ mod tests {
                 .iter()
                 .map(|key| PeerId::new(key.public_key().clone())),
         );
+        assert!(
+            validate_fixture_genesis_policy(
+                prepared.genesis.block().clone(),
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+                1,
+            )
+            .unwrap()
+            .is_none(),
+            "the helper preserves genuine completed genesis validation"
+        );
+        assert!(matches!(
+            *validate_fixture_genesis_policy(
+                wrong.clone(),
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+                0,
+            )
+            .unwrap_err(),
+            crate::block::BlockValidationError::ProofPolicyHashMismatch { expected: hash, actual }
+                if hash == HashOf::new(&expected) && actual == Some(HashOf::new(&wrong_policy))
+        ));
         {
             let validation = crate::block::ValidBlock::validate_signed_genesis(
                 wrong,

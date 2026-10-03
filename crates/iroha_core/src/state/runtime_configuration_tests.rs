@@ -773,6 +773,10 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let deferred_bytes = mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts()
             .into_iter()
             .chain(native_execution_tip::TipCell::allocation_layouts())
+            .chain(mv::cell::Cell::<
+                crate::sumeragi::amx::RetainedNativeAmx,
+                iroha_allocation::AllocationCharge,
+            >::allocation_layouts())
             .map(|layout| layout.size())
             .sum::<usize>();
         assert!(retained_bytes > deferred_bytes);

@@ -11354,7 +11354,6 @@ pub mod tests {
         };
         use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();

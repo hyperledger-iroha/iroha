@@ -1861,6 +1861,342 @@ fn native_ingress_app_with_config_for_test(
     app
 }
 
+/// Execute genuine four-seat genesis plus paid H2/H3 registrations without retaining a fixture driver.
+fn native_ingress_with_registered_route_peers_for_test(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+    members: &[(AccountId, KeyPair)],
+    labels: &[String],
+) -> SharedAppState {
+    native_ingress_with_registered_route_peers_and_chain_for_test(
+        world,
+        nexus,
+        members,
+        labels,
+        Vec::new(),
+    )
+    .0
+}
+
+/// Execute four genesis voters, then register and mature additional route peers through paid H2/H3 work.
+fn native_ingress_with_registered_route_peers_and_chain_for_test(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+    members: &[(AccountId, KeyPair)],
+    labels: &[String],
+    genesis_parameters: Vec<iroha_data_model::parameter::Parameter>,
+) -> (
+    SharedAppState,
+    iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    KeyPair,
+) {
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
+    assert!(
+        members.len() > 4,
+        "this fixture has post-genesis route peers"
+    );
+    assert_eq!(labels.len(), members.len());
+    let fee_asset: AssetDefinitionId = nexus.fees.fee_asset_id.parse().expect("original fee asset");
+    assert!(
+        world.view().asset_definition(&fee_asset).is_err(),
+        "fixture fee currency is seeded once"
+    );
+    let mut config = TestChainConfig::new(world, 1_000);
+    config.nexus = Some(nexus);
+    config.genesis_parameters.extend(genesis_parameters);
+    config.validator_keys = Some(members[..4].iter().map(|(_, key)| key.clone()).collect());
+    let genesis_key = config.genesis_key.clone();
+    let genesis = AccountId::new(genesis_key.public_key().clone());
+    config.genesis_instructions.push(
+        Grant::account_permission(Permission::from(CanManageConsensusKeys), genesis.clone()).into(),
+    );
+    config.genesis_instructions.push(
+        Grant::account_permission(
+            Permission::from(iroha_executor_data_model::permission::peer::CanManagePeers),
+            genesis.clone(),
+        )
+        .into(),
+    );
+    config.genesis_instructions.push(
+        Register::asset_definition(iroha_data_model::asset::AssetDefinition::numeric(
+            fee_asset.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+    );
+    config.genesis_instructions.push(
+        iroha_data_model::isi::Mint::asset_quantity(
+            1_u32,
+            AssetId::new(fee_asset.clone(), genesis.clone()),
+        )
+        .into(),
+    );
+    let mut additional_peers = Vec::new();
+    for (index, ((validator, key), label)) in members.iter().zip(labels).enumerate() {
+        config
+            .genesis_instructions
+            .push(Register::account(Account::new(validator.clone())).into());
+        config.genesis_instructions.push(
+            Grant::account_permission(Permission::from(CanManageConsensusKeys), validator.clone())
+                .into(),
+        );
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("original route peer PoP");
+        if index >= 4 {
+            additional_peers.push(
+                RegisterPeerWithPop::new(PeerId::new(key.public_key().clone()), pop.clone()).into(),
+            );
+        }
+        // Additional identities are introduced after registration, preserving the
+        // one-block activation lead in their actual signed H2 instructions.
+        for role in [ConsensusKeyRole::Validator, ConsensusKeyRole::Committee] {
+            let id = ConsensusKeyId::new(role, label.as_str());
+            let instruction = RegisterConsensusKey {
+                id: id.clone(),
+                record: ConsensusKeyRecord {
+                    id,
+                    public_key: key.public_key().clone(),
+                    pop: Some(pop.clone()),
+                    activation_height: if index < 4 { 1 } else { 3 },
+                    expiry_height: None,
+                    replaces: None,
+                    status: if index < 4 {
+                        ConsensusKeyStatus::Active
+                    } else {
+                        ConsensusKeyStatus::Pending
+                    },
+                },
+            }
+            .into();
+            if index < 4 {
+                config.genesis_instructions.push(instruction);
+            } else {
+                additional_peers.push(instruction);
+            }
+        }
+    }
+    let (mut app, original_hash, mut chain) =
+        executed_history_test_fixture(config, &genesis_key, additional_peers, true);
+    assert_original_paid_registration_receipt_for_test(&app, &chain, original_hash, &fee_asset);
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .sumeragi
+            .key_activation_lead_blocks,
+        1
+    );
+    let mut next = TransactionBuilder::new(
+        chain.network_id(),
+        AccountId::new(genesis_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    next.set_creation_time(Duration::from_millis(1_002));
+    next = next.with_instructions([Log::new(
+        Level::INFO,
+        "mature original registered route keys".to_owned(),
+    )]);
+    let draft = next.clone().sign(genesis_key.private_key());
+    let quote = {
+        let view = chain.state().view();
+        iroha_core::executor::quote_nexus_fee_admission_draft(
+            view.world(),
+            view.nexus(),
+            view.pipeline(),
+            draft.payload(),
+            1_002,
+            3,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+        .expect("actual H3 work receives the unchanged native fee quote")
+    };
+    assert_eq!(quote.quote.charges.len(), 1);
+    let transaction = next
+        .with_fee_payment_intent(quote.recommended_intent)
+        .sign(genesis_key.private_key());
+    let entrypoint = transaction.hash_as_entrypoint();
+    assert_eq!(
+        chain.commit(vec![transaction]),
+        vec![true],
+        "genuine paid H3 maturity work"
+    );
+    assert!(app.state.has_committed_entrypoint(entrypoint));
+    assert!(
+        chain
+            .committed(3)
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .is_ok()
+    );
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_route_authority(super::lane_authority_route(route))
+        .expect("genuine H3 retains the original four-seat global authority");
+    assert_eq!(committee.authority_height(), 3);
+    let mut original = members[..4]
+        .iter()
+        .map(|(_, key)| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    original.sort();
+    assert_eq!(committee.into_validators(), original);
+    let view = app.state.view();
+    for (validator, key) in members {
+        assert!(view.world().account(validator).is_ok());
+        assert!(
+            view.world()
+                .peers()
+                .iter()
+                .any(|peer| peer == &PeerId::new(key.public_key().clone()))
+        );
+    }
+    let payer_asset = AssetId::new(fee_asset.clone(), genesis);
+    let balance = view
+        .world()
+        .assets()
+        .get(&payer_asset)
+        .expect("original funded payer")
+        .as_ref()
+        .clone();
+    let supply = view
+        .world()
+        .asset_definition(&fee_asset)
+        .unwrap()
+        .total_quantity()
+        .clone();
+    assert!(
+        balance < Quantity::from(1_u32),
+        "ordinary Nexus fee was charged"
+    );
+    assert_eq!(balance, supply, "the original fee burns its exact supply");
+    drop(view);
+    let unique = Arc::get_mut(&mut app).expect("unique genuinely executed fixture");
+    unique.chain_id = Arc::new(chain.state().view().chain_id().clone());
+    unique.local_peer_id = Some(PeerId::new(members[0].1.public_key().clone()));
+    unique.torii_proxy_bridge_signer = members[0].1.clone();
+    let view = unique.state.view();
+    unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+    drop(view);
+    (app, chain, genesis_key)
+}
+
+/// Advance the original executed fixture with a genuinely quoted, paid transaction at each height.
+#[cfg(feature = "connect")]
+fn advance_registered_route_fixture_for_test(
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    genesis_key: &KeyPair,
+    target_height: u64,
+) {
+    assert!(target_height > chain.height());
+    while chain.height() < target_height {
+        let height = chain.height() + 1;
+        let created_ms = 1_000 + height - 1;
+        let mut next = TransactionBuilder::new(
+            chain.network_id(),
+            AccountId::new(genesis_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        next.set_creation_time(Duration::from_millis(created_ms));
+        next = next.with_instructions([Log::new(
+            Level::INFO,
+            format!("advance original route fixture to height {height}"),
+        )]);
+        let draft = next.clone().sign(genesis_key.private_key());
+        let quote = {
+            let view = chain.state().view();
+            iroha_core::executor::quote_nexus_fee_admission_draft(
+                view.world(),
+                view.nexus(),
+                view.pipeline(),
+                draft.payload(),
+                created_ms,
+                height,
+                Some(DataSpaceId::UNIVERSAL),
+            )
+            .expect("actual original paid route advancement quote")
+        };
+        assert_eq!(quote.quote.charges.len(), 1);
+        let transaction = next
+            .with_fee_payment_intent(quote.recommended_intent)
+            .sign(genesis_key.private_key());
+        let entrypoint = transaction.hash_as_entrypoint();
+        assert_eq!(chain.commit(vec![transaction]), vec![true]);
+        assert!(chain.state().has_committed_entrypoint(entrypoint));
+        assert_eq!(chain.height(), height);
+        assert!(
+            chain
+                .committed(height)
+                .block()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result
+                .is_ok()
+        );
+    }
+}
+
+/// Check the original H2 receipt in a separate completed read before producing H3 work.
+fn assert_original_paid_registration_receipt_for_test(
+    app: &SharedAppState,
+    chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    original_hash: HashOf<SignedTransaction>,
+    fee_asset: &AssetDefinitionId,
+) {
+    let receipt = chain.committed(2);
+    assert_eq!(receipt.block().external_transactions().count(), 1);
+    assert_eq!(
+        receipt
+            .block()
+            .external_transactions()
+            .next()
+            .unwrap()
+            .hash(),
+        original_hash
+    );
+    assert!(
+        receipt
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .is_ok()
+    );
+    assert!(
+        app.state.has_committed_entrypoint(
+            receipt
+                .block()
+                .external_transactions()
+                .next()
+                .unwrap()
+                .hash_as_entrypoint(),
+        )
+    );
+    let original_intent = receipt
+        .block()
+        .external_transactions()
+        .next()
+        .unwrap()
+        .fee_payment_intent();
+    assert_eq!(original_intent.charge_limits().len(), 1);
+    assert_eq!(
+        original_intent.charge_limits()[0].asset_definition_id(),
+        fee_asset
+    );
+    assert_eq!(
+        original_intent.charge_limits()[0].kind(),
+        iroha_data_model::transaction::FeeChargeKind::Nexus
+    );
+}
+
 fn assert_native_pending_for_test(app: &SharedAppState, transaction: &SignedTransaction) {
     use iroha_version::codec::EncodeVersioned as _;
     assert!(
@@ -1889,6 +2225,7 @@ fn executed_history_test_fixture(
 ) {
     use iroha_core::sumeragi::test_chain::CertifiedTestChain;
     let creation_time = config.genesis_time_ms.checked_add(1).unwrap();
+    let nexus = config.nexus.clone();
     let mut chain = CertifiedTestChain::start(config).unwrap();
     let mut builder = TransactionBuilder::new(
         chain.network_id(),
@@ -1896,11 +2233,42 @@ fn executed_history_test_fixture(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
     builder.set_creation_time(Duration::from_millis(creation_time));
-    let transaction = builder
-        .with_instructions(instructions)
-        .sign(key.private_key());
+    builder = builder.with_instructions(instructions);
+    if let Some(nexus) = nexus {
+        let draft = builder.clone().sign(key.private_key());
+        let view = chain.state().view();
+        let quote = iroha_core::executor::quote_nexus_fee_admission_draft(
+            view.world(),
+            &nexus,
+            view.pipeline(),
+            draft.payload(),
+            creation_time,
+            2,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+        .expect("the original funded fixture receives Core's exact fee intent");
+        assert_eq!(
+            quote.quote.charges.len(),
+            1,
+            "one original native Nexus fee component"
+        );
+        builder = builder.with_fee_payment_intent(quote.recommended_intent);
+    }
+    let transaction = builder.sign(key.private_key());
     let hash = transaction.hash();
-    assert_eq!(chain.commit(vec![transaction]), vec![expected_applied]);
+    let observed = chain.commit(vec![transaction]);
+    assert_eq!(
+        observed,
+        vec![expected_applied],
+        "original native result: {:?}",
+        chain
+            .committed(2)
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+    );
     let mut app = mk_app_state_for_tests();
     let unique = Arc::get_mut(&mut app).unwrap();
     unique.state = chain.state().clone();
@@ -2924,6 +3292,15 @@ async fn transaction_details_authenticates_executed_native_registration_and_tran
                     .is_ok(),
                 applied
             );
+            let (output_index, output) = committed.block().network_output_at(0).unwrap();
+            eprintln!(
+                "original beneficiary register={register} applied={applied}: result={:?}; result_hint={:?}; output_hint={:?}",
+                output.result,
+                norito::core::SerializePayload::encoded_len_exact(&output.result),
+                norito::core::SerializePayload::encoded_len_exact(
+                    &committed.block().execution_outputs()[output_index as usize]
+                )
+            );
             for (label, key, allowed) in [
                 ("sender", &sender_key, true),
                 ("beneficiary", &beneficiary_key, applied),
@@ -2943,7 +3320,7 @@ async fn transaction_details_authenticates_executed_native_registration_and_tran
                 .await;
                 if allowed {
                     let response = response.unwrap_or_else(|error| {
-                        panic!("register={register} applied={applied} {label}: {error}")
+                        panic!("register={register} applied={applied} {label}: {error:?}")
                     });
                     assert_eq!(response.status(), StatusCode::OK);
                     let body =
@@ -4292,4 +4669,14 @@ fn full_ledger_carrier_honors_exact_role_and_role_revocation() {
     tx.apply();
     block.commit_world_overlay_for_testing().unwrap();
     assert!(super::require_full_ledger_carrier_permission(&app, &account).is_err());
+}
+
+// Local pending custody only: a submission receipt does not promise restart durability.
+fn lifecycle_pending_wire(app: &SharedAppState) -> Vec<Vec<u8>> {
+    use iroha_version::codec::EncodeVersioned as _;
+    let view = app.state.view();
+    app.queue
+        .all_transactions(&view)
+        .map(|transaction| transaction.entrypoint().encode_versioned())
+        .collect()
 }

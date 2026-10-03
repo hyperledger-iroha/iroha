@@ -9888,51 +9888,60 @@ fn transactions_query_tool(name: &str, path_template: &str, description: &str) -
     )
 }
 fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
-    MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
-        let request_body = spec
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get(definition.path))
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("requestBody"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "Musubi V1 OpenAPI operation {} is missing its typed request body",
-                    definition.path
-                )
-            });
-        let body_schema = build_request_body_schema(spec, request_body)
-            .map(|schema| inline_openapi_schema(spec, &schema, 0))
-            .unwrap_or_else(|| {
-                panic!(
-                    "Musubi V1 OpenAPI operation {} has no JSON request schema",
-                    definition.path
-                )
-            });
-        ToolSpec::route(
-            definition.name.to_owned(),
-            definition.description.to_owned(),
-            definition.effect,
-            Method::POST,
-            definition.path.to_owned(),
-            norito::json!({
-                "type": "object",
-                "additionalProperties": false,
-                "x-iroha-mcp-strict-body": true,
-                "required": ["body", "headers"],
-                "properties": {
-                    "body": (body_schema),
-                    "headers": {
-                        "type": "object",
-                        "additionalProperties": { "type": "string" }
-                    },
-                    "accept": { "type": "string" }
-                }
-            }),
-        )
-    })
+    MUSUBI_V1_TOOL_DEFINITIONS
+        .iter()
+        .filter(|definition| {
+            catalog_mcp_projection_decision(
+                CATALOG_PROJECTION_GROUPS,
+                &Method::POST,
+                definition.path,
+            ) == Some(true)
+        })
+        .map(|definition| {
+            let request_body = spec
+                .get("paths")
+                .and_then(Value::as_object)
+                .and_then(|paths| paths.get(definition.path))
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("post"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("requestBody"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Musubi V1 OpenAPI operation {} is missing its typed request body",
+                        definition.path
+                    )
+                });
+            let body_schema = build_request_body_schema(spec, request_body)
+                .map(|schema| inline_openapi_schema(spec, &schema, 0))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Musubi V1 OpenAPI operation {} has no JSON request schema",
+                        definition.path
+                    )
+                });
+            ToolSpec::route(
+                definition.name.to_owned(),
+                definition.description.to_owned(),
+                definition.effect,
+                Method::POST,
+                definition.path.to_owned(),
+                norito::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "x-iroha-mcp-strict-body": true,
+                    "required": ["body", "headers"],
+                    "properties": {
+                        "body": (body_schema),
+                        "headers": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" }
+                        },
+                        "accept": { "type": "string" }
+                    }
+                }),
+            )
+        })
 }
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
@@ -10685,3 +10694,7 @@ mod contract_artifact_route_tests {
         assert!(contract_artifact_route(missing.as_object().unwrap(), true).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "mcp/compiled_catalog_tests.rs"]
+mod compiled_catalog_tests;

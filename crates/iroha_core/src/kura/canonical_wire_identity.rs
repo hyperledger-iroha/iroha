@@ -1,7 +1,4 @@
 impl Kura {
-    fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        Self::canonical_block_wire_identity(block).map(|(_, hash)| hash)
-    }
     fn canonical_block_wire_identity(block: &SignedBlock) -> Result<(u64, Hash)> {
         let wire = block.encode_wire().map_err(Error::NoritoFrame)?;
         let len = u64::try_from(wire.len())?;
@@ -12,11 +9,6 @@ impl Kura {
             });
         }
         Ok((len, Hash::new(&wire)))
-    }
-    fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        block
-            .canonical_proposal_wire_hash()
-            .map_err(Error::NoritoFrame)
     }
     fn ensure_existing_block_wire_matches(
         &self,

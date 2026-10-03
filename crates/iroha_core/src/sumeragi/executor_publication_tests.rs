@@ -123,6 +123,7 @@ fn with_worker_from(
                 beacon: None,
                 archives: None,
                 pending_commit: None,
+                replay_completion: None,
                 attestation: None,
                 quarantine_context: None,
             };
@@ -484,6 +485,123 @@ fn execute_proposal(
 
 fn original_overlay(worker: &Worker<'_>) -> usize {
     std::ptr::from_ref(worker.live.as_ref().unwrap().overlay.as_deref().unwrap()) as usize
+}
+
+#[test]
+fn replay_completion_retirement_keeps_exact_source_and_original_pool_retry() {
+    use iroha_sumeragi::availability::{AvailabilitySource, BodyRestoration};
+
+    with_worker(|chain, worker, blocks, events| {
+        let (block, qc) = executed(chain, worker);
+        let alternate = chain.commit_qc(2, qc.block_hash, qc.result, false, Signers::LastThree);
+        worker
+            .prepare_with_origin(&block, &qc, CommitTelemetryOrigin::HistoricalReplay)
+            .unwrap();
+        blocks.append(&block, &qc).unwrap();
+        worker.replay(&block, &qc).unwrap();
+        assert!(
+            worker.live.is_none(),
+            "the large Published owner is retired"
+        );
+        assert!(worker.finishing.is_none());
+        assert!(worker.pending_commit.is_none());
+        assert!(worker.replay_completion.is_some());
+        assert!(worker.context.staging.get(&qc.block_hash).is_none());
+        let mut emitted = 0;
+        while events.try_recv().is_ok() {
+            emitted += 1;
+        }
+        assert!(emitted > 0, "the original publication emits real events");
+        let budget = worker.state.ivm_execution_budget();
+        let retained = budget.reserved_bytes();
+        worker.replay(&block, &qc).unwrap();
+        assert_eq!(budget.reserved_bytes(), retained);
+        assert!(events.try_recv().is_err());
+        assert!(worker.replay(&block, &alternate).is_err());
+        for field in 0..7 {
+            let mut changed = qc.clone();
+            match field {
+                0 => changed.agg_sig.0[0] ^= 1,
+                1 => changed.result.0[0] ^= 1,
+                2 => changed.instance.0[0] ^= 1,
+                3 => changed.epoch.context.0[0] ^= 1,
+                4 => changed.view += 1,
+                5 => changed.attest = !changed.attest,
+                _ => changed.kind = iroha_sumeragi::message::VoteKind::Prepare,
+            }
+            assert!(worker.replay(&block, &changed).is_err());
+        }
+        // Equal voting authority and exact signed body still do not authorize
+        // replacement chain parameters after the original schedule has retired.
+        for field in 0..6 {
+            let mut config = block.source().config().clone();
+            match field {
+                0 => config.params.block_time += 1,
+                1 => config.params.payload_retry_interval += 1,
+                2 => config.params.e_max += 1,
+                3 => config.params.a_max += 1,
+                4 => config.params.max_block_bytes += 1,
+                _ => config.params.epoch_length += 1,
+            }
+            let source = AvailabilitySource::new(
+                block.source().instance(),
+                block.source().height(),
+                block.source().block_hash(),
+                config,
+            )
+            .unwrap();
+            let rebound = BodyRestoration::new(
+                source,
+                block.header().clone(),
+                block.availability().clone(),
+                block.payload().clone(),
+            )
+            .complete(&budget, &**worker.context.crypto.as_ref().unwrap())
+            .map_err(|(_, error)| error)
+            .expect("availability is valid under equal signing authority");
+            assert!(worker.replay(&rebound, &qc).is_err());
+        }
+        assert_eq!(worker.state.committed_height(), 2);
+        assert_eq!(budget.reserved_bytes(), retained);
+        assert!(events.try_recv().is_err());
+
+        let occupied = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        let held = budget.reserved_bytes();
+        assert!(matches!(
+            worker.replay(&block, &qc),
+            Err(PublicationError::Retryable(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), held);
+        assert!(
+            worker
+                .routing_refusal
+                .as_ref()
+                .is_some_and(|reason| { reason.allocation_refusal().is_some() })
+        );
+        assert!(worker.replay_completion.is_some());
+        assert!(worker.live.is_none());
+        assert!(events.try_recv().is_err());
+        drop(occupied);
+        worker.replay(&block, &qc).unwrap();
+        assert_eq!(budget.reserved_bytes(), retained);
+        assert!(worker.routing_refusal.is_none());
+        assert!(events.try_recv().is_err());
+
+        // A certificate or serialized tip claim alone cannot recreate the
+        // private evidence issued by the original completed replay.
+        let original = worker.replay_completion.take().unwrap();
+        assert!(worker.replay(&block, &qc).is_err());
+        worker.replay_completion = Some(original);
+        let applied = worker.applied;
+        worker.applied.1.0[0] ^= 1;
+        assert!(worker.replay(&block, &qc).is_err());
+        worker.applied = applied;
+        worker.replay(&block, &qc).unwrap();
+        assert!(worker.live.is_none());
+        assert!(events.try_recv().is_err());
+    });
 }
 
 #[cfg(feature = "telemetry")]

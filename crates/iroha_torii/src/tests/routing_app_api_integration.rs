@@ -5,7 +5,6 @@ mod app_api_integration_tests {
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
@@ -294,14 +293,14 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn tx_query_sorted_total_counts_matches() {
         let _guard = app_query_limits_guard();
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
+        let _kura = Kura::blank_kura_for_testing();
+        let _query = LiveQueryStore::start_test();
         let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
             iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
         )
         .expect("original sorted transaction fixture genesis");
         let state = Arc::clone(native_chain.state());
-        let kura = Arc::clone(native_chain.kura());
+        let _kura = Arc::clone(native_chain.kura());
         // Build three transactions with distinct timestamps
         let network_id = *state.network_id_ref();
         let kp_a = checked_app_api_keypair(

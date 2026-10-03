@@ -4,6 +4,7 @@ pub mod commitments;
 mod ingest;
 mod persistence;
 pub mod pin_intents;
+#[cfg(any(feature = "app_api", test))]
 mod rs16;
 mod spool;
 #[cfg(feature = "app_api")]

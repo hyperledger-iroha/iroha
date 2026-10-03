@@ -499,13 +499,23 @@ impl FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
 
     /// Validate the full public key transcript and lifecycle ordering.
     pub fn validate(&self) -> Result<(), GlobalThresholdBeaconError> {
+        self.validated_session().map(|_| ())
+    }
+
+    /// Retain this probe's fully validated transcript after checking lifecycle ordering.
+    ///
+    /// The caller may check additional external bindings without reconstructing the same
+    /// transcript again. This value does not authorize a later State view or custody probe.
+    pub(crate) fn validated_session(
+        &self,
+    ) -> Result<ValidatedGlobalThresholdBeaconSessionV1, GlobalThresholdBeaconError> {
         let binding = GlobalThresholdBeaconSessionBindingV1 {
             network_id: self.session.network_id,
             session_id: self.session.session_id,
             roster_hash: self.session.roster_hash,
             transcript_hash: self.session.transcript_hash,
         };
-        validate_global_threshold_beacon_session_v1(self.session.clone(), &binding)?;
+        let session = validate_global_threshold_beacon_session_v1(self.session.clone(), &binding)?;
         match (self.activated_at_height, self.retired_at_height) {
             (None, None) => {}
             (Some(activated), None)
@@ -515,7 +525,7 @@ impl FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
                     && retired > activated => {}
             _ => return Err(GlobalThresholdBeaconError::InvalidKeyLifecycle),
         }
-        Ok(())
+        Ok(session)
     }
 
     /// Mark this key active at a committed height, idempotently at the same height.
@@ -1520,6 +1530,17 @@ impl ValidatedGlobalThresholdBeaconSessionV1 {
         &self.record
     }
 
+    /// Check external bindings against this already validated immutable transcript.
+    ///
+    /// This preserves admission's version and binding error order. It neither probes live
+    /// custody nor replaces validation of a newly acquired canonical session record.
+    pub(crate) fn validate_binding(
+        &self,
+        expected: &GlobalThresholdBeaconSessionBindingV1,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        validate_global_threshold_beacon_session_binding_v1(&self.record, expected)
+    }
+
     /// Consume the verified session and retain its original canonical record.
     ///
     /// This transfers the existing transcript buffers without cloning them.
@@ -2220,6 +2241,31 @@ pub fn validate_global_threshold_beacon_session_v1(
     ))
 }
 
+/// Check only the external context, before any public transcript reconstruction.
+fn validate_global_threshold_beacon_session_binding_v1(
+    record: &GlobalThresholdBeaconKeySessionV1,
+    expected: &GlobalThresholdBeaconSessionBindingV1,
+) -> Result<(), GlobalThresholdBeaconError> {
+    if record.version != GLOBAL_THRESHOLD_BEACON_VERSION_V1 {
+        return Err(GlobalThresholdBeaconError::UnsupportedVersion {
+            actual: record.version,
+        });
+    }
+    if record.network_id != expected.network_id {
+        return Err(GlobalThresholdBeaconError::NetworkMismatch);
+    }
+    if record.session_id != expected.session_id {
+        return Err(GlobalThresholdBeaconError::SessionMismatch);
+    }
+    if record.roster_hash != expected.roster_hash {
+        return Err(GlobalThresholdBeaconError::RosterMismatch);
+    }
+    if record.transcript_hash != expected.transcript_hash {
+        return Err(GlobalThresholdBeaconError::TranscriptMismatch);
+    }
+    Ok(())
+}
+
 /// Validate a session while charging its verifier-owned heap buffers to its caller.
 ///
 /// Admission precedes each exact preimage, hybrid-key copy and reconstructed
@@ -2237,24 +2283,7 @@ pub fn validate_global_threshold_beacon_session_with_admission_v1<E>(
     expected: &GlobalThresholdBeaconSessionBindingV1,
     admit: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<ValidatedGlobalThresholdBeaconSessionV1, GlobalThresholdBeaconVerificationError<E>> {
-    if record.version != GLOBAL_THRESHOLD_BEACON_VERSION_V1 {
-        return Err(GlobalThresholdBeaconError::UnsupportedVersion {
-            actual: record.version,
-        }
-        .into());
-    }
-    if record.network_id != expected.network_id {
-        return Err(GlobalThresholdBeaconError::NetworkMismatch.into());
-    }
-    if record.session_id != expected.session_id {
-        return Err(GlobalThresholdBeaconError::SessionMismatch.into());
-    }
-    if record.roster_hash != expected.roster_hash {
-        return Err(GlobalThresholdBeaconError::RosterMismatch.into());
-    }
-    if record.transcript_hash != expected.transcript_hash {
-        return Err(GlobalThresholdBeaconError::TranscriptMismatch.into());
-    }
+    validate_global_threshold_beacon_session_binding_v1(&record, expected)?;
     #[cfg(all(test, sumeragi_core_mutation = "HC12"))]
     let mut uncharged = |_| Ok::<(), E>(());
     #[cfg(all(test, sumeragi_core_mutation = "HC12"))]

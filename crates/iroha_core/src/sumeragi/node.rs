@@ -1460,9 +1460,6 @@ mod tests {
         payload_retry_interval_ms: u64,
         extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
     ) -> Chain {
-        // Each independently executed node-test group needs its own logger initialization.
-        // The maintained static handle retains the configured diagnostics after this helper.
-        let _logger = iroha_logger::test_logger();
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)

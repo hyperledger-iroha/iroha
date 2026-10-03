@@ -292,16 +292,43 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         )
         .unwrap();
         let entry_hash = transaction.hash_as_entrypoint();
-        let mut block = payload::assemble(
-            &world,
-            Assembly {
-                parent: parent.block(),
-                view: 0,
-                cadence: Duration::from_millis(1),
-            },
-            &[transaction],
-        )
-        .unwrap();
+        let mut block = if height == 2 {
+            // Preserve the real builder's signed-root routing assertion at its first
+            // successor. This transcript fixture has no executed State history.
+            payload::assemble(
+                &world,
+                Assembly {
+                    parent: parent.block(),
+                    view: 0,
+                    cadence: Duration::from_millis(1),
+                },
+                &[transaction],
+            )
+            .unwrap()
+        } else {
+            // Author only the certificate transcript's canonical proposal. The production
+            // payload builder requires an original executed parent-service receipt at H3+;
+            // synthetic BLS/attestation transcripts cannot provide that State authority.
+            // Inherit the original H2 DA/confidential policy, carry the exact signed root
+            // route, and keep the normal builder's parent, ordered inputs and ledger time.
+            let (_, proposal_time) = iroha_primitives::time::TimeSource::new_mock(block_time);
+            crate::block::BlockBuilder::new_with_time_source(vec![transaction], proposal_time)
+                .chain(0, Some(parent.block()))
+                .with_da_proof_policies(parent.block().da_proof_policies().cloned())
+                .with_confidential_features(parent.block().header().confidential_features())
+                .with_execution_context(Some(
+                    iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+                        iroha_data_model::block::ExternalExecutionContext::new(
+                            entry_hash,
+                            crate::sumeragi::lanes::routing::GLOBAL_LANE,
+                            metadata.sumeragi_context.root_scope.dataspace_id(),
+                        ),
+                    ]),
+                ))
+                .with_network_input_time_floor(block_time)
+                .unwrap()
+                .into_unsigned_proposal()
+        };
         assert_eq!(
             block.execution_context().unwrap().external,
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -309,7 +336,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
                 crate::sumeragi::lanes::routing::GLOBAL_LANE,
                 metadata.sumeragi_context.root_scope.dataspace_id(),
             )],
-            "normal payload assembly commits the exact signed-root route",
+            "canonical transcript proposal commits the exact signed-root route",
         );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(
