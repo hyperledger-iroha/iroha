@@ -21,6 +21,7 @@ pub mod chunker_registry;
 pub mod deal;
 pub mod gar;
 pub mod gateway;
+pub mod gateway_compliance;
 pub mod gateway_fixture;
 pub mod governance;
 pub mod hedging;

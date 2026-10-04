@@ -8162,6 +8162,7 @@ pub(crate) mod valid {
                 ivm::error::ExecutionDeferral::AllocationUnavailable,
                 ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
                 ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable,
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
             ] {
                 assert_eq!(
                     map_block_err_to_reason(&BlockValidationError::ExecutionDeferred(
@@ -8578,7 +8579,7 @@ mod event {
             if let Err((_, error)) = &mut self.0 {
                 // A pre-existing local failure owns its exact refusal or terminal custody.
                 // A concurrent publication cannot replace that owner or authorize rejection.
-                if !cfg!(all(test, sumeragi_core_mutation = "HC90"))
+                if !cfg!(all(test, sumeragi_core_mutation = "HC99"))
                     && map_block_err_to_reason(error).is_none()
                 {
                     return self;

@@ -3,8 +3,8 @@
 //! Selection fields are explicit caller intent, not authenticated state. This planner proves
 //! neither policy absence nor manager permission, funding, current eligibility or finality.
 //! Native execution owns `CanSetSorafsReservePolicy`, entity existence and revision checks.
-//! TODO: connect a managed coordinator only after an independent native reserve-state reader
-//! authenticates those prerequisites. This module does not activate a runtime or rewrite profiles.
+//! `iroha_deploy::managed::ManagedInitialReservePolicy` owns independently authenticated state
+//! preflight and exact original inclusion. This planner does not activate a runtime or rewrite profiles.
 
 use super::{
     bounded::{decode_bounded, encode_bounded, validate_options},
@@ -132,15 +132,15 @@ pub(super) fn instructions(
 
 pub(super) struct ReservePolicyExpectation<'a>(pub(super) &'a InitialReservePolicyRequest);
 impl ReservePolicyExpectation<'_> {
-    pub(super) fn verify(&self, record: &TransactionJournal) -> Result<()> {
-        let NativeOperation::InitialReservePolicy { plan, terms } = &record.operation else {
+    pub(super) fn verify(&self, record: &preparation::Selection<'_>) -> Result<()> {
+        let NativeOperation::InitialReservePolicy { plan, terms } = record.operation else {
             eyre::bail!("reserve journal differs from selected initial-policy purpose");
         };
         let retained: Plan = decode_bounded(plan, MAX_PLAN_BYTES)?;
         let expected = Plan::new(self.0, retained.validated_at_unix_ms)?;
         eyre::ensure!(
             encode_bounded(&expected, MAX_PLAN_BYTES)? == *plan
-                && record.requested_fee == self.0.options.fee_payment
+                && *record.requested_fee == self.0.options.fee_payment
                 && terms.matches_options(&self.0.options)?,
             "reserve journal differs from original request or fee authorization"
         );
@@ -149,6 +149,37 @@ impl ReservePolicyExpectation<'_> {
 }
 
 impl AccountService {
+    /// Inspect the exact original request and every durable preparation stage without network I/O.
+    /// # Errors
+    /// Rejects changed identity, request, fees, malformed stages or unsafe journal custody.
+    pub fn inspect_initial_reserve_policy_preparation(
+        &self,
+        journal: &Path,
+        expected: &InitialReservePolicyRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::InitialReservePolicy,
+            Some(OperationExpectation::ReservePolicy(
+                ReservePolicyExpectation(expected),
+            )),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_initial_reserve_policy_unprepared(
+        &self,
+        journal: &Path,
+        expected: &InitialReservePolicyRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::InitialReservePolicy,
+            OperationExpectation::ReservePolicy(ReservePolicyExpectation(expected)),
+        )
+    }
+
     /// Quote, sign and retain one initial policy without submitting it.
     ///
     /// The caller supplies structural intent; native permission and state are not authenticated here.
@@ -159,6 +190,57 @@ impl AccountService {
         request: &InitialReservePolicyRequest,
         journal: &Path,
     ) -> Result<OperationReport> {
+        if let Some(report) = self
+            .with_deadline(request.options.deadline)?
+            .finish_existing_preparation(
+                journal,
+                NativeOperationKind::InitialReservePolicy,
+                Some(OperationExpectation::ReservePolicy(
+                    ReservePolicyExpectation(request),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
+        self.retain_initial_reserve_policy_request(request, journal)?;
+        if let Some(report) = self
+            .with_deadline(request.options.deadline)?
+            .finish_existing_preparation(
+                journal,
+                NativeOperationKind::InitialReservePolicy,
+                Some(OperationExpectation::ReservePolicy(
+                    ReservePolicyExpectation(request),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
+        Err(eyre!(
+            "retained native request disappeared before preparation"
+        ))
+    }
+
+    /// Retain or inspect this exact request without HTTP, fee quotes, payload creation or signing.
+    /// Existing payloads and signed envelopes are returned unchanged; no lifetime is renewed.
+    /// # Errors
+    /// Rejects changed identity, intent, fee limits, deadline, malformed records or unsafe custody.
+    pub fn retain_initial_reserve_policy_request(
+        &self,
+        request: &InitialReservePolicyRequest,
+        journal: &Path,
+    ) -> Result<VerifiedNativePreparation> {
+        if let Some(report) = self
+            .with_deadline(request.options.deadline)?
+            .inspect_existing_preparation(
+                journal,
+                NativeOperationKind::InitialReservePolicy,
+                Some(OperationExpectation::ReservePolicy(
+                    ReservePolicyExpectation(request),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let plan = Plan::new(request, current_unix_ms()?)?;
         plan.instruction(&self.config)?;
@@ -170,7 +252,7 @@ impl AccountService {
         };
         operation.instructions(&self.config)?;
         self.with_deadline(request.options.deadline)?
-            .prepare_native(operation, request.options.fee_payment.clone(), journal)
+            .retain_native_request(operation, request.options.fee_payment.clone(), journal)
     }
 
     /// Inspect the exact retained signed envelope, including after its original UTC deadline.
@@ -184,12 +266,8 @@ impl AccountService {
         journal: &Path,
         expected: &InitialReservePolicyRequest,
     ) -> Result<SignedTransaction> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(journal)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        let transaction = record.verify(&self.config)?;
-        ReservePolicyExpectation(expected).verify(&record)?;
-        Ok(transaction)
+        self.inspect_initial_reserve_policy_preparation(journal, expected)?
+            .into_signed_transaction()
     }
 
     fn run_initial_reserve_policy(

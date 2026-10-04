@@ -2,14 +2,14 @@
 
 use super::*;
 use iroha_data_model::{
-    block::{CommitCertificate, decode_versioned_signed_block},
+    block::{CommitCertificate, decode_framed_signed_block},
     sumeragi_finality::test_fixtures::NativeFinalityFixture,
 };
 
 fn fixture() -> iroha_data_model::block::SharedSignedBlock {
     let fixture = NativeFinalityFixture::new();
     crate::block::reserve_block_for_tests()
-        .initialize(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap())
+        .initialize(decode_framed_signed_block(&fixture.latest().block_wire).unwrap())
 }
 
 fn with_parts(

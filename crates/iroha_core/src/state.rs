@@ -451,8 +451,9 @@ use crate::telemetry::record_da_shard_cursor_lag;
 use crate::{
     Peers,
     beacon::{
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
-        GlobalThresholdBeaconPulseLinkV1, validate_persisted_global_threshold_beacon_pulse_v1,
+        GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconPulseLinkV1,
+        RetainedFinalizedGlobalThresholdBeaconSessionV1,
+        validate_persisted_global_threshold_beacon_pulse_v1,
     },
     block::CommittedBlock,
     compliance::LaneComplianceEngine,
@@ -4514,7 +4515,7 @@ pub struct WorldData {
     pub(crate) global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public keys with activation and retirement metadata.
     pub(crate) global_beacon_key_sessions:
-        Storage<[u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        Storage<[u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton pointer to the active finalized beacon key session.
     pub(crate) global_beacon_active_session: Storage<u64, [u8; 32]>,
     /// Singleton monotonic ingestion cursor for finalized beacon pulses.
@@ -5543,7 +5544,7 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
-        StorageField<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageField<'world, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton active beacon session pointer.
     pub(crate) global_beacon_active_session: StorageField<'world, u64, [u8; 32]>,
     /// Singleton latest beacon pulse/origin link.
@@ -7227,7 +7228,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) global_beacon_dkg:
         StorageTransaction<'block, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     pub(crate) global_beacon_key_sessions:
-        StorageTransaction<'block, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageTransaction<'block, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     pub(crate) global_beacon_active_session: StorageTransaction<'block, u64, [u8; 32]>,
     pub(crate) global_beacon_latest_pulse:
         StorageTransaction<'block, u64, GlobalThresholdBeaconPulseLinkV1>,
@@ -9526,7 +9527,7 @@ pub struct WorldView<'world> {
     pub(crate) global_beacon_dkg: StorageView<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
-        StorageView<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageView<'world, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton active beacon session pointer.
     pub(crate) global_beacon_active_session: StorageView<'world, u64, [u8; 32]>,
     /// Singleton latest beacon pulse/origin link.
@@ -20014,17 +20015,7 @@ impl World {
         self.repo_agreements_by_custodian = by_custodian;
     }
     fn rebuild_proof_status_index(&mut self) {
-        let mut by_status = BTreeMap::<
-            iroha_data_model::proof::ProofStatus,
-            BTreeSet<iroha_data_model::proof::ProofId>,
-        >::new();
-        for (proof_id, record) in self.proofs.view().iter() {
-            by_status
-                .entry(record.status)
-                .or_default()
-                .insert(proof_id.clone());
-        }
-        self.proofs_by_status = by_status.into_iter().collect();
+        proof_status_restore::rebuild(self);
     }
     fn validate_identifier_claims(&self) -> Result<(), String> {
         let identifier_claims = self.identifier_claims.view();
@@ -21209,7 +21200,7 @@ macro_rules! world_ro_accessors {
                 [u8; 32] => GlobalThresholdBeaconDkgSnapshotV1;
             /// Finalized beacon key sessions with activation/retirement metadata.
             storage global_beacon_key_sessions:
-                [u8; 32] => FinalizedGlobalThresholdBeaconKeySessionRecordV1;
+                [u8; 32] => RetainedFinalizedGlobalThresholdBeaconSessionV1;
             /// Singleton active beacon key-session pointer.
             storage global_beacon_active_session: u64 => [u8; 32];
             /// Singleton latest finalized beacon pulse or genesis-origin link.
@@ -22360,7 +22351,7 @@ impl<'world> WorldBlock<'world> {
     /// Install one fully verified global-beacon fixture for dependent-crate tests.
     pub fn install_global_beacon_fixture_for_testing(
         &mut self,
-        key_record: crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        key_record: crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
         pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
         expected_context: &iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
     ) -> Result<(), crate::beacon::GlobalThresholdBeaconError> {
@@ -22391,12 +22382,10 @@ impl<'world> WorldBlock<'world> {
             roster_hash: pulse.roster_hash,
             transcript_hash: pulse.transcript_hash,
         };
-        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
-            key_record.session.clone(),
-            &binding,
-        )?;
+        let session = &key_record.session;
+        session.check_binding(&binding)?;
         let link = crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
-            &session,
+            session,
             &pulse,
             pulse.finalized_chain_anchor,
             expected_context,
@@ -24225,7 +24214,7 @@ impl WorldTransaction<'_, '_> {
     /// Persist one finalized public beacon key and remove its matching active DKG snapshot.
     pub(crate) fn put_finalized_global_beacon_key_session(
         &mut self,
-        record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
     ) -> Result<(), GlobalThresholdBeaconError> {
         record.validate()?;
         if record.activated_at_height.is_some() || record.retired_at_height.is_some() {
@@ -24336,7 +24325,7 @@ impl WorldTransaction<'_, '_> {
             .global_beacon_key_sessions
             .get(&session_id)
             .ok_or(GlobalThresholdBeaconError::ActiveKeyMismatch)?;
-        if &persisted_session.session != session.record()
+        if persisted_session.session.record() != session.record()
             || !persisted_session.is_active_at(pulse.height)
         {
             return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
@@ -27413,7 +27402,7 @@ impl State {
                     "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
                 )
             });
-        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world).expect(
+        contract_subject_restore::rebuild(&mut world).expect(
             "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
         );
         let default_sns_payment_asset_id =
@@ -39548,6 +39537,7 @@ mod tiered_snapshot_diff_tests {
         let provider_id = ProviderId::new([0xA1; 32]);
         let authority = ProviderIngestCompletionAuthorityV1::new(
             owner.clone(),
+            owner.clone(),
             iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0xA2; 32],
                 revision: 1,
@@ -42503,20 +42493,16 @@ impl StateTransaction<'_, '_> {
             let run_result = vm.run_with_host(&mut host);
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
-                if let Some(reason) =
-                    crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
-                {
-                    drop(host);
-                    drop(vm);
-                    return Err(self.defer_execution(reason));
-                }
-                let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                    &vm, &error,
-                );
-                {
-                    let _consumed_host = host;
-                }
+                let attempt =
+                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
+                drop(host);
                 drop(vm);
+                let error = match attempt {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        return Err(self.defer_execution(reason));
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                };
                 self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                 return Err(error);
             }
@@ -43021,20 +43007,17 @@ impl StateTransaction<'_, '_> {
                 }
                 let run_result = vm.run_with_host(&mut host);
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                let local_deferral = run_result
-                    .as_ref()
-                    .err()
-                    .and_then(crate::execution_attempt::ExecutionDeferred::from_vm_error);
                 let run_error = run_result.err().map(|error| {
-                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error)
+                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
                 });
-                if let Some(error) = run_error {
-                    {
-                        let _consumed_host = host;
-                    }
-                    if let Some(reason) = local_deferral {
-                        return Err(self.defer_execution(reason).into());
-                    }
+                if let Some(attempt) = run_error {
+                    drop(host);
+                    let error = match attempt {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            return Err(self.defer_execution(reason).into());
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    };
                     self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                     return Err(error.into());
                 }
@@ -43315,21 +43298,23 @@ impl StateTransaction<'_, '_> {
                             }
                             let run_result = vm.run_with_host(&mut host);
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                            let local_deferral = run_result.as_ref().err().and_then(
-                                crate::execution_attempt::ExecutionDeferred::from_vm_error,
-                            );
                             let run_error = run_result.err().map(|error| {
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &vm, &error,
+                                    &vm, error,
                                 )
                             });
-                            if let Some(error) = run_error {
-                                {
-                                    let _consumed_host = host;
-                                }
-                                if let Some(reason) = local_deferral {
-                                    return Err(self.defer_execution(reason).into());
-                                }
+                            if let Some(attempt) = run_error {
+                                drop(host);
+                                let error = match attempt {
+                                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                        reason,
+                                    ) => {
+                                        return Err(self.defer_execution(reason).into());
+                                    }
+                                    crate::execution_attempt::ExecutionAttemptError::Rejected(
+                                        error,
+                                    ) => error,
+                                };
                                 self.last_tx_gas_used =
                                     self.last_tx_gas_used.saturating_add(trigger_gas_used);
                                 return Err(error.into());
@@ -43509,10 +43494,14 @@ mod alias_index_restore;
 mod alias_lease;
 use alias_lease::validate_alias_lease_window;
 mod asset_index_restore;
+pub(crate) mod contract_subject_restore;
+mod contract_subject_validation;
 mod ownership_index_restore;
+mod proof_status_restore;
 pub(crate) mod sccp_snapshot_state;
 pub(crate) mod snapshot_service_state;
 pub(crate) mod snapshot_storage;
+mod verifying_key_index_validation;
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotNoritoBlob {
     pub encoded_hex: String,

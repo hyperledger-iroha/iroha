@@ -162,13 +162,6 @@ impl AttachmentStore {
             .ok_or(AttachmentError::Invalid("missing pending parent operation"))?;
         let transaction_root = self.directory.ensure_child("transactions")?;
         let journal = transaction_root.path().join(pending.journal_name()?);
-        let exists = match std::fs::symlink_metadata(&journal) {
-            Ok(_) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        // The wallet owner performs handle-bound journal validation; this existence check only
-        // chooses create versus exact recovery and never authorizes reading or overwriting it.
         let account = AccountService::new(parent_config.clone())
             .and_then(|account| account.with_deadline(options.deadline))
             .map_err(|_| {
@@ -192,7 +185,25 @@ impl AttachmentStore {
                         })?;
                     None
                 } else {
-                    if !exists {
+                    let preparation = account
+                        .inspect_private_root_registration_preparation(&journal, &request)
+                        .map_err(|_| {
+                            AttachmentError::Operation(
+                                "parent preparation differs from exact request",
+                            )
+                        })?;
+                    let needs_prepare = match preparation.phase() {
+                        iroha_wallet::operations::NativePreparationPhase::Missing
+                        | iroha_wallet::operations::NativePreparationPhase::RequestOnly
+                        | iroha_wallet::operations::NativePreparationPhase::PayloadRetained => true,
+                        iroha_wallet::operations::NativePreparationPhase::Signed => false,
+                        iroha_wallet::operations::NativePreparationPhase::Retired => {
+                            return Err(AttachmentError::Operation(
+                                "original parent request was retired",
+                            ));
+                        }
+                    };
+                    if needs_prepare {
                         account
                             .prepare_private_root_registration(&request, &journal)
                             .map_err(|_| {
@@ -218,7 +229,25 @@ impl AttachmentStore {
                         })?;
                     None
                 } else {
-                    if !exists {
+                    let preparation = account
+                        .inspect_private_root_anchor_preparation(&journal, &request)
+                        .map_err(|_| {
+                            AttachmentError::Operation(
+                                "parent preparation differs from exact request",
+                            )
+                        })?;
+                    let needs_prepare = match preparation.phase() {
+                        iroha_wallet::operations::NativePreparationPhase::Missing
+                        | iroha_wallet::operations::NativePreparationPhase::RequestOnly
+                        | iroha_wallet::operations::NativePreparationPhase::PayloadRetained => true,
+                        iroha_wallet::operations::NativePreparationPhase::Signed => false,
+                        iroha_wallet::operations::NativePreparationPhase::Retired => {
+                            return Err(AttachmentError::Operation(
+                                "original parent request was retired",
+                            ));
+                        }
+                    };
+                    if needs_prepare {
                         account
                             .prepare_private_root_anchor(&request, &journal)
                             .map_err(|_| {

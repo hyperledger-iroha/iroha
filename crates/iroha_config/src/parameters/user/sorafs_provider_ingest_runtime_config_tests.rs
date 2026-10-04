@@ -39,10 +39,9 @@ fn valid_config() -> SorafsProviderIngestRuntimeConfig {
 }
 fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfig) {
     config.enabled = true;
-    config.clock_seal_handle =
-        Some("sealed://sorafs/provider-attestation/clock-primary".to_owned());
-    config.clock_seal_revision = Some(11);
-    config.clock_seal_policy_digest_hex = Some("c1".repeat(32));
+    config.clock_handle = Some("sealed://sorafs/provider-attestation/clock-primary".to_owned());
+    config.clock_revision = Some(11);
+    config.clock_policy_digest_hex = Some("c1".repeat(32));
     config.approval_signer_handle =
         Some("signer://sorafs/provider-attestation/approval-primary".to_owned());
     config.approval_signer_revision = Some(12);
@@ -67,9 +66,9 @@ fn disabled_default_is_inert() {
     let config = SorafsProviderIngestRuntimeConfig::default();
     let journal = &config.provider_attestation_journal;
     assert!(!journal.enabled);
-    assert!(journal.clock_seal_handle.is_none());
-    assert!(journal.clock_seal_revision.is_none());
-    assert!(journal.clock_seal_policy_digest_hex.is_none());
+    assert!(journal.clock_handle.is_none());
+    assert!(journal.clock_revision.is_none());
+    assert!(journal.clock_policy_digest_hex.is_none());
     assert!(journal.approval_signer_handle.is_none());
     assert!(journal.approval_signer_revision.is_none());
     assert!(journal.approval_signer_policy_digest_hex.is_none());
@@ -166,7 +165,7 @@ fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
     assert_eq!(
         parsed.provider_attestation_journal,
         Some(actual::SorafsProviderAttestationJournal {
-            clock_seal: actual::SorafsProviderAttestationRuntimeBinding {
+            clock: actual::SorafsProviderAttestationRuntimeBinding {
                 handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
                 revision: 11,
                 policy_digest: [0xC1; 32],
@@ -196,9 +195,9 @@ fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
 #[test]
 fn disabled_attestation_journal_rejects_every_binding_field() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 9] = [
-        |config| config.clock_seal_handle = Some("sealed://clock/primary".to_owned()),
-        |config| config.clock_seal_revision = Some(1),
-        |config| config.clock_seal_policy_digest_hex = Some("c1".repeat(32)),
+        |config| config.clock_handle = Some("sealed://clock/primary".to_owned()),
+        |config| config.clock_revision = Some(1),
+        |config| config.clock_policy_digest_hex = Some("c1".repeat(32)),
         |config| config.approval_signer_handle = Some("signer://approval/primary".to_owned()),
         |config| config.approval_signer_revision = Some(1),
         |config| config.approval_signer_policy_digest_hex = Some("c2".repeat(32)),
@@ -220,11 +219,9 @@ fn enabled_attestation_journal_requires_all_three_binding_roles() {
         let mut config = valid_config();
         enable_attestation_journal(&mut config.provider_attestation_journal);
         if present_roles & 0b001 == 0 {
-            config.provider_attestation_journal.clock_seal_handle = None;
-            config.provider_attestation_journal.clock_seal_revision = None;
-            config
-                .provider_attestation_journal
-                .clock_seal_policy_digest_hex = None;
+            config.provider_attestation_journal.clock_handle = None;
+            config.provider_attestation_journal.clock_revision = None;
+            config.provider_attestation_journal.clock_policy_digest_hex = None;
         }
         if present_roles & 0b010 == 0 {
             config.provider_attestation_journal.approval_signer_handle = None;
@@ -255,13 +252,12 @@ fn enabled_attestation_journal_rejects_partial_binding_triplets() {
     for present_fields in 0b001_u8..0b111 {
         let mut config = valid_config();
         enable_attestation_journal(&mut config.provider_attestation_journal);
-        config.provider_attestation_journal.clock_seal_handle =
+        config.provider_attestation_journal.clock_handle =
             (present_fields & 0b001 != 0).then(|| "sealed://clock/primary".to_owned());
-        config.provider_attestation_journal.clock_seal_revision =
+        config.provider_attestation_journal.clock_revision =
             (present_fields & 0b010 != 0).then_some(11);
-        config
-            .provider_attestation_journal
-            .clock_seal_policy_digest_hex = (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
+        config.provider_attestation_journal.clock_policy_digest_hex =
+            (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
         let mut emitter = Emitter::new();
         assert!(
             config
@@ -275,16 +271,16 @@ fn enabled_attestation_journal_rejects_partial_binding_triplets() {
 #[test]
 fn enabled_attestation_journal_rejects_unqualified_bindings() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
-        |config| config.clock_seal_handle = Some("sealed://clock/test".to_owned()),
+        |config| config.clock_handle = Some("sealed://clock/test".to_owned()),
         |config| config.approval_signer_handle = Some("signer://approval/dev".to_owned()),
         |config| config.inventory_handle = Some("coordinator://inventory/mock".to_owned()),
-        |config| config.clock_seal_revision = Some(0),
+        |config| config.clock_revision = Some(0),
         |config| config.approval_signer_revision = Some(0),
         |config| config.inventory_revision = Some(0),
-        |config| config.clock_seal_policy_digest_hex = Some("00".repeat(32)),
+        |config| config.clock_policy_digest_hex = Some("00".repeat(32)),
         |config| config.approval_signer_policy_digest_hex = Some("00".repeat(32)),
         |config| config.inventory_policy_digest_hex = Some("00".repeat(32)),
-        |config| config.clock_seal_policy_digest_hex = Some("C1".repeat(32)),
+        |config| config.clock_policy_digest_hex = Some("C1".repeat(32)),
         |config| config.approval_signer_policy_digest_hex = Some("gg".repeat(32)),
         |config| config.inventory_policy_digest_hex = Some("c3".repeat(31)),
     ];
@@ -728,4 +724,35 @@ fn native_completion_credential_is_explicit_absolute_and_disabled_configs_reject
     let mut emitter = Emitter::new();
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn selected_clock_triplet_uses_the_single_first_release_config_spelling() {
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    let table: toml::Table = r#"
+clock_handle = "software://sorafs/provider-attestation-clock"
+clock_revision = 1
+clock_policy_digest_hex = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+"#
+    .parse()
+    .unwrap();
+    let current = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(table.clone()))
+        .read_and_complete::<SorafsProviderAttestationJournalConfig>()
+        .unwrap();
+    assert_eq!(current.clock_revision, Some(1));
+    assert_eq!(
+        current.clock_handle.as_deref(),
+        Some("software://sorafs/provider-attestation-clock")
+    );
+    let retired = table
+        .into_iter()
+        .map(|(name, value)| (name.replacen("clock_", "clock_seal_", 1), value))
+        .collect();
+    assert!(
+        ConfigReader::new()
+            .with_toml_source(TomlSource::inline(retired))
+            .read_and_complete::<SorafsProviderAttestationJournalConfig>()
+            .is_err()
+    );
 }

@@ -2311,7 +2311,7 @@ mod tests {
         }
         let mut program = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 0,

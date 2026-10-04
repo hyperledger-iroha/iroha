@@ -412,16 +412,23 @@ async fn signed_query_cancellation_never_replays() {
         Duration::from_millis(10),
     );
     let account = client.account_client().unwrap();
-    assert_eq!(
-        account
+    {
+        let actual_error = account
             .da()
             .verify_commitment(&sample_da_commitment_proof())
             .await
-            .unwrap_err(),
-        Error::Timeout {
-            operation: "data_availability.commitment.verify"
-        }
-    );
+            .unwrap_err();
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            (actual_operation,),
+            (&("data_availability.commitment.verify"),)
+        );
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
 }

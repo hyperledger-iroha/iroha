@@ -57,7 +57,7 @@ fn finite_utc_interval_requires_both_custody_endpoints_at_one_applied_cut() {
                 assert_eq!(verified.applied_floor().height, 4);
                 verified.ensure_live().unwrap();
             }
-            (Err(actual), Some(expected)) => assert_eq!(actual, expected),
+            (Err(actual), Some(expected)) => assert_eq!(actual.rejection(), Some(expected)),
             _ => panic!("both finite UTC endpoints must satisfy custody eligibility"),
         }
     }
@@ -98,7 +98,8 @@ fn malformed_interval_is_rejected_before_native_eligibility() {
         assert_eq!(
             pending
                 .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(time))
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Clock)
         );
     }
@@ -143,7 +144,10 @@ fn reserved_interval_checks_execution_lower_bound_and_exclusive_expiry_upper_bou
                 assert_eq!(verified.snapshot().operation.as_ref(), Some(&row));
                 assert_eq!(verified.applied_floor().height, 5);
             } else {
-                assert_eq!(result.err(), Some(Error::Authority));
+                assert_eq!(
+                    result.err().and_then(|failure| failure.rejection()),
+                    Some(Error::Authority)
+                );
             }
         }
     }
@@ -203,7 +207,8 @@ fn completed_interval_cannot_authorize_without_exact_complete_source_proof() {
             assert_eq!(
                 pending
                     .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(time))
-                    .err(),
+                    .err()
+                    .and_then(|failure| failure.rejection()),
                 Some(Error::Execution),
                 "a successful native completed Check alone cannot admit this phase"
             );

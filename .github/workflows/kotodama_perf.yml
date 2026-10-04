@@ -331,7 +331,7 @@ jobs:
 
       - name: Build canonical Kotodama release tools
         working-directory: candidate
-        run: cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --bin ivm_artifact_admit
+        run: cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --features ivm_artifact_admission/dev-tools --bin ivm_artifact_admit
 
       - name: Compile every Kotodama documentation source
         working-directory: candidate

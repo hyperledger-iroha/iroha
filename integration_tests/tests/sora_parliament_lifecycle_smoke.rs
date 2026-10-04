@@ -194,18 +194,25 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     network.ensure_blocks(1).await?;
     let client = network.client();
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
-    let beacon_record =
-        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
-            .wrap_err("derive exact public beacon fixture")?;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let beacon_record = deterministic_parliament_beacon_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+        &beacon_budget,
+    )
+    .wrap_err("derive exact public beacon fixture")?;
     let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
         network_id: beacon_record.session.network_id,
         session_id: beacon_record.session.session_id,
         roster_hash: beacon_record.session.roster_hash,
         transcript_hash: beacon_record.session.transcript_hash,
     };
-    let validated_beacon_session =
-        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
-            .wrap_err("replay the exact public beacon transcript")?;
+    let validated_beacon_session = validate_global_threshold_beacon_session_v1(
+        &beacon_record.session,
+        &beacon_binding,
+        &beacon_budget,
+    )
+    .wrap_err("replay the exact public beacon transcript")?;
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public TLE fixture")?;
@@ -527,9 +534,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
 
     let client = network.client();
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
-    let beacon_record =
-        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
-            .wrap_err("derive mandatory NPoS beacon fixture")?;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let beacon_record = deterministic_parliament_beacon_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+        &beacon_budget,
+    )
+    .wrap_err("derive mandatory NPoS beacon fixture")?;
     assert_eq!(beacon_record.session.committee_size, 4);
     assert_eq!(beacon_record.session.threshold, 2);
     let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
@@ -538,9 +549,12 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         roster_hash: beacon_record.session.roster_hash,
         transcript_hash: beacon_record.session.transcript_hash,
     };
-    let validated_beacon_session =
-        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
-            .wrap_err("replay mandatory NPoS beacon transcript")?;
+    let validated_beacon_session = validate_global_threshold_beacon_session_v1(
+        &beacon_record.session,
+        &beacon_binding,
+        &beacon_budget,
+    )
+    .wrap_err("replay mandatory NPoS beacon transcript")?;
     let install_height = next_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
@@ -940,9 +954,13 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
 
     let client = network.client();
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
-    let beacon_record =
-        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
-            .wrap_err("derive fail-closed NPoS beacon fixture")?;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let beacon_record = deterministic_parliament_beacon_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+        &beacon_budget,
+    )
+    .wrap_err("derive fail-closed NPoS beacon fixture")?;
     assert_eq!(beacon_record.session.committee_size, 4);
     assert_eq!(beacon_record.session.threshold, 2);
     let install_height = next_execution_height(

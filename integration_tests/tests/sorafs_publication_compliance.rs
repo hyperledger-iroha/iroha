@@ -9,12 +9,14 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::prelude::*;
 use iroha_torii::sorafs::gateway::{
     GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+};
+use sha2::{Digest as _, Sha256};
+use sorafs_manifest::gateway_compliance::{
     GatewayComplianceAcknowledgementPayloadV1, GatewayComplianceAcknowledgementV1,
     GatewayComplianceCatalogApprovalV1, GatewayComplianceCatalogPayloadV1,
     GatewayComplianceCatalogV1, GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
     gateway_compliance_feed_transport_policy_digest,
 };
-use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,

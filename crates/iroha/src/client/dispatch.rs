@@ -3,10 +3,13 @@
 use super::{Client, DefaultRequestBuilder};
 use crate::{Error, Result, TransportErrorKind, http::Response};
 
-pub(super) fn transport_error(operation: &'static str, error: &eyre::Report) -> Error {
-    if let Some(typed) = error.downcast_ref::<Error>() {
-        return typed.clone();
-    }
+pub(super) fn transport_error(operation: &'static str, error: eyre::Report) -> Error {
+    // Move the original failure out of its context. Retained response bytes and
+    // resource causes belong to this attempt and must not be cloned on return.
+    let error = match error.downcast::<Error>() {
+        Ok(original) => return original,
+        Err(error) => error,
+    };
     let io_kind = error.chain().find_map(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -50,7 +53,7 @@ pub(super) async fn send(
         .await
         .map_err(|_| Error::Timeout { operation })?
     };
-    response.map_err(|error| transport_error(operation, &error))
+    response.map_err(|error| transport_error(operation, error))
 }
 
 pub(super) fn media_type<'a>(

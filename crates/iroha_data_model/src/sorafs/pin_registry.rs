@@ -1060,7 +1060,7 @@ pub fn derive_sorafs_auto_replication_order_id_v1(
     name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1"
 )]
 pub struct ProviderIngestCompletionSignerPolicyV1 {
-    /// Stable governance identity for this provider-owner signing policy.
+    /// Stable governance identity for this provider completion signing policy.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_id: [u8; 32],
     /// Monotonic policy revision beginning at one.
@@ -1109,7 +1109,7 @@ impl ProviderIngestCompletionSignerPolicyV1 {
         policy_id_is_nonzero && predecessor_is_canonical && policy_digest_is_nonzero
     }
 }
-/// Chain-authoritative owner and governed signer policy for provider ingest.
+/// Chain-authoritative provider owner, independent completion signer, and governed policy.
 #[derive(
     Clone,
     Debug,
@@ -1128,8 +1128,10 @@ impl ProviderIngestCompletionSignerPolicyV1 {
     name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1"
 )]
 pub struct ProviderIngestCompletionAuthorityV1 {
-    /// Current registered owner authorized to complete this provider's work.
+    /// Current registered owner authorized to set or revoke this provider's binding.
     pub provider_owner: AccountId,
+    /// Exact registered transaction authority authorized to complete this provider's work.
+    pub completion_signer: AccountId,
     /// Exact governed completion-signer policy active for this owner.
     pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
@@ -1138,10 +1140,12 @@ impl ProviderIngestCompletionAuthorityV1 {
     #[must_use]
     pub const fn new(
         provider_owner: AccountId,
+        completion_signer: AccountId,
         signer_policy: ProviderIngestCompletionSignerPolicyV1,
     ) -> Self {
         Self {
             provider_owner,
+            completion_signer,
             signer_policy,
         }
     }
@@ -1588,7 +1592,12 @@ mod tests {
         };
         assert!(revision_one.is_valid());
         assert!(
-            ProviderIngestCompletionAuthorityV1::new(fixture_account(), revision_one).is_valid()
+            ProviderIngestCompletionAuthorityV1::new(
+                fixture_account().clone(),
+                fixture_account(),
+                revision_one
+            )
+            .is_valid()
         );
         let mut revision_one_with_predecessor = revision_one;
         revision_one_with_predecessor.predecessor_digest = Some([0x90; 32]);
@@ -1664,6 +1673,7 @@ mod tests {
                 completion_epoch: 20,
                 assignment_revision: 1,
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    completed_by.clone(),
                     completed_by,
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [0x91; 32],
@@ -1735,3 +1745,5 @@ mod tests {
 
 #[cfg(test)]
 mod captured_pin_registry_schema_tests;
+#[cfg(test)]
+mod completion_authority_tests;

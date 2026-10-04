@@ -55,7 +55,8 @@ fn published_generation_survives_retry_with_an_unpublished_leftover() {
         .unwrap();
     drop(stage);
     let pin = read(&directory).unwrap().launcher;
-    let request = LocalnetRequest::new(pin.path.clone(), pin.path);
+    let mut request = LocalnetRequest::new(pin.path.clone(), pin.path);
+    request.service_profile = prepared.service_profile;
     assert!(matches!(store.up(&request), Err(Error::Io(_))));
     assert_eq!(encode(&read(&directory).unwrap()).unwrap(), before);
     assert_eq!(store.prepared("local").unwrap(), prepared);
@@ -90,7 +91,7 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
         .unwrap();
     let binary = directory.path().join("binary");
     let pin = store::pin_binary(&binary).unwrap();
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     let _operation = store::acquire(&directory, "operation.lock", "private").unwrap();
     let ports = LocalnetPorts::reserve().unwrap();
@@ -110,6 +111,17 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
     )
     .unwrap();
     assert_ne!(retained.prepared.context.account_id, abandoned_owner);
+    assert_eq!(
+        retained.prepared.service_profile,
+        crate::localnet::LocalnetServiceProfile::Standard
+    );
+    assert!(
+        !directory
+            .path()
+            .join(DIRECTORY)
+            .join("runtime/stream-token-authorities")
+            .exists()
+    );
     assert!(!directory.path().join(STAGING).exists());
     assert!(!directory.path().join(MANIFEST).exists());
     assert_eq!(
@@ -237,7 +249,10 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "native-authorities".into();
-    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+    assert_eq!(
+        request.service_profile,
+        crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+    );
     let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
     let ports = LocalnetPorts::reserve().unwrap();
     let retained = prepare(

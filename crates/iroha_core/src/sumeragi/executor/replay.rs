@@ -246,7 +246,7 @@ impl CompletedReplay {
             &AllocationBudget,
         ) -> Result<ChargedBuffer<u8>, ResultPreimageError>,
     ) -> Result<(), PublicationError> {
-        if !cfg!(all(test, sumeragi_core_mutation = "HC86"))
+        if !cfg!(all(test, sumeragi_core_mutation = "HC94"))
             && self.source != ReplaySource::capture(block.source())
         {
             return Err(PublicationError::Retryable(

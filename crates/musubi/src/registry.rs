@@ -74,6 +74,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
+mod provider_inventory;
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";

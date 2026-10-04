@@ -1,7 +1,5 @@
 //! Exact original-funded fixed trace backing and public PC rows.
 //!
-//! TODO: Link with the coordinated delta/PC lifecycle and preflight cut. This
-//! draft deliberately has no module declaration in the current runtime.
 //! An absent original budget retains the existing fallible standalone owner;
 //! neither construction nor reset creates a substitute State allocation pool.
 
@@ -126,7 +124,9 @@ pub(super) fn check_scope(
     match (original, scope) {
         (Some(original), Some(scope)) if scope.belongs_to(original) => Ok(()),
         (None, None) => Ok(()),
-        _ => Err(VMError::HostUnavailable),
+        _ => Err(VMError::ExecutionDeferred(
+            crate::error::ExecutionDeferral::TraceOwnerUnavailable,
+        )),
     }
 }
 pub(super) fn next_capacity(capacity: usize, needed: usize) -> Result<usize, VMError> {
@@ -174,13 +174,20 @@ impl PcTraceLog {
             original: original.cloned(),
         }
     }
+    /// Validate original refund custody before a compound trace operation.
+    pub(crate) fn validate_scope(
+        &self,
+        scope: Option<&AllocationScope<'_>>,
+    ) -> Result<(), VMError> {
+        check_scope(self.original.as_ref(), scope)
+    }
     /// Admit public observation count before its enclosing effects.
     pub(crate) fn prepare(
         &mut self,
         additional: usize,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         let needed = self
             .as_slice()
             .len()
@@ -208,6 +215,10 @@ impl PcTraceLog {
     pub(crate) fn record_reserved(&mut self, pc: u64) {
         self.rows.push_reserved(pc);
     }
+    /// Internal immutable capture input with original identity and public capacity.
+    pub(super) fn capture_storage(&self) -> (&TraceRows<u64>, Option<&AllocationBudget>) {
+        (&self.rows, self.original.as_ref())
+    }
     /// Borrow original initialized PCs.
     pub fn as_slice(&self) -> &[u64] {
         self.rows.as_slice()
@@ -224,7 +235,7 @@ impl PcTraceLog {
     }
     /// Retire backing without rebinding the original owner.
     pub(crate) fn reset(&mut self, scope: Option<&AllocationScope<'_>>) -> Result<(), VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         let retired = std::mem::replace(&mut self.rows, TraceRows::empty(self.original.is_some()));
         drop(retired);
         Ok(())
@@ -235,7 +246,7 @@ impl PcTraceLog {
         &self,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<Self, VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         let mut copy = Self::new(self.original.as_ref());
         copy.prepare(self.rows.capacity(), scope)?;
         copy.rows.copy_from(self.as_slice());

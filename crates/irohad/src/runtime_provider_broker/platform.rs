@@ -24,7 +24,12 @@ const BROKER_IO_TIMEOUT_V1: Duration = Duration::from_secs(15);
 const MAX_BROKER_SESSIONS_V1: usize = 8;
 include!("platform_server_qualification.rs");
 include!("platform_operation_dispatch.rs");
+#[path = "server_observation.rs"]
+mod server_observation;
 include!("platform_server_transport.rs");
+#[path = "received_exchange.rs"]
+mod received_exchange;
+use received_exchange::{OutboundExchangeV1, ReceivedExchangeV1};
 include!("platform_provider_clients_01.rs");
 include!("pop_recipient_client.rs");
 include!("platform_provider_clients_02.rs");

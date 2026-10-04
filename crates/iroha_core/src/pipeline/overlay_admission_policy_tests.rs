@@ -108,3 +108,22 @@ fn empty_overlay_is_noop() {
     let ovl = TxOverlay::default();
     assert!(ovl.is_empty());
 }
+
+#[test]
+fn header_policy_rejects_retired_minor_before_other_policy_errors() {
+    let retired = ivm::ProgramMetadata {
+        version_minor: 0,
+        mode: 0xff,
+        vector_length: 255,
+        max_cycles: 0,
+        abi_version: 2,
+        ..ivm::ProgramMetadata::default()
+    };
+    assert!(matches!(validate_header_policy(&retired),
+        Err(IvmAdmissionError::UnsupportedVersion(info)) if info.major == 1 && info.minor == 0));
+    let current = ivm::ProgramMetadata {
+        max_cycles: 1,
+        ..ivm::ProgramMetadata::default()
+    };
+    assert!(validate_header_policy(&current).is_ok());
+}

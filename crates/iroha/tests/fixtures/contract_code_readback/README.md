@@ -25,10 +25,11 @@ Update the provenance and the SDK/IVM hash goldens together. Run the IVM
 same source before recording their results. Admission and exact-byte checks are
 required; a plausible hash alone is insufficient.
 
-Build the two canonical producers without a node dependency:
+Build the two canonical producers without a node dependency. The admission tool
+is a development binary, so it must be selected with its `dev-tools` feature:
 
 ```sh
-cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --bin ivm_artifact_admit
+cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --features ivm_artifact_admission/dev-tools --bin ivm_artifact_admit
 ```
 
 The owner accepts `--admission-tool <path>` for a nondefault binary location.

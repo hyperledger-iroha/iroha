@@ -331,7 +331,7 @@ pub(crate) fn permission_targets_enacted_validation_fee_payout_trigger(
 ) -> Result<bool, iroha_data_model::isi::error::InstructionExecutionError> {
     let trigger_id = match trigger_id_from_permission(state_transaction, permission) {
         Ok(trigger_id) => trigger_id,
-        Err(_) if cfg!(all(test, sumeragi_core_mutation = "HC91")) => return Ok(false),
+        Err(_) if cfg!(all(test, sumeragi_core_mutation = "HC97")) => return Ok(false),
         Err(error) => return Err(error),
     };
     Ok(trigger_id.is_some_and(|trigger_id| {
@@ -383,7 +383,7 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
         Ok(Some(registry)) => registry,
         Ok(None) => return Ok(None),
         Err(error) => {
-            if cfg!(all(test, sumeragi_core_mutation = "HC89")) {
+            if cfg!(all(test, sumeragi_core_mutation = "HC96")) {
                 return Ok(None);
             }
             return Err(state_transaction.world.attempt_error_to_instruction_error(

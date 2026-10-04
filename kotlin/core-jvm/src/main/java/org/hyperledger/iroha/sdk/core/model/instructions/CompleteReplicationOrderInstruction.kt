@@ -1,9 +1,11 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+
 private const val COMPLETE_REPLICATION_ACTION = "CompleteReplicationOrder"
 
 /** Exact governed signer-policy identity expected at completion commit. */
-data class ProviderIngestCompletionSignerPolicyV1(
+class ProviderIngestCompletionSignerPolicyV1(
     val policyId: String,
     val revision: Long,
     val predecessorDigest: String?,
@@ -28,6 +30,17 @@ data class ProviderIngestCompletionSignerPolicyV1(
         }
     }
 
+    override fun equals(other: Any?): Boolean = other is ProviderIngestCompletionSignerPolicyV1 &&
+        policyId == other.policyId && revision == other.revision &&
+        predecessorDigest == other.predecessorDigest && policyDigest == other.policyDigest
+
+    override fun hashCode(): Int {
+        var result = policyId.hashCode()
+        result = 31 * result + revision.hashCode()
+        result = 31 * result + (predecessorDigest?.hashCode() ?: 0)
+        return 31 * result + policyDigest.hashCode()
+    }
+
     internal fun canonicalJson(): String {
         val predecessor = predecessorDigest?.let { "\"$it\"" } ?: "null"
         return "{\"policy_id\":\"$policyId\",\"revision\":$revision," +
@@ -35,9 +48,10 @@ data class ProviderIngestCompletionSignerPolicyV1(
     }
 }
 
-/** Exact provider owner and signer policy expected at completion commit. */
-data class ProviderIngestCompletionAuthorityV1(
+/** Exact provider owner, completion signer and signer policy expected at completion commit. */
+class ProviderIngestCompletionAuthorityV1(
     val providerOwner: String,
+    val completionSigner: String,
     val signerPolicy: ProviderIngestCompletionSignerPolicyV1,
 ) {
     init {
@@ -47,15 +61,26 @@ data class ProviderIngestCompletionAuthorityV1(
         ) {
             "providerOwner must be an exact canonical I105 account id"
         }
+        require(requireCanonicalI105Address(completionSigner, "completionSigner") == completionSigner) {
+            "completionSigner must be an exact canonical I105 account id"
+        }
     }
 
+    override fun equals(other: Any?): Boolean = other is ProviderIngestCompletionAuthorityV1 &&
+        providerOwner == other.providerOwner && completionSigner == other.completionSigner &&
+        signerPolicy == other.signerPolicy
+
+    override fun hashCode(): Int =
+        31 * (31 * providerOwner.hashCode() + completionSigner.hashCode()) + signerPolicy.hashCode()
+
     internal fun canonicalJson(): String =
-        "{\"provider_owner\":\"$providerOwner\",\"signer_policy\":" +
+        "{\"provider_owner\":\"$providerOwner\",\"completion_signer\":\"$completionSigner\"," +
+            "\"signer_policy\":" +
             "${signerPolicy.canonicalJson()}}"
 }
 
 /** Exact finalized committed-chain prefix used to prepare a completion. */
-data class ProviderIngestFinalizedAnchorV1(
+class ProviderIngestFinalizedAnchorV1(
     val height: Long,
     val blockHash: String,
 ) {
@@ -63,6 +88,11 @@ data class ProviderIngestFinalizedAnchorV1(
         ReplicationOrderInstructionValidation.requirePositiveRevision(height, "height")
         ReplicationOrderInstructionValidation.requireDigest(blockHash, "blockHash")
     }
+
+    override fun equals(other: Any?): Boolean = other is ProviderIngestFinalizedAnchorV1 &&
+        height == other.height && blockHash == other.blockHash
+
+    override fun hashCode(): Int = 31 * height.hashCode() + blockHash.hashCode()
 
     internal fun canonicalJson(): String =
         "{\"height\":$height,\"block_hash\":\"$blockHash\"}"
@@ -91,7 +121,7 @@ class CompleteReplicationOrderInstruction(
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
 
-    override val arguments: Map<String, String> = linkedMapOf(
+    override val arguments: Map<String, String> get() = linkedMapOf(
         "action" to COMPLETE_REPLICATION_ACTION,
         "order_id" to this.orderId,
         "provider_id" to this.providerId,
@@ -124,7 +154,7 @@ class CompleteReplicationOrderInstruction(
 
     companion object {
         private val authorityPattern = Regex(
-            """^\{"provider_owner":"([^"\\]+)","signer_policy":\{"policy_id":"([0-9a-f]{64})","revision":([1-9][0-9]*),"predecessor_digest":(null|"([0-9a-f]{64})"),"policy_digest":"([0-9a-f]{64})"\}\}$""",
+            """^\{"provider_owner":"([^"\\]+)","completion_signer":"([^"\\]+)","signer_policy":\{"policy_id":"([0-9a-f]{64})","revision":([1-9][0-9]*),"predecessor_digest":(null|"([0-9a-f]{64})"),"policy_digest":"([0-9a-f]{64})"\}\}$""",
         )
         private val anchorPattern = Regex(
             """^\{"height":([1-9][0-9]*),"block_hash":"([0-9a-f]{64})"\}$""",
@@ -161,13 +191,14 @@ class CompleteReplicationOrderInstruction(
                     "Instruction argument 'expected_authority' must use canonical JSON",
                 )
             val policy = ProviderIngestCompletionSignerPolicyV1(
-                policyId = match.groupValues[2],
-                revision = requireLongLiteral(match.groupValues[3], "signer policy revision"),
-                predecessorDigest = match.groupValues[5].ifEmpty { null },
-                policyDigest = match.groupValues[6],
+                policyId = match.groupValues[3],
+                revision = requireLongLiteral(match.groupValues[4], "signer policy revision"),
+                predecessorDigest = match.groupValues[6].ifEmpty { null },
+                policyDigest = match.groupValues[7],
             )
             val authority = ProviderIngestCompletionAuthorityV1(
                 providerOwner = match.groupValues[1],
+                completionSigner = match.groupValues[2],
                 signerPolicy = policy,
             )
             require(authority.canonicalJson() == value) {

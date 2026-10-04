@@ -1,4 +1,5 @@
 //! Contracts helpers.
+mod local_debug_attempt;
 mod local_debug_rendering;
 use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override,
@@ -1140,12 +1141,15 @@ fn execute_local_contract_debug_view<C: RunContext>(
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
-    let run_result = vm.run_with_host(&mut tracing_host);
+    let run_result = local_debug_attempt::run(&mut vm, &mut tracing_host)?;
     let (mut host, syscall_trace) = tracing_host.into_parts();
     let queued = host.drain_instructions();
     let durable_state_overlay = host.drain_durable_state_overlay();
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
-    let mut vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    let mut vm_diagnostic = run_result.as_ref().err().and_then(|error| {
+        vm.last_diagnostic()
+            .map(|diagnostic| map_local_vm_diagnostic(diagnostic, error))
+    });
     if let (Some(diagnostic), Some(source_map)) = (vm_diagnostic.as_mut(), source_map.as_deref()) {
         apply_local_contract_source_map(diagnostic, source_map, program_prefix_len);
     }
@@ -1203,8 +1207,11 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let result = descriptor.return_schema.as_ref().map_or_else(
         || Ok(norito::json::Value::Null),
         |schema| {
-            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
-                .map_err(|err| eyre!("failed to decode contract debug view return value: {err}"))
+            local_debug_attempt::decode_return(
+                &vm,
+                schema,
+                "failed to decode contract debug view return value",
+            )
         },
     )?;
     Ok(LocalContractDebugViewResponse {
@@ -1292,7 +1299,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
-    let run_result = vm.run_with_host(&mut tracing_host);
+    let run_result = local_debug_attempt::run(&mut vm, &mut tracing_host)?;
     let (mut host, syscall_trace) = tracing_host.into_parts();
     let queued = host.drain_instructions();
     let durable_state_overlay = host.drain_durable_state_overlay();
@@ -1301,7 +1308,10 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let queued_instructions = render_queued_instructions(&queued)?;
     let durable_state_overlay_json = render_durable_state_overlay(&durable_state_overlay)?;
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
-    let mut vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    let mut vm_diagnostic = run_result.as_ref().err().and_then(|error| {
+        vm.last_diagnostic()
+            .map(|diagnostic| map_local_vm_diagnostic(diagnostic, error))
+    });
     if let (Some(diagnostic), Some(source_map)) = (vm_diagnostic.as_mut(), source_map.as_deref()) {
         apply_local_contract_source_map(diagnostic, source_map, program_prefix_len);
     }
@@ -1330,8 +1340,11 @@ fn execute_local_contract_debug_call<C: RunContext>(
         .return_schema
         .as_ref()
         .map(|schema| {
-            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
-                .map_err(|err| eyre!("failed to decode contract debug call return value: {err}"))
+            local_debug_attempt::decode_return(
+                &vm,
+                schema,
+                "failed to decode contract debug call return value",
+            )
         })
         .transpose()?;
     Ok(LocalContractDebugCallResponse {
@@ -1375,16 +1388,22 @@ fn build_local_debug_budget(
         final_pc: vm.pc(),
     }
 }
-fn map_local_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> LocalContractDebugVmDiagnostic {
+fn map_local_vm_diagnostic(
+    diag: ivm::VmExecutionDiagnostic<'_>,
+    error: &ivm::VMError,
+) -> LocalContractDebugVmDiagnostic {
     LocalContractDebugVmDiagnostic {
         trap_kind: format!("{:?}", diag.trap_kind),
-        message: diag.message.clone(),
+        message: error.to_string(),
         pc: diag.pc,
         function: diag
             .source
             .as_ref()
-            .and_then(|source| source.function.clone()),
-        source_path: diag.source.as_ref().and_then(|source| source.path.clone()),
+            .and_then(|source| source.function.map(str::to_owned)),
+        source_path: diag
+            .source
+            .as_ref()
+            .and_then(|source| source.path.map(str::to_owned)),
         line: diag.source.as_ref().and_then(|source| source.line),
         column: diag.source.as_ref().and_then(|source| source.column),
         gas_limit: diag.budget.gas_limit,
@@ -1395,7 +1414,7 @@ fn map_local_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> LocalContractDe
         stack_limit_bytes: diag.budget.stack_limit_bytes,
         stack_bytes_used: diag.budget.stack_bytes_used,
         entrypoint_pc: diag.context.entrypoint_pc,
-        current_function: diag.context.current_function.clone(),
+        current_function: diag.context.current_function.map(str::to_owned),
         opcode: diag.context.opcode,
         syscall: diag.context.syscall,
         predecoded_loaded: diag.context.predecoded_loaded,

@@ -1,11 +1,11 @@
-//! Unix retained-file custody borrowing an existing directory and caller-owned basename.
+//! Native retained-file custody borrowing an existing directory and caller-owned basename.
 
 use super::*;
 
-/// A bounded Unix writer borrowing its original directory authority and basename.
+/// A bounded native writer borrowing its original directory authority and basename.
 ///
-/// The descriptor and metadata live inline; opening this capability does not clone the
-/// directory's retained lineage or allocate an owned basename. Both borrowed inputs must
+/// The descriptor and metadata live inline; this capability does not retain copies of the
+/// directory's lineage or basename. Both borrowed inputs must
 /// outlive this capability. Native ACL/path scratch and the existing directory's allocations
 /// remain the caller's admission responsibility. This is not a complete I/O memory budget.
 ///
@@ -49,7 +49,7 @@ pub struct BorrowedPendingPrivateFile<'a> {
     position: u64,
 }
 
-/// A bounded Unix immutable reader borrowing its directory and current basename.
+/// A bounded native immutable reader borrowing its directory and current basename.
 ///
 /// Uses the same strict access, identity, ancestry and publication checks as
 /// [`SealedPrivateFile`]. No writable descriptor, clone or raw-handle accessor is exposed.
@@ -78,7 +78,7 @@ pub struct BorrowedSealedPrivateFile<'a> {
 }
 
 impl PrivateDirectory {
-    /// Exclusively create a bounded private Unix writer borrowing this directory and name.
+    /// Exclusively create a bounded private writer borrowing this directory and name.
     ///
     /// The new file and its parent are synchronized before success. Existing names are never
     /// replaced or hardened. A refusal may leave an incomplete file for later reconciliation.
@@ -100,9 +100,10 @@ impl PrivateDirectory {
         })
     }
 
-    /// Reopen one bounded, strictly owner-read-only Unix file with borrowed authority.
+    /// Reopen one bounded, strictly owner-read-only file with borrowed authority.
     ///
-    /// Requires exact mode `0400`; incomplete writable files are refused without repair.
+    /// Unix requires exact mode `0400`; Windows requires a protected current-owner read-only
+    /// DACL. Incomplete writable files are refused without repair.
     /// This borrows both directory lineage and basename without retaining Rust-owned copies.
     ///
     /// # Errors
@@ -124,7 +125,9 @@ impl PrivateDirectory {
 }
 
 impl<'a> BorrowedPendingPrivateFile<'a> {
-    /// Consume writable custody into exact mode `0400` and synchronized immutable contents.
+    /// Consume writable custody into strict owner-read-only access and synchronized contents.
+    ///
+    /// Unix uses exact mode `0400`; Windows installs a protected owner-only read DACL.
     ///
     /// The same descriptor, borrowed authority and original extent bound survive sealing.
     /// Any failure leaves the claimed name for reconciliation.
@@ -250,8 +253,9 @@ impl io::Seek for BorrowedSealedPrivateFile<'_> {
     }
 }
 
-// TODO: Admit inherited directory/native scratch through the original caller resource owner,
-// and implement an equivalent Windows borrowed-custody seam before claiming portable budgets.
+// TODO: Admit inherited directory/native scratch through the original caller resource owner.
+// Borrowing avoids retained Rust lineage/name copies on Unix and Windows; it does not fund
+// native ACL/path/directory buffers or establish a complete portable allocation budget.
 
 #[cfg(test)]
 #[path = "borrowed_tests.rs"]

@@ -318,3 +318,70 @@ fn indirect_or_network_scoped_execution_cannot_acquire_genesis_authority() {
             .is_none()
     );
 }
+
+#[test]
+fn source_bound_current_admission_preserves_signed_genesis_material_expiry_and_custody() {
+    use crate::query::{
+        provider_admission::read_provider_admission_at_native_current_v1,
+        signer_check::{SignerCertifiedWalkV1, with_native_check_read_limits},
+    };
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
+    let mut initialize = initializer(&fixture);
+    let mut material: ProviderAdmissionGenesisMaterialV1 =
+        decode_frame(&initialize.providers[0].material).unwrap();
+    material.retention_epoch = NOW + 3;
+    initialize.providers[0].material = norito::encode_canonical(&material).unwrap();
+    let mut chain =
+        chain(vec![initialize.into()], None).expect("actual signed genesis initializer");
+    let log = chain.sign(
+        &key(1),
+        [iroha_data_model::isi::Log::new(
+            iroha_logger::Level::INFO,
+            "admission source-bound successor".to_owned(),
+        )
+        .into()],
+        (NOW + 1) * 1000,
+    );
+    assert!(chain.commit_at((NOW + 1) * 1000, vec![log])[0]);
+    let state = Arc::clone(chain.state());
+    let view = state.view();
+    let public_facade = native::read_finalized_provider_admission_v1(&view, provider, NOW + 1)
+        .unwrap()
+        .unwrap();
+    with_native_check_read_limits(|| {
+        let reader = SignerCertifiedWalkV1::new(&view).unwrap();
+        let current = reader.walk(2, 2).next().unwrap().unwrap();
+        let original =
+            read_provider_admission_at_native_current_v1(&view, &current, provider, NOW + 1)
+                .unwrap()
+                .unwrap();
+        assert!(original.is_genesis_material());
+        assert_eq!(original.envelope(), public_facade.envelope());
+        assert!(
+            read_provider_admission_at_native_current_v1(&view, &current, provider, NOW + 3)
+                .is_err(),
+            "original interval cannot be renewed by re-reading"
+        );
+        let tiny =
+            norito::DecodeLimits::new(64 * 1024 * 1024, 64 * 1024 * 1024, 64 * 1024 * 1024, 0, 128);
+        assert!(
+            norito::with_decode_limits_scope(
+                tiny,
+                || read_provider_admission_at_native_current_v1(&view, &current, provider, NOW + 1)
+            )
+            .is_err(),
+            "retained current receipt does not waive original admission decode/source charge"
+        );
+    });
+    drop(view);
+    state
+        .kura()
+        .corrupt_canonical_body_for_testing(std::num::NonZeroUsize::MIN)
+        .unwrap();
+    let view = state.view();
+    assert!(
+        with_native_check_read_limits(|| SignerCertifiedWalkV1::new(&view)).is_err(),
+        "missing original genesis frame is not replaced by retained admission bytes"
+    );
+}

@@ -512,3 +512,33 @@ fn standby_retirement_capture_retains_exact_original_predecessor_and_remaining_a
         norito::encode_canonical(&current).unwrap()
     );
 }
+
+#[test]
+fn local_unavailable_handle_replacement_preserves_both_governed_source_images() {
+    use crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier;
+    use std::sync::Arc;
+
+    let state = state();
+    install_policy(&state);
+    let captured = CapturedGovernedRegistry::try_capture(&state, limits())
+        .unwrap()
+        .unwrap();
+    let original_runtime = state.kagemusha_v1_runtime_verifier();
+    state
+        .install_kagemusha_v1_runtime_verifier_checked(
+            state.kagemusha_v1_runtime_reload_head(),
+            Arc::new(RejectAllKagemushaV1RuntimeVerifier),
+        )
+        .unwrap();
+    assert!(!Arc::ptr_eq(
+        &original_runtime,
+        &state.kagemusha_v1_runtime_verifier()
+    ));
+    assert!(captured.try_matches_current().unwrap());
+    let after = CapturedGovernedRegistry::try_capture(&state, limits())
+        .unwrap()
+        .unwrap();
+    assert_eq!(captured.current_bytes(), after.current_bytes());
+    assert_eq!(captured.predecessor_bytes(), after.predecessor_bytes());
+    state.validate_kagemusha_v1_runtime_for_startup().unwrap();
+}

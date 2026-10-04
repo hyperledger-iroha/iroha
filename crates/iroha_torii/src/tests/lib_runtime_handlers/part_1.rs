@@ -2586,6 +2586,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         sorafs_node,
         #[cfg(feature = "app_api")]
         sorafs_proof_outcome_signer: None,
+        sorafs_provider_attestation_inventory: None,
         #[cfg(feature = "app_api")]
         sorafs_repair_transaction_signer: None,
         #[cfg(feature = "app_api")]

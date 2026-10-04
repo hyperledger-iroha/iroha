@@ -953,7 +953,10 @@ impl Memory {
             return Ok(());
         };
         let end = pc.checked_add(4).ok_or(VMError::DecodeError)?;
-        if !pc.is_multiple_of(4) || end > self.code_length {
+        // The prepared-program owner already authenticates the instruction
+        // boundary relative to its admitted executable origin. A variable-size
+        // contract prefix can place that origin at any physical byte alignment.
+        if end > self.code_length {
             return Err(VMError::DecodeError);
         }
         let start = usize::try_from(pc).map_err(|_| VMError::DecodeError)?;

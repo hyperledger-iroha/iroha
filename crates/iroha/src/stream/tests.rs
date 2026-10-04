@@ -264,14 +264,21 @@ async fn default_transport_bounds_single_frames_and_fragmented_messages() {
                 if length == MAXIMUM {
                     assert!(matches!(result, Ok(StreamFrame::Binary(bytes)) if bytes == expected));
                 } else {
-                    assert_eq!(
-                        result.expect_err("oversized message must be rejected"),
-                        Error::ResponseTooLarge {
-                            maximum: MAXIMUM,
-                            actual: Some(length)
-                        },
-                        "fragmented={fragmented}",
-                    );
+                    {
+                        let actual_error = result.expect_err("oversized message must be rejected");
+                        let Error::ResponseTooLarge {
+                            maximum: actual_maximum,
+                            actual: actual_actual,
+                        } = &actual_error
+                        else {
+                            panic!("unexpected SDK error: {actual_error:?}");
+                        };
+                        assert_eq!(
+                            (actual_maximum, actual_actual,),
+                            (&(MAXIMUM), &(Some(length)),),
+                            "fragmented={fragmented}"
+                        );
+                    };
                 }
             };
             let ((), server) = tokio::join!(client, server);
@@ -303,15 +310,22 @@ async fn default_transport_rejects_oversized_send_without_writing_a_frame() {
         let mut connection = bounded(DefaultStreamTransport.connect(request))
             .await
             .unwrap();
-        assert_eq!(
-            bounded(connection.socket.send(vec![1; MAXIMUM + 1]))
+        {
+            let actual_error = bounded(connection.socket.send(vec![1; MAXIMUM + 1]))
                 .await
-                .unwrap_err(),
-            Error::ResponseTooLarge {
-                maximum: MAXIMUM,
-                actual: Some(MAXIMUM + 1)
-            },
-        );
+                .unwrap_err();
+            let Error::ResponseTooLarge {
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_maximum, actual_actual,),
+                (&(MAXIMUM), &(Some(MAXIMUM + 1)),)
+            );
+        };
         bounded(connection.socket.send(vec![2; MAXIMUM]))
             .await
             .unwrap();
@@ -416,50 +430,82 @@ fn socket_error_preserves_io_http_capacity_and_protocol_categories() {
             OPERATION,
             tungstenite::Error::Io(std::io::Error::new(kind, "retained cause")),
         );
-        assert_eq!(
-            error,
-            Error::Transport {
-                operation: OPERATION,
-                kind: TransportErrorKind::Io(kind),
-                details: "retained cause".to_owned(),
-            }
-        );
+        {
+            let actual_error = error;
+            let Error::Transport {
+                operation: actual_operation,
+                kind: actual_kind,
+                details: actual_details,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_operation, actual_kind, actual_details,),
+                (
+                    &(OPERATION),
+                    &(TransportErrorKind::Io(kind)),
+                    &("retained cause".to_owned()),
+                )
+            );
+        };
     }
-    assert_eq!(
-        socket_error(
+    {
+        let actual_error = socket_error(
             OPERATION,
-            tungstenite::Error::Io(std::io::Error::from(ErrorKind::TimedOut))
-        ),
-        Error::Timeout {
-            operation: OPERATION
-        },
-    );
+            tungstenite::Error::Io(std::io::Error::from(ErrorKind::TimedOut)),
+        );
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(OPERATION),));
+    };
     for body in [None, Some(b"retained API rejection".to_vec())] {
         let expected = body.clone().unwrap_or_default();
         let response = http::Response::builder().status(403).body(body).unwrap();
-        assert_eq!(
-            socket_error(OPERATION, tungstenite::Error::Http(Box::new(response))),
-            Error::Http {
-                operation: OPERATION,
-                status: 403,
-                retry_after: None,
-                body: expected,
-            }
-        );
+        {
+            let actual_error =
+                socket_error(OPERATION, tungstenite::Error::Http(Box::new(response)));
+            let Error::Http {
+                operation: actual_operation,
+                status: actual_status,
+                retry_after: actual_retry_after,
+                body: actual_body,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (
+                    actual_operation,
+                    actual_status,
+                    actual_retry_after,
+                    actual_body,
+                ),
+                (&(OPERATION), &(403), &(None), &(expected),)
+            );
+        };
     }
-    assert_eq!(
-        socket_error(
+    {
+        let actual_error = socket_error(
             OPERATION,
             tungstenite::Error::Capacity(tungstenite::error::CapacityError::MessageTooLong {
                 size: 17,
-                max_size: 16
-            })
-        ),
-        Error::ResponseTooLarge {
-            maximum: 16,
-            actual: Some(17)
-        },
-    );
+                max_size: 16,
+            }),
+        );
+        let Error::ResponseTooLarge {
+            maximum: actual_maximum,
+            actual: actual_actual,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_maximum, actual_actual,), (&(16), &(Some(17)),));
+    };
     assert!(matches!(
         socket_error(OPERATION, tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)),
         Error::StreamProtocol { operation: OPERATION, details } if !details.is_empty(),
@@ -473,13 +519,30 @@ fn rejected_upgrade_retains_exact_retry_after_delta() {
         .header(http::header::RETRY_AFTER, "3")
         .body(Some(b"slow down".to_vec()))
         .unwrap();
-    assert_eq!(
-        socket_error(OPERATION, tungstenite::Error::Http(Box::new(response))),
-        Error::Http {
-            operation: OPERATION,
-            status: 429,
-            retry_after: Some(Duration::from_secs(3)),
-            body: b"slow down".to_vec(),
-        }
-    );
+    {
+        let actual_error = socket_error(OPERATION, tungstenite::Error::Http(Box::new(response)));
+        let Error::Http {
+            operation: actual_operation,
+            status: actual_status,
+            retry_after: actual_retry_after,
+            body: actual_body,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            (
+                actual_operation,
+                actual_status,
+                actual_retry_after,
+                actual_body,
+            ),
+            (
+                &(OPERATION),
+                &(429),
+                &(Some(Duration::from_secs(3))),
+                &(b"slow down".to_vec()),
+            )
+        );
+    };
 }

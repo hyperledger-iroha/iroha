@@ -4,19 +4,74 @@
 //! existing CertifiedChain verifier their exact contiguous hash cut. No projected context,
 //! fabricated genesis QC, alternate verifier, storage database or mutable World is introduced.
 
-use iroha_allocation::AllocationBudget;
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SharedSignedBlock, SignedBlock},
-    sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
+    sumeragi::finality::{
+        NativeFinalityDecodeError, NativeFinalityLimits, NativeFinalitySource,
+        decode_native_finality_block,
+    },
 };
 use iroha_model_base::chain::ChainId;
 use iroha_sumeragi::crypto::AttestationVerifier;
 
-use super::certified_chain::CertifiedChain;
+use super::certified_chain::{CertifiedChain, ChainReadError};
+use crate::execution_attempt::ExecutionAttemptError;
 use crate::state::StateView;
+
+/// A native proof read, keeping deterministic invalidity and original resource custody distinct.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeJournalError {
+    /// A complete source, bound or authority check failed.
+    #[error("native journal: {0}")]
+    Invalid(String),
+    /// Canonical source decoding retained its original admission classification.
+    #[error(transparent)]
+    Decode(#[from] NativeFinalityDecodeError),
+    /// Original cumulative decoder allowance refused index/control accounting.
+    #[error("native journal index admission failed")]
+    DecodeAllocation(#[source] norito::Error),
+    /// Original caller pool or physical allocator refused the block control.
+    #[error(transparent)]
+    Block(#[from] iroha_data_model::block::SharedBlockAdmissionError),
+    /// The original pool or physical allocator refused exact index backing.
+    #[error("native journal index allocation failed")]
+    Index(#[source] ChargedBufferError),
+    /// Original authenticated history read failed or was deferred.
+    #[error(transparent)]
+    History(#[from] ExecutionAttemptError<ChainReadError>),
+    /// Signed-genesis decoding and authority retains its own original source.
+    #[error(transparent)]
+    Genesis(#[from] iroha_data_model::sumeragi_finality::GenesisReadError),
+}
+impl From<String> for NativeJournalError {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for NativeJournalError {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+
+/// Exact fixed arrays borrowed by the existing native history verifier.
+/// Nested block graphs are separate obligations; these owners cover only index backing.
+struct NativeJournalIndex {
+    frames: ChargedBuffer<SharedSignedBlock>,
+    hashes: ChargedBuffer<HashOf<BlockHeader>>,
+}
+impl NativeJournalIndex {
+    /// Admit each actual backing before allocation from the unchanged operation pool.
+    fn new(count: usize, budget: &AllocationBudget) -> Result<Self, NativeJournalError> {
+        let frames = ChargedBuffer::new(count, budget).map_err(NativeJournalError::Index)?;
+        let hashes = ChargedBuffer::new(count, budget).map_err(NativeJournalError::Index)?;
+        Ok(Self { frames, hashes })
+    }
+}
 
 /// Run an offline read against one complete independently pinned native journal.
 ///
@@ -32,40 +87,54 @@ use crate::state::StateView;
 /// # Errors
 /// Rejects malformed bounds, excessive source/decoded size, noncanonical frames, noncontiguous
 /// heights, wrong network/instance, altered execution results, quorum or attestation failures.
-pub fn with_verified_native_journal<T>(
-    journal: &NativeFinalityJournal,
+pub fn with_verified_native_journal<'source, T>(
+    journal: impl Into<NativeFinalitySource<'source>>,
     chain_id: &ChainId,
     network: &NetworkId,
     limits: NativeFinalityLimits,
     attestations: &dyn AttestationVerifier,
-    read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, String>,
-) -> Result<T, String> {
-    journal.validate_source(limits)?;
-    // One explicit offline operation allowance funds every retained shared control.
-    let control_budget = AllocationBudget::new(limits.allocated_bytes);
+    budget: &AllocationBudget,
+    read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, NativeJournalError>,
+) -> Result<T, NativeJournalError> {
+    let journal = journal.into();
+    journal.validate(limits)?;
+    // The caller owns one operation pool; shared controls and both actual index backings
+    // retain their original charges for their entire physical lifetime.
+    // Prepared sources borrow original funded bytes and range backing. An owning DTO's
+    // source allocations remain its caller's obligation.
+    // TODO: decoded nested block/result graphs still use source limits and cumulative
+    // decoder counters, not full retained pool ledgers.
     norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
         // Admission precedes each concrete side allocation; canonical blocks themselves use
         // the same active Norito counters. No per-block scope resets the aggregate counter.
-        let count = journal.blocks.len();
+        let count = journal.len();
         let side_bytes = count
             .checked_mul(
                 core::mem::size_of::<iroha_data_model::block::SharedSignedBlock>()
                     + core::mem::size_of::<HashOf<BlockHeader>>(),
             )
             .ok_or("native journal index allocation overflow")?;
-        norito::core::reserve_decode_allocation(side_bytes).map_err(|error| error.to_string())?;
-        let mut frames = Vec::new();
-        let mut hashes = Vec::new();
-        frames
-            .try_reserve_exact(count)
-            .map_err(|_| "native journal frame index allocation failed")?;
-        hashes
-            .try_reserve_exact(count)
-            .map_err(|_| "native journal hash index allocation failed")?;
-        for (offset, artifact) in journal.blocks.iter().enumerate() {
-            let shell =
-                SharedSignedBlock::reserve(&control_budget).map_err(|error| error.to_string())?;
-            let block = artifact.decode_block(limits)?;
+        norito::core::reserve_decode_allocation(side_bytes)
+            .map_err(NativeJournalError::DecodeAllocation)?;
+        let reserve_shell = || {
+            SharedSignedBlock::reserve(budget).map_err(|error| {
+                if cfg!(all(test, sumeragi_core_mutation = "HC90")) {
+                    NativeJournalError::Invalid("mutated journal control refusal".into())
+                } else {
+                    NativeJournalError::Block(error)
+                }
+            })
+        };
+        // Source validation established a nonempty prefix. Retain its first control before
+        // index admission, preserving original control refusal precedence under saturation.
+        let mut first_shell = Some(reserve_shell()?);
+        let mut index = NativeJournalIndex::new(count, budget)?;
+        for (offset, wire) in journal.blocks().enumerate() {
+            let shell = match first_shell.take() {
+                Some(shell) => shell,
+                None => reserve_shell()?,
+            };
+            let block = decode_native_finality_block(wire, limits)?;
             let expected = u64::try_from(offset)
                 .ok()
                 .and_then(|value| value.checked_add(1))
@@ -74,17 +143,20 @@ pub fn with_verified_native_journal<T>(
                 return Err("native journal is not a complete consecutive prefix".into());
             }
             norito::core::reserve_decode_allocation(SharedSignedBlock::allocation_layout().size())
-                .map_err(|error| error.to_string())?;
-            hashes.push(block.hash());
-            frames.push(shell.initialize(block));
+                .map_err(NativeJournalError::DecodeAllocation)?;
+            // Each source contributes exactly one entry to the fixed count admitted above.
+            index.hashes.push_reserved(block.hash());
+            index.frames.push_reserved(shell.initialize(block));
         }
-        let reader = CertifiedChain::from_frames(chain_id, network, &hashes, &frames)
-            .map_err(|error| error.to_string())?
-            .with_attestation_verifier(attestations);
+        let reader = CertifiedChain::from_frames(
+            chain_id,
+            network,
+            index.hashes.as_slice(),
+            index.frames.as_slice(),
+        )?
+        .with_attestation_verifier(attestations);
         let height = u64::try_from(count).map_err(|_| "native journal height overflow")?;
-        reader
-            .certified(height)
-            .map_err(|error| error.to_string())?;
+        reader.certified(height)?;
         read(&reader)
     })
 }
@@ -99,6 +171,7 @@ pub struct NativeJournalCursor {
     chain_id: ChainId,
     network: NetworkId,
     limits: NativeFinalityLimits,
+    budget: AllocationBudget,
     attestations: super::attestation::NativePastaVerifier,
     tip: Option<super::certified_chain::CommittedBlock>,
 }
@@ -109,7 +182,8 @@ impl NativeJournalCursor {
         network: NetworkId,
         root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
         limits: NativeFinalityLimits,
-    ) -> Result<Self, String> {
+        budget: &AllocationBudget,
+    ) -> Result<Self, NativeJournalError> {
         limits.validate()?;
         let instance = root_scope
             .instance_id(&super::crypto::BlsCrypto::new(), network, chain_id.as_str())
@@ -118,6 +192,7 @@ impl NativeJournalCursor {
             chain_id,
             network,
             limits,
+            budget: budget.clone(),
             attestations: super::attestation::NativePastaVerifier::new(instance, network),
             tip: None,
         })
@@ -125,6 +200,10 @@ impl NativeJournalCursor {
     /// Borrow the production verifier pinned to this operation's independent identity.
     pub fn attestations(&self) -> &super::attestation::NativePastaVerifier {
         &self.attestations
+    }
+    /// Original operation pool retained across unchanged-source retries.
+    pub fn allocation_budget(&self) -> &AllocationBudget {
+        &self.budget
     }
     /// The last genuinely certified ordinary tip, absent before the first H2+ prefix.
     pub fn tip(&self) -> Option<&super::certified_chain::CommittedBlock> {
@@ -144,12 +223,12 @@ impl NativeJournalCursor {
     }
 
     /// Authenticate a strictly advancing complete prefix and retain its exact native tip.
-    pub fn advance(
+    pub fn advance<'source>(
         &mut self,
-        journal: &NativeFinalityJournal,
-    ) -> Result<&super::certified_chain::CommittedBlock, String> {
-        let height =
-            u64::try_from(journal.blocks.len()).map_err(|_| "native phase height overflow")?;
+        journal: impl Into<NativeFinalitySource<'source>>,
+    ) -> Result<&super::certified_chain::CommittedBlock, NativeJournalError> {
+        let journal = journal.into();
+        let height = u64::try_from(journal.len()).map_err(|_| "native phase height overflow")?;
         if height < 2 || self.tip.as_ref().is_some_and(|tip| height <= tip.height()) {
             return Err("native phase journal does not advance a certified ordinary height".into());
         }
@@ -159,11 +238,10 @@ impl NativeJournalCursor {
             &self.network,
             self.limits,
             &self.attestations,
+            &self.budget,
             |reader| {
                 if let Some(tip) = &self.tip {
-                    let retained = reader
-                        .certified(tip.height())
-                        .map_err(|error| error.to_string())?;
+                    let retained = reader.certified(tip.height())?;
                     if retained.block_hash() != tip.block_hash()
                         || retained.core_hash() != tip.core_hash()
                         || retained.result() != tip.result()
@@ -174,7 +252,7 @@ impl NativeJournalCursor {
                 reader
                     .certified(height)
                     .map(|value| value.into_committed())
-                    .map_err(|error| error.to_string())
+                    .map_err(NativeJournalError::History)
             },
         )?;
         self.tip = Some(next);
@@ -197,31 +275,25 @@ pub fn authenticate_signed_genesis(
         SignedBlock,
         iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
     ),
-    crate::execution_attempt::ExecutionAttemptError<String>,
+    NativeJournalError,
 > {
     limits.validate()?;
     if wire.is_empty() || wire.len() > limits.block_bytes {
         return Err("signed genesis exceeds its configured source bound".into());
     }
-    norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
-        let block = iroha_data_model::block::decode_framed_signed_block(wire).map_err(|error| {
-            crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                error.to_string()
-            })
-        })?;
-        if block.hash() != network.into_genesis_hash() {
-            return Err("foreign signed genesis".into());
-        }
-        let epoch = super::epoch::genesis_epoch(&block).map_err(|error| {
-            crate::execution_attempt::genesis_read_attempt_error(error, |error| error.to_string())
-        })?;
-        Ok((block, epoch))
-    })
+    let block = iroha_data_model::sumeragi::finality::decode_native_finality_block(wire, limits)?;
+    if block.hash() != network.into_genesis_hash() {
+        return Err("foreign signed genesis".into());
+    }
+    let epoch = super::epoch::genesis_epoch(&block)?;
+    Ok((block, epoch))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod index_tests;
+    mod source_tests;
     use crate::{
         state::World,
         sumeragi::{
@@ -229,7 +301,7 @@ mod tests {
             test_chain::{CertifiedTestChain, TestChainConfig},
         },
     };
-    use iroha_data_model::sumeragi::finality::NativeFinalityArtifact;
+    use iroha_data_model::sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal};
     use iroha_sumeragi::crypto::NoAttestation;
 
     fn limits() -> NativeFinalityLimits {
@@ -265,6 +337,7 @@ mod tests {
             &chain.network_id(),
             limits(),
             &NoAttestation,
+            &chain.state().ivm_execution_budget(),
             |reader| {
                 assert_eq!(
                     reader.certified(1).unwrap().verification(),
@@ -294,9 +367,11 @@ mod tests {
                 &chain.network_id(),
                 bounds,
                 &NoAttestation,
+                &chain.state().ivm_execution_budget(),
                 |_| Err::<(), _>("callback must not run".into()),
             )
             .unwrap_err()
+            .to_string()
         };
         let suffix = NativeFinalityJournal {
             blocks: journal.blocks[1..].to_vec(),
@@ -337,6 +412,7 @@ mod tests {
             chain.network_id(),
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
             limits(),
+            &chain.state().ivm_execution_budget(),
         )
         .unwrap();
         let initial = NativeFinalityJournal {
@@ -373,6 +449,122 @@ mod tests {
         ));
         assert!(
             authenticate_signed_genesis(&initial.blocks[0].block_wire, wrong, limits()).is_err()
+        );
+    }
+
+    #[test]
+    fn native_cursor_preserves_original_pool_refusal_and_retries_identical_prefix() {
+        use iroha_allocation::AllocationRefusal;
+        use std::task::{Context, Waker};
+        let (chain, journal) = fixture();
+        let pool = chain.state().ivm_execution_budget();
+        let floor = pool.reserved_bytes();
+        let mut observer = crate::unit_test_support::release_registration(&pool);
+        let mut cursor = NativeJournalCursor::new(
+            ChainId::from("sumeragi-certified-test-chain"),
+            chain.network_id(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            limits(),
+            &pool,
+        )
+        .unwrap();
+        let h2 = NativeFinalityJournal {
+            blocks: journal.blocks[..2].to_vec(),
+        };
+        cursor.advance(&h2).unwrap();
+        let retained = cursor.tip().unwrap().block_hash();
+        let blocker = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        let expected = pool
+            .try_reserve(SharedSignedBlock::allocation_layout())
+            .unwrap_err();
+        let error = cursor.advance(&journal).unwrap_err();
+        let NativeJournalError::Block(
+            iroha_data_model::block::SharedBlockAdmissionError::Admission(actual),
+        ) = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(cursor.tip().unwrap().block_hash(), retained);
+        let AllocationRefusal::Capacity { release, .. } = actual else {
+            panic!("actual occupied pool");
+        };
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(observer.poll_wait(&release, &mut context).is_pending());
+        let foreign = AllocationBudget::new(1);
+        drop(foreign.try_reserve_bytes(1).unwrap());
+        assert!(observer.poll_wait(&release, &mut context).is_pending());
+        drop(blocker);
+        assert!(observer.poll_wait(&release, &mut context).is_ready());
+        observer.cancel();
+        assert_eq!(
+            cursor.advance(&journal).unwrap().block_hash(),
+            chain.committed(3).block_hash()
+        );
+        drop(cursor);
+        drop(observer);
+        assert_eq!(pool.reserved_bytes(), floor);
+    }
+
+    #[test]
+    fn native_journal_decoder_refusal_never_runs_reader_or_replaces_cursor_tip() {
+        let (chain, journal) = fixture();
+        let pool = chain.state().ivm_execution_budget();
+        let mut cursor = NativeJournalCursor::new(
+            ChainId::from("sumeragi-certified-test-chain"),
+            chain.network_id(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            limits(),
+            &pool,
+        )
+        .unwrap();
+        cursor
+            .advance(&NativeFinalityJournal {
+                blocks: journal.blocks[..2].to_vec(),
+            })
+            .unwrap();
+        let prior = cursor.tip().unwrap().block_hash();
+        let credits = pool.reserved_bytes();
+        let error = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || {
+                with_verified_native_journal(
+                    &journal,
+                    cursor.chain_id(),
+                    &chain.network_id(),
+                    limits(),
+                    cursor.attestations(),
+                    &pool,
+                    |_| -> Result<(), NativeJournalError> {
+                        panic!("refused source must not reach reader");
+                    },
+                )
+            },
+        )
+        .unwrap_err();
+        let NativeJournalError::DecodeAllocation(original) = error else {
+            panic!("{error:?}");
+        };
+        assert!(matches!(
+            original.decode_resource_error(),
+            Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+        ));
+        assert_eq!(cursor.tip().unwrap().block_hash(), prior);
+        assert_eq!(pool.reserved_bytes(), credits);
+        let mut malformed = journal.clone();
+        malformed.blocks[2].block_wire.push(0);
+        assert!(matches!(
+            cursor.advance(&malformed),
+            Err(NativeJournalError::Decode(
+                NativeFinalityDecodeError::Malformed(_)
+            ))
+        ));
+        assert_eq!(cursor.tip().unwrap().block_hash(), prior);
+        assert_eq!(
+            cursor.advance(&journal).unwrap().block_hash(),
+            chain.committed(3).block_hash()
         );
     }
 }

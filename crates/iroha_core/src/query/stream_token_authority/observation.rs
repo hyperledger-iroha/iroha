@@ -4,6 +4,8 @@
 //! use one applied State view. A decoded row, observer signature or submission acknowledgement
 //! cannot construct the verified capability returned here.
 
+pub use crate::query::signer_check::NativeCheckBindingErrorV1;
+
 use std::{sync::Arc, time::Duration};
 
 use iroha_crypto::HashOf;
@@ -37,8 +39,9 @@ use super::{
 use crate::{
     query::{
         signer_check::{
-            BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1, NativeCheckRoundV1,
-            NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1, bind_signed_check_v1,
+            BindingFailure, BindingScope, BoundNativeCheckV1, NativeCheckErrorV1,
+            NativeCheckFloorV1, NativeCheckRoundV1, NativeCustodyCheckPurposeV1,
+            NativeCustodyCheckRefV1, SignedCheckAttempt, bind_signed_check_v1,
             validate_native_signatory_v1,
         },
         stream_token_custody::{read_active, read_stream_token_custody_control_at_v1},
@@ -266,7 +269,7 @@ pub struct VerifiedStreamTokenCheckV1 {
     snapshot: StreamTokenCheckSnapshotV1,
     applied_floor: StreamTokenFinalityFloorV1,
     entry_hash: HashOf<TransactionEntrypoint>,
-    canonical_external: Vec<u8>,
+    canonical_external: iroha_allocation::ChargedBuffer<u8>,
     check_block_hash: [u8; 32],
     time: StreamTokenEligibilityTimeIntervalV1,
     round: NativeCheckRoundV1,
@@ -354,6 +357,12 @@ pub fn begin_stream_token_check_v1(
 }
 
 impl PreparedStreamTokenCheckV1 {
+    /// Original absolute deadline; no signing, binding or retry renews it.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.round.deadline()
+    }
+
     /// Exact instruction, including its already-fixed fresh challenge.
     #[must_use]
     pub const fn instruction(&self) -> &MutateSorafsStreamTokenAuthority {
@@ -372,22 +381,26 @@ impl PreparedStreamTokenCheckV1 {
     ///
     /// # Errors
     /// Rejects signature, authority, instruction, network, size or deadline substitution.
+    /// Every failure retains the exact signed graph and original preparation. Local refusals may
+    /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
     pub fn bind_signed_transaction(
-        mut self,
+        self,
         signed: SignedTransaction,
-    ) -> Result<PendingStreamTokenCheckV1, Error> {
-        let bound = bind_signed_check_v1(
-            &mut self.round,
-            NativeCustodyCheckRefV1::StreamToken(&self.instruction),
-            &self.expected.binding.chain_id,
-            self.expected.binding.network_id,
-            &self.expected.observer,
-            native_floor(self.expected.floor),
-            signed,
-        )?;
-        Ok(PendingStreamTokenCheckV1 {
-            prepared: self,
-            bound,
+    ) -> Result<PendingStreamTokenCheckV1, StreamTokenCheckBindingFailureV1> {
+        bind_signed_check_v1(self, SignedCheckAttempt::new(signed), Self::binding_scope)
+            .map(|(prepared, bound)| PendingStreamTokenCheckV1 { prepared, bound })
+            .map_err(StreamTokenCheckBindingFailureV1)
+    }
+
+    fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
+        Ok(BindingScope {
+            state: &self.state,
+            round: &mut self.round,
+            instruction: NativeCustodyCheckRefV1::StreamToken(&self.instruction),
+            chain_id: &self.expected.binding.chain_id,
+            network_id: self.expected.binding.network_id,
+            authority: &self.expected.observer,
+            floor: native_floor(self.expected.floor),
         })
     }
 }
@@ -476,7 +489,66 @@ fn completed_at(
     }))
 }
 
+/// Exact original signed attempt retained after binding refusal.
+/// Retry cannot replace the signer output, challenge, State pool, or original deadline.
+#[must_use = "retain the original signed Check until binding completes or the attempt is retired"]
+pub struct StreamTokenCheckBindingFailureV1(BindingFailure<PreparedStreamTokenCheckV1, Error>);
+
+impl StreamTokenCheckBindingFailureV1 {
+    /// Borrow the original local refusal or completed rejection without erasing custody.
+    #[must_use]
+    pub fn error(&self) -> &NativeCheckBindingErrorV1<Error> {
+        &self.0.error
+    }
+
+    /// Inspect a completed native rejection; local refusals have no transaction verdict.
+    #[must_use]
+    pub fn rejection(&self) -> Option<Error> {
+        match &self.0.error {
+            NativeCheckBindingErrorV1::Rejected(error) => Some(*error),
+            _ => None,
+        }
+    }
+
+    /// The unchanged absolute deadline, including after any number of local retries.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.0.prepared.round.deadline()
+    }
+
+    /// Retry only this exact signed attempt; terminal failures return the same owner.
+    ///
+    /// # Errors
+    /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    pub fn retry(self) -> Result<PendingStreamTokenCheckV1, Self> {
+        if !self.0.error.is_retryable() {
+            return Err(self);
+        }
+        bind_signed_check_v1(
+            self.0.prepared,
+            self.0.signed,
+            PreparedStreamTokenCheckV1::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingStreamTokenCheckV1 { prepared, bound })
+        .map_err(Self)
+    }
+}
+impl std::fmt::Debug for StreamTokenCheckBindingFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StreamTokenCheckBindingFailureV1")
+            .field("error", &self.0.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PendingStreamTokenCheckV1 {
+    /// Original absolute deadline; no signing, binding or retry renews it.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.prepared.round.deadline()
+    }
+
     /// Exact signed transaction to submit or reconcile without constructing another Check.
     #[must_use]
     pub fn signed_transaction(&self) -> &SignedTransaction {
@@ -497,41 +569,71 @@ impl PendingStreamTokenCheckV1 {
     pub fn verify_finalized(
         self,
         sample_time: impl FnOnce() -> Result<StreamTokenEligibilityTimeIntervalV1, Error>,
-    ) -> Result<VerifiedStreamTokenCheckV1, Error> {
-        let prepared = self.prepared;
-        prepared.round.ensure_live()?;
-        let view = prepared.state.view();
-        let cut = lineage::authenticate(&view, &prepared, self.bound)?;
-        let view = cut.view();
-        prepared.round.ensure_live()?;
-        let time = sample_time().map_err(|_| Error::Clock)?;
-        if time.earliest_unix_ms == 0
-            || time.latest_unix_ms < time.earliest_unix_ms
-            || time.latest_unix_ms == u64::MAX
-        {
-            return Err(Error::Clock);
-        }
-        let snapshot = snapshot_at(
-            view,
-            &prepared.expected,
-            &prepared.instruction,
-            time.earliest_unix_ms,
-        )?;
-        snapshot_at(
-            view,
-            &prepared.expected,
-            &prepared.instruction,
-            time.latest_unix_ms,
-        )?;
-        prepared.round.ensure_live()?;
-        let floor = cut.applied_floor();
-        let applied_floor = StreamTokenFinalityFloorV1 {
-            height: floor.height,
-            block_hash: floor.block_hash,
-            context_id: floor.context_id,
-        };
-        let entry_hash = cut.entry_hash();
-        let (canonical_external, check_block_hash) = cut.into_verified_entry();
+    ) -> Result<VerifiedStreamTokenCheckV1, StreamTokenCheckAttemptFailureV1> {
+        let Self {
+            prepared,
+            bound: original,
+        } = self;
+        let mut bound = Some(original);
+        let result = (|| -> Result<_, crate::execution_attempt::ExecutionAttemptError<Error>> {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let view = prepared.state.view();
+            let cut = lineage::authenticate(&view, &prepared, &mut bound)?;
+            let view = cut.view();
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let time = sample_time().map_err(|_| Error::Clock)?;
+            if time.earliest_unix_ms == 0
+                || time.latest_unix_ms < time.earliest_unix_ms
+                || time.latest_unix_ms == u64::MAX
+            {
+                return Err(Error::Clock.into());
+            }
+            let snapshot = snapshot_at(
+                view,
+                &prepared.expected,
+                &prepared.instruction,
+                time.earliest_unix_ms,
+            )?;
+            snapshot_at(
+                view,
+                &prepared.expected,
+                &prepared.instruction,
+                time.latest_unix_ms,
+            )?;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let floor = cut.applied_floor();
+            let applied_floor = StreamTokenFinalityFloorV1 {
+                height: floor.height,
+                block_hash: floor.block_hash,
+                context_id: floor.context_id,
+            };
+            let entry_hash = cut.entry_hash();
+            let (canonical_external, check_block_hash) = cut.into_verified_entry();
+
+            Ok((
+                snapshot,
+                applied_floor,
+                entry_hash,
+                canonical_external,
+                check_block_hash,
+                time,
+            ))
+        })();
+        let (snapshot, applied_floor, entry_hash, canonical_external, check_block_hash, time) =
+            match result {
+                Ok(parts) => parts,
+                Err(error) => {
+                    return Err(StreamTokenCheckAttemptFailureV1 {
+                        error,
+                        pending: Self {
+                            prepared,
+                            bound: bound
+                                .take()
+                                .expect("failed verification retains original binding"),
+                        },
+                    });
+                }
+            };
         Ok(VerifiedStreamTokenCheckV1 {
             instruction: prepared.instruction,
             snapshot,
@@ -576,7 +678,7 @@ impl VerifiedStreamTokenCheckV1 {
     /// Complete canonical External entry authenticated by the successful result proof.
     #[must_use]
     pub fn canonical_external(&self) -> &[u8] {
-        &self.canonical_external
+        self.canonical_external.as_slice()
     }
     /// Exact finalized block containing the successful Check.
     #[must_use]
@@ -594,3 +696,6 @@ mod lineage;
 
 #[cfg(test)]
 mod tests;
+
+mod attempt_failure;
+pub use attempt_failure::StreamTokenCheckAttemptFailureV1;

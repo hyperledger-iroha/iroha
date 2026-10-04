@@ -83,6 +83,9 @@ fn fixture() -> (
     let catalog = IrohaRuntimeProviderBindingsV1 {
         chain_id: metadata.custody().chain_id.clone(),
         network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: vec![
             IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(metadata.clone()).unwrap(),
         ],

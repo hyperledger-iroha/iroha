@@ -723,6 +723,31 @@ fn catalog_slot_ids_are_bounded_by_configured_multiplicities() {
     );
 }
 #[test]
+fn catalog_slot_ids_enforce_every_sparse_slot_multiplicity_and_reject_unknowns() {
+    for slot in IrohaRuntimeProviderSlotV1::ALL {
+        let maximum = slot.max_configured_multiplicity();
+        assert_eq!(
+            validate_catalog_slot_ids(std::iter::repeat_n(slot.wire_id(), maximum)),
+            Ok(()),
+            "valid multiplicity for wire ID {}",
+            slot.wire_id(),
+        );
+        assert_eq!(
+            validate_catalog_slot_ids(std::iter::repeat_n(slot.wire_id(), maximum + 1)),
+            Err(BrokerError::BindingMismatch),
+            "excess multiplicity for wire ID {}",
+            slot.wire_id(),
+        );
+    }
+    for unknown in [0, 53, 61, u16::MAX] {
+        assert_eq!(
+            validate_catalog_slot_ids([unknown]),
+            Err(BrokerError::BindingMismatch),
+            "unregistered wire ID {unknown} must fail closed",
+        );
+    }
+}
+#[test]
 fn signing_payload_bound_matches_canonical_governance_ceiling() {
     assert_eq!(
         MAX_SIGNING_PAYLOAD_BYTES_V1,
@@ -2483,7 +2508,7 @@ fn fenced_privacy_preflight_uses_selected_process_and_preserves_active_operation
             .expect("selected-process preflight"),
         request
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
     let full = pool
         .try_acquire(pool.max_bytes)
         .expect("fill selected process cap");
@@ -2507,7 +2532,7 @@ fn fenced_privacy_preflight_uses_selected_process_and_preserves_active_operation
         ));
     }
     drop(outer);
-    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(outer_pool.allocation.reserved_bytes(), 0);
     let unrelated = DecodeResourceAdmissionV1::acquire_operation_from(
         Arc::clone(&outer_pool),
         OPERATION_QUALIFY_V1,
@@ -2529,8 +2554,8 @@ fn fenced_privacy_preflight_uses_selected_process_and_preserves_active_operation
         malformed.to_request_from_pool(Arc::clone(&pool)),
         Err(BrokerError::Rejected)
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
-    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
+    assert_eq!(outer_pool.allocation.reserved_bytes(), 0);
 }
 
 #[test]

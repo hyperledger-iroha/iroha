@@ -493,6 +493,7 @@ impl ManagedStore {
         let _operation = acquire(&directory, "operation.lock", name)?;
         let _runtime = acquire(&directory, "runtime.lock", name)?;
         directory.revalidate()?;
+        transport::clear_stopped_endpoint(&directory)?;
         directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
         // The ownership directory and locked files remain pinned on every platform. Keep
         // selection resolution explicit: a reset selection should report the missing

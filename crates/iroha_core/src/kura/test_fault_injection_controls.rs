@@ -66,7 +66,3 @@ fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures
         }));
     });
 }
-
-
-
-

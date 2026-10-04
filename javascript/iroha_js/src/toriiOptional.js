@@ -5,6 +5,9 @@
 // shared governance graph behind one entry avoids duplicate split chunks while
 // leaving the ordinary client startup path small.
 export {
+  encodeValidatorStakingPreparationFrameV1,
+  decodeValidatorStakingPreparationFrameV1,
+  validateValidatorStakingPreparationV1,
   noritoEncodeFeePaymentIntentArchive,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeSorafsBillingAcknowledgementProofV1,

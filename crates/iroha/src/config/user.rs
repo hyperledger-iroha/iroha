@@ -651,8 +651,11 @@ impl fmt::Debug for MusubiPublication {
 pub struct MusubiPublicationProviderGateway {
     /// Lowercase hexadecimal public `SoraFS` provider identifier.
     pub provider_id: String,
-    /// Provider-specific authenticated readback HTTPS base URL.
+    /// Authenticated private readback HTTPS base URL; providers may share a service.
     pub url: String,
+    /// Exact provider management origin for account-signed attestation inventory reads.
+    /// HTTPS is required except for an explicitly selected numeric loopback HTTP origin.
+    pub attestation_url: String,
 }
 impl fmt::Debug for MusubiPublicationProviderGateway {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

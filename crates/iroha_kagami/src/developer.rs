@@ -19,9 +19,6 @@ use iroha_deploy::managed::{
     ManagedStatus, ManagedStore, default_state_root, workspace_state_root,
 };
 use iroha_primitives::numeric::Quantity;
-use musubi::archive_fetch::{
-    MusubiArchiveDiscoveryErrorV1, PreparedProductionSorafsArchiveTransportV1,
-};
 use musubi::deployment_runtime::{AliasSelection, ContractInput, DeploymentRuntime};
 
 use crate::{Outcome, RunArgs, localnet, tui};
@@ -346,7 +343,6 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
             Self::Up(args) => {
-                let runtime = InstalledRuntime::discover()?;
                 let store = args.store.open()?;
                 let request = DataspaceRequest {
                     name: args.name.unwrap_or_else(|| args.alias.clone()),
@@ -355,15 +351,20 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
                     timeout: Duration::from_secs(args.timeout),
                 };
                 tui::status("Authenticating the installed parent and preparing private validators");
-                match store.up_dataspace(&runtime, &request) {
+                match InstalledRuntime::discover()
+                    .and_then(|runtime| store.up_dataspace(&runtime, &request))
+                {
                     Ok(status) => print_dataspace_status(writer, &status, args.store.json),
                     Err(error) => {
-                        // Partial work remains under the same owner and exact journals. Emit a
-                        // safe observation when available while preserving a nonzero outcome.
-                        if let Ok(Some(status)) = store.dataspace_status(&request.name) {
-                            print_dataspace_status(writer, &status, args.store.json)?;
-                        }
-                        Err(error.into())
+                        let retained = store.dataspace_status(&request.name).ok().flatten();
+                        dataspace_failure(
+                            writer,
+                            store.root(),
+                            &request.name,
+                            retained.as_ref(),
+                            args.store.json,
+                            error.into(),
+                        )
                     }
                 }
             }
@@ -442,31 +443,7 @@ impl<T: Write> RunArgs<T> for ContractCommand {
                 // registry identity. Source, bytecode and local packages never enter it.
                 let deadline = Instant::now() + Duration::from_secs(60);
                 let store = ManagedStore::open(&registry_root)?;
-                let Some(registry) = store.build_registry(&runtime, &registry_context, deadline)?
-                else {
-                    return Ok(None);
-                };
-                let parent = registry.config().clone();
-                let transport = PreparedProductionSorafsArchiveTransportV1::from_account_registry(
-                    parent.clone(),
-                    Arc::new(move |provider| {
-                        registry.discover(provider, deadline).map_err(|error| {
-                            if Instant::now() >= deadline {
-                                MusubiArchiveDiscoveryErrorV1::Deadline
-                            } else {
-                                match error {
-                                    iroha_deploy::bootstrap::BootstrapError::Busy
-                                    | iroha_deploy::bootstrap::BootstrapError::Io(_) => {
-                                        MusubiArchiveDiscoveryErrorV1::Unavailable
-                                    }
-                                    _ => MusubiArchiveDiscoveryErrorV1::Rejected,
-                                }
-                            }
-                        })
-                    }),
-                    Duration::from_secs(30),
-                )?;
-                Ok(Some((parent, transport)))
+                Ok(store.build_registry(&runtime, &registry_context, deadline)?)
             }),
         );
         let mut progress = deployment_progress;
@@ -600,13 +577,19 @@ fn print_status(writer: &mut impl Write, status: &ManagedStatus, json: bool) -> 
     Ok(())
 }
 
-fn localnet_action(root: &Path, name: &str, action: &str, json: bool) -> norito::json::Value {
+fn managed_action(
+    root: &Path,
+    name: &str,
+    command: &str,
+    action: &str,
+    json: bool,
+) -> norito::json::Value {
     // The opened canonical store already binds --workspace and any relative --state input.
     // Never turn a non-UTF-8 native path into different executable arguments through lossiness.
     let argv = root.to_str().map(|root| {
         let mut args = vec![
             "kagami".to_owned(),
-            "localnet".to_owned(),
+            command.to_owned(),
             action.to_owned(),
             name.to_owned(),
             "--state".to_owned(),
@@ -625,14 +608,15 @@ fn localnet_action(root: &Path, name: &str, action: &str, json: bool) -> norito:
     })
 }
 
-fn print_localnet_action(
+fn print_managed_action(
     writer: &mut impl Write,
     root: &Path,
     name: &str,
+    command: &str,
     action: &str,
 ) -> Outcome {
     // Separate fields are portable across shells and cannot disguise spaces as extra argv.
-    writeln!(writer, "action: kagami localnet {action}")?;
+    writeln!(writer, "action: kagami {command} {action}")?;
     writeln!(writer, "  name: {name}")?;
     writeln!(writer, "  --state (quoted path): {root:?}")?;
     Ok(())
@@ -654,8 +638,8 @@ fn localnet_failure(
                 &norito::json!({
                     "status": status,
                     "recovery": [
-                        (localnet_action(root, name, "status", true)),
-                        (localnet_action(root, name, "logs", true)),
+                        (managed_action(root, name, "localnet", "status", true)),
+                        (managed_action(root, name, "localnet", "logs", true)),
                     ],
                 }),
             );
@@ -667,8 +651,44 @@ fn localnet_failure(
             writer,
             "Inspect the requested environment with these action fields:"
         )?;
-        print_localnet_action(writer, root, name, "status")?;
-        print_localnet_action(writer, root, name, "logs")
+        print_managed_action(writer, root, name, "localnet", "status")?;
+        print_managed_action(writer, root, name, "localnet", "logs")
+    })();
+    Err(original)
+}
+
+fn dataspace_failure(
+    writer: &mut impl Write,
+    root: &Path,
+    name: &str,
+    status: Option<&ManagedDataspaceStatus>,
+    json: bool,
+    original: color_eyre::Report,
+) -> Outcome {
+    // Parent work keeps its original journals. Observation and output are best-effort;
+    // neither may replace the actual attachment failure or suggest a new operation.
+    let _ = (|| -> Outcome {
+        if json {
+            return write_json(
+                writer,
+                &norito::json!({
+                    "status": status,
+                    "recovery": [
+                        (managed_action(root, name, "dataspace", "status", true)),
+                        (managed_action(root, name, "localnet", "logs", true)),
+                    ],
+                }),
+            );
+        }
+        if let Some(status) = status {
+            print_dataspace_status(writer, status, false)?;
+        }
+        writeln!(
+            writer,
+            "Inspect the requested dataspace with these action fields:"
+        )?;
+        print_managed_action(writer, root, name, "dataspace", "status")?;
+        print_managed_action(writer, root, name, "localnet", "logs")
     })();
     Err(original)
 }
@@ -680,12 +700,12 @@ fn print_reset(writer: &mut impl Write, root: &Path, name: &str, json: bool) -> 
             &norito::json!({
                 "name": name,
                 "state": "reset",
-                "next": (localnet_action(root, name, "up", true)),
+                "next": (managed_action(root, name, "localnet", "up", true)),
             }),
         );
     }
     writeln!(writer, "{name} reset; the next up creates a fresh ledger.")?;
-    print_localnet_action(writer, root, name, "up")
+    print_managed_action(writer, root, name, "localnet", "up")
 }
 
 fn print_dataspace_status(
@@ -890,16 +910,27 @@ mod tests {
                 Ok(())
             }
         }
-        for json in [false, true] {
+        for (json, dataspace) in [(false, false), (true, false), (false, true), (true, true)] {
             let original = iroha_deploy::managed::Error::Timeout(Duration::from_secs(9));
-            let error = localnet_failure(
-                &mut BrokenWriter,
-                Path::new("state"),
-                "named",
-                None,
-                json,
-                original.into(),
-            )
+            let error = if dataspace {
+                dataspace_failure(
+                    &mut BrokenWriter,
+                    Path::new("state"),
+                    "named",
+                    None,
+                    json,
+                    original.into(),
+                )
+            } else {
+                localnet_failure(
+                    &mut BrokenWriter,
+                    Path::new("state"),
+                    "named",
+                    None,
+                    json,
+                    original.into(),
+                )
+            }
             .unwrap_err();
             assert!(matches!(
                 error.downcast_ref::<iroha_deploy::managed::Error>(),
@@ -944,12 +975,14 @@ mod tests {
     fn recovery_does_not_emit_lossy_arguments_for_non_utf8_state_paths() {
         use std::os::unix::ffi::OsStringExt as _;
         let root = PathBuf::from(std::ffi::OsString::from_vec(b"/state/\xff".to_vec()));
-        let action = localnet_action(&root, "named", "status", true);
-        assert_eq!(action.get("argv"), Some(&norito::json::Value::Null));
-        assert_eq!(
-            action.get("argv_unavailable").and_then(|v| v.as_str()),
-            Some("state_path_not_utf8")
-        );
+        for command in ["localnet", "dataspace"] {
+            let action = managed_action(&root, "named", command, "status", true);
+            assert_eq!(action.get("argv"), Some(&norito::json::Value::Null));
+            assert_eq!(
+                action.get("argv_unavailable").and_then(|v| v.as_str()),
+                Some("state_path_not_utf8")
+            );
+        }
     }
 
     #[test]
@@ -1034,6 +1067,73 @@ mod tests {
             norito::json::from_slice::<ManagedDataspaceStatus>(&json).unwrap(),
             status
         );
+        // A ready child must remain distinguishable from the failed parent attachment in
+        // recovery output, including when no retained attachment was published at all.
+        let root = Path::new("/workspace with spaces/state 'quoted'");
+        for retained in [None, Some(&status)] {
+            let mut output = Vec::new();
+            let error = dataspace_failure(
+                &mut output,
+                root,
+                "custom-local-name",
+                retained,
+                true,
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original detail").into(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            let text = std::str::from_utf8(&output).unwrap();
+            assert_eq!(text.lines().count(), 1);
+            assert!(!text.contains("original detail"));
+            let value: norito::json::Value = norito::json::from_slice(&output).unwrap();
+            assert_eq!(
+                value.get("status").unwrap(),
+                &norito::json::to_value(&retained).unwrap()
+            );
+            let recovery = value.get("recovery").unwrap().as_array().unwrap();
+            assert_eq!(recovery.len(), 2);
+            for (action, expected) in recovery.iter().zip(["dataspace", "localnet"]) {
+                let argv = action.get("argv").unwrap().as_array().unwrap();
+                let argv: Vec<_> = argv.iter().map(|arg| arg.as_str().unwrap()).collect();
+                assert_eq!(argv[1], expected);
+                let parsed = crate::Cli::try_parse_from(argv).unwrap();
+                let (name, store) = match parsed.command {
+                    crate::Command::Dataspace(DataspaceCommand::Status(args)) => {
+                        (args.name.unwrap(), args.store)
+                    }
+                    crate::Command::Localnet(LocalnetCommand::Logs(args)) => {
+                        (args.named.name, args.named.store)
+                    }
+                    _ => panic!("expected read-only dataspace recovery action"),
+                };
+                assert_eq!(name, "custom-local-name");
+                assert_eq!(store.state.as_deref(), Some(root));
+                assert!(store.json);
+            }
+        }
+        let mut output = Vec::new();
+        assert!(
+            dataspace_failure(
+                &mut output,
+                root,
+                "custom-local-name",
+                Some(&status),
+                false,
+                eyre!("original detail"),
+            )
+            .is_err()
+        );
+        let human = String::from_utf8(output).unwrap();
+        assert!(human.contains("Ready (4 validators)"));
+        assert!(human.contains("parent taira: funding"));
+        assert!(human.contains("action: kagami dataspace status"));
+        assert!(human.contains("action: kagami localnet logs"));
+        assert!(human.contains("  name: custom-local-name"));
+        assert!(human.contains(&format!("--state (quoted path): {root:?}")));
+        assert!(!human.contains("original detail"));
     }
 
     #[test]

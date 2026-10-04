@@ -1348,7 +1348,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             ]
         )
         let authority = try fixtureObject(binding["completion_authority"])
-        try requireKeys(authority, ["provider_owner", "signer_policy"])
+        try requireKeys(authority, ["provider_owner", "completion_signer", "signer_policy"])
         let policy = try fixtureObject(authority["signer_policy"])
         try requireKeys(
             policy,
@@ -1362,6 +1362,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         }
         let completionAuthority = try MusubiProviderIngestCompletionAuthorityV1(
             providerOwner: XCTUnwrap(authority["provider_owner"] as? String),
+            completionSigner: XCTUnwrap(authority["completion_signer"] as? String),
             signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1(
                 policyID: fixedBytes32(policy["policy_id"]),
                 revision: fixtureUInt64(policy, "revision"),

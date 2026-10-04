@@ -930,11 +930,8 @@ fn validate_builtin_subsystem_query_permission(
         | SingularQueryBox::FindSorafsOrderbookEvents(_) => {
             let can_set_pricing: Permission =
                 executor_permission::sorafs::CanSetSorafsPricing.into();
-            let can_complete_orders: Permission =
-                executor_permission::sorafs::CanCompleteSorafsReplicationOrder.into();
-            if authority_has_permission(world, authority, &can_set_pricing)?
-                || authority_has_permission(world, authority, &can_complete_orders)?
-            {
+            // Provider-scoped completion authority grants no global orderbook inventory.
+            if authority_has_permission(world, authority, &can_set_pricing)? {
                 Ok(())
             } else {
                 Err(ValidationFail::NotPermitted(
@@ -6417,13 +6414,15 @@ impl Executor {
         };
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
-            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&err) {
-                drop(host);
-                return Err(state_transaction.defer_execution(reason));
-            }
-            let error =
-                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
+            let attempt =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
             drop(host);
+            let error = match attempt {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state_transaction.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            };
             // Retain attempted VM work even when the guest traps. Live-batch rejection discards
             // business state but uses this counter for block budgeting and rejected fees.
             state_transaction.last_tx_gas_used =
@@ -7369,16 +7368,17 @@ impl Executor {
                 };
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 if let Err(err) = run_result {
-                    if let Some(reason) =
-                        crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
-                    {
-                        drop(host);
-                        return Err(state_transaction.defer_execution(reason));
-                    }
-                    let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                        &runtime, &err,
-                    );
+                    let attempt =
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime, err,
+                        );
                     drop(host);
+                    let error = match attempt {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            return Err(state_transaction.defer_execution(reason));
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    };
                     // The actual VM consumed this work even though business effects
                     // will roll back. Retain it before returning the original failure.
                     state_transaction.last_tx_gas_used = gas_used;
@@ -7576,13 +7576,15 @@ impl Executor {
         };
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
-            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&err) {
-                drop(host);
-                return Err(state_transaction.defer_execution(reason));
-            }
-            let error =
-                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
+            let attempt =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
             drop(host);
+            let error = match attempt {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state_transaction.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            };
             state_transaction.last_tx_gas_used = gas_used;
             state_transaction.record_execution_fee_vm_work(gas_used)?;
             return Err(error);
@@ -15065,6 +15067,17 @@ mod tests {
     }
     #[test]
     fn local_checkout_deferral_abandons_transaction_without_gas_or_fee() {
+        check_local_checkout_abandons_transaction(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        );
+    }
+    #[test]
+    fn local_custody_invariant_abandons_transaction_without_gas_or_fee() {
+        check_local_checkout_abandons_transaction(
+            ivm::error::ExecutionDeferral::LocalInvariantViolation,
+        );
+    }
+    fn check_local_checkout_abandons_transaction(reason: ivm::error::ExecutionDeferral) {
         let (state, keypair, authority, _, _, fee_asset, _) =
             pipeline_fee_state_fixture(state_after_genesis);
         let mut program = ivm::ProgramMetadata {
@@ -15123,9 +15136,7 @@ mod tests {
         let retry_transaction = transaction.clone();
         let mut ivm_cache = IvmCache::new();
         let shared_cache = ivm_cache.prepared_contract_cache();
-        shared_cache.set_checkout_refusal_for_test(Some(
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
-        ));
+        shared_cache.set_checkout_refusal_for_test(Some(reason));
         let result = super::Executor::Initial.execute_transaction(
             &mut state_transaction,
             &authority,
@@ -15135,14 +15146,11 @@ mod tests {
         assert_eq!(
             result,
             Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+                reason.into()
             ))
         );
         assert_eq!(state_transaction.last_tx_gas_used, 0);
-        assert_eq!(
-            state_transaction.execution_deferral(),
-            Some(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
-        );
+        assert_eq!(state_transaction.execution_deferral(), Some(reason.into()));
         // Releasing local pressure cannot bless this already incomplete overlay.
         shared_cache.set_checkout_refusal_for_test(None);
         assert_eq!(
@@ -20108,7 +20116,7 @@ mod tests {
     fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 100_000,

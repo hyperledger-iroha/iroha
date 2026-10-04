@@ -131,12 +131,19 @@ async fn fund_and_declare(
         .ok_or_else(|| eyre!("publication network must expose its actual bootstrap fee asset"))?
         .parse()?;
     for provider in providers {
-        for account in std::iter::once(provider.owner()).chain(
-            provider
-                .role_keys
-                .iter()
-                .map(|key| AccountId::new(key.public_key().clone())),
-        ) {
+        ensure!(
+            provider.owner() != provider.completion_signer(),
+            "dedicated completion account required"
+        );
+        for account in [provider.owner(), provider.completion_signer()]
+            .into_iter()
+            .chain(
+                provider
+                    .role_keys
+                    .iter()
+                    .map(|key| AccountId::new(key.public_key().clone())),
+            )
+        {
             submit_instruction(
                 &governor,
                 Transfer::asset_quantity(
@@ -212,6 +219,7 @@ async fn fund_and_declare(
         submit_instruction(
             &governor,
             UpsertProviderCredit {
+                expected_current: None,
                 record: ProviderCreditRecord::new(
                     provider.id,
                     Quantity::from(100_u32),
@@ -511,8 +519,9 @@ pub(super) async fn create_and_publish(
     };
     for (key, request) in [
         (&*ALICE_KEYPAIR, source_request),
+        (&providers[1].owner_key, source_request),
         (
-            &providers[1].owner_key,
+            &providers[1].completion_key,
             iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1 {
                 assignment_revision: source_request.assignment_revision + 1,
                 ..source_request
@@ -561,6 +570,24 @@ pub(super) async fn create_and_publish(
         complete.order.provider_completions.len() == 3,
         "all three independent native completions required"
     );
+    for completion in &complete.order.provider_completions {
+        let provider = providers
+            .iter()
+            .find(|provider| provider.id == completion.provider_id)
+            .ok_or_else(|| eyre!("completion provider must belong to the test network"))?;
+        ensure!(
+            completion.completed_by == provider.completion_signer(),
+            "native completion must retain the dedicated signer"
+        );
+        ensure!(
+            completion.completion_authority.provider_owner == provider.owner(),
+            "native completion must retain the independent owner"
+        );
+        ensure!(
+            completion.completion_authority.completion_signer == completion.completed_by,
+            "full completion authority must bind the signer"
+        );
+    }
     let floor = wire::prove(
         &http,
         &publisher,

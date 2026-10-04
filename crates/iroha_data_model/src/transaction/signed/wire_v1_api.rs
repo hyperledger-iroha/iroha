@@ -1,7 +1,4 @@
-//! UNLINKED DRAFT: typed model entry points for the shared fixed-V1 counted writer.
-//!
-//! TODO: Stage with wire_v1.rs, its type re-export and replacement of the current ordinary
-//! encode_default_layout_versioned helper. Do not retain two encoding implementations.
+//! Typed entry points for the sole shared fixed-V1 counted transaction writer.
 
 use super::{SignedTransaction, TransactionEntrypoint, wire_v1::WireV1Plan};
 

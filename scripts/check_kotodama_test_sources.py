@@ -33,15 +33,22 @@ OUT_OF_LINE_TEST_SOURCES = {
 # These exact Rust child modules are part of the compiler's one test owner.
 EXPECTED_TEST_MODULES = {
     "crates/kotodama_lang/src/compiler.rs": (
+        ("dead_operands", "crates/kotodama_lang/src/compiler/tests/dead_operands.rs"),
         ("literal_helpers", "crates/kotodama_lang/src/compiler/tests/literal_helpers.rs"),
+        ("numeric_operands", "crates/kotodama_lang/src/compiler/tests/numeric_operands.rs"),
         ("rematerialized", "crates/kotodama_lang/src/compiler/tests/rematerialized.rs"),
+        ("state_operands", "crates/kotodama_lang/src/compiler/tests/state_operands.rs"),
     ),
 }
-# The canonical pool fixture intentionally has two independent compiler controls.
+# The canonical pool fixture has independent folding, liveness, rematerialization,
+# and borrowed numeric/state operand controls.
 # No other fixture or consumer is permitted to share an include.
 SHARED_EXTERNAL_FIXTURE_OWNERS = {
     "crates/iroha_core/src/validation_fee/fixtures/dlmm_pool.ko": frozenset({
+        ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_dead_operands_measure_actual_frame_and_byte_savings", True),
         ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_literal_folding_measures_same_compiler_artifacts_and_public_metadata", True),
+        ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_borrowed_numeric_operands_measure_material_byte_reduction", True),
+        ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_borrowed_state_operands_measure_material_byte_reduction", True),
         ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_rematerialization_measures_same_compiler_artifacts_and_metadata", True),
     }),
 }

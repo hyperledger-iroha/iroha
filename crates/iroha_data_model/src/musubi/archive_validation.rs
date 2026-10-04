@@ -522,9 +522,10 @@ impl MusubiProviderBundleVerificationBindingV1 {
     pub fn validate(&self) -> Result<(), ParseError> {
         validate_musubi_account_id_v1(&self.completed_by)?;
         validate_musubi_account_id_v1(&self.completion_authority.provider_owner)?;
+        validate_musubi_account_id_v1(&self.completion_authority.completion_signer)?;
         if self.network_id.as_bytes()[31] & 1 != 1
             || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
-            || self.completed_by != self.completion_authority.provider_owner
+            || self.completed_by != self.completion_authority.completion_signer
             || !self.completion_authority.is_valid()
             || self
                 .replication_order
@@ -564,7 +565,7 @@ impl MusubiProviderBundleVerificationPayloadV1 {
         }
         self.binding.validate()
     }
-    /// Compute the domain-separated typed hash signed by the provider-owner controller.
+    /// Compute the domain-separated typed hash signed by the completion-signer controller.
     #[must_use]
     pub fn signing_hash(&self) -> HashOf<Self> {
         domain_signing_hash(MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SIGNATURE_DOMAIN_V1, self)
@@ -630,12 +631,12 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             digest: self.digest(),
         }
     }
-    /// Verify the exact finalized completion binding and provider-owner controller quorum.
+    /// Verify the exact finalized completion binding and completion-signer controller quorum.
     ///
     /// # Errors
     ///
     /// Returns an error if validation fails, the expected binding differs, an approval is not a
-    /// provider-owner key, a signature fails, or the provider-owner threshold is not met.
+    /// completion-signer key, a signature fails, or the completion-signer threshold is not met.
     pub fn verify(
         &self,
         expected_binding: &MusubiProviderBundleVerificationBindingV1,
@@ -654,18 +655,18 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             .payload
             .binding
             .completion_authority
-            .provider_owner
+            .completion_signer
             .controller()
         {
             AccountController::Single(public_key) => {
                 let [approval] = self.approvals.as_slice() else {
                     return Err(ParseError::new(
-                        "Musubi single-key provider owner requires exactly one approval",
+                        "Musubi single-key completion signer requires exactly one approval",
                     ));
                 };
                 if &approval.public_key != public_key {
                     return Err(ParseError::new(
-                        "Musubi provider bundle approval is not a provider-owner key",
+                        "Musubi provider bundle approval is not a completion-signer key",
                     ));
                 }
                 iroha_crypto::verify_signature_borrowed(
@@ -684,7 +685,7 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                         .find(|member| member.public_key() == &approval.public_key)
                     else {
                         return Err(ParseError::new(
-                            "Musubi provider bundle approval is not a provider-owner key",
+                            "Musubi provider bundle approval is not a completion-signer key",
                         ));
                     };
                     iroha_crypto::verify_signature_borrowed(
@@ -701,7 +702,7 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                 }
                 if approved_weight < u32::from(policy.threshold()) {
                     return Err(ParseError::new(
-                        "Musubi provider bundle approvals do not meet provider-owner threshold",
+                        "Musubi provider bundle approvals do not meet completion-signer threshold",
                     ));
                 }
                 Ok(())

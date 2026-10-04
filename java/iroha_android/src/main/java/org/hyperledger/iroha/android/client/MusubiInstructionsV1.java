@@ -28,13 +28,6 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRole;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageScope;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationPayload;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionAuthority;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionSignerPolicy;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderFinalizedAnchor;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Publication;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Reason;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.RegistryAdmissionMode;
@@ -183,35 +176,6 @@ public final class MusubiInstructionsV1 {
       writeSized(encoder, child -> encodeArchiveCommitment(child, commitment));
       writeSized(encoder, child -> encodeSeedIngressReceipt(child, stagingReceipt));
       writeSized(encoder, child -> encodeU64(child, expectedPolicyRevision));
-    }
-  }
-
-  /** Register one immutable provider proof for later location-set commitments. */
-  public static final class RegisterMusubiProviderBundleAttestationV1
-      extends TypedInstructionV1 {
-    public static final String WIRE_ID =
-        "iroha.musubi.v1.provider_bundle_attestation.register";
-    public static final String SCHEMA_NAME =
-        "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1";
-
-    private final ProviderBundleVerificationAttestation attestation;
-    private final BigInteger expectedLocationRevision;
-
-    public RegisterMusubiProviderBundleAttestationV1(
-        final ProviderBundleVerificationAttestation attestation,
-        final BigInteger expectedLocationRevision) {
-      super(WIRE_ID, SCHEMA_NAME);
-      this.attestation = Objects.requireNonNull(attestation, "attestation");
-      this.expectedLocationRevision =
-          requirePositiveRevision(expectedLocationRevision, "expectedLocationRevision");
-    }
-
-    public ProviderBundleVerificationAttestation attestation() { return attestation; }
-    public BigInteger expectedLocationRevision() { return expectedLocationRevision; }
-
-    @Override void encodeBare(final NoritoEncoder encoder) {
-      writeSized(encoder, child -> encodeProviderAttestation(child, attestation));
-      writeSized(encoder, child -> encodeU64(child, expectedLocationRevision));
     }
   }
 
@@ -1156,70 +1120,6 @@ public final class MusubiInstructionsV1 {
     }
   }
 
-  private static void encodeProviderAttestation(
-      final NoritoEncoder encoder, final ProviderBundleVerificationAttestation value) {
-    writeSized(encoder, child -> encodeProviderPayload(child, value.payload()));
-    writeSized(encoder, child -> {
-      child.writeUInt(value.approvals().size(), 64);
-      for (final ProviderBundleVerificationApproval approval : value.approvals()) {
-        writeSized(child, item -> encodeProviderApproval(item, approval));
-      }
-    });
-  }
-
-  private static void encodeProviderPayload(
-      final NoritoEncoder encoder, final ProviderBundleVerificationPayload value) {
-    writeSized(encoder, child -> child.writeByte(1));
-    writeSized(encoder, child -> encodeProviderBinding(child, value.binding()));
-  }
-
-  private static void encodeProviderBinding(
-      final NoritoEncoder encoder, final ProviderBundleVerificationBinding value) {
-    writeSized(encoder, child -> child.writeBytes(value.networkId().bytes()));
-    writeSized(encoder, child -> encodeHexDigestNewtype(child, value.providerId()));
-    writeSized(encoder, child -> encodeAccountId(child, value.completedBy()));
-    writeSized(encoder, child -> encodeCompletionAuthority(child, value.completionAuthority()));
-    writeSized(encoder, child -> encodeDigest32(child, value.replicationOrder()));
-    writeSized(encoder, child -> encodeU64(child, value.assignmentRevision()));
-    writeSized(encoder, child -> encodeU64(child, value.completionEpoch()));
-    writeSized(encoder, child -> encodeFinalizedAnchor(child, value.finalizedAnchor()));
-    writeSized(encoder, child -> encodeDigest32(child, value.archiveId()));
-    writeSized(encoder, child -> encodeDigest32(child, value.bundleDigest()));
-    writeSized(encoder, child -> encodeDigest32(child, value.descriptorDigest()));
-    writeSized(encoder, child -> encodeDigest32(child, value.semanticReleaseManifestDigest()));
-    writeSized(encoder, child -> encodeDigest32(child, value.verificationLockDigest()));
-    writeSized(encoder, child -> encodeDigest32(child, value.sourceTreeDigest()));
-  }
-
-  private static void encodeCompletionAuthority(
-      final NoritoEncoder encoder, final ProviderCompletionAuthority value) {
-    writeSized(encoder, child -> encodeAccountId(child, value.providerOwner()));
-    writeSized(encoder, child -> encodeCompletionSignerPolicy(child, value.signerPolicy()));
-  }
-
-  private static void encodeCompletionSignerPolicy(
-      final NoritoEncoder encoder, final ProviderCompletionSignerPolicy value) {
-    writeSized(encoder, child -> child.writeBytes(value.policyId()));
-    writeSized(encoder, child -> encodeU64(child, value.revision()));
-    writeSized(encoder, child -> encodeOption(
-        child,
-        value.predecessorDigest(),
-        MusubiInstructionsV1::encodeGenericFixedBytes));
-    writeSized(encoder, child -> child.writeBytes(value.policyDigest()));
-  }
-
-  private static void encodeFinalizedAnchor(
-      final NoritoEncoder encoder, final ProviderFinalizedAnchor value) {
-    writeSized(encoder, child -> encodeU64(child, value.height()));
-    writeSized(encoder, child -> child.writeBytes(value.blockHash()));
-  }
-
-  private static void encodeProviderApproval(
-      final NoritoEncoder encoder, final ProviderBundleVerificationApproval value) {
-    writeSized(encoder, child -> encodePublicKey(child, value.publicKey()));
-    writeSized(encoder, child -> encodeSignature(child, value.signature()));
-  }
-
   private static void encodeNamespaceBinding(
       final NoritoEncoder encoder, final NamespaceBinding value) {
     writeSized(encoder, child -> encodeStringNewtype(child, value.namespace().value()));
@@ -1639,13 +1539,6 @@ public final class MusubiInstructionsV1 {
       if (comparison != 0) return comparison;
     }
     return Integer.compare(left.length, right.length);
-  }
-
-  static byte[] providerBundleAttestationDigest(
-      final ProviderBundleVerificationAttestation attestation) {
-    return domainHash(
-        "iroha.musubi.provider-bundle-attestation.digest.v1",
-        encoded(encoder -> encodeProviderAttestation(encoder, attestation)));
   }
 
   static byte[] releaseManifestDigest(final ReleaseManifest manifest) {

@@ -1,0 +1,5 @@
+error: duplicate decode_fields attribute
+ --> tests/ui_fail/duplicate_prepared_field_decode.rs:4:25
+  |
+4 | #[norito(decode_fields, decode_fields)]
+  |                         ^^^^^^^^^^^^^

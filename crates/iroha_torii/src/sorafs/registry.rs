@@ -831,6 +831,7 @@ struct RegistryReplicationCompletion {
     completion_epoch: u64,
     assignment_revision: u64,
     provider_owner: String,
+    completion_signer: String,
     signer_policy_id_hex: String,
     signer_policy_revision: u64,
     signer_policy_predecessor_digest_hex: Option<String>,
@@ -1807,7 +1808,7 @@ impl RegistryReplicationOrder {
                     .is_some_and(|previous| completion.completion_epoch < previous)
                 || completion.assignment_revision != record.assignment_revision
                 || !completion.completion_authority.is_valid()
-                || completion.completed_by != completion.completion_authority.provider_owner
+                || completion.completed_by != completion.completion_authority.completion_signer
                 || !completion.finalized_anchor.is_valid()
             {
                 return Err(PinRegistryError::InvalidReplicationOrder {
@@ -1861,6 +1862,10 @@ impl RegistryReplicationOrder {
                 completion_epoch: completion.completion_epoch,
                 assignment_revision: completion.assignment_revision,
                 provider_owner: completion.completion_authority.provider_owner.to_string(),
+                completion_signer: completion
+                    .completion_authority
+                    .completion_signer
+                    .to_string(),
                 signer_policy_id_hex: hex::encode(
                     completion.completion_authority.signer_policy.policy_id,
                 ),
@@ -2007,6 +2012,10 @@ impl RegistryReplicationCompletion {
         completion_authority.insert(
             "provider_owner".into(),
             Value::String(self.provider_owner.clone()),
+        );
+        completion_authority.insert(
+            "completion_signer".into(),
+            Value::String(self.completion_signer.clone()),
         );
         completion_authority.insert("signer_policy".into(), Value::Object(signer_policy));
         map.insert(
@@ -2542,6 +2551,11 @@ mod tests {
                 .parse()
                 .expect("public key");
         let issuer = AccountId::new(public_key);
+        let signer_key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xd3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("dedicated completion key");
+        let completion_signer = AccountId::new(signer_key.public_key().clone());
+        assert_ne!(issuer, completion_signer);
         let record = ReplicationOrderRecord {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),
@@ -2554,11 +2568,12 @@ mod tests {
             assignment_revision: 1,
             provider_completions: vec![ReplicationOrderCompletionRecord {
                 provider_id: ProviderId::new(order_payload.assignments[0].provider_id),
-                completed_by: issuer.clone(),
+                completed_by: completion_signer.clone(),
                 completion_epoch: 15,
                 assignment_revision: 1,
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
-                    issuer,
+                    issuer.clone(),
+                    completion_signer.clone(),
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [0xA1; 32],
                         revision: 1,
@@ -2615,7 +2630,12 @@ mod tests {
             .get("completion_authority")
             .and_then(Value::as_object)
             .expect("completion authority");
-        let expected_owner = record.provider_completions[0].completed_by.to_string();
+        let expected_owner = issuer.to_string();
+        let expected_signer = completion_signer.to_string();
+        assert_eq!(
+            authority.get("completion_signer").and_then(Value::as_str),
+            Some(expected_signer.as_str())
+        );
         assert_eq!(
             authority.get("provider_owner").and_then(Value::as_str),
             Some(expected_owner.as_str())
@@ -2683,6 +2703,9 @@ mod tests {
             Some(16)
         );
         let mut invalid_records = Vec::new();
+        let mut owner_signed_completion = record.clone();
+        owner_signed_completion.provider_completions[0].completed_by = issuer;
+        invalid_records.push(owner_signed_completion);
         let mut zero_assignment_revision = record.clone();
         zero_assignment_revision.assignment_revision = 0;
         invalid_records.push(zero_assignment_revision);

@@ -781,7 +781,13 @@ fn original_signed_configure_journal_survives_expiry_and_rejects_request_or_fee_
     let expected = CustodyExpectation::Configure(&request);
     let plan = expected.plan(VALIDATED_AT).unwrap();
     let record = journal(&fixture.config, &plan, &request.options);
-    expected.verify(&record).unwrap();
+    expected
+        .verify(&preparation::Selection {
+            operation: &record.operation,
+            requested_fee: &record.requested_fee,
+            deadline_ms: record.deadline_ms,
+        })
+        .unwrap();
     assert!(transaction_expired(&record.verify(&fixture.config).unwrap()).unwrap());
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("original-configure");
@@ -794,26 +800,44 @@ fn original_signed_configure_journal_survives_expiry_and_rejects_request_or_fee_
     );
     assert_eq!(recovered.transaction_hash, record.transaction_hash);
     recovered.verify(&fixture.config).unwrap();
-    expected.verify(&recovered).unwrap();
+    expected
+        .verify(&preparation::Selection {
+            operation: &recovered.operation,
+            requested_fee: &recovered.requested_fee,
+            deadline_ms: recovered.deadline_ms,
+        })
+        .unwrap();
     let mut changed = request.clone();
     changed.deadline_unix_ms += 1;
     assert!(
         CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed = request.clone();
     changed.selection.expected_digest = [0x7c; 32];
     assert!(
         CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed = request.clone();
     *changed.options.max_total_fees.values_mut().next().unwrap() = Quantity::from(11_u32);
     assert!(
         CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed = request.clone();
@@ -821,7 +845,11 @@ fn original_signed_configure_journal_survives_expiry_and_rejects_request_or_fee_
         FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(1));
     assert!(
         CustodyExpectation::Configure(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed_record = recovered;
@@ -830,7 +858,15 @@ fn original_signed_configure_journal_survives_expiry_and_rejects_request_or_fee_
         panic!("configure purpose retained");
     };
     changed_record.operation = NativeOperation::StreamTokenCustodyEnroll { plan, terms };
-    assert!(expected.verify(&changed_record).is_err());
+    assert!(
+        expected
+            .verify(&preparation::Selection {
+                operation: &changed_record.operation,
+                requested_fee: &changed_record.requested_fee,
+                deadline_ms: changed_record.deadline_ms,
+            })
+            .is_err()
+    );
     assert!(changed_record.verify(&fixture.config).is_err());
 }
 
@@ -842,16 +878,32 @@ fn original_signed_enrollment_journal_rejects_renewed_interval_and_substituted_a
     let expected = CustodyExpectation::Enroll(&request);
     let plan = expected.plan(VALIDATED_AT).unwrap();
     let record = journal(&fixture.config, &plan, &request.options);
-    expected.verify(&record).unwrap();
+    expected
+        .verify(&preparation::Selection {
+            operation: &record.operation,
+            requested_fee: &record.requested_fee,
+            deadline_ms: record.deadline_ms,
+        })
+        .unwrap();
     let bytes = norito::json::to_vec(&record).unwrap();
     let recovered: TransactionJournal = norito::json::from_slice(&bytes).unwrap();
-    expected.verify(&recovered).unwrap();
+    expected
+        .verify(&preparation::Selection {
+            operation: &recovered.operation,
+            requested_fee: &recovered.requested_fee,
+            deadline_ms: recovered.deadline_ms,
+        })
+        .unwrap();
     recovered.verify(&fixture.config).unwrap();
     let mut changed = request.clone();
     changed.expires_at_unix_ms += 1;
     assert!(
         CustodyExpectation::Enroll(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed = request;
@@ -861,7 +913,11 @@ fn original_signed_enrollment_journal_rejects_renewed_interval_and_substituted_a
     changed.enrollment = attest(enrollment.statement, &fixture.attester);
     assert!(
         CustodyExpectation::Enroll(&changed)
-            .verify(&recovered)
+            .verify(&preparation::Selection {
+                operation: &recovered.operation,
+                requested_fee: &recovered.requested_fee,
+                deadline_ms: recovered.deadline_ms,
+            })
             .is_err()
     );
     let mut changed_record = recovered;

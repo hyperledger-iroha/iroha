@@ -332,6 +332,7 @@ record_contract!(parse_policy, render_policy, ProviderIngestCompletionSignerPoli
 });
 record_contract!(parse_authority, render_authority, ProviderIngestCompletionAuthorityV1 {
     provider_owner: parse_model => render_model,
+    completion_signer: parse_model => render_model,
     signer_policy: parse_policy => render_policy,
 });
 record_contract!(parse_anchor, render_anchor, ProviderIngestFinalizedAnchorV1 {

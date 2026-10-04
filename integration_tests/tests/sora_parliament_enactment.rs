@@ -157,18 +157,25 @@ pub(crate) async fn enact(
     let client = network.client();
     fund_citizen_fees(network, &client, &citizens).await?;
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
-    let beacon_record =
-        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
-            .wrap_err("derive exact public beacon fixture")?;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let beacon_record = deterministic_parliament_beacon_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+        &beacon_budget,
+    )
+    .wrap_err("derive exact public beacon fixture")?;
     let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
         network_id: beacon_record.session.network_id,
         session_id: beacon_record.session.session_id,
         roster_hash: beacon_record.session.roster_hash,
         transcript_hash: beacon_record.session.transcript_hash,
     };
-    let validated_beacon_session =
-        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
-            .wrap_err("replay the exact public beacon transcript")?;
+    let validated_beacon_session = validate_global_threshold_beacon_session_v1(
+        &beacon_record.session,
+        &beacon_binding,
+        &beacon_budget,
+    )
+    .wrap_err("replay the exact public beacon transcript")?;
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public TLE fixture")?;

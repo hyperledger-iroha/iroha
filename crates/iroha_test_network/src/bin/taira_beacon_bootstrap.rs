@@ -122,10 +122,10 @@ struct RetainedSeat {
 
 #[derive(JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct Ceremony {
+struct Ceremony<Session> {
     schema: String,
     binding: Binding,
-    public_session: GlobalThresholdBeaconKeySessionV1,
+    public_session: Session,
     bundle_sha256: String,
     instruction_sha256: String,
     seats: Vec<RetainedSeat>,
@@ -494,6 +494,12 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                     binding.network_id,
                     SumeragiRootScope::Global,
                     limits(),
+                    &iroha_allocation::AllocationBudget::new(
+                        native
+                            .runtime_provider_broker
+                            .credential_max_memory_bytes
+                            .get(),
+                    ),
                 )
                 .map_err(|error| eyre!(error))?;
                 ensure!(
@@ -837,7 +843,10 @@ fn derived_config(path: &Path, provider: &Provider) -> Result<Zeroizing<Vec<u8>>
     result
 }
 
-fn installation(output: &Path, ceremony: &Ceremony) -> Result<Vec<InstructionBox>> {
+fn installation(
+    output: &Path,
+    ceremony: &Ceremony<GlobalThresholdBeaconKeySessionV1>,
+) -> Result<Vec<InstructionBox>> {
     let path = output.join("install-instruction.json");
     ensure!(
         file_digest(&path, false)? == ceremony.instruction_sha256,
@@ -1132,7 +1141,7 @@ async fn run(args: Args) -> Result<()> {
                     && provider.policy_digest
                         == global_beacon_partial_signer_public_inventory_digest_v1(
                             args.binding.network_id,
-                            &[(dkg.public_session.clone(), seat.signer_index)]
+                            &[(dkg.public_session.record(), seat.signer_index)]
                         )?,
                 "native provider differs from exact completed seat"
             );
@@ -1163,7 +1172,7 @@ async fn run(args: Args) -> Result<()> {
         let ceremony = Ceremony {
             schema: "iroha.operator.genesis-beacon.ceremony.v1".to_owned(),
             binding: args.binding.clone(),
-            public_session: dkg.public_session.clone(),
+            public_session: dkg.public_session.record(),
             bundle_sha256: hex(&sha256(&*bundle)),
             instruction_sha256: hex(&sha256(&*instruction)),
             seats: retained,
@@ -1172,7 +1181,8 @@ async fn run(args: Args) -> Result<()> {
     }
     // Recovery is deliberately limited to retained transactions. A consumed or
     // incomplete DKG attempt cannot be restarted through this command.
-    let ceremony: Ceremony = json::from_slice(&read_input(&ceremony_path, false)?)?;
+    let ceremony: Ceremony<GlobalThresholdBeaconKeySessionV1> =
+        json::from_slice(&read_input(&ceremony_path, false)?)?;
     ensure!(
         ceremony.schema == "iroha.operator.genesis-beacon.ceremony.v1"
             && ceremony.binding == args.binding
@@ -1460,6 +1470,50 @@ mod tests {
         assert!(
             validate_retained_phase_audit(binding, roster, 3, &corrupted, &audit_bytes).is_err()
         );
+    }
+
+    #[test]
+    fn ceremony_json_borrows_the_public_field_without_changing_recovery_bytes() {
+        // The generic ceremony container has one JSON layout. Session proof
+        // validation stays at its existing native boundary, independently of
+        // whether this encoding borrows a retained graph or owns decoded data.
+        let binding = Binding {
+            input_dir: PathBuf::from("input"),
+            daemon: PathBuf::from("iroha3d"),
+            daemon_sha256: "a".repeat(64),
+            chain_id: ChainId::from("ceremony-container"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"ceremony-container"),
+            )),
+            chain_discriminant: 42,
+            genesis_manifest: PathBuf::from("genesis.json"),
+            manifest_sha256: "b".repeat(64),
+            genesis_signed: PathBuf::from("genesis.norito"),
+            signed_genesis_sha256: "c".repeat(64),
+            client_config: PathBuf::from("client.toml"),
+            validator_configs: Vec::new(),
+        };
+        #[derive(Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+        struct PublicField {
+            values: Vec<u16>,
+        }
+        let public_field = PublicField {
+            values: vec![3_u16, 7, 31],
+        };
+        let borrowed = Ceremony {
+            schema: "iroha.operator.genesis-beacon.ceremony.v1".to_owned(),
+            binding: binding.clone(),
+            public_session: &public_field,
+            bundle_sha256: "d".repeat(64),
+            instruction_sha256: "e".repeat(64),
+            seats: Vec::new(),
+        };
+        let bytes = json::to_vec(&borrowed).unwrap();
+        let recovered: Ceremony<PublicField> = json::from_slice(&bytes).unwrap();
+        assert_eq!(recovered.public_session, public_field);
+        assert!(recovered.binding == binding);
+        assert_eq!(json::to_vec(&recovered).unwrap(), bytes);
+        assert!(std::ptr::eq(borrowed.public_session, &public_field));
     }
 
     #[test]

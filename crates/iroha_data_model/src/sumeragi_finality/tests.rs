@@ -376,7 +376,7 @@ impl Fixture {
     }
     pub(super) fn alternate(&self) -> SumeragiFinalityProof {
         let mut proof = self.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let consensus_header = certificate.consensus_header().to_vec();
         let result_preimage = certificate.result_preimage().to_vec();
@@ -426,7 +426,7 @@ fn current_proofs_roundtrip_and_verify_successful_exact_execution() {
             .is_err()
     );
     assert!(
-        decode_versioned_signed_block(&authenticated.canonical_executed_wire().unwrap())
+        decode_framed_signed_block(&authenticated.canonical_executed_wire().unwrap())
             .unwrap()
             .commit_certificate()
             .is_none()
@@ -461,7 +461,7 @@ fn current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availabili
     let fixture = Fixture::new();
     for mutation in 0..8 {
         let mut bad = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&bad.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&bad.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut consensus_header = certificate.consensus_header().to_vec();
         let mut result_preimage = certificate.result_preimage().to_vec();
@@ -641,7 +641,7 @@ fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
     let fixture = Fixture::new();
     for change_epoch in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
         let mut header: CoreHeader =
@@ -708,7 +708,7 @@ fn certified_beacon_pulse_requires_the_exact_committed_parent() {
     let fixture = Fixture::new();
     for foreign_parent in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();
@@ -843,7 +843,7 @@ fn certified_beacon_pulse_requires_exact_parent_and_native_context() {
     let fixture = Fixture::new();
     for mutation in 0..7 {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();
@@ -928,7 +928,7 @@ fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
     let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
     for with_control in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut header: CoreHeader =
             norito::decode_canonical(certificate.consensus_header()).unwrap();
@@ -1045,7 +1045,7 @@ fn signed_genesis_layout_reaches_the_native_epoch_exactly() {
 #[test]
 fn availability_scratch_refusal_preserves_signed_source_for_retry() {
     let fixture = Fixture::new();
-    let block = decode_versioned_signed_block(&fixture.second.block_wire).unwrap();
+    let block = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let header: CoreHeader = norito::decode_canonical(certificate.consensus_header()).unwrap();
     let table: AvailabilityFrame = norito::decode_canonical(certificate.availability()).unwrap();

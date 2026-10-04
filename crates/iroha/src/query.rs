@@ -495,6 +495,9 @@ pub enum QueryError {
     /// Iterable query response has an invalid batch shape: {0}
     #[error("iterable query response has an invalid batch shape: {0}")]
     ResponseShape(#[from] iroha_data_model::query::builder::TypedBatchDowncastError),
+    /// A structured SDK operation failure, including original canonical decoder custody.
+    #[error("{0}")]
+    Sdk(#[from] crate::Error),
     /// A singular query response carried an output of a different type.
     #[error("singular query response has an unexpected output type: {0}")]
     UnexpectedOutput(String),
@@ -719,7 +722,7 @@ impl Client {
         let details: PipelineTransactionDetailsResponse = Client::decode_canonical_norito_response(
             &response,
             TRANSACTION_DETAILS_RESPONSE_MAX_BYTES,
-            "Failed to get exact transaction details",
+            "query.transaction_details",
         )
         .map_err(QueryError::from)?;
         validate_transaction_details_bindings(&details, entrypoint_hash)
@@ -1961,7 +1964,14 @@ mod query_errors_handling {
             (StatusCode::OK, APPLICATION_NORITO, b"NRT0".to_vec()),
         ] {
             let error = transaction_details_http_failure(status, vec![content_type], body);
-            assert!(matches!(error, QueryError::Other(_)));
+            if status == StatusCode::OK {
+                assert!(
+                    matches!(&error, QueryError::Sdk(crate::Error::CanonicalDecode { source, .. })
+                    if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid)
+                );
+            } else {
+                assert!(matches!(error, QueryError::Other(_)));
+            }
             let report = eyre::Report::new(error);
             assert!(
                 !report
@@ -2061,7 +2071,11 @@ mod query_errors_handling {
             },
         )
         .expect_err("trailing bytes must be rejected");
-        assert!(error.to_string().contains("canonical Norito"));
+        assert!(matches!(
+            &error,
+            QueryError::Sdk(crate::Error::CanonicalDecode { operation: "query.transaction_details", source })
+                if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
 
         let client = compatible_client_with_conflicting_wire_headers();
         let encoded = norito::to_bytes(&details).expect("encode transaction-details response");

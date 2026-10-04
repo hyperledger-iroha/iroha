@@ -365,8 +365,8 @@ fn exact_replay_pagination_and_provider_index_isolation_are_deterministic() {
         expected_provider_a.expected_owner
     );
     assert_eq!(
-        page_one.rows[0].expected_signer_policy,
-        expected_provider_a.expected_signer_policy
+        page_one.rows[0].expected_authority,
+        expected_provider_a.expected_authority
     );
     assert_eq!(
         page_one.rows[0].expected_assignment_revision,

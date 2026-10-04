@@ -24,6 +24,7 @@ mod unix_main {
     use irohad::{
         IrohaRuntimeProviderSlotV1, RuntimeProviderBrokerExecutableArgsV1,
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
+        load_runtime_provider_broker_policy_file_v1,
     };
     use norito::{NoritoDeserialize, NoritoSerialize};
     use std::{
@@ -362,11 +363,50 @@ mod unix_main {
             }
         }
     }
+    /// Terminal launcher error retains credential decoder provenance until reporting.
+    #[derive(Debug)]
+    enum LauncherError {
+        Operation(CliError),
+        ThresholdCredential(
+            irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1,
+        ),
+    }
+    impl From<CliError> for LauncherError {
+        fn from(error: CliError) -> Self {
+            Self::Operation(error)
+        }
+    }
+    impl LauncherError {
+        fn message(&self) -> &'static str {
+            match self {
+                Self::Operation(error) => error.message(),
+                Self::ThresholdCredential(error) => match error {
+                    irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
+                    | irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Session(_)
+                    | irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(_) => "runtime secret credential is locally unavailable",
+                    _ => "runtime secret credential was rejected",
+                },
+            }
+        }
+    }
+    impl std::fmt::Display for LauncherError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.message())
+        }
+    }
+    impl std::error::Error for LauncherError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::ThresholdCredential(error) => Some(error),
+                Self::Operation(_) => None,
+            }
+        }
+    }
     pub fn main() {
         let result = if is_standard_broker_argv0(env::args_os().next().as_deref()) {
             run_standard_runtime_provider_broker()
         } else {
-            run(Cli::parse())
+            run(Cli::parse()).map_err(LauncherError::from)
         };
         if let Err(error) = result {
             eprintln!("{}", error.message());
@@ -598,18 +638,22 @@ mod unix_main {
         Ok(())
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
+    fn run_standard_runtime_provider_broker() -> Result<(), LauncherError> {
         let args = RuntimeProviderBrokerExecutableArgsV1::parse();
+        let broker_policy = load_runtime_provider_broker_policy_file_v1(args.broker_policy_path())
+            .map_err(|_| CliError::Binding)?;
         let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
             .map_err(|_| CliError::Binding)?;
+        let credential_budget = catalog.new_credential_registry_budget_v1();
         #[cfg(target_os = "linux")]
         let threshold_signers = {
             let credential_directory = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 credential_directory.as_deref(),
+                &credential_budget,
             )
-            .map_err(|_| CliError::Credential)?
+            .map_err(LauncherError::ThresholdCredential)?
         };
         #[cfg(target_os = "macos")]
         let threshold_signers = {
@@ -619,8 +663,9 @@ mod unix_main {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
                 &catalog,
                 &mut credential_bundle,
+                &credential_budget,
             )
-            .map_err(|_| CliError::Credential)?
+            .map_err(LauncherError::ThresholdCredential)?
         };
         let mut signers =
             ExternalSoftwareSignerBackendsV1::new().with_base_registry(Arc::new(threshold_signers));
@@ -658,7 +703,7 @@ mod unix_main {
                     let SignerPurposeBindingV1::GovernanceDag { publisher_peer_id } =
                         binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_governance_dag(Arc::new(
                         ExternalSoftwareSignerGovernanceDagAdapterV1::try_new(
@@ -671,7 +716,7 @@ mod unix_main {
                 IrohaRuntimeProviderSlotV1::PotrGatewaySigner => {
                     let SignerPurposeBindingV1::PotrGateway { signer_id } = binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_potr_gateway(Arc::new(
                         ExternalSoftwareSignerPotrGatewayAdapterV1::try_new(client, signer_id)
@@ -684,7 +729,7 @@ mod unix_main {
                         provider_id,
                     } = binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_potr_provider(Arc::new(
                         ExternalSoftwareSignerPotrProviderAdapterV1::try_new(
@@ -699,7 +744,7 @@ mod unix_main {
                     let SignerPurposeBindingV1::BillingStatement { signer_id } =
                         binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_billing_statement(Arc::new(
                         ExternalSoftwareSignerBillingStatementAdapterV1::try_new(client, signer_id)
@@ -711,28 +756,32 @@ mod unix_main {
                         ExternalSoftwareSignerEvidenceViewerAdapterV1::try_new(client)
                             .map_err(|_| CliError::Client)?,
                     )),
-                _ => return Err(CliError::Binding),
+                _ => return Err(CliError::Binding.into()),
             }
             .map_err(|_| CliError::Binding)?;
         }
-        let executable = RuntimeProviderBrokerExecutableV1::try_from_args(&args, &signers)
-            .map_err(|_| CliError::Binding)?;
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
+            args.catalog_path(),
+            broker_policy,
+            &signers,
+        )
+        .map_err(|_| CliError::Binding)?;
         #[cfg(target_os = "linux")]
         {
             executable
                 .serve_until_shutdown_signal_with_systemd_notify()
-                .map_err(|_| CliError::Service)
+                .map_err(|_| LauncherError::Operation(CliError::Service))
         }
         #[cfg(target_os = "macos")]
         {
             executable
                 .serve_until_shutdown_signal(|| {})
-                .map_err(|_| CliError::Service)
+                .map_err(|_| LauncherError::Operation(CliError::Service))
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
-        Err(CliError::Service)
+    fn run_standard_runtime_provider_broker() -> Result<(), LauncherError> {
+        Err(CliError::Service.into())
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fixed_catalog_signer_role_name(
@@ -1810,6 +1859,40 @@ mod unix_main {
             );
             assert!(!path.exists());
             assert!(!moved.join("receipt.json").exists());
+        }
+
+        #[test]
+        fn threshold_decoder_failure_remains_typed_until_unavailable_launcher_diagnostic() {
+            use iroha_core::beacon::credential::{
+                ConsensusThresholdCredentialDecodeErrorV1, decode_consensus_threshold_credential_v1,
+            };
+            let secret = "credential diagnostic secret sentinel".to_owned();
+            let bytes = norito::encode_canonical(&vec![secret.clone()]).unwrap();
+            let error = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || decode_consensus_threshold_credential_v1::<Vec<String>>(&bytes),
+            )
+            .unwrap_err();
+            let error = LauncherError::ThresholdCredential(error.into());
+            assert_eq!(
+                error.message(),
+                "runtime secret credential is locally unavailable"
+            );
+            assert!(!format!("{error:?}").contains(&secret));
+            assert!(std::error::Error::source(&error).is_some());
+            let LauncherError::ThresholdCredential(irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(original)) = error else { panic!("terminal diagnostic must keep the original cause"); };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            assert!(matches!(
+                original.into_error(),
+                norito::Error::ScopedDecodeResource(_)
+            ));
+            let rejected = LauncherError::ThresholdCredential(
+                ConsensusThresholdCredentialDecodeErrorV1::Rejected.into(),
+            );
+            assert_eq!(rejected.message(), "runtime secret credential was rejected");
         }
     }
 }

@@ -3,9 +3,13 @@
 //! The stock binaries and deployment-owned launchers share this exact implementation. External
 //! launchers can provide runtime-only adapters through [`IrohaRuntimeProviderRegistryV1`] without
 //! copying daemon startup logic or exposing provider credentials through `iroha_config`.
+mod mutation_guard;
+
 /// Authenticated external software signer service and broker adapters.
 #[cfg(feature = "daemon")]
 pub mod external_software_signer;
+#[cfg(feature = "daemon")]
+mod native_check_binding;
 #[cfg(feature = "daemon")]
 mod runtime_credential;
 /// Software or optional hardware signing fenced by authenticated custody and completion.

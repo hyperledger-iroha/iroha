@@ -64,6 +64,10 @@ struct AssetFeeMaximum {
 
 impl BoundedTerms {
     pub(super) fn new(options: &BoundedTransactionOptions) -> Result<Self> {
+        eyre::ensure!(
+            options.max_total_fees.len() <= 16 && options.fee_payment.charge_limits().len() <= 16,
+            "operation fee authorization exceeds sixteen entries"
+        );
         options.fee_payment.validate()?;
         let remaining = options
             .deadline
@@ -140,6 +144,68 @@ impl BoundedTerms {
 }
 
 impl AccountService {
+    /// Inspect exact private-root preparation without network I/O or signing.
+    /// # Errors
+    /// Rejects changed child, certificate, fees or unsafe journal custody.
+    pub fn inspect_private_root_anchor_preparation(
+        &self,
+        journal: &Path,
+        expected: &PrivateRootAnchorRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::PrivateRootAnchor,
+            Some(OperationExpectation::PrivateRoot(
+                BoundedOperationExpectation::Anchor(expected),
+            )),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_private_root_anchor_unprepared(
+        &self,
+        journal: &Path,
+        expected: &PrivateRootAnchorRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::PrivateRootAnchor,
+            OperationExpectation::PrivateRoot(BoundedOperationExpectation::Anchor(expected)),
+        )
+    }
+
+    /// Inspect exact private-root preparation without network I/O or signing.
+    /// # Errors
+    /// Rejects changed child, certificate, fees or unsafe journal custody.
+    pub fn inspect_private_root_registration_preparation(
+        &self,
+        journal: &Path,
+        expected: &PrivateRootRegistrationRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::PrivateRootRegistration,
+            Some(OperationExpectation::PrivateRoot(
+                BoundedOperationExpectation::Registration(expected),
+            )),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_private_root_registration_unprepared(
+        &self,
+        journal: &Path,
+        expected: &PrivateRootRegistrationRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::PrivateRootRegistration,
+            OperationExpectation::PrivateRoot(BoundedOperationExpectation::Registration(expected)),
+        )
+    }
+
     /// Clone this exact account context with a deadline shared by every subsequent HTTP request.
     ///
     /// Use the clone for prepare, submit or read-only recovery within one attachment deadline.
@@ -158,6 +224,7 @@ impl AccountService {
             config: self.config.clone(),
             client: Client::from_client(self.client.client().with_request_deadline(deadline))?,
             deadline: Some(deadline),
+            cancellation: self.cancellation.clone(),
         })
     }
 
@@ -175,6 +242,18 @@ impl AccountService {
         request: &PrivateRootRegistrationRequest,
         journal: &Path,
     ) -> Result<OperationReport> {
+        if let Some(report) = self
+            .with_deadline(request.options.deadline)?
+            .finish_existing_preparation(
+                journal,
+                NativeOperationKind::PrivateRootRegistration,
+                Some(OperationExpectation::PrivateRoot(
+                    BoundedOperationExpectation::Registration(request),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
         let operation = NativeOperation::PrivateRootRegistration {
             alias: request.alias.clone(),
             expected_ownership_generation: request.expected_ownership_generation,
@@ -200,6 +279,18 @@ impl AccountService {
         request: &PrivateRootAnchorRequest,
         journal: &Path,
     ) -> Result<OperationReport> {
+        if let Some(report) = self
+            .with_deadline(request.options.deadline)?
+            .finish_existing_preparation(
+                journal,
+                NativeOperationKind::PrivateRootAnchor,
+                Some(OperationExpectation::PrivateRoot(
+                    BoundedOperationExpectation::Anchor(request),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
         let operation = NativeOperation::PrivateRootAnchor {
             state: Box::new(request.state.clone()),
             anchor: Box::new(request.anchor.clone()),
@@ -278,8 +369,8 @@ pub(super) enum BoundedOperationExpectation<'a> {
     Anchor(&'a PrivateRootAnchorRequest),
 }
 impl BoundedOperationExpectation<'_> {
-    pub(super) fn verify(&self, record: &TransactionJournal) -> Result<()> {
-        let options = match (self, &record.operation) {
+    pub(super) fn verify(&self, record: &preparation::Selection<'_>) -> Result<()> {
+        let options = match (self, record.operation) {
             (Self::Alias(expected, options), NativeOperation::AliasSetup { request, .. })
                 if *expected == request =>
             {
@@ -314,7 +405,7 @@ impl BoundedOperationExpectation<'_> {
             .bounded_terms()
             .ok_or_else(|| eyre!("saved journal does not retain explicit operation bounds"))?;
         terms.validate()?;
-        if record.requested_fee != options.fee_payment
+        if *record.requested_fee != options.fee_payment
             || !terms.matches_options(options)?
             || record.deadline_ms > terms.deadline_ms
         {
@@ -336,11 +427,9 @@ impl AccountService {
         journal: &Path,
         expected: &PrivateRootRegistrationRequest,
     ) -> Result<()> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(journal)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        record.verify(&self.config)?;
-        BoundedOperationExpectation::Registration(expected).verify(&record)
+        self.inspect_private_root_registration_preparation(journal, expected)?
+            .into_signed_transaction()?;
+        Ok(())
     }
 
     /// Check one retained anchor against the exact confirmed state, child certificate and fee limits.
@@ -352,11 +441,9 @@ impl AccountService {
         journal: &Path,
         expected: &PrivateRootAnchorRequest,
     ) -> Result<()> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(journal)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        record.verify(&self.config)?;
-        BoundedOperationExpectation::Anchor(expected).verify(&record)
+        self.inspect_private_root_anchor_preparation(journal, expected)?
+            .into_signed_transaction()?;
+        Ok(())
     }
 
     /// Submit once only after binding the held journal to the exact selected private child.

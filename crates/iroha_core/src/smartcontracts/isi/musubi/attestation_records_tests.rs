@@ -362,7 +362,7 @@ fn borrowed_attestations_preserve_multisig_controller_membership_and_threshold()
             .payload
             .binding
             .completion_authority
-            .provider_owner = owner;
+            .completion_signer = owner;
         let digest = record.attestation.payload.signing_hash();
         record.attestation.approvals = [&first, &second]
             .into_iter()
@@ -383,13 +383,13 @@ fn borrowed_attestations_preserve_multisig_controller_membership_and_threshold()
             view.musubi_archive_locations().get(&key).unwrap(),
             &view,
         )
-        .expect("both provider-owner approvals meet threshold");
+        .expect("both completion-signer approvals meet threshold");
         assert_eq!(evidence.len(), 1);
     }
     change_borrowed_attestation_record(&mut world, key, 0, |record| {
         let _ = record.attestation.approvals.pop();
     });
-    assert_borrowed_attestation_error(&world, key, "do not meet provider-owner threshold");
+    assert_borrowed_attestation_error(&world, key, "do not meet completion-signer threshold");
     change_borrowed_attestation_record(&mut world, key, 0, |record| {
         let foreign = KeyPair::try_from_seed(vec![0x7a; 32], Algorithm::Ed25519).unwrap();
         record.attestation.approvals[0] = MusubiProviderBundleVerificationApprovalV1 {
@@ -401,7 +401,7 @@ fn borrowed_attestations_preserve_multisig_controller_membership_and_threshold()
             .unwrap(),
         };
     });
-    assert_borrowed_attestation_error(&world, key, "not a provider-owner key");
+    assert_borrowed_attestation_error(&world, key, "not a completion-signer key");
 }
 
 #[test]

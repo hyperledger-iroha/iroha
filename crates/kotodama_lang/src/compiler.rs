@@ -9,7 +9,15 @@
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
+mod access_hint_normalization;
+#[cfg(test)]
+mod emission_profile;
 mod entrypoint_descriptors;
+#[cfg(test)]
+mod numeric_operands;
+#[cfg(test)]
+mod state_operands;
+use access_hint_normalization::canonical_state_hint_keys;
 use entrypoint_descriptors::build_entrypoint_descriptors;
 
 /// Opaque phase boundaries used by the compiler regression benchmark.
@@ -1715,7 +1723,7 @@ pub struct CompilerOptions {
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
     /// Production mode rejects test declarations and test-capable typed HIR; it never silently
-    /// strips them from a deployable artifact. Test mode emits an ABI-authenticated generic IVM 1.0
+    /// strips them from a deployable artifact. Test mode emits an ABI-authenticated generic IVM 1.1
     /// harness without a deployable CNTR section.
     pub mode: CompilerMode,
 }
@@ -1864,7 +1872,7 @@ mod test_mode_tests {
             .compile_source_with_manifest_and_report(src)
             .expect("compile in test mode");
         let parsed = ProgramMetadata::parse(&code).expect("parse test harness metadata");
-        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.version_minor, 1);
         assert_eq!(parsed.metadata.abi_version, KOTODAMA_ABI_VERSION);
         assert!(
             parsed.contract_interface.is_none(),
@@ -4226,8 +4234,9 @@ impl Compiler {
                     data_key_for_pointer(kind, value)
                 }
             };
-            let emit_values_to_syscall_registers = |values: &[ir::Temp],
-                                                    code: &mut Vec<u8>|
+            let emit_syscall_values_with_kinds = |values: &[ir::Temp],
+                                                  pointer_kinds: Option<&[DataKind]>,
+                                                  code: &mut Vec<u8>|
              -> Result<(), String> {
                 let mut register_moves = Vec::new();
                 let mut literal_loads = Vec::new();
@@ -4239,7 +4248,22 @@ impl Compiler {
                         .copied()
                         .ok_or_else(|| "syscall argument register window is exhausted".to_owned())?
                         as u8;
-                    if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                    if let Some(kinds) = pointer_kinds
+                        && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
+                    {
+                        // Preserve each pointer emitter's exact literal kind, including
+                        // StatePath/NoritoBytes and Name map bases. Dynamic sources still
+                        // use the same parallel register/spill custody below.
+                        literal_loads.push((
+                            target,
+                            DataKey(
+                                *kinds.get(index).ok_or_else(|| {
+                                    "syscall pointer argument kind is missing".to_owned()
+                                })?,
+                                value,
+                            ),
+                        ));
+                    } else if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
                         && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
                     {
                         literal_loads.push((target, literal_data_key(temp, kind, &value)));
@@ -4268,6 +4292,64 @@ impl Compiler {
                 }
                 Ok(())
             };
+            let emit_values_to_syscall_registers = |values: &[ir::Temp], code: &mut Vec<u8>| {
+                emit_syscall_values_with_kinds(values, None, code)
+            };
+            let emit_numeric_operands =
+                |left: &ir::Temp, right: &ir::Temp, code: &mut Vec<u8>| -> Result<(), String> {
+                    // Preserve the original codegen rejection before loading either
+                    // operand. This does not replace canonical literal validation.
+                    for temp in [left, right] {
+                        if string_map.contains_key(&(func_idx, *temp))
+                            && !dataref_kind_map.contains_key(&(func_idx, *temp))
+                        {
+                            return Err(i18n::translate(
+                                self.lang,
+                                Message::SemanticError(
+                                    "numeric literal missing ABI metadata during numeric lowering",
+                                ),
+                            ));
+                        }
+                    }
+                    // Only the test binary retains the former publication sequence,
+                    // to measure the same compiler before/after this lowering change.
+                    #[cfg(test)]
+                    if numeric_operands::retain_publication() {
+                        for (index, temp) in [left, right].into_iter().enumerate() {
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                && let Some(value) = string_map.get(&(func_idx, *temp))
+                            {
+                                emit_literal_load(
+                                    code,
+                                    &fixups,
+                                    10,
+                                    literal_data_key(temp, kind, value),
+                                );
+                            } else {
+                                let source = src_reg(temp, scratch1, code)?;
+                                push_word(code, encode_addi(10, source, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            if index == 0 {
+                                push_word(code, encode_addi(scratch2, 10, 0)?);
+                            } else {
+                                push_word(code, encode_addi(11, 10, 0)?);
+                                push_word(code, encode_addi(10, scratch2, 0)?);
+                            }
+                        }
+                        return Ok(());
+                    }
+                    // The canonical numeric syscall snapshots both public operands
+                    // through numeric_tlv::snapshot_metered. It admits loader-validated
+                    // immutable literals, INPUT and owned HEAP; checks pointer type,
+                    // complete envelope/hash/frame, and charges its original work.
+                    // It retains no pointer after the synchronous operation. Passing
+                    // these pointers directly removes only the preceding redundant
+                    // INPUT_PUBLISH and its shuffles, not the typed numeric boundary.
+                    // Existing parallel staging consumes all register sources before
+                    // materializing literals/spills, including swapped/aliased inputs.
+                    emit_values_to_syscall_registers(&[*left, *right], code)
+                };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -4382,7 +4464,16 @@ impl Compiler {
                     }
                     _ => None,
                 };
+                #[cfg(test)]
+                let mut emission_observation = None;
                 for (instruction_index, instr) in bb.instrs.iter().enumerate() {
+                    #[cfg(test)]
+                    emission_profile::advance(
+                        &mut emission_observation,
+                        &func.name,
+                        instr,
+                        code.len(),
+                    );
                     allocation_position.set(next_allocation_position);
                     emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                     next_allocation_position = next_allocation_position.saturating_add(1);
@@ -6554,7 +6645,12 @@ impl Compiler {
                                 let rs = src_reg(value, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
                             }
-                            code.extend_from_slice(&publish_tlv);
+                            // The existing synchronous consumer validates the original owned
+                            // public envelope before reading it; no pointer escapes this call.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                code.extend_from_slice(&publish_tlv);
+                            }
                             code.extend_from_slice(&pointer_to_bytes);
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6805,8 +6901,8 @@ impl Compiler {
                             spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code)?;
                         }
                         Instr::StateGet { dest, path } => {
-                            // Load framed StatePath bytes into x10; publish into INPUT;
-                            // SCALL STATE_GET; move x10 to dest.
+                            // Borrow framed StatePath bytes in x10 through the canonical
+                            // STATE_GET consumer; move the independently owned result to dest.
                             if let Some(key) = state_path_literal_data_key(
                                 func_idx,
                                 *path,
@@ -6818,33 +6914,63 @@ impl Compiler {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
-                            code.extend_from_slice(&publish_tlv);
+                            // The existing synchronous consumer validates the original owned
+                            // public envelope before reading it; no pointer escapes this call.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                code.extend_from_slice(&publish_tlv);
+                            }
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_GET);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::StateSet { path, value } => {
-                            // r10=&NoritoBytes(StatePath); r11=&NoritoBytes value;
-                            // publish both to INPUT then SCALL.
-                            if let Some(key) = state_path_literal_data_key(
+                            // Baseline emission exists only in tests. The production consumer
+                            // still validates/copies its owned result or durable value before
+                            // returning; borrowing here removes no retaining-boundary clone.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                // r10=&NoritoBytes(StatePath); r11=&NoritoBytes value;
+                                // publish both to INPUT then SCALL.
+                                if let Some(key) = state_path_literal_data_key(
+                                    func_idx,
+                                    *path,
+                                    &string_map,
+                                    &dataref_kind_map,
+                                )? {
+                                    emit_literal_load(&mut code, &fixups, 10, key);
+                                } else {
+                                    let r = src_reg(path, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(10, r, 0)?);
+                                }
+                                // Load value into r11
+                                load_pointer(
+                                    value,
+                                    11,
+                                    scratch1,
+                                    DataKind::NoritoBytes,
+                                    &mut code,
+                                )?;
+                                // Publish both; preserve published path for the final syscall.
+                                code.extend_from_slice(&publish_tlv); // r10
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 11, 0)?);
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
+                                continue;
+                            }
+                            let _ = state_path_literal_data_key(
                                 func_idx,
                                 *path,
                                 &string_map,
                                 &dataref_kind_map,
-                            )? {
-                                emit_literal_load(&mut code, &fixups, 10, key);
-                            } else {
-                                let r = src_reg(path, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
-                            }
-                            // Load value into r11
-                            load_pointer(value, 11, scratch1, DataKind::NoritoBytes, &mut code)?;
-                            // Publish both; preserve published path for the final syscall.
-                            code.extend_from_slice(&publish_tlv); // r10
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            )?;
+                            emit_syscall_values_with_kinds(
+                                &[*path, *value],
+                                Some(&[DataKind::NoritoBytes, DataKind::NoritoBytes]),
+                                &mut code,
+                            )?;
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
                         }
                         Instr::StateDel { path } => {
@@ -7253,43 +7379,7 @@ impl Compiler {
                             right_kind,
                             result_kind,
                         } => {
-                            let load_ptr = |temp: &ir::Temp,
-                                            target: u8,
-                                            scratch: u8,
-                                            code: &mut Vec<u8>|
-                             -> Result<(), String> {
-                                if let Some(kind) =
-                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                                {
-                                    let key = literal_data_key(temp, kind, &lit);
-                                    emit_literal_load(code, &fixups, target, key);
-                                } else {
-                                    if string_map.contains_key(&(func_idx, *temp))
-                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
-                                    {
-                                        return Err(i18n::translate(
-                                            self.lang,
-                                            Message::SemanticError(
-                                                "numeric literal missing ABI metadata during numeric lowering",
-                                            ),
-                                        ));
-                                    }
-                                    let rs = src_reg(temp, scratch, code)?;
-                                    push_word(code, encode_addi(target, rs, 0)?);
-                                }
-                                Ok(())
-                            };
-                            // Load/publish lhs
-                            load_ptr(left, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            // Load/publish rhs
-                            load_ptr(right, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            // Restore lhs into r10
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            emit_numeric_operands(left, right, &mut code)?;
                             for register in 12..=14 {
                                 push_word(&mut code, encode_addi(register, 0, 0)?);
                             }
@@ -7535,40 +7625,7 @@ impl Compiler {
                             right,
                             kind,
                         } => {
-                            let load_ptr = |temp: &ir::Temp,
-                                            target: u8,
-                                            scratch: u8,
-                                            code: &mut Vec<u8>|
-                             -> Result<(), String> {
-                                if let Some(kind) =
-                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                                {
-                                    let key = literal_data_key(temp, kind, &lit);
-                                    emit_literal_load(code, &fixups, target, key);
-                                } else {
-                                    if string_map.contains_key(&(func_idx, *temp))
-                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
-                                    {
-                                        return Err(i18n::translate(
-                                            self.lang,
-                                            Message::SemanticError(
-                                                "numeric literal missing ABI metadata during numeric lowering",
-                                            ),
-                                        ));
-                                    }
-                                    let rs = src_reg(temp, scratch, code)?;
-                                    push_word(code, encode_addi(target, rs, 0)?);
-                                }
-                                Ok(())
-                            };
-                            load_ptr(left, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            load_ptr(right, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            emit_numeric_operands(left, right, &mut code)?;
                             let num = match (kind, op) {
                                 (ir::WideNumericKind::Int, BinaryOp::Eq) => {
                                     syscalls::SYSCALL_INT_EQ
@@ -7736,30 +7793,47 @@ impl Compiler {
                             base,
                             key_blob,
                         } => {
-                            // r10=&Name base; publish; r11=&NoritoBytes blob; publish;
-                            // SCALL BUILD_PATH_KEY_NORITO -> &NoritoBytes(StatePath).
-                            if let Some(s) = string_map.get(&(func_idx, *base)) {
-                                let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &fixups, 10, kb);
-                            } else {
-                                let r = src_reg(base, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            // Baseline emission exists only in tests. The production consumer
+                            // still validates/copies its owned result or durable value before
+                            // returning; borrowing here removes no retaining-boundary clone.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                // r10=&Name base; publish; r11=&NoritoBytes blob; publish;
+                                // SCALL BUILD_PATH_KEY_NORITO -> &NoritoBytes(StatePath).
+                                if let Some(s) = string_map.get(&(func_idx, *base)) {
+                                    let kb = DataKey(DataKind::Name, s.clone());
+                                    emit_literal_load(&mut code, &fixups, 10, kb);
+                                } else {
+                                    let r = src_reg(base, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(10, r, 0)?);
+                                }
+                                code.extend_from_slice(&publish_tlv);
+                                if let Some(s) = string_map.get(&(func_idx, *key_blob)) {
+                                    let kb = DataKey(DataKind::NoritoBytes, s.clone());
+                                    emit_literal_load(&mut code, &fixups, 11, kb);
+                                } else {
+                                    let r = src_reg(key_blob, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(11, r, 0)?);
+                                }
+                                // INPUT_PUBLISH_TLV always operates on r10, so preserve the published
+                                // base pointer while mirroring the key blob through r10.
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 11, 0)?);
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                push_syscall_imm8(
+                                    &mut code,
+                                    syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
+                                );
+                                spill_syscall_result(dest, &mut code)?;
+                                continue;
                             }
-                            code.extend_from_slice(&publish_tlv);
-                            if let Some(s) = string_map.get(&(func_idx, *key_blob)) {
-                                let kb = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &fixups, 11, kb);
-                            } else {
-                                let r = src_reg(key_blob, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
-                            }
-                            // INPUT_PUBLISH_TLV always operates on r10, so preserve the published
-                            // base pointer while mirroring the key blob through r10.
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            emit_syscall_values_with_kinds(
+                                &[*base, *key_blob],
+                                Some(&[DataKind::Name, DataKind::NoritoBytes]),
+                                &mut code,
+                            )?;
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO);
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -8034,6 +8108,8 @@ impl Compiler {
                     }
                 }
                 // end for instr in &bb.instrs
+                #[cfg(test)]
+                emission_profile::finish(emission_observation, code.len());
                 allocation_position.set(next_allocation_position);
                 emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                 next_allocation_position = next_allocation_position.saturating_add(1);
@@ -8275,16 +8351,10 @@ impl Compiler {
         }
         let meta = ProgramMetadata {
             version_major: 1,
-            // Local test harnesses are executable tooling images, not
-            // deployable contracts. Keep them on the authenticated generic
-            // 1.0 profile so the VM does not interpret their private test
-            // functions as a production CNTR interface. The separately
-            // projected runtime artifact is compiled in Production mode and
-            // therefore remains a self-describing 1.1 contract.
-            version_minor: match self.opts.mode {
-                CompilerMode::Production => 1,
-                CompilerMode::Test => 0,
-            },
+            // Every profile uses the sole current header. Test harnesses omit
+            // CNTR and require the explicit compiler-owned test capability;
+            // production artifacts embed their admitted contract interface.
+            version_minor: 1,
             mode,
             vector_length: 0,
             max_cycles: self.opts.max_cycles,
@@ -9135,8 +9205,8 @@ fn build_access_set_hints(
         reads.insert(key);
     }
     Ok(Some(AccessSetHints {
-        read_keys: reads.into_iter().collect(),
-        write_keys: writes.into_iter().collect(),
+        read_keys: canonical_state_hint_keys(reads.into_iter().collect()),
+        write_keys: canonical_state_hint_keys(writes.into_iter().collect()),
         dynamic_reads,
         dynamic_writes,
     }))

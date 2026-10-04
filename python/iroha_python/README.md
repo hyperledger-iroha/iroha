@@ -2764,3 +2764,34 @@ no environment variables need to be exported.
   instruction in the shared deployment workflow.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
+
+The `validator_staking` module exposes immutable `StakingMonetaryPlanV1`,
+`StakingRewardClaimPlanV1`, `StakingAuthorityGenerationV1` and
+`StakingEpochAuthorizationV1` values with `from_norito` / `to_norito`. The sole
+compact layout uses the existing Norito codec and mandatory native identity
+validation. Monetary preconditions are typed; `fee_claim` is a required argument
+whose `None` means no fee reward effects. Amounts use `KotodamaQuantity`. These
+codecs do not authenticate preparation observations, the network's pinned XOR,
+custody, signatures or finality; those remain execution/evidence checks.
+
+### Staking preparation observations
+
+The client exposes the canonical `/v1/nexus/staking/prepare` read as
+`preparePublicLanePlan(request, xorAssetDefinitionId)` in JavaScript and
+`prepare_public_lane_plan(request, xor_asset_definition_id)` in Python. It uses
+the client's immutable local signing context only to pin the expected network;
+the read signs and submits no transaction. Supply the network's genesis-pinned
+XOR definition explicitly. All proposed balances must use that definition and
+Global scope. The response is a server observation, including its reported
+block identity; it is not an independently authenticated state proof.
+
+Requests and responses use exact bounded Norito frames. The client checks the
+echoed request, epoch cut, expiry, recipients, selected accruals, and complete
+ordered balance set before returning the plan for review. There is one dispatch
+with no retry or redirect. Execution must recompute all monetary effects and
+preconditions before any signed plan changes ledger balances.
+
+Python preparation currently inherits Requests connect/read inactivity timeouts.
+A slow response can exceed the configured duration while it keeps delivering
+bytes. Absolute deadline qualification remains open in the canonical transport
+owner; the byte limit alone does not bound elapsed time.

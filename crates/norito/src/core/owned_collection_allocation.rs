@@ -33,10 +33,8 @@ pub fn with_decode_limits_measured<T>(
     decode: impl FnOnce() -> T,
 ) -> (T, DecodeAllocationUsage) {
     let context = DecodeBudgetContext::new(limits);
-    let counters = Arc::clone(&context.layers[0].budget.counters);
-    let guard = DecodeLimitsGuard::enter_context(&context);
-    let result = decode();
-    drop(guard);
+    let counters = context.layer.budget.counters.clone();
+    let result = context.with(decode);
     let usage = DecodeAllocationUsage {
         total_elements: usize::try_from(counters.total_elements.load(Ordering::Relaxed))
             .unwrap_or(usize::MAX),

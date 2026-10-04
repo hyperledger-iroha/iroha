@@ -2524,6 +2524,7 @@ impl HostExecutionArtifacts {
             .into());
         }
         for (path, authorization) in durable_state_authorizations {
+            validate_reserve_durable_state_path(path)?;
             if Self::durable_path_requires_authorization(path) && authorization.is_none() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
@@ -11331,6 +11332,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let key = self
                         .scoped_durable_state_path(&path)?
                         .unwrap_or_else(|| path.clone());
+                    validate_reserve_durable_state_path(&key)
+                        .map_err(|_| ivm::VMError::PermissionDenied)?;
                     if crate::validation_fee::is_consensus_fee_state_key(&key) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
@@ -11354,6 +11357,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let scoped_path = self.scoped_durable_state_path(&path)?;
                     let key = scoped_path.unwrap_or_else(|| path.clone());
                     let effective_path = &key;
+                    validate_reserve_durable_state_path(effective_path)
+                        .map_err(|_| ivm::VMError::PermissionDenied)?;
                     if crate::validation_fee::is_consensus_fee_state_key(effective_path) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
@@ -12479,7 +12484,7 @@ seiyaku PrivilegedBinding {
         // Prepare VM with ABI v1 (baseline)
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
@@ -15042,7 +15047,7 @@ seiyaku PrivilegedBinding {
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     let mut program = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length,
         max_cycles: 1_000_000,
@@ -19610,7 +19615,9 @@ seiyaku Callee {
             }
         );
         assert_eq!(
-            crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error),
+            crate::execution_attempt::expect_completed_rejection(
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error),
+            ),
             iroha_data_model::ValidationFail::ContractRejected(
                 iroha_data_model::executor::ContractRejection {
                     contract: "Callee".into(),

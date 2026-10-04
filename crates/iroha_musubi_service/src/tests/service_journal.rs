@@ -33,16 +33,26 @@ fn test_network_id(seed: u8) -> NetworkId {
         [seed; 32],
     )))
 }
-#[cfg(unix)]
 #[test]
-fn publication_filesystem_owner_probe_reports_target_filesystem_owner() {
-    let root = tempfile::tempdir().expect("publication ownership probe root");
-    let expected_owner = std::fs::metadata(root.path())
-        .expect("publication ownership probe root metadata")
-        .uid();
-    let actual_owner = publication_filesystem_owner_probe(root.path())
-        .expect("probe publication filesystem owner");
-    assert_eq!(actual_owner, expected_owner);
+fn publication_private_filesystem_revalidates_original_native_owner() {
+    let workspace = tempfile::tempdir().expect("publication test workspace");
+    let root = iroha_fs::PrivateDirectory::open_or_create(workspace.path().join("private"))
+        .expect("private native root");
+    let lock = root
+        .create_lock("owner.lock")
+        .expect("original private lock");
+    let before = iroha_fs::FileSnapshot::private_journal(&lock).expect("native private snapshot");
+    root.revalidate().expect("original native custody");
+    let named = root.open_read("owner.lock").expect("original named lock");
+    assert_eq!(
+        iroha_fs::FileSnapshot::private_journal(&named).unwrap(),
+        before
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        lock.metadata().unwrap().uid(),
+        std::fs::metadata(root.path()).unwrap().uid()
+    );
 }
 #[derive(Clone)]
 struct TestPublicationClock {
@@ -554,7 +564,7 @@ impl MusubiStorageCoordinationBackendV1 for UnusedStorage {
 
     fn coordinate_storage(
         &mut self,
-        _request: &MusubiStorageCoordinationRequestV1,
+        _request: &VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1> {
         Err(MusubiPublicationServiceBackendErrorV1::Permanent)
     }
@@ -588,7 +598,7 @@ impl MusubiStorageCoordinationBackendV1 for FixedStorage {
 
     fn coordinate_storage(
         &mut self,
-        _request: &MusubiStorageCoordinationRequestV1,
+        _request: &VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1> {
         let mut response = self.response.clone();
         if self.substitute {
@@ -730,6 +740,7 @@ fn control_service_fixture(
                 provider_id: ProviderId::new([0xb8 + index; 32]),
                 completed_by: provider_owner.clone(),
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    provider_owner.clone(),
                     provider_owner,
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [0xc0 + index; 32],
@@ -845,6 +856,7 @@ fn control_service_fixture(
     };
     let storage_response = MusubiStorageCoordinationResponseV1 {
         version: 1,
+        request_digest: storage_request.canonical_request_digest().unwrap(),
         archive,
         location_id,
         pin_manifest,
@@ -852,7 +864,10 @@ fn control_service_fixture(
         renew_after_epoch: 10,
         expires_at_epoch: 20,
         disposition: MusubiStorageLocationDispositionV1::NeedsRegistration {
-            provider_attestations: provider_attestations.clone(),
+            completed_providers: provider_attestations
+                .iter()
+                .map(|a| a.key().provider_id)
+                .collect(),
             expected_location_revision: 1,
         },
     };

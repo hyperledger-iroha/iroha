@@ -9,6 +9,8 @@
 mod completed_source;
 mod reserved_source;
 
+pub use crate::query::signer_check::NativeCheckBindingErrorV1;
+
 use std::{sync::Arc, time::Duration};
 
 use iroha_crypto::HashOf;
@@ -36,9 +38,10 @@ use super::{
 };
 use crate::{
     query::signer_check::{
-        BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1, NativeCheckRoundV1,
-        NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1, authenticate_applied_check_v1,
-        bind_signed_check_v1, validate_native_signatory_v1,
+        BindingFailure, BindingScope, BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1,
+        NativeCheckRoundV1, NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1,
+        SignedCheckAttempt, authenticate_applied_check_v1, bind_signed_check_v1,
+        validate_native_signatory_v1,
     },
     state::State,
 };
@@ -91,7 +94,7 @@ pub struct FinalPromotionEligibilityTimeIntervalV1 {
     pub latest_unix_ms: u64,
 }
 
-/// Payload-free terminal failures; none leaves a reusable pending observation.
+/// Payload-free semantic verdicts, carried with original custody by verification failures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FinalPromotionObservationErrorV1 {
     /// Independent expectations or canonical bounds are invalid.
@@ -173,7 +176,7 @@ pub struct VerifiedFinalPromotionCheckV1 {
     original_floor: FinalPromotionCheckFloorV1,
     applied_floor: FinalPromotionCheckFloorV1,
     entry_hash: HashOf<TransactionEntrypoint>,
-    canonical_external: Vec<u8>,
+    canonical_external: iroha_allocation::ChargedBuffer<u8>,
     check_block_hash: [u8; 32],
     eligibility_time_interval: FinalPromotionEligibilityTimeIntervalV1,
     round: NativeCheckRoundV1,
@@ -350,6 +353,12 @@ fn validate_expected_subject(
 }
 
 impl PreparedFinalPromotionCheckV1 {
+    /// Original absolute deadline; no signing, binding or retry renews it.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.round.deadline()
+    }
+
     /// Original independently supplied role-14 binding; this is not verified current custody.
     #[must_use]
     pub const fn binding(&self) -> &SignerCustodyBindingV1 {
@@ -388,30 +397,95 @@ impl PreparedFinalPromotionCheckV1 {
     /// # Errors
     /// Consumes the prepared challenge on expiry, size, account/network, instruction or signature
     /// mismatch. Signing and transport waits never reset the original interval.
+    /// Every failure retains the exact signed graph and original preparation. Local refusals may
+    /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
     pub fn bind_signed_transaction(
-        mut self,
+        self,
         signed: SignedTransaction,
-    ) -> Result<PendingFinalPromotionCheckV1, Error> {
-        let bound = bind_signed_check_v1(
-            &mut self.round,
-            NativeCustodyCheckRefV1::FinalPromotion(&self.instruction),
-            &self.expected.binding.chain_id,
-            self.expected.binding.network_id,
-            &self.expected.observer,
-            self.expected.floor.coordinates(),
-            signed,
-        )?;
-        Ok(PendingFinalPromotionCheckV1 {
-            prepared: self,
-            bound,
+    ) -> Result<PendingFinalPromotionCheckV1, FinalPromotionCheckBindingFailureV1> {
+        bind_signed_check_v1(self, SignedCheckAttempt::new(signed), Self::binding_scope)
+            .map(|(prepared, bound)| PendingFinalPromotionCheckV1 { prepared, bound })
+            .map_err(FinalPromotionCheckBindingFailureV1)
+    }
+
+    fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
+        Ok(BindingScope {
+            state: &self.state,
+            round: &mut self.round,
+            instruction: NativeCustodyCheckRefV1::FinalPromotion(&self.instruction),
+            chain_id: &self.expected.binding.chain_id,
+            network_id: self.expected.binding.network_id,
+            authority: &self.expected.observer,
+            floor: self.expected.floor.coordinates(),
         })
     }
 }
 
+/// Exact original signed attempt retained after binding refusal.
+/// Retry cannot replace the signer output, challenge, State pool, or original deadline.
+#[must_use = "retain the original signed Check until binding completes or the attempt is retired"]
+pub struct FinalPromotionCheckBindingFailureV1(
+    BindingFailure<PreparedFinalPromotionCheckV1, Error>,
+);
+
+impl FinalPromotionCheckBindingFailureV1 {
+    /// Borrow the original local refusal or completed rejection without erasing custody.
+    #[must_use]
+    pub fn error(&self) -> &NativeCheckBindingErrorV1<Error> {
+        &self.0.error
+    }
+
+    /// Inspect a completed native rejection; local refusals have no transaction verdict.
+    #[must_use]
+    pub fn rejection(&self) -> Option<Error> {
+        match &self.0.error {
+            NativeCheckBindingErrorV1::Rejected(error) => Some(*error),
+            _ => None,
+        }
+    }
+
+    /// The unchanged absolute deadline, including after any number of local retries.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.0.prepared.round.deadline()
+    }
+
+    /// Retry only this exact signed attempt; terminal failures return the same owner.
+    ///
+    /// # Errors
+    /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    pub fn retry(self) -> Result<PendingFinalPromotionCheckV1, Self> {
+        if !self.0.error.is_retryable() {
+            return Err(self);
+        }
+        bind_signed_check_v1(
+            self.0.prepared,
+            self.0.signed,
+            PreparedFinalPromotionCheckV1::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingFinalPromotionCheckV1 { prepared, bound })
+        .map_err(Self)
+    }
+}
+impl std::fmt::Debug for FinalPromotionCheckBindingFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FinalPromotionCheckBindingFailureV1")
+            .field("error", &self.0.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PendingFinalPromotionCheckV1 {
+    /// Original absolute deadline; no signing, binding or retry renews it.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.prepared.round.deadline()
+    }
+
     /// Exact signed envelope for ordinary native submission or reconciliation; no replacement API.
     #[must_use]
-    pub const fn signed_transaction(&self) -> &SignedTransaction {
+    pub fn signed_transaction(&self) -> &SignedTransaction {
         self.bound.signed_transaction()
     }
 
@@ -431,8 +505,8 @@ impl PendingFinalPromotionCheckV1 {
     /// The callback supplies one independently established UTC interval after expensive proof work.
     /// Both endpoints must satisfy the shared custody and phase predicates at this same applied cut;
     /// this consumer does not qualify the clock source or derive its uncertainty from the candidate.
-    /// All terminal outcomes consume the capability, including absence of application. Polling and
-    /// transport reconciliation therefore occur before this call within the same original interval.
+    /// Failed attempts retain the original signed owner and deadline. Local refusals may retry
+    /// verification; transport reconciliation and semantic rejection remain separate decisions.
     ///
     /// # Errors
     /// Rejects expiry, missing exact application/finality, foreign committee continuity, changed
@@ -441,115 +515,161 @@ impl PendingFinalPromotionCheckV1 {
         self,
         source: FinalPromotionCheckSourceV1<'_>,
         sample_eligibility_time: impl FnOnce() -> Result<FinalPromotionEligibilityTimeIntervalV1, Error>,
-    ) -> Result<VerifiedFinalPromotionCheckV1, Error> {
-        self.ensure_live()?;
-        let p = &self.prepared;
-        enum PhaseSource<'a> {
-            Current,
-            Reserved(&'a FinalPromotionOperationRecordV1, &'a SignedTransaction),
-            Completed {
-                row: &'a FinalPromotionOperationRecordV1,
-                reserve: &'a SignedTransaction,
-                complete: &'a SignedTransaction,
-            },
-        }
-        let phase_source = match (&p.expected.subject, source) {
-            (FinalPromotionCheckSubjectV1::Current(_), FinalPromotionCheckSourceV1::Current) => {
-                PhaseSource::Current
+    ) -> Result<VerifiedFinalPromotionCheckV1, FinalPromotionCheckAttemptFailureV1> {
+        let Self {
+            prepared,
+            bound: original,
+        } = self;
+        let mut bound = Some(original);
+        let result = (|| -> Result<_, crate::execution_attempt::ExecutionAttemptError<Error>> {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let p = &prepared;
+            enum PhaseSource<'a> {
+                Current,
+                Reserved(&'a FinalPromotionOperationRecordV1, &'a SignedTransaction),
+                Completed {
+                    row: &'a FinalPromotionOperationRecordV1,
+                    reserve: &'a SignedTransaction,
+                    complete: &'a SignedTransaction,
+                },
             }
-            (
-                FinalPromotionCheckSubjectV1::BeforeProvider(row)
-                | FinalPromotionCheckSubjectV1::AfterProvider(row)
-                | FinalPromotionCheckSubjectV1::BeforeCommit(row),
-                FinalPromotionCheckSourceV1::Reserved(signed),
-            ) => PhaseSource::Reserved(row, signed),
-            (
-                FinalPromotionCheckSubjectV1::AfterCommit(row)
-                | FinalPromotionCheckSubjectV1::BeforeRelease(row),
-                FinalPromotionCheckSourceV1::Completed { reserve, complete },
-            ) => PhaseSource::Completed {
-                row,
-                reserve,
-                complete,
-            },
-            _ => return Err(Error::Execution),
-        };
-        let cut = authenticate_applied_check_v1(
-            &p.state,
-            NativeCustodyCheckPurposeV1::FinalPromotion,
-            self.bound,
-            &p.round,
-        )?;
-        let view = cut.view();
-        match phase_source {
-            PhaseSource::Current => {}
-            PhaseSource::Reserved(row, signed) => reserved_source::authenticate_reserved_source(
-                view,
-                p.expected.floor,
-                cut.applied_floor(),
-                row,
-                signed,
+            let phase_source = match (&p.expected.subject, source) {
+                (
+                    FinalPromotionCheckSubjectV1::Current(_),
+                    FinalPromotionCheckSourceV1::Current,
+                ) => PhaseSource::Current,
+                (
+                    FinalPromotionCheckSubjectV1::BeforeProvider(row)
+                    | FinalPromotionCheckSubjectV1::AfterProvider(row)
+                    | FinalPromotionCheckSubjectV1::BeforeCommit(row),
+                    FinalPromotionCheckSourceV1::Reserved(signed),
+                ) => PhaseSource::Reserved(row, signed),
+                (
+                    FinalPromotionCheckSubjectV1::AfterCommit(row)
+                    | FinalPromotionCheckSubjectV1::BeforeRelease(row),
+                    FinalPromotionCheckSourceV1::Completed { reserve, complete },
+                ) => PhaseSource::Completed {
+                    row,
+                    reserve,
+                    complete,
+                },
+                _ => return Err(Error::Execution.into()),
+            };
+            let cut = authenticate_applied_check_v1(
+                &p.state,
+                NativeCustodyCheckPurposeV1::FinalPromotion,
+                &mut bound,
                 &p.round,
-            )?,
-            PhaseSource::Completed {
-                row,
-                reserve,
-                complete,
-            } => completed_source::authenticate_completed_source(
+            )
+            .map_err(|error| error.map_rejection(Error::from))?;
+            let view = cut.view();
+            match phase_source {
+                PhaseSource::Current => {}
+                PhaseSource::Reserved(row, signed) => {
+                    reserved_source::authenticate_reserved_source(
+                        view,
+                        p.expected.floor,
+                        cut.applied_floor(),
+                        row,
+                        signed,
+                        &p.round,
+                    )?
+                }
+                PhaseSource::Completed {
+                    row,
+                    reserve,
+                    complete,
+                } => completed_source::authenticate_completed_source(
+                    view,
+                    p.expected.floor,
+                    cut.applied_floor(),
+                    row,
+                    reserve,
+                    complete,
+                    &p.round,
+                )?,
+            }
+            let eligibility_time_interval = sample_eligibility_time().map_err(|_| Error::Clock)?;
+            let FinalPromotionEligibilityTimeIntervalV1 {
+                earliest_unix_ms,
+                latest_unix_ms,
+            } = eligibility_time_interval;
+            if earliest_unix_ms == 0
+                || earliest_unix_ms > latest_unix_ms
+                || latest_unix_ms == u64::MAX
+            {
+                return Err(Error::Clock.into());
+            }
+            p.round.ensure_live().map_err(Error::from)?;
+            let snapshot = check_applied_snapshot_v1(
                 view,
-                p.expected.floor,
-                cut.applied_floor(),
-                row,
-                reserve,
-                complete,
-                &p.round,
-            )?,
-        }
-        let eligibility_time_interval = sample_eligibility_time().map_err(|_| Error::Clock)?;
-        let FinalPromotionEligibilityTimeIntervalV1 {
-            earliest_unix_ms,
-            latest_unix_ms,
-        } = eligibility_time_interval;
-        if earliest_unix_ms == 0 || earliest_unix_ms > latest_unix_ms || latest_unix_ms == u64::MAX
-        {
-            return Err(Error::Clock);
-        }
-        p.round.ensure_live()?;
-        let snapshot = check_applied_snapshot_v1(
-            view,
-            &p.instruction,
-            &p.expected.binding,
-            &p.expected.observer,
-            earliest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        p.round.ensure_live()?;
-        // Reuse this exact native snapshot; do not repeat history traversal or capture a newer cut.
-        // The shared owner rejects not-yet-valid lower bounds and expired upper bounds alike.
-        // The earliest bound is also the observation time; uncertainty consumes anchor age.
-        check_snapshot_eligibility_v1(
-            &snapshot,
-            &p.instruction,
-            &p.expected.binding,
-            &p.expected.observer,
-            latest_unix_ms,
-            earliest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        p.round.ensure_live()?;
-        let check_height = cut.check_height();
-        let native_floor = cut.applied_floor();
-        let applied_floor = FinalPromotionCheckFloorV1 {
-            height: native_floor.height,
-            block_hash: native_floor.block_hash,
-            context_id: native_floor.context_id,
+                &p.instruction,
+                &p.expected.binding,
+                &p.expected.observer,
+                earliest_unix_ms,
+            )
+            .map_err(|_| Error::Authority)?;
+            p.round.ensure_live().map_err(Error::from)?;
+            // Reuse this exact native snapshot; do not repeat history traversal or capture a newer cut.
+            // The shared owner rejects not-yet-valid lower bounds and expired upper bounds alike.
+            // The earliest bound is also the observation time; uncertainty consumes anchor age.
+            check_snapshot_eligibility_v1(
+                &snapshot,
+                &p.instruction,
+                &p.expected.binding,
+                &p.expected.observer,
+                latest_unix_ms,
+                earliest_unix_ms,
+            )
+            .map_err(|_| Error::Authority)?;
+            p.round.ensure_live().map_err(Error::from)?;
+            let check_height = cut.check_height();
+            let native_floor = cut.applied_floor();
+            let applied_floor = FinalPromotionCheckFloorV1 {
+                height: native_floor.height,
+                block_hash: native_floor.block_hash,
+                context_id: native_floor.context_id,
+            };
+            let entry_hash = cut.entry_hash();
+            let (canonical_external, check_block_hash) = cut.into_verified_entry();
+
+            Ok((
+                snapshot,
+                check_height,
+                applied_floor,
+                entry_hash,
+                canonical_external,
+                check_block_hash,
+                eligibility_time_interval,
+            ))
+        })();
+        let (
+            snapshot,
+            check_height,
+            applied_floor,
+            entry_hash,
+            canonical_external,
+            check_block_hash,
+            eligibility_time_interval,
+        ) = match result {
+            Ok(parts) => parts,
+            Err(error) => {
+                return Err(FinalPromotionCheckAttemptFailureV1 {
+                    error,
+                    pending: Self {
+                        prepared,
+                        bound: bound
+                            .take()
+                            .expect("failed verification retains original binding"),
+                    },
+                });
+            }
         };
-        let entry_hash = cut.entry_hash();
-        let (canonical_external, check_block_hash) = cut.into_verified_entry();
+        let p = prepared;
         Ok(VerifiedFinalPromotionCheckV1 {
-            observer: p.expected.observer.clone(),
-            expected_operator: p.expected.expected_operator.clone(),
-            instruction: p.instruction.clone(),
+            observer: p.expected.observer,
+            expected_operator: p.expected.expected_operator,
+            instruction: p.instruction,
             snapshot,
             check_height,
             original_floor: p.expected.floor,
@@ -558,7 +678,7 @@ impl PendingFinalPromotionCheckV1 {
             canonical_external,
             check_block_hash,
             eligibility_time_interval,
-            round: self.prepared.round,
+            round: p.round,
         })
     }
 }
@@ -594,7 +714,7 @@ impl VerifiedFinalPromotionCheckV1 {
     /// Borrowing historical execution material grants no renewed eligibility or authority.
     #[must_use]
     pub fn canonical_external(&self) -> &[u8] {
-        &self.canonical_external
+        self.canonical_external.as_slice()
     }
     /// Exact authenticated block hash at `check_height`, distinct from a later applied floor.
     #[must_use]
@@ -678,3 +798,6 @@ impl VerifiedFinalPromotionCheckV1 {
 
 #[cfg(test)]
 mod tests;
+
+mod attempt_failure;
+pub use attempt_failure::FinalPromotionCheckAttemptFailureV1;

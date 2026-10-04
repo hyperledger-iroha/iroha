@@ -784,6 +784,86 @@ fn validation_wrappers_keep_real_capacity_and_terminal_custody_distinct() {
 }
 
 #[test]
+fn original_local_custody_invariant_halts_worker_without_fee_result_or_quarantine() {
+    use crate::state::StateReadOnly as _;
+    use iroha_data_model::transaction::{
+        Executable, FeePaymentIntent, IvmBytecode, TransactionBuilder,
+    };
+    use std::{num::NonZeroU64, time::Duration};
+    publication_tests::with_worker(|chain, worker, _blocks, events| {
+        let body =
+            publication_tests::proposal_with_transaction(chain, worker, |chain, created_ms| {
+                let key = iroha_crypto::KeyPair::from_seed(
+                    vec![0xCE; 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                );
+                assert_eq!(
+                    chain.genesis_account(),
+                    &iroha_data_model::account::AccountId::new(key.public_key().clone())
+                );
+                let mut program = ivm::ProgramMetadata {
+                    max_cycles: 100,
+                    ..Default::default()
+                }
+                .encode();
+                program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+                let mut builder = TransactionBuilder::new(
+                    chain.network_id(),
+                    chain.genesis_account().clone(),
+                    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000_000)),
+                );
+                builder.set_creation_time(Duration::from_millis(created_ms));
+                builder
+                    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+                    .sign(key.private_key())
+            });
+        let hash = body.hash(&**worker.context.crypto.as_ref().unwrap());
+        let original_payload = body.payload().as_slice().as_ptr();
+        let original_height = worker.state.view().height();
+        let cache = worker.state.view().prepared_contract_cache();
+        let reason = ivm::error::ExecutionDeferral::LocalInvariantViolation;
+        cache.set_checkout_refusal_for_test(Some(reason));
+        let outcome = worker.execute(&body, hash);
+        cache.set_checkout_refusal_for_test(None);
+        let Some(super::super::ExecOutcome::Failed(message)) = outcome else {
+            panic!("an original local custody invariant cannot become a validity verdict")
+        };
+        assert!(message.contains(&reason.to_string()), "{message}");
+        assert_eq!(worker.recovery.as_deref(), Some(message.as_str()));
+        assert!(worker.quarantine_context.is_none());
+        assert!(worker.results.get(&hash).is_none());
+        assert!(worker.live.is_none() && worker.finishing.is_none());
+        assert!(worker.pending_commit.is_none());
+        assert!(worker.context.staging.get(&hash).is_none());
+        assert!(events.try_recv().is_err());
+        assert_eq!(worker.state.view().height(), original_height);
+        assert_eq!(body.payload().as_slice().as_ptr(), original_payload);
+        assert!(
+            matches!(worker.execute(&body, hash), Some(super::super::ExecOutcome::Failed(again)) if again == message)
+        );
+        assert!(
+            worker.live.is_none() && worker.finishing.is_none(),
+            "clearing local injection cannot authorize reexecution after recovery is required"
+        );
+        let error = BlockValidationError::ExecutionDeferred(reason.into());
+        assert!(!crate::sumeragi::executor::control::transaction_rejection(
+            &error
+        ));
+        assert!(matches!(
+            validation_failure(&error),
+            Some(PublicationError::RecoveryRequired(_))
+        ));
+        assert!(matches!(
+            super::super::classify_lane_step(
+                2,
+                &crate::sumeragi::lanes::step::LaneStepError::Deferred(reason.into())
+            ),
+            Err(PublicationError::RecoveryRequired(_))
+        ));
+    });
+}
+
+#[test]
 fn native_source_publication_change_retries_without_recovery_or_quarantine() {
     for error in [
         BlockValidationError::NativeSourceChanged {

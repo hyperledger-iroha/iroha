@@ -1472,7 +1472,7 @@ fn make_signed_advert(
     advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
     let attestation = EndpointAttestationV1 {
         version: ENDPOINT_ATTESTATION_VERSION_V1,
-        kind: EndpointAttestationKind::Mtls,
+        kind: EndpointAttestationKind::Tls,
         attested_at: ISSUED_AT.saturating_sub(300),
         expires_at: ISSUED_AT + TTL_SECS + 1_200,
         leaf_certificate: vec![0xAA, 0xBB, 0xCC, 0xDD],
@@ -1764,6 +1764,14 @@ fn discovery_gateway_compliance_fixture(
     Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
 ) {
     use iroha_torii::sorafs::gateway::*;
+    use sorafs_manifest::gateway_compliance::{
+        GATEWAY_COMPLIANCE_ACK_VERSION_V1, GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1,
+        GATEWAY_COMPLIANCE_FEED_VERSION_V1, GatewayComplianceAcknowledgementPayloadV1,
+        GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogApprovalV1,
+        GatewayComplianceCatalogV1, GatewayComplianceFeedDocumentV1,
+        GatewayComplianceSubjectKindV1, GatewayComplianceTrustPolicyV1,
+        GatewayComplianceTrustedSignerV1,
+    };
     fs::create_dir_all(&directory).expect("create isolated compliance directory");
     #[cfg(unix)]
     {

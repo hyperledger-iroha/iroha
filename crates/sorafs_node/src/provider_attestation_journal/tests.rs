@@ -460,7 +460,11 @@ fn fixture_with_provider(provider_id: [u8; 32], claim_seed: u8) -> Fixture {
             ),
             provider_id: ProviderId::new(provider_id),
             completed_by: owner.clone(),
-            completion_authority: ProviderIngestCompletionAuthorityV1::new(owner, policy),
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                (owner).clone(),
+                owner,
+                policy,
+            ),
             replication_order: ReplicationOrderId::new([0x23; 32]),
             assignment_revision: 3,
             completion_epoch: 9,
@@ -1055,7 +1059,9 @@ fn corrupt_checkpoint_rejects_unmarked_network_identity() {
             &bytes,
             JOURNAL_CHECKPOINT_DECODE_LIMITS_V1,
         ),
-        Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+        Err(norito::Error::InvalidValue {
+            context: "hash lsb"
+        })
     ));
     let snapshot = MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(bytes)
         .expect("content-address corrupt bytes");
@@ -2769,5 +2775,79 @@ fn journal_checkpoint_frames_recover_intents_and_reject_an_entry_as_the_root() {
     assert_eq!(
         decode_checkpoint(&foreign, test_policy()),
         Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
+    );
+}
+
+/// Signed codec/persistence specimen only; this helper establishes no native finalized claim.
+pub(crate) fn native_inventory_test_attestation(
+    provider: u8,
+    assignment_revision: u64,
+) -> MusubiProviderBundleVerificationAttestationV1 {
+    let fixture = fixture(provider, 7);
+    let mut attestation = signed_attestation(&fixture);
+    attestation.payload.binding.assignment_revision = assignment_revision;
+    attestation.approvals[0].signature = SignatureOf::try_from_hash(
+        fixture.owner_key.private_key(),
+        attestation.payload.signing_hash(),
+    )
+    .expect("sign exact persistence specimen");
+    attestation
+        .verify(&attestation.payload.binding)
+        .expect("valid persistence specimen");
+    attestation
+}
+
+#[tokio::test]
+async fn distinct_registered_owner_preserves_completion_signer_approval_and_journal_identity() {
+    // This control tests the canonical journal/approval contract, not native current authority.
+    let mut fixture = fixture(0x51, 0x52);
+    let owner_key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
+    let mut payload = fixture.request.payload().clone();
+    payload.binding.completion_authority.provider_owner =
+        AccountId::new(owner_key.public_key().clone());
+    assert_ne!(
+        payload.binding.completed_by,
+        payload.binding.completion_authority.provider_owner
+    );
+    fixture.request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
+        payload,
+        fixture.request.completion_claim_digest(),
+        fixture.request.observed_finalized_cursor(),
+        fixture.request.signer_policy(),
+    )
+    .unwrap();
+    let signer = FakeApprovalSigner::new(&fixture);
+    let attestation = approve_musubi_provider_attestation_v1(&signer, &fixture.request, 1_000)
+        .await
+        .unwrap();
+    attestation
+        .verify(&fixture.request.payload().binding)
+        .unwrap();
+    assert_eq!(
+        attestation.approvals[0].public_key,
+        *fixture.owner_key.public_key()
+    );
+    assert_ne!(attestation.approvals[0].public_key, *owner_key.public_key());
+    let store = Arc::new(MemoryJournalStore::default());
+    let journal = MusubiProviderAttestationJournalV1::new(store.clone(), test_policy()).unwrap();
+    let first = journal.enqueue(&fixture.request).await.unwrap();
+    let reopened = MusubiProviderAttestationJournalV1::new(store, test_policy()).unwrap();
+    assert_eq!(
+        reopened
+            .enqueue(&fixture.request)
+            .await
+            .unwrap()
+            .approval_id(),
+        first.approval_id()
+    );
+    let mut substituted = attestation.clone();
+    substituted.approvals[0].public_key = owner_key.public_key().clone();
+    substituted.approvals[0].signature =
+        SignatureOf::try_from_hash(owner_key.private_key(), substituted.payload.signing_hash())
+            .unwrap();
+    assert!(
+        substituted
+            .verify(&fixture.request.payload().binding)
+            .is_err()
     );
 }

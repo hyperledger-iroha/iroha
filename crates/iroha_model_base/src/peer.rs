@@ -37,6 +37,7 @@ mod model {
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::peer::model::PeerId")]
+    #[norito(decode_fields)]
     pub struct PeerId {
         /// Public key identifying this peer.
         pub public_key: PublicKey,

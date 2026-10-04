@@ -34,15 +34,18 @@ impl NativeGateway {
         let signed = self
             .transactions
             .sign(prepared.instruction(), true, deadline)?;
-        let pending = prepared
-            .bind_signed_transaction(signed.clone())
-            .map_err(observation_error)?;
-        self.transactions.submit_and_wait(&signed, deadline)?;
-        let proof = pending
-            .verify_finalized(|| self.time())
-            .map_err(observation_error)?;
-        let step = proof
-            .consume_for_reputation_delivery(
+        let pending =
+            complete_binding(prepared.bind_signed_transaction(signed)).map_err(binding_error)?;
+        self.transactions
+            .submit_and_wait(pending.signed_transaction(), pending.deadline())?;
+        let proof = complete_check(pending.verify_finalized(|| self.time()), |failure| {
+            failure.into_pending().verify_finalized(|| self.time())
+        })
+        .map_err(verification_error)?;
+        // A failed source recheck returns before this callback runs. A retry re-verifies the
+        // same signed Check; signing the Append is entered once, only after the final fence.
+        let consume = |proof: Verified| {
+            proof.consume_for_reputation_delivery(
                 &original,
                 || self.time(),
                 |delivery| match delivery.disposition() {
@@ -60,7 +63,11 @@ impl NativeGateway {
                         .map(DeliveryStep::Append),
                 },
             )
-            .map_err(observation_error)??;
+        };
+        let step = complete_check(consume(proof), |failure| {
+            consume(failure.into_pending().verify_finalized(|| self.time())?)
+        })
+        .map_err(verification_error)??;
         self.check_deadline(deadline)?;
         Ok(step)
     }

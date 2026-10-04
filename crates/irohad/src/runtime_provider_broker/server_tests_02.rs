@@ -525,8 +525,11 @@ fn provider_ingest_completion_test_context(
     owner: AccountId,
 ) -> node::ProviderIngestCompletionSignerResolutionContextV1 {
     node::ProviderIngestCompletionSignerResolutionContextV1::new(
-        owner,
-        ingest_completion_policy(),
+        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+            (owner).clone(),
+            owner,
+            ingest_completion_policy(),
+        ),
         3,
         ingest_completion_cursor(),
     )
@@ -539,6 +542,7 @@ fn provider_ingest_completion_test_instruction(
         provider_id: iroha_data_model::sorafs::capacity::ProviderId::new([0x22; 32]),
         completion_epoch: 9,
         expected_authority: test_pin_registry::ProviderIngestCompletionAuthorityV1::new(
+            (owner).clone(),
             owner,
             ingest_completion_policy(),
         ),

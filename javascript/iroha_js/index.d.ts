@@ -8653,6 +8653,7 @@ export interface SorafsReplicationCompletion {
   assignment_revision: number | bigint;
   completion_authority: {
     provider_owner: string;
+    completion_signer: string;
     signer_policy: {
       policy_id_hex: string;
       revision: number | bigint;
@@ -10988,6 +10989,7 @@ export declare class ToriiClient {
     programId: string,
     options: RequiredCanonicalRequestOptions,
   ): Promise<FeeSponsorProgram | null>;
+  preparePublicLanePlan(request: StakingPreparationRequestV1, xorAssetDefinitionId: string, options?: { signal?: AbortSignal }): Promise<StakingPreparationV1>;
   quoteFees(
     payload: Record<string, unknown> | TransactionPayloadDraftResult,
     options: RequiredCanonicalRequestOptions,
@@ -12854,6 +12856,7 @@ export interface ProviderIngestCompletionSignerPolicyV1 {
 
 export interface ProviderIngestCompletionAuthorityV1 {
   provider_owner: string;
+  completion_signer: string;
   signer_policy: ProviderIngestCompletionSignerPolicyV1;
 }
 
@@ -12908,6 +12911,7 @@ export function buildCompleteReplicationOrderInstruction(options: {
   completionEpoch: NumericLike;
   expectedAuthority: {
     providerOwner: string;
+    completionSigner: string;
     signerPolicy: {
       policyId: string;
       revision: NumericLike;
@@ -14212,3 +14216,75 @@ export function retailFeeAssessmentMarkerMessage(assessment: RetailFeeAssessment
 
 
 export function decodeRetailFeeAssessmentMarkerMessage(message: string): RetailFeeAssessmentV1;
+
+/** Exact canonical bare staking values. Native execution authenticates all ledger bindings. */
+export type StakingUnsignedV1 = bigint | number | string;
+export type StakingScopeV1 = { kind: "genesis"; value: null } | { kind: "network"; value: NetworkId };
+export type StakingAssetScopeV1 = { kind: "global"; value: null } | { kind: "dataspace"; value: StakingUnsignedV1 };
+export interface StakingAssetIdV1 { account: string; definition: string; scope: StakingAssetScopeV1; }
+export interface StakingPeerIdV1 { public_key: string; }
+export type StakingMonetaryPreconditionV1 =
+  | { kind: "registration"; value: { activation_height: StakingUnsignedV1 } }
+  | { kind: "bond"; value: { activation_height: StakingUnsignedV1; peer_id: StakingPeerIdV1 } }
+  | { kind: "unbond"; value: { activation_height: StakingUnsignedV1; request_hash: string } }
+  | { kind: "slash"; value: { activation_height: StakingUnsignedV1; slashable_exposure: string } };
+export interface StakingMonetaryPlanV1 {
+  network_scope: StakingScopeV1; valid_until_height: StakingUnsignedV1;
+  source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
+  amount: string; precondition: StakingMonetaryPreconditionV1;
+}
+export interface StakingRewardClaimStateV1 { through_epoch: StakingUnsignedV1 | null; }
+export interface StakingRewardRecordRefV1 { epoch: StakingUnsignedV1; record_hash: string; }
+export interface StakingRewardClaimSourceV1 {
+  source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
+  expected_accrued: string | null; payout: string;
+}
+export interface StakingFeeRewardClaimV1 {
+  lifecycle_seal: Uint8Array; beneficiary_id: string; beneficiary_revision: StakingUnsignedV1;
+  source_asset: StakingAssetIdV1; destination_asset: StakingAssetIdV1;
+  amount: string; expected_claim_sequence: StakingUnsignedV1;
+}
+export interface StakingRewardClaimPlanV1 {
+  network_scope: StakingScopeV1; valid_until_height: StakingUnsignedV1;
+  expected_state: StakingRewardClaimStateV1 | null; records: StakingRewardRecordRefV1[];
+  sources: StakingRewardClaimSourceV1[]; fee_claim: StakingFeeRewardClaimV1 | null;
+}
+export interface StakingValidatorKeysV1 { validator: StakingPeerIdV1; eq_proof_public_key: Uint8Array; ep_proof_public_key: Uint8Array; }
+export interface StakingAuthorityGenerationV1 {
+  version: StakingUnsignedV1; network_id: NetworkId; generation: StakingUnsignedV1; validators: StakingValidatorKeysV1[];
+}
+export interface StakingEpochAuthorizationV1 {
+  version: StakingUnsignedV1; network_id: NetworkId; epoch: StakingUnsignedV1;
+  first_height: StakingUnsignedV1; last_height: StakingUnsignedV1; authority_generation: StakingUnsignedV1;
+  authority_id: Uint8Array;
+  beacon: { kind: "bootstrap"; value: null } | { kind: "installed"; value: { session_id: Uint8Array; transcript_hash: Uint8Array } };
+  previous_authorization_id: Uint8Array; transition_id: Uint8Array;
+  decision: { kind: "genesis" | "activate" | "retain" | "retain_and_cancel"; value: null };
+}
+export interface ValidatorStakingValueMapV1 {
+  PreparationRequest: StakingPreparationRequestV1; Preparation: StakingPreparationV1;
+  MonetaryPlan: StakingMonetaryPlanV1; RewardClaimPlan: StakingRewardClaimPlanV1;
+  AuthorityGeneration: StakingAuthorityGenerationV1; EpochAuthorization: StakingEpochAuthorizationV1;
+}
+/** u64 values decode as bigint; explicit optional fields never default to null. */
+export function encodeValidatorStakingValueV1<K extends keyof ValidatorStakingValueMapV1>(name: K, value: ValidatorStakingValueMapV1[K]): Buffer;
+export function decodeValidatorStakingValueV1<K extends keyof ValidatorStakingValueMapV1>(name: K, payload: Uint8Array): ValidatorStakingValueMapV1[K];
+
+/** Bounded exact intent; no transaction is signed or submitted. */
+export type StakingPreparationOperationV1 =
+  | { kind: "registration"; value: { validator: string; peer_id: StakingPeerIdV1; amount: string; candidate: boolean } }
+  | { kind: "bond"; value: { validator: string; staker: string; amount: string } }
+  | { kind: "finalize_unbond"; value: { validator: string; staker: string; request_id: string } }
+  | { kind: "claim_rewards"; value: { recipient: string; upto_epoch: StakingUnsignedV1 | null; max_records: StakingUnsignedV1; accrued_sources: StakingAssetIdV1[] } };
+export interface StakingPreparationRequestV1 { lane_id: StakingUnsignedV1; valid_for_blocks: StakingUnsignedV1; operation: StakingPreparationOperationV1; }
+export interface StakingPreparationBalanceV1 { asset: StakingAssetIdV1; balance: string; stake_reserved: string; rewards_reserved: string; }
+/** Coherent server observation; the reported block identity is not a state proof. */
+export interface StakingPreparationV1 {
+  request: StakingPreparationRequestV1; network_id: NetworkId; observed_height: StakingUnsignedV1;
+  observed_block_hash: string; observed_ledger_time_ms: StakingUnsignedV1; assumed_execution_height: StakingUnsignedV1;
+  xor_asset_definition_id: string; plan: { kind: "monetary"; value: StakingMonetaryPlanV1 } | { kind: "claim"; value: StakingRewardClaimPlanV1 };
+  balances: StakingPreparationBalanceV1[];
+}
+export function encodeValidatorStakingPreparationFrameV1<K extends "PreparationRequest" | "Preparation">(name: K, value: ValidatorStakingValueMapV1[K]): Buffer;
+export function decodeValidatorStakingPreparationFrameV1<K extends "PreparationRequest" | "Preparation">(name: K, payload: Uint8Array): ValidatorStakingValueMapV1[K];
+export function validateValidatorStakingPreparationV1(prepared: StakingPreparationV1, request: StakingPreparationRequestV1, networkId: NetworkId, xorDefinition: string): StakingPreparationV1;

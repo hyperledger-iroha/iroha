@@ -1,13 +1,24 @@
 //! Original decode-budget provenance at a synchronous canonical admission boundary.
 
-use super::{ActiveDecodeBudgetLayer, DecodeBudgetCounters, DecodeResourceError, Error};
-use std::{cell::RefCell, sync::Arc};
+use super::{ActiveDecodeBudgetLayer, CounterOwner, DecodeResourceError, Error, budget_scope};
+use std::cell::RefCell;
+
+#[derive(Clone, Debug)]
+struct BudgetFamily {
+    counters: CounterOwner,
+    attempt: u64,
+}
+impl BudgetFamily {
+    fn same(&self, other: &Self) -> bool {
+        self.attempt == other.attempt && self.counters.ptr_eq(&other.counters)
+    }
+}
 
 #[derive(Clone)]
 struct Observer {
     boundary: usize,
     protocol_start: usize,
-    family: Option<Arc<DecodeBudgetCounters>>,
+    family: Option<BudgetFamily>,
 }
 
 thread_local! {
@@ -20,7 +31,7 @@ struct Scope {
 
 impl Scope {
     fn enter() -> Self {
-        let boundary = super::DECODE_BUDGET_LAYERS.with(|layers| layers.borrow().len());
+        let boundary = budget_scope::with_active(|layers| layers.len());
         let previous = OBSERVER.with(|slot| {
             let previous = slot.borrow_mut().take();
             *slot.borrow_mut() = Some(Observer {
@@ -101,7 +112,7 @@ impl std::error::Error for DecodeAttemptError {
 #[derive(Clone, Debug)]
 pub struct ScopedDecodeResourceError {
     resource: DecodeResourceError,
-    family: Arc<DecodeBudgetCounters>,
+    family: BudgetFamily,
     layer: usize,
     protocol_start: usize,
 }
@@ -109,7 +120,7 @@ pub struct ScopedDecodeResourceError {
 impl PartialEq for ScopedDecodeResourceError {
     fn eq(&self, other: &Self) -> bool {
         self.resource == other.resource
-            && Arc::ptr_eq(&self.family, &other.family)
+            && self.family.same(&other.family)
             && self.layer == other.layer
             && self.protocol_start == other.protocol_start
     }
@@ -129,7 +140,7 @@ impl ScopedDecodeResourceError {
                     observer
                         .family
                         .as_ref()
-                        .is_some_and(|family| Arc::ptr_eq(family, &self.family))
+                        .is_some_and(|family| family.same(&self.family))
                         && self.layer < observer.boundary
                 })
             })
@@ -144,19 +155,22 @@ impl std::fmt::Display for ScopedDecodeResourceError {
 
 impl std::error::Error for ScopedDecodeResourceError {}
 
-pub(super) fn note_fresh_budget(counters: &Arc<DecodeBudgetCounters>) {
+pub(super) fn note_fresh_budget(counters: &CounterOwner) {
     OBSERVER.with(|slot| {
         if let Some(observer) = slot.borrow_mut().as_mut()
             && observer.family.is_none()
         {
-            observer.family = Some(Arc::clone(counters));
+            observer.family = Some(BudgetFamily {
+                counters: counters.clone(),
+                attempt: counters.attempt.load(super::Ordering::Relaxed),
+            });
         }
     });
 }
 
-pub(super) fn layers_in_order(
-    layers: &[ActiveDecodeBudgetLayer],
-) -> impl Iterator<Item = (usize, &ActiveDecodeBudgetLayer)> {
+pub(super) fn layers_in_order<'a>(
+    layers: budget_scope::BudgetLayers<'a>,
+) -> impl Iterator<Item = (usize, &'a ActiveDecodeBudgetLayer)> {
     let split = OBSERVER.with(|slot| {
         slot.borrow()
             .as_ref()
@@ -183,41 +197,52 @@ pub(super) fn budget_error(layer: usize, error: Error) -> Error {
         };
         Error::ScopedDecodeResource(ScopedDecodeResourceError {
             resource,
-            family: Arc::clone(family),
+            family: family.clone(),
             layer,
             protocol_start: observer.protocol_start,
         })
     })
 }
 
-pub(crate) fn classify_decode_attempt<T>(
+/// Run a synchronous decoder and its canonical authentication under one admission observer.
+///
+/// Protocol-owned decode limits belong inside `decode`; caller-owned limits enclose this
+/// call. The original decoder resource identity is captured before those scopes unwind.
+/// This does not invent an allocation-pool wake source or classify reconstructed errors.
+pub fn classify_decode_attempt<T>(
     decode: impl FnOnce() -> Result<T, Error>,
 ) -> Result<T, DecodeAttemptError> {
+    observe(|| decode().map_err(capture))
+}
+
+pub(super) fn observe<R>(body: impl FnOnce() -> R) -> R {
     let _scope = Scope::enter();
-    decode().map_err(|error| {
-        let kind = match &error {
-            Error::AllocationFailed { .. } => DecodeAttemptErrorKind::Allocator,
-            Error::ScopedDecodeResource(origin) => OBSERVER.with(|slot| {
-                let observer = slot.borrow();
-                let observer = observer
-                    .as_ref()
-                    .expect("original observer remains in scope");
-                if observer
-                    .family
-                    .as_ref()
-                    .is_some_and(|family| Arc::ptr_eq(family, &origin.family))
-                    && origin.layer < observer.boundary
-                    && origin.layer < origin.protocol_start
-                {
-                    DecodeAttemptErrorKind::EnclosingLimit
-                } else {
-                    DecodeAttemptErrorKind::Invalid
-                }
-            }),
-            _ => DecodeAttemptErrorKind::Invalid,
-        };
-        DecodeAttemptError { error, kind }
-    })
+    body()
+}
+
+pub(super) fn capture(error: Error) -> DecodeAttemptError {
+    let kind = match &error {
+        Error::AllocationFailed { .. } => DecodeAttemptErrorKind::Allocator,
+        Error::ScopedDecodeResource(origin) => OBSERVER.with(|slot| {
+            let observer = slot.borrow();
+            let observer = observer
+                .as_ref()
+                .expect("original observer remains in scope");
+            if observer
+                .family
+                .as_ref()
+                .is_some_and(|family| family.same(&origin.family))
+                && origin.layer < observer.boundary
+                && origin.layer < origin.protocol_start
+            {
+                DecodeAttemptErrorKind::EnclosingLimit
+            } else {
+                DecodeAttemptErrorKind::Invalid
+            }
+        }),
+        _ => DecodeAttemptErrorKind::Invalid,
+    };
+    DecodeAttemptError { error, kind }
 }
 
 #[cfg(test)]

@@ -384,7 +384,7 @@ fn original_beacon_public_state_decode_refusal_defers_before_installation() {
         .global_beacon_key_sessions()
         .get(&record.session.session_id)
         .unwrap();
-    assert_eq!(installed.session, record.session);
+    assert_eq!(installed.session.record(), &record.session);
     assert_eq!(installed.activated_at_height, Some(height + 1));
 }
 

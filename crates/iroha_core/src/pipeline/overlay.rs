@@ -1780,6 +1780,7 @@ impl TxOverlay {
             .into());
         }
         for (path, authorization) in &self.durable_state_authorizations {
+            crate::smartcontracts::ivm::host::validate_reserve_durable_state_path(path)?;
             if (self.source == TxOverlaySource::IvmProved
                 || Self::durable_path_requires_authorization(path))
                 && authorization.is_none()
@@ -3835,6 +3836,60 @@ mod tests_overlay_manifest {
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
+
+    #[test]
+    fn reserve_namespace_retained_overlay_refuses_before_writes() {
+        let (authority, _) = gen_account_in("wonderland");
+        let mut world = crate::state::World::new();
+        let (id, account) = build_wonderland_account(&authority).into_key_value();
+        world.accounts.insert(id, account);
+        let state = test_support::state_after_genesis(world);
+        let mut block = execution_block(&state);
+        for text in ["sorafs_reserve_state_v1", "sorafs_reserve_unknown_record"] {
+            for replacement in [Some(vec![8]), None] {
+                let path: StatePath = text.parse().unwrap();
+                let ordinary: StatePath = "ordinary_before_reserve".parse().unwrap();
+                let original = vec![7];
+                let mut tx = block.transaction();
+                tx.world
+                    .smart_contract_state
+                    .insert(path.clone(), original.clone());
+                // A retained overlay is data, never authority to replace native reserve state.
+                let overlay = TxOverlay::from_ivm_execution(
+                    Vec::new(),
+                    0,
+                    BTreeMap::from([
+                        (ordinary.clone(), Some(vec![1])),
+                        (path.clone(), replacement),
+                    ]),
+                );
+                let error = overlay.apply(&mut tx, &authority).unwrap_err();
+                assert!(
+                    matches!(error, ValidationFail::NotPermitted(reason) if reason.contains("native reserve state"))
+                );
+                assert_eq!(tx.world.smart_contract_state.get(&path), Some(&original));
+                assert!(tx.world.smart_contract_state.get(&ordinary).is_none());
+            }
+        }
+        for replacement in [Some(vec![8]), None] {
+            let path: StatePath = "sorafs_reservex_state_v1".parse().unwrap();
+            let mut tx = block.transaction();
+            tx.world.smart_contract_state.insert(path.clone(), vec![7]);
+            let overlay = TxOverlay::from_ivm_execution(
+                Vec::new(),
+                0,
+                BTreeMap::from([(path.clone(), replacement.clone())]),
+            );
+            overlay
+                .apply(&mut tx, &authority)
+                .expect("adjacent ordinary state remains writable");
+            assert_eq!(
+                tx.world.smart_contract_state.get(&path),
+                replacement.as_ref()
+            );
+        }
+    }
+
     fn analysis_with_syscalls(numbers: &[u32]) -> ivm::analysis::ProgramAnalysis {
         let mut program = ivm::ProgramMetadata::default().encode();
         for number in numbers {
@@ -5526,6 +5581,34 @@ seiyaku GuardedOverlayRebound {
             guarded_path.clone(),
             overlay.entrypoint_authorization.clone(),
         );
+        {
+            let view = authorized_state.view();
+            let root = overlay.entrypoint_authorization.as_ref().unwrap();
+            root.validate(view.world())
+                .expect("fixture retains actual live contract authority");
+            validate_ivm_proved_durable_authorizations(
+                view.world(),
+                &overlay.durable_state_overlay,
+                &overlay.durable_state_authorizations,
+                root,
+            )
+            .expect("the original scoped contract path retains its exact authority");
+            let native: StatePath = "sorafs_reserve_state_v1".parse().unwrap();
+            for replacement in [Some(vec![8]), None] {
+                let error = validate_ivm_proved_durable_authorizations(
+                    view.world(),
+                    &BTreeMap::from([(native.clone(), replacement)]),
+                    &BTreeMap::from([(native.clone(), Some(root.clone()))]),
+                    root,
+                )
+                .unwrap_err();
+                assert!(matches!(error,
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(
+                        ValidationFail::NotPermitted(reason)
+                    ) if reason.contains("native reserve state")
+                ));
+            }
+        }
         let proved_overlay = TxOverlay::from_ivm_proved_instructions(
             overlay.instructions.clone(),
             &authority,
@@ -6648,8 +6731,8 @@ seiyaku GuardedOverlayRebound {
 }
 /// Validate IVM header policy and return a structured admission error.
 pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
-    // Version: first release accepts the canonical 1.0 and 1.1 layouts.
-    if meta.version_major != 1 || !matches!(meta.version_minor, 0 | 1) {
+    // Version: every first-release execution profile uses the sole 1.1 header.
+    if meta.version_major != 1 || meta.version_minor != 1 {
         return Err(IvmAdmissionError::UnsupportedVersion(
             iroha_data_model::executor::UnsupportedVersionInfo {
                 major: meta.version_major,
@@ -8493,6 +8576,7 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
         ).into());
     }
     for (path, authorization) in durable_state_authorizations {
+        crate::smartcontracts::ivm::host::validate_reserve_durable_state_path(path)?;
         let authorization = authorization.as_ref().ok_or_else(|| {
             ValidationFail::NotPermitted(format!(
                 "Executable::IvmProved durable state path `{path}` is missing its contract authorization snapshot"

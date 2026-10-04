@@ -295,8 +295,13 @@ fn pulse_fixture() -> (World, ValidatorEpochContextV1, Vec<HashOf<BlockHeader>>)
     // This component fixture supplies an explicit pulse source binding. Native
     // prefix tests separately derive these identities from the certified parent.
     let pulse_context = component_pulse_context(&current);
-    let (record, mut pulses) =
-        signed_pulses_fixture_for_roster_and_anchors(network(), &pairs, &[(anchor, pulse_context)]);
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let (record, mut pulses) = signed_pulses_fixture_for_roster_and_anchors(
+        network(),
+        &pairs,
+        &[(anchor, pulse_context)],
+        &budget,
+    );
     let pulse = pulses.pop().unwrap();
     let mut world = World::new();
     world

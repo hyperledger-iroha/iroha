@@ -34,8 +34,6 @@ use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf};
-#[cfg(test)]
-use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     AccountId, NetworkId,
     block::{
@@ -5010,15 +5008,7 @@ impl Kura {
                 buffer.resize(length, 0);
                 block_store.read_block_data(slot.start, &mut buffer)?;
             }
-            let block = decode_framed_signed_block(&buffer).map_err(|error| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("committed canonical frame {height} is malformed: {error}"),
-                    ),
-                    block_store.path_to_blockchain.clone(),
-                )
-            })?;
+            let block = decode_framed_signed_block(&buffer).map_err(Error::BlockDecode)?;
             if block.header().height().get() != height
                 || block.hash() != expected[position]
                 || block.header().prev_block_hash() != previous
@@ -5494,7 +5484,7 @@ impl Kura {
         crate::execution_attempt::ExecutionAttemptError<Error>,
     > {
         use crate::execution_attempt::{
-            ExecutionAttemptError as Attempt, versioned_decode_attempt_error,
+            ExecutionAttemptError as Attempt, canonical_decode_attempt_error,
         };
         use iroha_data_model::block::SharedSignedBlock;
         let reserve =
@@ -5640,7 +5630,7 @@ impl Kura {
                             ?error,
                             block_index, height, "Failed to decode evicted block payload"
                         );
-                        return Err(versioned_decode_attempt_error(error, Error::VersionedCodec));
+                        return Err(canonical_decode_attempt_error(error, Error::BlockDecode));
                     }
                 };
                 shell.initialize(decoded)
@@ -5669,13 +5659,13 @@ impl Kura {
                         // A caller's nested Norito budget may refuse a valid stored
                         // frame. That refusal cannot establish persistent corruption
                         // or revoke native admission for the entire node.
-                        if !error.is_decode_resource_limit() {
+                        if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid {
                             self.poison_corrupt_canonical_read(
                                 block_index,
                                 "committed inline block body is not decodable",
                             );
                         }
-                        return Err(versioned_decode_attempt_error(error, Error::VersionedCodec));
+                        return Err(canonical_decode_attempt_error(error, Error::BlockDecode));
                     }
                 }
             };

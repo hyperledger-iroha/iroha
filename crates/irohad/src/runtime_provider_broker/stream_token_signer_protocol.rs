@@ -14,8 +14,8 @@ use sorafs_manifest::signer::{
     stream_token_evidence::{
         SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1,
         SIGNER_STREAM_TOKEN_OBSERVATION_REQUEST_MAX_BYTES_V1,
-        SignerStreamTokenObservationRequestSubjectV1, SignerStreamTokenObservationRequestV1,
-        SignerStreamTokenStateObservationV1,
+        SignerStreamTokenEvidenceAdmissionErrorV1, SignerStreamTokenObservationRequestSubjectV1,
+        SignerStreamTokenObservationRequestV1, SignerStreamTokenStateObservationV1,
     },
 };
 
@@ -57,6 +57,20 @@ fn stream_token_transport_error(error: BrokerError) -> StreamTokenSignerCallErro
         BrokerError::Protocol | BrokerError::BindingMismatch => {
             StreamTokenSignerCallErrorV1::InvalidResponse
         }
+    }
+}
+
+// The fixed broker outcome preserves operational versus semantic classification.
+// TODO: retain the original phase and exact returned bytes across pre-return
+// transport refusals; Unavailable alone does not authorize another observe call.
+fn stream_token_evidence_error(
+    error: &SignerStreamTokenEvidenceAdmissionErrorV1,
+    rejected: BrokerError,
+) -> BrokerError {
+    if error.is_retryable() {
+        BrokerError::Unavailable
+    } else {
+        rejected
     }
 }
 
@@ -306,7 +320,7 @@ fn decode_stream_token_observer_request(
         SIGNER_STREAM_TOKEN_OBSERVATION_REQUEST_MAX_BYTES_V1,
     )?;
     let request = SignerStreamTokenObservationRequestV1::decode_canonical(bytes)
-        .map_err(|_| BrokerError::Rejected)?;
+        .map_err(|error| stream_token_evidence_error(&error, BrokerError::Rejected))?;
     let (SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { binding_digest }
     | SignerStreamTokenObservationRequestSubjectV1::CompletedOperation {
         binding_digest, ..
@@ -346,40 +360,46 @@ impl Drop for StreamTokenObserverReplyWireV1 {
     }
 }
 
-fn encode_stream_token_observer_reply(
+#[cfg(test)]
+fn prepare_stream_token_observer_wire(
     request: &SignerStreamTokenObservationRequestV1,
     reply: &StreamTokenObserverReplyV1,
-) -> Result<Vec<u8>, BrokerError> {
-    let wire = match request.subject {
+) -> Result<StreamTokenObserverReplyWireV1, CanonicalAttemptErrorV1> {
+    let limit = MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1;
+    Ok(match request.subject {
         SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { .. } => {
             let (record, observation) = reply.current_evidence().ok_or(BrokerError::Protocol)?;
+            let mut record = canonical_attempt::copy(record, limit)?;
+            let mut observation = canonical_attempt::copy(observation, limit)?;
             StreamTokenObserverReplyWireV1::Current {
-                record: record.to_vec(),
-                observation: observation.to_vec(),
+                record: record.take(),
+                observation: observation.take(),
             }
         }
         SignerStreamTokenObservationRequestSubjectV1::CompletedOperation { .. } => {
             let observation = reply.completed_observation().ok_or(BrokerError::Protocol)?;
+            let mut observation = canonical_attempt::copy(observation, limit)?;
             StreamTokenObserverReplyWireV1::Completed {
-                observation: observation.to_vec(),
+                observation: observation.take(),
             }
         }
-    };
+    })
+}
+#[cfg(test)]
+fn encode_stream_token_observer_reply(
+    request: &SignerStreamTokenObservationRequestV1,
+    reply: &StreamTokenObserverReplyV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let wire = prepare_stream_token_observer_wire(request, reply)
+        .map_err(|error| error.service_error())?;
     encode_canonical(&wire, MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1)
 }
 
-fn decode_stream_token_observer_reply(
-    binding: &ProviderBindingWireV1,
-    payload: &[u8],
-    result: &[u8],
+fn take_stream_token_observer_reply(
+    expected: &SignerStreamTokenObservationRequestV1,
+    wire: &mut StreamTokenObserverReplyWireV1,
 ) -> Result<StreamTokenObserverReplyV1, BrokerError> {
-    let expected = decode_stream_token_observer_request(binding, payload)?;
-    let mut wire = decode_canonical_with_policy::<StreamTokenObserverReplyWireV1>(
-        result,
-        MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
-        STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
-    )?;
-    let reply = match (&expected.subject, &mut wire) {
+    match (&expected.subject, wire) {
         (
             SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { .. },
             StreamTokenObserverReplyWireV1::Current {
@@ -395,7 +415,40 @@ fn decode_stream_token_observer_reply(
         ) => StreamTokenObserverReplyV1::completed(std::mem::take(observation)),
         _ => return Err(BrokerError::Protocol),
     }
-    .map_err(|_| BrokerError::Protocol)?;
+    .map_err(|_| BrokerError::Protocol)
+}
+
+fn validate_stream_token_observer_body(
+    binding: &ProviderBindingWireV1,
+    expected: &SignerStreamTokenObservationRequestV1,
+    observation: &SignerStreamTokenStateObservationV1,
+) -> Result<(), SignerStreamTokenEvidenceAdmissionErrorV1> {
+    let signer_backend = binding
+        .stream_token_signer_binding
+        .as_ref()
+        .ok_or(sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenEvidenceErrorV1::SourceMismatch)?;
+    if observation.body.request_digest != expected.digest()?
+        || observation.body.phase != expected.phase
+        || observation.body.chain_id != signer_backend.custody().chain_id
+        || observation.body.network_id != signer_backend.custody().network_id
+    {
+        return Err(sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
+    }
+    Ok(())
+}
+
+fn decode_stream_token_observer_reply(
+    binding: &ProviderBindingWireV1,
+    payload: &[u8],
+    result: &[u8],
+) -> Result<StreamTokenObserverReplyV1, BrokerError> {
+    let expected = decode_stream_token_observer_request(binding, payload)?;
+    let mut wire = decode_canonical_with_policy::<StreamTokenObserverReplyWireV1>(
+        result,
+        MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
+        STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
+    )?;
+    let reply = take_stream_token_observer_reply(&expected, &mut wire)?;
     let observation_bytes = reply
         .current_evidence()
         .map(|(_, observation)| observation)
@@ -406,15 +459,9 @@ fn decode_stream_token_observer_reply(
         SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1,
     )?;
     let observation = SignerStreamTokenStateObservationV1::decode_canonical(observation_bytes)
-        .map_err(|_| BrokerError::Protocol)?;
-    let signer_backend = required_binding_ref!(binding, stream_token_signer_binding);
-    if observation.body.request_digest != expected.digest().map_err(|_| BrokerError::Protocol)?
-        || observation.body.phase != expected.phase
-        || observation.body.chain_id != signer_backend.custody().chain_id
-        || observation.body.network_id != signer_backend.custody().network_id
-    {
-        return Err(BrokerError::Protocol);
-    }
+        .map_err(|error| stream_token_evidence_error(&error, BrokerError::Protocol))?;
+    validate_stream_token_observer_body(binding, &expected, &observation)
+        .map_err(|error| stream_token_evidence_error(&error, BrokerError::Protocol))?;
     // No signature, custody, freshness, ancestry or completed-state authority is minted here.
     Ok(reply)
 }

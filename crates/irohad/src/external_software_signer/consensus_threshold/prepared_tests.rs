@@ -2,6 +2,7 @@
 
 #[test]
 fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restart() {
+    let budget = test_credential_budget();
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         isi::kagemusha_v1::{
@@ -32,7 +33,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
             + 1,
     )
     .unwrap();
-    let incumbent = beacon_fixture_v1(network_id, 0x81);
+    let incumbent = beacon_fixture_v1(network_id, 0x81, &budget);
     let authority = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 1,
         validators: peers.iter().enumerate().map(|(index, peer)| iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(&[0xB0 + u8::try_from(index).unwrap(); 32], 1, peer.clone()).unwrap()).collect(),
@@ -89,8 +90,9 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
         );
     let pending = BeaconFixtureV1 {
         validated: validate_global_threshold_beacon_session_v1(
-            pending_record.clone(),
+            &pending_record,
             &beacon_binding_v1(&pending_record),
+            &budget,
         )
         .unwrap(),
         record: pending_record,
@@ -110,7 +112,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
     };
     transition.validate().unwrap();
     let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-        incumbent.record.clone(),
+        incumbent.validated.clone(),
         1,
         incumbent.components,
     )];
@@ -118,18 +120,19 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
         global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning).unwrap();
     let old_catalog = beacon_catalog_v1(old_policy);
     let binding = old_catalog.iter().next().unwrap();
-    let old = encode_global_beacon_partial_signer_credential_v1(
+    let old = beacon_credential_fixture_v1(
         network_id,
         HANDLE,
         REVISION,
         old_policy,
         provisioning,
+        &budget,
     )
     .unwrap();
     let old_digest = Hash::new(old.as_slice());
     let pending_share = || {
         RuntimeGlobalBeaconShareProvisioningV1::new(
-            pending.record.clone(),
+            pending.validated.clone(),
             pending_seat,
             Zeroizing::new(*pending.components),
         )
@@ -144,7 +147,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
                 pending_share()
             }
             2 => RuntimeGlobalBeaconShareProvisioningV1::new(
-                pending.record.clone(),
+                pending.validated.clone(),
                 if pending_seat == 1 { 2 } else { 1 },
                 Zeroizing::new(*pending.components),
             ),
@@ -152,7 +155,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
                 let mut components = Zeroizing::new(*pending.components);
                 components[0] = [0; 32];
                 RuntimeGlobalBeaconShareProvisioningV1::new(
-                    pending.record.clone(),
+                    pending.validated.clone(),
                     pending_seat,
                     components,
                 )
@@ -165,13 +168,15 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
                 revision,
                 &changed,
                 &local_peer,
-                share
+                &share,
+                &budget
             )
             .is_err(),
             "invalid append {invalid}"
         );
         assert_eq!(Hash::new(old.as_slice()), old_digest);
-        let original = decode_global_beacon_runtime_signer_v1(&old, &network_id, binding).unwrap();
+        let original =
+            decode_global_beacon_runtime_signer_v1(&old, &network_id, binding, &budget).unwrap();
         original
             .attest_partial_signing_capability(&incumbent.validated, 1)
             .unwrap();
@@ -205,9 +210,10 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
                 wrong_session,
                 pending_seat,
             );
-        validate_global_threshold_beacon_session_v1(
-            wrong_record.clone(),
+        let wrong_session = validate_global_threshold_beacon_session_v1(
+            &wrong_record,
             &beacon_binding_v1(&wrong_record),
+            &budget,
         )
         .expect("the wrong-binding DKG is independently valid");
         let mut changed = transition.clone();
@@ -219,26 +225,101 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
                 REVISION + 1,
                 &changed,
                 &local_peer,
-                RuntimeGlobalBeaconShareProvisioningV1::new(
-                    wrong_record,
+                &RuntimeGlobalBeaconShareProvisioningV1::new(
+                    wrong_session,
                     pending_seat,
                     wrong_components,
                 ),
+                &budget
             )
             .is_err(),
             "valid DKG with wrong {mismatch} must not provision the frozen transition"
         );
     }
+    let retained_once =
+        decode_global_beacon_credential_shares_v1(&old, &network_id, binding, &budget).unwrap();
+    assert!(retained_once.iter().all(|entry| entry.belongs_to(&budget)));
+    let pending_original = pending_share();
+    let retained_owner = retained_once[0].authenticated_session().clone();
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let error = super::prepared::prepare_global_beacon_transition_from_retained_v1(
+        Some((retained_once.as_slice(), binding)),
+        HANDLE,
+        REVISION + 1,
+        &transition,
+        &local_peer,
+        &pending_original,
+        &budget,
+    )
+    .err()
+    .expect("actual output backing must be admitted too");
+    let RuntimeConsensusThresholdSignerCredentialErrorV1::Output(
+        GlobalBeaconCredentialEncodeErrorV1::Admission(ref original),
+    ) = error
+    else {
+        panic!("preserve actual output admission cause")
+    };
+    let iroha_allocation::AllocationRefusal::Capacity {
+        requested_bytes, ..
+    } = original
+    else {
+        panic!("original occupied pool")
+    };
+    assert_eq!(
+        *original,
+        budget.try_reserve_bytes(*requested_bytes).unwrap_err()
+    );
+    assert!(
+        retained_once[0]
+            .authenticated_session()
+            .ptr_eq(&retained_owner)
+    );
+    assert_eq!(Hash::new(old.as_slice()), old_digest);
+    drop(held);
+    let from_originals = super::prepared::prepare_global_beacon_transition_from_retained_v1(
+        Some((retained_once.as_slice(), binding)),
+        HANDLE,
+        REVISION + 1,
+        &transition,
+        &local_peer,
+        &pending_original,
+        &budget,
+    )
+    .expect(
+        "same retained graphs and pending secret retry unchanged after output capacity returns",
+    );
     let prepared = prepare_global_beacon_transition_credential_v1(
         Some((&old, binding)),
         HANDLE,
         REVISION + 1,
         &transition,
         &local_peer,
-        pending_share(),
+        &pending_share(),
+        &budget,
     )
     .unwrap();
     assert_eq!(Hash::new(old.as_slice()), old_digest);
+    assert_eq!(
+        from_originals.credential.as_slice(),
+        prepared.credential.as_slice()
+    );
+    let foreign = test_credential_budget();
+    assert!(matches!(
+        super::prepared::prepare_global_beacon_transition_from_retained_v1(
+            None,
+            HANDLE,
+            REVISION + 1,
+            &transition,
+            &local_peer,
+            &pending_share(),
+            &foreign
+        ),
+        Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Session(
+            GlobalThresholdBeaconSessionError::ForeignReservation
+        ))
+    ));
     let catalog = beacon_catalog_with_revision_v1(prepared.revision, prepared.policy_digest);
     let (_guard, directory) = secure_credential_directory_v1();
     write_credential_v1(
@@ -254,6 +335,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 Some(&directory),
+                &budget,
             )
             .unwrap();
         let backend = restarted.global_beacon.as_ref().unwrap();
@@ -276,12 +358,13 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
             REVISION + 2,
             &transition,
             &local_peer,
-            pending_share()
+            &pending_share(),
+            &budget
         )
         .is_err()
     );
     assert!(
-        decode_global_beacon_runtime_signer_v1(&prepared.credential, &network_id, binding).is_err()
+        decode_global_beacon_runtime_signer_v1(&prepared.credential, &network_id, binding, &budget,).is_err()
     );
     let joining = prepare_global_beacon_transition_credential_v1(
         None,
@@ -289,7 +372,8 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
         1,
         &transition,
         &local_peer,
-        pending_share(),
+        &pending_share(),
+        &budget,
     )
     .unwrap();
     let joining_catalog = beacon_catalog_with_revision_v1(1, joining.policy_digest);
@@ -297,6 +381,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
         &joining.credential,
         &network_id,
         joining_catalog.iter().next().unwrap(),
+        &budget,
     )
     .unwrap();
     joining_provider
@@ -311,6 +396,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
 
 #[test]
 fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_seven_seat() {
+    let budget = test_credential_budget();
     use iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1;
     let network = network_id_v1(0xC1);
     for (current_size, pending_size) in [(4, 7), (7, 4)] {
@@ -329,6 +415,7 @@ fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_
                     current_size,
                     beacon_fixture_roster_hash_v1(current_size),
                     seat,
+                    &budget,
                 )
             });
             let pending = beacon_fixture_for_seat_v1(
@@ -337,17 +424,18 @@ fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_
                 pending_size,
                 beacon_fixture_roster_hash_v1(pending_size),
                 pending_seat,
+                &budget,
             );
             let mut shares = Vec::new();
             if let Some(current) = &current {
                 shares.push(RuntimeGlobalBeaconShareProvisioningV1::new(
-                    current.record.clone(),
+                    current.validated.clone(),
                     current_seat.unwrap(),
                     Zeroizing::new(*current.components),
                 ));
             }
             shares.push(RuntimeGlobalBeaconShareProvisioningV1::new(
-                pending.record.clone(),
+                pending.validated.clone(),
                 pending_seat,
                 Zeroizing::new(*pending.components),
             ));
@@ -360,10 +448,17 @@ fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_
                 HANDLE,
                 REVISION,
                 policy,
+                budget.limit_bytes(),
             )
             .unwrap();
-            let credential = encode_global_beacon_partial_signer_credential_v1(
-                network, HANDLE, REVISION, policy, shares,
+            let credential =
+                beacon_credential_fixture_v1(network, HANDLE, REVISION, policy, shares, &budget)
+                    .unwrap();
+            let retained_shares = decode_global_beacon_credential_shares_v1(
+                &credential,
+                &network,
+                catalog.iter().next().unwrap(),
+                &budget,
             )
             .unwrap();
             if let Some(current) = &current {
@@ -372,18 +467,14 @@ fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_
                     transcript_hash: current.record.transcript_hash,
                 };
                 super::provisioning_command::validate_retained_incumbent(
-                    &credential,
-                    catalog.iter().next().unwrap(),
-                    network,
+                    &retained_shares,
                     current_seat,
                     active,
                 )
                 .unwrap();
                 assert!(
                     super::provisioning_command::validate_retained_incumbent(
-                        &credential,
-                        catalog.iter().next().unwrap(),
-                        network,
+                        &retained_shares,
                         current_seat,
                         InstalledBeaconEpochBindingV1 {
                             session_id: [0xEF; 32],
@@ -409,6 +500,7 @@ fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_
                     RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                         &catalog,
                         Some(&directory),
+                        &budget,
                     )
                     .unwrap();
                 let provider = restarted.global_beacon.unwrap();

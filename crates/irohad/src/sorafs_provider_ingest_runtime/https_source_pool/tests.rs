@@ -259,10 +259,10 @@ fn actual_deployment_constructor_uses_catalog_bound_injection_without_claiming_r
     let calls = Arc::new(Calls::default());
     let deployment = RuntimeProviderBrokerDeploymentV1::try_new(
         catalog(limits()),
-        iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
-            iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path(),
+        iroha_config::parameters::actual::RuntimeProviderBroker::from_toml_source(
+            iroha_config_base::toml::TomlSource::inline("".parse().expect("empty broker policy")),
         )
-        .expect("validated default broker endpoint"),
+        .expect("validated default broker policy"),
         &Registry(Arc::clone(&calls)),
     )
     .unwrap();

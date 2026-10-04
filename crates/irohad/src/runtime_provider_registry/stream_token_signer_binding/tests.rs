@@ -114,6 +114,9 @@ fn complete_signer_catalog_survives_canonical_roundtrip_in_every_layout() {
     let catalog = IrohaRuntimeProviderBindingsV1 {
         chain_id: signer_backend.custody().chain_id.clone(),
         network_id: runtime_provider_test_network_id(),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: vec![binding],
     };
     let canonical = catalog.export_canonical_v1().unwrap();
@@ -185,6 +188,7 @@ fn software_signer_and_observer_survive_public_catalog_roundtrip() {
         let catalog = IrohaRuntimeProviderBindingsV1 {
             chain_id: custody.chain_id.clone(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(metadata.clone())
                     .unwrap(),
@@ -222,6 +226,9 @@ fn catalog_rejects_enclosing_network_or_header_drift() {
     let mut catalog = IrohaRuntimeProviderBindingsV1 {
         chain_id: "other-chain".to_owned(),
         network_id: runtime_provider_test_network_id(),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: vec![binding],
     };
     assert!(catalog.export_canonical_v1().is_err());
@@ -248,6 +255,7 @@ fn every_provider_or_trust_pin_change_alters_the_exported_catalog_identity() {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: signer_backend.custody.chain_id.clone(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(signer_backend).unwrap(),
             ],

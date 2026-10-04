@@ -299,6 +299,11 @@ export {
   computeAxtBinding,
 } from "./axt.js";
 export {
+  encodeValidatorStakingPreparationFrameV1,
+  decodeValidatorStakingPreparationFrameV1,
+  validateValidatorStakingPreparationV1,
+  encodeValidatorStakingValueV1,
+  decodeValidatorStakingValueV1,
   encodeAccountIdNoritoValue,
   decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,

@@ -1,8 +1,12 @@
 //! Canonical byte-chunk Merkle commitments with fixed leaf ownership.
 
+#[cfg(any(target_os = "macos", feature = "cuda", test))]
+mod acceleration_policy;
 mod canonical_nodes;
 mod cpu_leaves;
 mod rehash;
+#[cfg(any(target_os = "macos", feature = "cuda"))]
+use acceleration_policy::ResolvedMerklePolicy;
 use canonical_nodes::CanonicalNodes;
 
 use crate::VMError;
@@ -12,8 +16,7 @@ use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::ops::{Deref, DerefMut};
 #[cfg(test)]
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One fixed leaf backing. Cold nested VMs keep their prepaid execution charge
 /// attached to these digests through idle retention and cache eviction.
@@ -87,115 +90,11 @@ pub struct ByteMerkleTree {
     leaves: Mutex<MerkleLeaves>,
     nodes: Mutex<CanonicalNodes>,
 }
-static MERKLE_GPU_MIN_LEAVES: AtomicUsize = AtomicUsize::new(8192);
-// Mac Metal uses a qualified synthetic cost profile; an explicit CPU ceiling
-// still overrides it. Other builds retain the conservative CPU default.
-// Thresholds are configurable via `ivm::set_acceleration_config` (threaded from `iroha_config`).
-#[cfg(all(target_arch = "aarch64", target_os = "macos", feature = "metal"))]
-static MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(all(
-    target_arch = "aarch64",
-    not(all(target_os = "macos", feature = "metal"))
-))]
-static MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_768);
-// The same policy applies to x86/x86_64 hosts with SHA-NI.
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_os = "macos",
-    feature = "metal"
-))]
-static MERKLE_X86_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    not(all(target_os = "macos", feature = "metal"))
-))]
-static MERKLE_X86_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_768);
 // Test-only observation counters; production exposes the same events via telemetry.
 #[cfg(test)]
 static MERKLE_REBUILDS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static MERKLE_INCREMENTAL_LEAF_UPDATES: AtomicU64 = AtomicU64::new(0);
-pub(crate) fn set_merkle_gpu_min_leaves(n: usize) {
-    MERKLE_GPU_MIN_LEAVES.store(n.max(1), Ordering::SeqCst);
-}
-pub(crate) fn merkle_gpu_min_leaves() -> usize {
-    MERKLE_GPU_MIN_LEAVES.load(Ordering::SeqCst)
-}
-// Backend-specific minimum thresholds (default to the generic GPU threshold)
-static MERKLE_METAL_MIN_LEAVES: AtomicUsize = AtomicUsize::new(0);
-static MERKLE_CUDA_MIN_LEAVES: AtomicUsize = AtomicUsize::new(0);
-pub(crate) fn set_merkle_metal_min_leaves(n: usize) {
-    MERKLE_METAL_MIN_LEAVES.store(n, Ordering::SeqCst);
-}
-pub(crate) fn set_merkle_cuda_min_leaves(n: usize) {
-    MERKLE_CUDA_MIN_LEAVES.store(n, Ordering::SeqCst);
-}
-#[inline]
-#[cfg(any(target_os = "macos", test))]
-fn merkle_metal_min_leaves() -> usize {
-    let v = MERKLE_METAL_MIN_LEAVES.load(Ordering::SeqCst);
-    if v == 0 { merkle_gpu_min_leaves() } else { v }
-}
-#[inline]
-#[cfg(feature = "cuda")]
-fn merkle_cuda_min_leaves() -> usize {
-    let v = MERKLE_CUDA_MIN_LEAVES.load(Ordering::SeqCst);
-    if v == 0 { merkle_gpu_min_leaves() } else { v }
-}
-// Test-only helpers to validate configuration wiring.
-#[cfg(test)]
-pub(crate) fn test_get_metal_min() -> usize {
-    merkle_metal_min_leaves()
-}
-#[cfg(all(test, feature = "cuda"))]
-pub(crate) fn test_get_cuda_min() -> usize {
-    merkle_cuda_min_leaves()
-}
-#[inline]
-fn cpu_sha2_available_any() -> bool {
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("sha2") {
-            return true;
-        }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if std::is_x86_feature_detected!("sha") {
-            return true;
-        }
-    }
-    false
-}
-#[inline]
-fn prefer_cpu_sha2(leaves: usize) -> bool {
-    if !cpu_sha2_available_any() {
-        return false;
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let max = MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES.load(Ordering::SeqCst);
-        if leaves <= max {
-            return true;
-        }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        let max = MERKLE_X86_CPU_PREFER_MAX_LEAVES.load(Ordering::SeqCst);
-        if leaves <= max {
-            return true;
-        }
-    }
-    false
-}
-#[cfg(target_arch = "aarch64")]
-pub(crate) fn set_prefer_cpu_sha2_max_leaves_aarch64(v: usize) {
-    MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
-}
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub(crate) fn set_prefer_cpu_sha2_max_leaves_x86(v: usize) {
-    MERKLE_X86_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
-}
 /// Return cumulative completed canonical-node refreshes and incremental leaf updates.
 /// Initial construction and independent template copies do not increment these counters.
 #[cfg(test)]
@@ -387,25 +286,21 @@ impl ByteMerkleTree {
     /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
     pub fn from_bytes_accel(data: &[u8], chunk: usize) -> Result<Self, VMError> {
         Self::validate_chunk_size(chunk)?;
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
         let leaves_count = data.len().div_ceil(chunk).max(1);
-        // Platforms without exact Metal construction profiles retain their
-        // existing CUDA/CPU policy until that operation is independently measured.
-        #[cfg(not(all(target_os = "macos", feature = "metal")))]
-        if prefer_cpu_sha2(leaves_count) {
-            return Self::from_bytes_parallel(data, chunk);
-        }
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
+        let policy = ResolvedMerklePolicy::current();
         #[cfg(target_os = "macos")]
-        if leaves_count >= merkle_metal_min_leaves()
-            && let Some(tree) = crate::vector::metal_tree_from_bytes_auto(data, chunk)
-        {
+        if let Some(tree) = policy.try_metal(leaves_count, || {
+            crate::vector::metal_tree_from_bytes_auto(data, chunk)
+        }) {
             return Ok(tree);
         }
         // CUDA keeps generated padded chunks and complete output in owned host storage.
         #[cfg(feature = "cuda")]
-        if leaves_count >= merkle_cuda_min_leaves()
-            && let Some(output) =
-                crate::cuda::sha256_leaf_chunks_cuda_attempt(data, chunk, leaves_count)
-            && output.len() == leaves_count
+        if let Some(output) = policy.try_cuda(leaves_count, || {
+            crate::cuda::sha256_leaf_chunks_cuda_attempt(data, chunk, leaves_count)
+        }) && output.len() == leaves_count
         {
             // HostOutput stays alive until both destination owners are complete.
             return Self::from_leaf_digests(output.as_slice(), chunk);
@@ -418,25 +313,29 @@ impl ByteMerkleTree {
     /// canonical nodes under its original owner before returning.
     /// Returns true if acceleration was used, false otherwise (no changes made).
     pub(crate) fn recompute_all_leaves_accel(&self, data: &[u8]) -> bool {
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
         let leaves_count = self.leaf_count();
-        // Prefer CPU SHA2 path on AArch64 for medium sizes
-        if prefer_cpu_sha2(leaves_count) || leaves_count < merkle_gpu_min_leaves() {
-            return false;
-        }
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
+        let policy = ResolvedMerklePolicy::current();
         #[cfg(target_os = "macos")]
-        if leaves_count >= merkle_metal_min_leaves()
-            && crate::vector::metal_rehash_tree_auto(self, data)
+        if policy
+            .try_metal(leaves_count, || {
+                crate::vector::metal_rehash_tree_auto(self, data).then_some(())
+            })
+            .is_some()
         {
             return true;
         }
         #[cfg(feature = "cuda")]
-        if let Some(output) =
+        if let Some(output) = policy.try_cuda(leaves_count, || {
             crate::cuda::sha256_leaf_chunks_cuda_attempt(data, self.chunk, leaves_count)
-        {
+        }) {
             // Validate exact geometry, then copy the full HostOutput while its
             // original allocation owner is still alive. Canonical nodes remain prepaid.
             return self.install_leaf_digests(output.as_slice());
         }
+        #[cfg(not(any(target_os = "macos", feature = "cuda")))]
+        let _ = data;
         false
     }
     /// Rehash every fixed leaf in place on the CPU. A large memory commit must
@@ -652,29 +551,29 @@ impl ByteMerkleTree {
         Self::validate_chunk_size(chunk)?;
         #[cfg(any(target_os = "macos", feature = "cuda"))]
         let leaves_count = data.len().div_ceil(chunk).max(1);
-        // Exact public byte/chunk geometry compares the complete canonical CPU
-        // and Metal operation; a CPU ISA heuristic cannot replace this evidence.
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
+        let policy = ResolvedMerklePolicy::current();
+        // Operator policy admits an attempt; the native owner still qualifies
+        // hardware and selects its complete public-geometry cost profile.
         #[cfg(target_os = "macos")]
-        if leaves_count >= merkle_metal_min_leaves()
-            && let Some(root) = crate::vector::metal_root_from_bytes_auto(data, chunk)
-        {
+        if let Some(root) = policy.try_metal(leaves_count, || {
+            crate::vector::metal_root_from_bytes_auto(data, chunk)
+        }) {
             let metrics = iroha_telemetry::metrics::global_or_default();
             metrics.merkle_root_gpu_total.inc();
             return Ok(root);
         }
-        // GPU CUDA path
         #[cfg(feature = "cuda")]
-        let use_cuda = {
-            let min_cuda = merkle_cuda_min_leaves();
-            crate::cuda_available() && leaves_count >= min_cuda
-        };
-        #[cfg(feature = "cuda")]
-        if use_cuda {
-            if let Some(root) = crate::cuda::sha256_merkle_root_cuda(data, chunk) {
-                let metrics = iroha_telemetry::metrics::global_or_default();
-                metrics.merkle_root_gpu_total.inc();
-                return Ok(root);
+        if let Some(root) = policy.try_cuda(leaves_count, || {
+            if crate::cuda_available() {
+                crate::cuda::sha256_merkle_root_cuda(data, chunk)
+            } else {
+                None
             }
+        }) {
+            let metrics = iroha_telemetry::metrics::global_or_default();
+            metrics.merkle_root_gpu_total.inc();
+            return Ok(root);
         }
         // CPU fallback
         let canonical =
@@ -843,37 +742,6 @@ mod tests {
         let tree = ByteMerkleTree::from_bytes(data, chunk).unwrap();
         // Below GPU threshold; must return false (no acceleration used)
         assert!(!tree.recompute_all_leaves_accel(data));
-    }
-    #[test]
-    fn set_per_backend_thresholds_applied() {
-        // Capture current values
-        let metal0 = test_get_metal_min();
-        #[cfg(feature = "cuda")]
-        let cuda0 = test_get_cuda_min();
-        // Apply new thresholds via public API
-        crate::set_acceleration_config(crate::AccelerationConfig {
-            resource_limits: iroha_accel::RegistryLimits::STANDARD,
-            enable_simd: true,
-            enable_metal: true,
-            enable_cuda: true,
-            max_gpus: None,
-            merkle_min_leaves_gpu: None,
-            merkle_min_leaves_metal: Some(1234),
-            merkle_min_leaves_cuda: Some(5678),
-            prefer_cpu_sha2_max_leaves_aarch64: None,
-            prefer_cpu_sha2_max_leaves_x86: None,
-        });
-        assert_eq!(test_get_metal_min(), 1234);
-        #[cfg(feature = "cuda")]
-        {
-            assert_eq!(test_get_cuda_min(), 5678);
-        }
-        // Restore
-        set_merkle_metal_min_leaves(metal0);
-        #[cfg(feature = "cuda")]
-        {
-            set_merkle_cuda_min_leaves(cuda0);
-        }
     }
     #[test]
     fn reset_from_restores_state() {

@@ -1023,6 +1023,7 @@ mod tests {
             provider_id: ProviderId::new([0x53; 32]),
             completed_by: owner.clone(),
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                owner.clone(),
                 owner,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x54; 32],

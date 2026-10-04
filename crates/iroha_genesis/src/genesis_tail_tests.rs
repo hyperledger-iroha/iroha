@@ -582,3 +582,61 @@ fn uses_shared_instruction_registry() {
         );
     }
 }
+
+#[test]
+fn prepared_bundle_retains_original_decoder_refusal_and_rejects_noncanonical_source() {
+    let (manifest, key_pair, block, wire) = prepared_proposal_fixture();
+    let failure = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash()),
+    )
+    .unwrap_err();
+    let original = failure
+        .downcast_ref::<norito::core::DecodeAttemptError>()
+        .expect("actual decoder cause survives bundle boundary");
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let retried =
+        validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+            .unwrap();
+    assert_eq!(retried.canonical_wire(), wire);
+    assert_eq!(retried.block(), &block);
+    for offset in [0, 1, 23, norito::core::Header::SIZE] {
+        let mut changed = wire.clone();
+        changed[offset] ^= 0x80;
+        let error = validate_prepared_genesis_bundle(
+            &changed,
+            &manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<norito::core::DecodeAttemptError>()
+                .expect("canonical header rejection")
+                .kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+    }
+    let mut trailing = wire.clone();
+    trailing.push(0);
+    let error =
+        validate_prepared_genesis_bundle(&trailing, &manifest, key_pair.public_key(), block.hash())
+            .unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<norito::core::DecodeAttemptError>()
+            .expect("canonical source exhaustion")
+            .kind(),
+        norito::core::DecodeAttemptErrorKind::Invalid
+    );
+    assert_eq!(
+        validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+            .unwrap()
+            .canonical_wire(),
+        wire
+    );
+}

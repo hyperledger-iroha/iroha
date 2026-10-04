@@ -93,6 +93,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn base_table() -> Table {
         toml::from_str(MINIMAL_CONFIG).expect("parse minimal config")
     }
+    include!("user/torii_https_transport_tests.rs");
     fn four_validator_roster_table() -> Table {
         let mut table = base_table();
         let base_public_key = table

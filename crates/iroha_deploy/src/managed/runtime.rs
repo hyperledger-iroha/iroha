@@ -14,7 +14,13 @@ use std::{
     time::Instant,
 };
 
+mod activation;
+mod maintenance;
+mod owned;
+mod progress;
 mod readiness;
+mod renewal;
+use owned::PeerProcesses;
 
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
 ///
@@ -63,43 +69,83 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         failure: None,
     };
     publish(&directory, &status)?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(progress::Progress::default());
+    let mut budget = Arc::new(activation::Budget {
+        started,
+        timeout: startup_timeout,
+        utc_ceiling_unix_ms: None,
+        cancelled: Arc::clone(&cancelled),
+        progress: Arc::clone(&progress),
+    });
+    let prepared = retained.prepared.clone();
     let mut processes = PeerProcesses::default();
-    if processes.start(&directory, &retained, &ownership).is_err() {
-        processes.stop()?;
-        status.phase = ManagedPhase::Failed;
-        status.failure = Some("a validator could not start; inspect its retained logs".into());
-        publish(&directory, &status)?;
-        return Err(Error::Invalid(status.failure.unwrap_or_default()));
+    let _cancel_on_exit = CancelOnExit(Arc::clone(&cancelled));
+    let activation::Startup {
+        launch,
+        authorization,
+    } = match activation::prepare(&prepared, &budget) {
+        Ok(startup) => startup,
+        Err(failure) => {
+            return fail_worker(&directory, &mut status, &mut processes, &cancelled, failure);
+        }
+    };
+    if processes
+        .start(&directory, &retained, &ownership, launch)
+        .is_err()
+    {
+        return fail_worker(
+            &directory,
+            &mut status,
+            &mut processes,
+            &cancelled,
+            progress.unconfirmed(),
+        );
     }
     status.running_peers = processes.children.len();
-    if let Err(error) = startup_remaining(started, startup_timeout) {
-        processes.stop()?;
-        status.phase = ManagedPhase::Failed;
-        status.running_peers = 0;
-        status.failure = Some("startup deadline expired before readiness".into());
-        publish(&directory, &status)?;
-        return Err(error);
-    }
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let readiness_cancelled = Arc::clone(&cancelled);
-    let prepared = retained.prepared;
-    let readiness_prepared = prepared.clone();
-    let progress = Arc::new(readiness::Progress::default());
-    let readiness_progress = Arc::clone(&progress);
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let generated = match processes.generated() {
+        Ok(generated) => generated,
+        Err(_) => {
+            return fail_worker(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress.unconfirmed(),
+            );
+        }
+    };
+    let background_prepared = prepared.clone();
+    let background_budget = Arc::clone(&budget);
+    let (sender, mut receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        let result = readiness::prove(
-            &readiness_prepared,
-            started,
-            startup_timeout,
-            &readiness_cancelled,
-            &readiness_progress,
+        let result = activation::initial(
+            &background_prepared,
+            &background_budget,
+            generated,
+            authorization,
         );
         let _ = sender.send(result);
     });
+    let mut service_expiry: Option<maintenance::Observation> = None;
+    let mut refresh: Option<
+        mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
+    > = None;
     let mut attachment: Option<remote::AttachmentWorker> = None;
     let mut attachment_attempted = false;
     loop {
+        if service_expiry
+            .as_ref()
+            .is_some_and(|expiry| !expiry.current().unwrap_or(false))
+        {
+            return fail_worker(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress::Failure::ObservationExpired,
+            );
+        }
         if let Some(mut connection) = listener.accept()? {
             if let Ok(request) = connection.receive()
                 && same_token(&request.token, &worker.token)
@@ -179,19 +225,187 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         if status.phase == ManagedPhase::Starting {
             // Deadline wins over a proof queued just before the worker observed it. Never
             // publish a transient Ready after the original startup budget was exhausted.
-            let result = observe_readiness(&receiver, &progress, started, startup_timeout);
-            if let Some(Err(failure)) = result {
-                cancelled.store(true, Ordering::Release);
-                processes.stop()?;
-                status.phase = ManagedPhase::Failed;
-                status.running_peers = 0;
-                status.failure = Some(failure.message());
-                publish(&directory, &status)?;
-                return Err(Error::Invalid(status.failure.unwrap_or_default()));
+            let result = match budget.check() {
+                Err(failure) => Some(Err(failure)),
+                Ok(_) => {
+                    observe_readiness(&receiver, &budget.progress, budget.started, budget.timeout)
+                }
+            };
+            match result {
+                Some(Err(failure)) => {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        failure,
+                    );
+                }
+                Some(Ok(activation::Outcome::Restart(restart))) => {
+                    let next = (|| {
+                        let (launch, recheck) = restart.into_launch(&prepared, &budget)?;
+                        // Old HTTP guards become inactive before any owned child is signalled.
+                        processes.stop().map_err(|_| progress.unconfirmed())?;
+                        budget.check()?;
+                        processes
+                            .start(&directory, &retained, &ownership, Some(launch))
+                            .map_err(|_| progress.unconfirmed())?;
+                        budget.check()?;
+                        let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
+                        status.running_peers = processes.children.len();
+                        let selected = prepared.clone();
+                        let background_budget = Arc::clone(&budget);
+                        let (sender, receiver) = mpsc::sync_channel(1);
+                        thread::spawn(move || {
+                            let _ =
+                                sender.send(recheck.finish(&selected, live, &background_budget));
+                        });
+                        Ok::<_, progress::Failure>(receiver)
+                    })();
+                    match next {
+                        Ok(next) => receiver = next,
+                        Err(failure) => {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                failure,
+                            );
+                        }
+                    }
+                }
+                Some(Ok(activation::Outcome::Complete(expiry))) => {
+                    service_expiry = expiry;
+                    if service_expiry
+                        .as_ref()
+                        .is_some_and(|expiry| !expiry.current().unwrap_or(false))
+                    {
+                        return fail_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress::Failure::ObservationExpired,
+                        );
+                    }
+                    // Successful handoffs are checked against the original deadline again above.
+                    status.phase = ManagedPhase::Ready;
+                    publish(&directory, &status)?;
+                }
+                None => {}
             }
-            if let Some(Ok(())) = result {
-                status.phase = ManagedPhase::Ready;
-                publish(&directory, &status)?;
+        }
+        if status.phase == ManagedPhase::Ready
+            && let Some(observation) = service_expiry.as_mut()
+        {
+            let result = refresh
+                .as_ref()
+                .and_then(|receiver| match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
+                });
+            if let Some(result) = result {
+                refresh = None;
+                // The old observation wins over queued success; a slow refresh cannot bridge
+                // an interval in which the worker had no current authenticated observation.
+                if !observation.current().unwrap_or(false) {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                    );
+                }
+                match result {
+                    Ok(next) if next.current().unwrap_or(false) => *observation = next,
+                    _ => {
+                        if observation.retry().is_err() {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress::Failure::ObservationExpired,
+                            );
+                        }
+                    }
+                }
+            }
+            if refresh.is_none() && observation.due().unwrap_or(true) {
+                let next = (|| -> Result<_> {
+                    let (selection, turn) = observation.begin(Arc::clone(&cancelled))?;
+                    let live = processes.gateway(selection.provider())?;
+                    let selected = prepared.clone();
+                    let (sender, receiver) = mpsc::sync_channel(1);
+                    thread::spawn(move || {
+                        let _ =
+                            sender.send(maintenance::refresh(&selected, selection, live, &turn));
+                    });
+                    Ok(receiver)
+                })();
+                match next {
+                    Ok(receiver) => refresh = Some(receiver),
+                    Err(_) => {
+                        if observation.retry().is_err() {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress::Failure::ObservationExpired,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if status.phase == ManagedPhase::Ready && refresh.is_none() {
+            let turn = service_expiry
+                .as_ref()
+                .map(|observation| {
+                    observation.renewal(Arc::clone(&cancelled), Arc::clone(&progress))
+                })
+                .transpose();
+            match turn {
+                Ok(Some(Some(turn))) => {
+                    let live = match processes.gateway(turn.provider()) {
+                        Ok(live) => live,
+                        Err(_) => {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress.unconfirmed(),
+                            );
+                        }
+                    };
+                    // Withdraw Ready durably before the background owner can mutate custody.
+                    // No stale observation survives across a native enrollment head change.
+                    status.phase = ManagedPhase::Starting;
+                    publish(&directory, &status)?;
+                    service_expiry = None;
+                    budget = Arc::clone(&turn.budget);
+                    let selected = prepared.clone();
+                    let (sender, next) = mpsc::sync_channel(1);
+                    thread::spawn(move || {
+                        let _ = sender.send(renewal::advance(&selected, turn, live));
+                    });
+                    receiver = next;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                    );
+                }
             }
         }
         if status.phase == ManagedPhase::Ready && !attachment_attempted {
@@ -212,18 +426,18 @@ fn publish(directory: &PrivateDirectory, status: &ManagedStatus) -> Result<()> {
     Ok(())
 }
 
-fn expire_startup_status(status: &mut ManagedStatus, failure: readiness::Failure) {
+fn expire_startup_status(status: &mut ManagedStatus, failure: progress::Failure) {
     status.phase = ManagedPhase::Failed;
     status.running_peers = 0;
     status.failure = Some(failure.message());
 }
 
-fn observe_readiness(
-    receiver: &mpsc::Receiver<std::result::Result<(), readiness::Failure>>,
-    progress: &readiness::Progress,
+fn observe_readiness<T>(
+    receiver: &mpsc::Receiver<std::result::Result<T, progress::Failure>>,
+    progress: &progress::Progress,
     started: Instant,
     timeout: Duration,
-) -> Option<std::result::Result<(), readiness::Failure>> {
+) -> Option<std::result::Result<T, progress::Failure>> {
     let observed = match receiver.try_recv() {
         Ok(result) => Some(result),
         Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
@@ -244,82 +458,6 @@ fn same_token(left: &str, right: &str) -> bool {
             .zip(right.bytes())
             .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
             == 0
-}
-
-#[derive(Default)]
-struct PeerProcesses {
-    children: Vec<Child>,
-}
-
-impl PeerProcesses {
-    fn start(
-        &mut self,
-        directory: &PrivateDirectory,
-        retained: &RetainedLocalnet,
-        ownership: &File,
-    ) -> Result<()> {
-        for (index, peer) in retained.prepared.peers.iter().enumerate() {
-            let log = directory.open_append(&peer.log_name)?;
-            let mut command = daemon_command(
-                &retained.daemon.path,
-                &peer.config_path,
-                &retained.root_kind,
-            )?;
-            command
-                .stdin(Stdio::from(ownership.try_clone()?))
-                .stdout(log.try_clone()?)
-                .stderr(log);
-            self.children
-                .push(spawn_with_launch_fence(directory, index, &mut command)?);
-        }
-        Ok(())
-    }
-
-    fn any_exited(&mut self) -> Result<bool> {
-        for child in &mut self.children {
-            if child.try_wait()?.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn stop(&mut self) -> Result<()> {
-        // Only this owner's unreaped Child handles are eligible for signalling. No persisted PID
-        // is ever used. Send all graceful requests before sharing a single bounded grace period.
-        for child in &mut self.children {
-            if child.try_wait()?.is_some() {
-                continue;
-            }
-            #[cfg(unix)]
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
-            }
-            #[cfg(not(unix))]
-            child.kill()?;
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let mut remaining = false;
-            for child in &mut self.children {
-                if child.try_wait()?.is_none() {
-                    remaining = true;
-                }
-            }
-            if !remaining || Instant::now() >= deadline {
-                break;
-            }
-            thread::sleep(POLL);
-        }
-        for child in &mut self.children {
-            if child.try_wait()?.is_none() {
-                child.kill()?;
-            }
-            child.wait()?;
-        }
-        self.children.clear();
-        Ok(())
-    }
 }
 
 fn daemon_command(
@@ -376,10 +514,26 @@ fn spawn_with_launch_fence(
     }
 }
 
-impl Drop for PeerProcesses {
+/// Any early error also cancels background work before owned children are dropped.
+struct CancelOnExit(Arc<AtomicBool>);
+impl Drop for CancelOnExit {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.0.store(true, Ordering::Release);
     }
+}
+
+fn fail_worker(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+    failure: progress::Failure,
+) -> Result<()> {
+    cancelled.store(true, Ordering::Release);
+    processes.stop()?;
+    expire_startup_status(status, failure);
+    publish(directory, status)?;
+    Err(Error::Invalid(failure.message()))
 }
 
 /// Charge every startup phase to the same finite budget, including custody and binary checks.
@@ -448,7 +602,7 @@ mod tests {
 
     #[test]
     fn queued_success_after_original_deadline_is_a_retained_failure() {
-        let progress = readiness::Progress::default();
+        let progress = progress::Progress::default();
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.send(Ok(())).unwrap();
         let failure = observe_readiness(
@@ -481,6 +635,54 @@ mod tests {
             assert_eq!(retained.running_peers, 0);
             assert_eq!(retained.failure, Some(progress.deadline().message()));
         }
+    }
+
+    #[test]
+    fn handoff_channel_preserves_noncopy_payload_and_discards_it_after_deadline() {
+        struct Handoff(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Handoff {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let progress = progress::Progress::default();
+        progress.enter(progress::Phase::Restart);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(Handoff(Arc::clone(&drops)))).ok().unwrap();
+        let success = observe_readiness(
+            &receiver,
+            &progress,
+            Instant::now(),
+            Duration::from_secs(30),
+        );
+        assert!(matches!(success, Some(Ok(_))));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(success);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        sender.send(Ok(Handoff(Arc::clone(&drops)))).ok().unwrap();
+        let late = observe_readiness(
+            &receiver,
+            &progress,
+            Instant::now() - Duration::from_secs(2),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(late, Some(Err(failure)) if failure == progress.deadline()));
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        drop(sender);
+        assert!(
+            matches!(observe_readiness(&receiver, &progress, Instant::now(), Duration::from_secs(30)),
+            Some(Err(failure)) if failure == progress.unconfirmed())
+        );
+    }
+
+    #[test]
+    fn scope_exit_cancels_background_work_without_changing_its_budget() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = CancelOnExit(Arc::clone(&cancelled));
+        }
+        assert!(cancelled.load(Ordering::Acquire));
     }
 
     #[test]
@@ -517,12 +719,8 @@ mod tests {
             .spawn()
             .unwrap();
         let other = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let mut owned = PeerProcesses {
-            children: vec![child],
-        };
-        let mut sentinel = PeerProcesses {
-            children: vec![other],
-        };
+        let mut owned = PeerProcesses::from_children(vec![child]);
+        let mut sentinel = PeerProcesses::from_children(vec![other]);
         drop(ownership);
         assert!(matches!(
             store::acquire(&directory, "runtime.lock", "fixture"),
@@ -535,5 +733,34 @@ mod tests {
         );
         store::acquire(&directory, "runtime.lock", "fixture").unwrap();
         sentinel.stop().unwrap();
+    }
+    #[test]
+    fn later_renewal_receivers_use_their_own_finite_budget_and_reject_late_success() {
+        let progress = progress::Progress::default();
+        progress.enter(progress::Phase::CustodyRenewal);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(())).unwrap();
+        let original_start = Instant::now() - Duration::from_secs(86_400);
+        assert!(original_start.elapsed() > Duration::from_secs(600));
+        let renewal_start = Instant::now();
+        assert!(matches!(
+            observe_readiness(
+                &receiver,
+                &progress,
+                renewal_start,
+                Duration::from_secs(120)
+            ),
+            Some(Ok(()))
+        ));
+        sender.send(Ok(())).unwrap();
+        assert_eq!(
+            observe_readiness(
+                &receiver,
+                &progress,
+                renewal_start - Duration::from_secs(121),
+                Duration::from_secs(120)
+            ),
+            Some(Err(progress.deadline()))
+        );
     }
 }

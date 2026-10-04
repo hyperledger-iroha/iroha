@@ -149,13 +149,14 @@ fn read_node_config(path: &Path, sora: bool) -> actual::Root {
     )
     .expect("open node file")
     .into_parts();
+    let sora_profile = iroha_config::sora_profile::SoraProfileSelection::from_reader(&reader);
     let mut config = reader
         .read_and_complete::<user::Root>()
         .expect("read node file")
         .parse()
         .expect("parse node file");
     if sora {
-        config.apply_sora_profile();
+        sora_profile.apply(&mut config);
     }
     config
 }

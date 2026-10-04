@@ -1768,7 +1768,7 @@ state_test! { sync world_transaction_apply_commits_sorafs_and_da_overlays
     let mut block = world.block();
     let provider_id = ProviderId::new([0x91; 32]);
     let provider_owner = AccountId::new(checked_keypair().public_key().clone());
-    let_row! { provider_authority = ProviderIngestCompletionAuthorityV1::new( provider_owner.clone(), iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 { policy_id: [0x92; 32], revision: 1, predecessor_digest: None, policy_digest: [0x93; 32], }, ) };
+    let_row! { provider_authority = ProviderIngestCompletionAuthorityV1::new(provider_owner.clone(),  provider_owner.clone(), iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 { policy_id: [0x92; 32], revision: 1, predecessor_digest: None, policy_digest: [0x93; 32], }, ) };
     let mut pricing = PricingScheduleRecord::launch_default();
     pricing.notes = Some("WorldTransaction apply regression".to_owned());
     let_row! { credit = ProviderCreditRecord::new( provider_id, Quantity::zero(), Quantity::zero(), Quantity::zero(), Quantity::zero(), 5, 7, Metadata::default(), ) };
@@ -14777,6 +14777,7 @@ fn seed_lane_committee_beacon_for_test(state: &State) -> u64 {
     let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         *state.network_id_ref(),
         pulse_height,
+        &state.ivm_execution_budget(),
     );
     let mut world = state.world.block();
     world
@@ -28739,10 +28740,12 @@ fn parliament_unavailable_beacon_slot_index_rebuilds_and_tracks_removal() {
 
 #[test]
 fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; 32])),
     );
-    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let (_, pulse) =
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
     let roster = (1_u8..=4)
         .map(|marker| {
             KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -28796,10 +28799,12 @@ fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomical
 
 #[test]
 fn parliament_unavailable_slot_rebuild_rejects_finalized_pulse_fail_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32])),
     );
-    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let (_, pulse) =
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
     let roster = (1_u8..=4)
         .map(|marker| {
             KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -30056,11 +30061,13 @@ fn world_block_snapshot_schema_matches_committed_world() {
 
 #[test]
 fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
         ),
         41,
+        &budget,
     );
     let mut world = World::new();
     world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
@@ -30103,11 +30110,13 @@ fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
 
 #[test]
 fn global_beacon_pulse_slot_rebuild_preserves_latest_block_undo_projection() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, added_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB3; 32])),
         ),
         41,
+        &budget,
     );
     let added_slot = (
         iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
@@ -30139,11 +30148,13 @@ fn global_beacon_pulse_slot_rebuild_preserves_latest_block_undo_projection() {
 
 #[test]
 fn global_beacon_pulse_slot_rebuild_rejects_an_invalid_previous_view_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB4; 32])),
         ),
         41,
+        &budget,
     );
     let slot = (
         iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
@@ -30183,11 +30194,13 @@ fn global_beacon_pulse_slot_rebuild_rejects_an_invalid_previous_view_atomically(
 
 #[test]
 fn global_beacon_fixture_installs_the_logical_slot_index() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; 32])),
     );
     let (key_record, pulse) =
-        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
+    assert!(key_record.session.belongs_to(&budget));
     let world = World::new();
     let mut block = world.block();
     block

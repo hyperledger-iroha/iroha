@@ -153,7 +153,13 @@ fn position(height: u64) -> Result<NonZeroUsize, NativeEvidenceError> {
 pub(crate) fn verify_from_state(
     state: &impl StateReadOnly,
     evidence: &Evidence,
-    before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    before_read: impl FnMut(
+        u64,
+        u64,
+    ) -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+    >,
 ) -> Result<VerifiedNativeEvidence, NativeEvidenceError> {
     let invalid = |reason: &str| NativeEvidenceError::Context(reason.into());
     let tip = state

@@ -5,8 +5,10 @@ use crate::test_allocations::allocations_during;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::{
-        AssetBalancePolicy, AssetConfidentialPolicy, ConfidentialPolicyMode,
-        ConfidentialPolicyTransition,
+        AssetBalancePolicy,
+        definition::{
+            AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        },
     },
     prelude::Registrable,
 };

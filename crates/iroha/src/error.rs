@@ -32,7 +32,9 @@ pub enum TransportErrorKind {
 ///
 /// Operations that have not yet migrated to this family remain an explicit
 /// first-release redesign gap; new structured operation errors belong here.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+/// Each error owns its original response or decoder cause. Inspect variants and
+/// their fields; errors are moved rather than cloned or compared as whole values.
+#[derive(Debug, Error)]
 pub enum Error {
     /// The default HTTP transport could not be constructed.
     #[error("HTTP transport construction failed: {details}")]
@@ -128,6 +130,24 @@ pub enum Error {
         operation: &'static str,
         /// Codec or content-negotiation diagnostic.
         details: String,
+    },
+    /// Canonical response decoding failed, preserving the original attempt and its scope.
+    #[error("{operation} canonical response decoding failed: {source}")]
+    CanonicalDecode {
+        /// Canonical operation whose response failed.
+        operation: &'static str,
+        /// Original canonical decoder failure, classified before its scopes unwind.
+        #[source]
+        source: norito::core::DecodeAttemptError,
+    },
+    /// A native finality frame is invalid or its original decoder resources are unavailable.
+    #[error("{operation} native finality decoding failed: {source}")]
+    NativeFinalityDecode {
+        /// Canonical operation whose native source failed.
+        operation: &'static str,
+        /// Original native decoder failure; malformed input and local refusal remain distinct.
+        #[source]
+        source: iroha_data_model::sumeragi::finality::NativeFinalityDecodeError,
     },
     /// A WebSocket peer violated the canonical stream protocol.
     #[error("{operation} stream protocol failed: {details}")]

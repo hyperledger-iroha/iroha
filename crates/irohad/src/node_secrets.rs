@@ -50,6 +50,7 @@ use crate::{
         SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
     },
 };
+use iroha_allocation::AllocationBudget;
 use iroha_config::parameters::{
     actual::{
         DataDir, NodeRole, NodeSecretFile, Root as Config, SoracloudRuntimeMutationSignerBinding,
@@ -60,7 +61,7 @@ use iroha_config::parameters::{
 use iroha_core::beacon::{
     GlobalThresholdBeaconPartialSignerV1,
     credential::{
-        MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
+        GlobalBeaconCredentialImportErrorV1, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
         decode_global_beacon_partial_signer_credential_v1,
         global_beacon_partial_signer_credential_header_v1,
     },
@@ -185,6 +186,48 @@ impl fmt::Display for NodeSecretsErrorV1 {
 
 impl std::error::Error for NodeSecretsErrorV1 {}
 
+/// Failure opening node credentials, retaining host-local memory failures separately.
+#[derive(Debug)]
+pub enum NodeSecretsLoadErrorV1 {
+    /// An unavailable, malformed, or substituted secret.
+    Secret(NodeSecretsErrorV1),
+    /// Admission or construction failed in the original local credential pool.
+    BeaconSession(iroha_core::beacon::GlobalThresholdBeaconSessionError),
+    /// Exact local decoder failure; the original credential has not been rejected.
+    BeaconDecode(norito::core::DecodeAttemptError),
+}
+
+impl From<NodeSecretsErrorV1> for NodeSecretsLoadErrorV1 {
+    fn from(error: NodeSecretsErrorV1) -> Self {
+        Self::Secret(error)
+    }
+}
+
+impl fmt::Display for NodeSecretsLoadErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Secret(error) => error.fmt(formatter),
+            Self::BeaconDecode(_) => {
+                formatter.write_str("node beacon credential decoder is unavailable")
+            }
+            Self::BeaconSession(error) => write!(
+                formatter,
+                "node beacon custody could not be retained: {error}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NodeSecretsLoadErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Secret(error) => Some(error),
+            Self::BeaconSession(error) => Some(error),
+            Self::BeaconDecode(error) => Some(error),
+        }
+    }
+}
+
 /// The runtime secrets a `data_dir` node starts with.
 pub struct NodeSecretsV1 {
     data_dir: DataDir,
@@ -212,9 +255,12 @@ impl NodeSecretsV1 {
     ///
     /// # Errors
     ///
-    /// [`NodeSecretsErrorV1`] for a missing required file, a custody failure, a malformed record
-    /// or a key that differs from its configured public binding.
-    pub fn open(config: &Config) -> Result<Option<Self>, NodeSecretsErrorV1> {
+    /// [`NodeSecretsLoadErrorV1`] for an invalid secret or a failure to retain its public
+    /// transcript in the caller's original pool. All current and pending sessions share it.
+    pub fn open(
+        config: &Config,
+        budget: &AllocationBudget,
+    ) -> Result<Option<Self>, NodeSecretsLoadErrorV1> {
         let Some(data_dir) = config.data_dir.clone() else {
             return Ok(None);
         };
@@ -224,12 +270,12 @@ impl NodeSecretsV1 {
             None if config.soracloud_runtime.production_mode => {
                 return Err(NodeSecretsErrorV1::Unsupported(
                     "soracloud_runtime.production_mode requires soracloud_runtime.submission.signer",
-                ));
+                ).into());
             }
             None => None,
         };
         let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
-        let beacon = load_beacon_signer(&data_dir, &network_id, &config.sumeragi)?;
+        let beacon = load_beacon_signer(&data_dir, &network_id, &config.sumeragi, budget)?;
         Ok(Some(Self {
             data_dir,
             runtime_signer,
@@ -647,7 +693,8 @@ fn load_beacon_signer(
     data_dir: &DataDir,
     network_id: &NetworkId,
     sumeragi: &Sumeragi,
-) -> Result<Option<FileBeaconSignerV1>, NodeSecretsErrorV1> {
+    budget: &AllocationBudget,
+) -> Result<Option<FileBeaconSignerV1>, NodeSecretsLoadErrorV1> {
     const FILE: NodeSecretFile = NodeSecretFile::BeaconCredential;
     let Some(path) = existing_secret_path(data_dir, FILE)? else {
         return Ok(None);
@@ -655,10 +702,11 @@ fn load_beacon_signer(
     if sumeragi.role != NodeRole::Validator {
         return Err(NodeSecretsErrorV1::Unsupported(
             "secrets/beacon.cred is present but sumeragi.role is not `validator`",
-        ));
+        )
+        .into());
     }
     let bytes = load_secret(&path, FILE, 1, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1)?;
-    let beacon = decode_beacon_credential(&bytes, network_id, sumeragi)?;
+    let beacon = decode_beacon_credential(&bytes, network_id, sumeragi, budget)?;
     drop(bytes);
     Ok(Some(beacon))
 }
@@ -667,18 +715,24 @@ fn decode_beacon_credential(
     bytes: &[u8],
     network_id: &NetworkId,
     sumeragi: &Sumeragi,
-) -> Result<FileBeaconSignerV1, NodeSecretsErrorV1> {
+    budget: &AllocationBudget,
+) -> Result<FileBeaconSignerV1, NodeSecretsLoadErrorV1> {
     const FILE: NodeSecretFile = NodeSecretFile::BeaconCredential;
     let mismatch = |detail| NodeSecretsErrorV1::BindingMismatch { file: FILE, detail };
-    let header = global_beacon_partial_signer_credential_header_v1(bytes)
-        .map_err(|_| NodeSecretsErrorV1::Malformed(FILE))?;
+    let header =
+        global_beacon_partial_signer_credential_header_v1(bytes).map_err(|error| match error {
+            iroha_core::beacon::credential::ConsensusThresholdCredentialDecodeErrorV1::Rejected => {
+                NodeSecretsLoadErrorV1::Secret(NodeSecretsErrorV1::Malformed(FILE))
+            }
+            iroha_core::beacon::credential::ConsensusThresholdCredentialDecodeErrorV1::Resource(
+                error,
+            ) => NodeSecretsLoadErrorV1::BeaconDecode(error),
+        })?;
     if header.network_id != *network_id {
-        return Err(mismatch("the credential belongs to another network"));
+        return Err(mismatch("the credential belongs to another network").into());
     }
     if !is_production_runtime_handle(&header.handle) {
-        return Err(mismatch(
-            "the credential handle is not a production provider handle",
-        ));
+        return Err(mismatch("the credential handle is not a production provider handle").into());
     }
     let configured = (
         sumeragi
@@ -697,7 +751,8 @@ fn decode_beacon_credential(
             return Err(mismatch(
                 "the configured sumeragi.global_beacon_partial_signer_provider_* binding differs \
                  from the credential header",
-            ));
+            )
+            .into());
         }
     }
     let custody = decode_global_beacon_partial_signer_credential_v1(
@@ -706,8 +761,19 @@ fn decode_beacon_credential(
         &header.handle,
         header.revision,
         header.policy_digest,
+        budget,
     )
-    .map_err(|_| NodeSecretsErrorV1::Malformed(FILE))?;
+    .map_err(|error| match error {
+        GlobalBeaconCredentialImportErrorV1::Credential(_) => {
+            NodeSecretsLoadErrorV1::Secret(NodeSecretsErrorV1::Malformed(FILE))
+        }
+        GlobalBeaconCredentialImportErrorV1::DecodeResource(error) => {
+            NodeSecretsLoadErrorV1::BeaconDecode(error)
+        }
+        GlobalBeaconCredentialImportErrorV1::Session(error) => {
+            NodeSecretsLoadErrorV1::BeaconSession(error)
+        }
+    })?;
     Ok(FileBeaconSignerV1 {
         handle: header.handle,
         revision: header.revision,

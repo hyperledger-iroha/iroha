@@ -394,13 +394,11 @@ async fn a_cursor_that_does_not_advance_is_rejected() {
         .try_collect::<Vec<_>>()
         .await
         .expect_err("stalled cursor");
-    assert_eq!(
-        error,
-        Error::ResponseBinding {
-            operation: "collections.nfts",
-            field: "next_cursor",
-        }
-    );
+    let Error::ResponseBinding { operation, field } = &error else {
+        panic!("unexpected collection error: {error:?}");
+    };
+    assert_eq!(*operation, "collections.nfts");
+    assert_eq!(*field, "next_cursor");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -491,14 +489,21 @@ async fn bodies_without_an_envelope_keep_the_raw_http_error() {
             .list_page(&Collection::Domains, &ListQuery::new())
             .await
             .expect_err("rejected");
+        let Error::Http {
+            operation,
+            status,
+            retry_after,
+            body: response_body,
+        } = &error
+        else {
+            panic!("unexpected collection error for {media_type:?} {body}: {error:?}");
+        };
+        assert_eq!(*operation, "collections.domains");
+        assert_eq!(*status, 502);
+        assert_eq!(*retry_after, None);
         assert_eq!(
-            error,
-            Error::Http {
-                operation: "collections.domains",
-                status: 502,
-                retry_after: None,
-                body: body.as_bytes().to_vec(),
-            },
+            response_body.as_slice(),
+            body.as_bytes(),
             "{media_type:?} {body}"
         );
         assert_eq!(error.code(), None);

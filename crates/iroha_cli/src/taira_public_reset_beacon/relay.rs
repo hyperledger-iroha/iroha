@@ -1,7 +1,9 @@
 //! One-owner-per-seat genesis DKG relay for the signed public-reset deployment.
 
 use super::*;
-use iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1;
+use iroha_core::beacon::{
+    GlobalThresholdBeaconDkgSnapshotV1, RetainedGlobalThresholdBeaconDkgFinalizationV1,
+};
 use iroha_data_model::{
     consensus::GlobalThresholdBeaconKeySessionV1, sumeragi_finality::SumeragiFinalityVerifier,
 };
@@ -59,6 +61,8 @@ impl SeatChild {
         deadline: Instant,
     ) -> Result<Self> {
         ensure_local_deadline(Some(deadline))?;
+        let credential_memory =
+            configured_beacon_credential_memory(config, Path::new("genesis-seat-config.toml"))?;
         // TODO: Recovery must scrub an unconsumed per-seat config copy after a
         // supervisor crash before its daemon child opens FD 198. The signed
         // network attempt remains consumed even when this cleanup is needed.
@@ -108,8 +112,10 @@ impl SeatChild {
         };
         let mut command = Command::new(program);
         command
-            .arg("beacon-bootstrap")
-            .arg("provision-genesis-seat")
+            .args(beacon_native_args(
+                credential_memory,
+                "provision-genesis-seat",
+            ))
             .args(proof_args)
             .arg("--signer-index")
             .arg(signer_index.to_string())
@@ -236,7 +242,6 @@ pub(super) struct GenesisRelay {
     children: Vec<SeatChild>,
     verifier: SumeragiFinalityVerifier,
     proofs: Vec<SumeragiFinalityProof>,
-    assembled: Option<GlobalThresholdBeaconKeySessionV1>,
     deadline: Instant,
 }
 
@@ -246,6 +251,7 @@ impl GenesisRelay {
         first_finality: &SumeragiFinalityProof,
         mut verifier: SumeragiFinalityVerifier,
         deadline: Instant,
+        budget: &iroha_core::state::AllocationBudget,
     ) -> Result<Self> {
         if first_finality.block_header.height().get() != 1 {
             return Err(eyre!("genesis relay requires authenticated h1 finality"));
@@ -257,11 +263,11 @@ impl GenesisRelay {
             state: GlobalThresholdBeaconDkgStateV1::new(
                 session,
                 &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+                budget,
             )?,
             children: Vec::with_capacity(4),
             verifier,
             proofs: Vec::with_capacity(3),
-            assembled: None,
             deadline,
         })
     }
@@ -318,14 +324,18 @@ impl GenesisRelay {
         }
     }
 
-    fn broadcast_public<T: NoritoSerialize>(&mut self, value: &T) -> Result<()> {
+    fn broadcast_public<T: NoritoSerialize>(
+        children: &mut [SeatChild],
+        value: &T,
+        deadline: Instant,
+    ) -> Result<()> {
         let bytes = norito::encode_canonical(value)?;
-        for child in &mut self.children {
+        for child in children {
             write_frame(
                 &mut child.public_writer,
                 &bytes,
                 usize::try_from(PUBLIC_LIMIT)?,
-                self.deadline,
+                deadline,
             )?;
         }
         Ok(())
@@ -350,19 +360,21 @@ impl GenesisRelay {
             {
                 return Err(eyre!("genesis publication is not one exact signed seat"));
             }
-            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), &crypto)?;
-            self.state.record_recipient_key(
-                self.session.start_height,
-                snapshot.recipient_keys[0].clone(),
+            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+                snapshot,
+                &crypto,
+                self.state.allocation_budget(),
             )?;
+            self.state
+                .record_recipient_key(self.session.start_height, &snapshot.recipient_keys[0])?;
             self.state.record_dealer_commitment(
                 self.session.start_height,
-                snapshot.dealer_commitments[0].clone(),
+                &snapshot.dealer_commitments[0],
                 &crypto,
             )?;
         }
         let snapshot = self.state.public_snapshot()?;
-        self.broadcast_public(&snapshot)
+        Self::broadcast_public(&mut self.children, snapshot.record(), self.deadline)
     }
 
     pub(super) fn require_running(&mut self) -> Result<()> {
@@ -416,14 +428,18 @@ impl GenesisRelay {
                     "genesis dealer did not publish every exact encrypted edge"
                 ));
             }
-            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), &crypto)?;
+            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+                snapshot,
+                &crypto,
+                self.state.allocation_budget(),
+            )?;
             for edge in &snapshot.encrypted_shares {
                 self.state
-                    .record_encrypted_share(self.session.commitments_end_height, edge.clone())?;
+                    .record_encrypted_share(self.session.commitments_end_height, edge)?;
             }
         }
         let snapshot = self.state.public_snapshot()?;
-        self.broadcast_public(&snapshot)
+        Self::broadcast_public(&mut self.children, snapshot.record(), self.deadline)
     }
 
     pub(super) fn acceptances(&mut self) -> Result<()> {
@@ -448,27 +464,26 @@ impl GenesisRelay {
                     "genesis recipient did not sign every exact edge acceptance"
                 ));
             }
-            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), &crypto)?;
+            let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+                snapshot,
+                &crypto,
+                self.state.allocation_budget(),
+            )?;
             for acceptance in &snapshot.share_acceptances {
-                self.state.record_share_acceptance(
-                    self.session.deliveries_end_height,
-                    acceptance.clone(),
-                )?;
+                self.state
+                    .record_share_acceptance(self.session.deliveries_end_height, acceptance)?;
             }
         }
         let assembled = self
             .state
-            .finalize(self.session.acceptances_end_height, &crypto)?
-            .clone();
-        self.broadcast_public(&assembled)?;
-        self.assembled = Some(assembled);
-        Ok(())
+            .finalize(self.session.acceptances_end_height, &crypto)?;
+        Self::broadcast_public(&mut self.children, assembled, self.deadline)
     }
 
     pub(super) fn finish(
         mut self,
     ) -> Result<(
-        GlobalThresholdBeaconKeySessionV1,
+        RetainedGlobalThresholdBeaconDkgFinalizationV1,
         Vec<PathBuf>,
         Vec<SumeragiFinalityProof>,
     )> {
@@ -477,10 +492,9 @@ impl GenesisRelay {
                 "genesis relay lacks complete authenticated h2–h4 finality"
             ));
         }
-        let assembled = self
-            .assembled
-            .take()
-            .ok_or_else(|| eyre!("genesis DKG was not finalized"))?;
+        // Consume the reducer only after authenticated completion. This moves
+        // its exact finalized graph and original ledger; no raw DTO clone escapes.
+        let assembled = self.state.into_finalized()?;
         let mut providers = Vec::with_capacity(4);
         for child in &mut self.children {
             loop {
@@ -506,7 +520,7 @@ impl GenesisRelay {
                 &bytes,
                 norito::canonical_decode_limits(bytes.len()),
             )?;
-            if public != assembled {
+            if &public != assembled.record() {
                 return Err(eyre!("genesis seat finalized another public transcript"));
             }
             let credential = child.attempt_path.join(CREDENTIAL_FILE);
@@ -523,7 +537,7 @@ impl GenesisRelay {
             providers.push(child.attempt_path.join("provider.json"));
             child.complete = true;
         }
-        Ok((assembled, providers, self.proofs.clone()))
+        Ok((assembled, providers, self.proofs))
     }
 }
 

@@ -3292,7 +3292,9 @@ mod tests {
             .expect("frame malformed scope payload");
             assert!(matches!(
                 norito::decode_from_bytes::<MusubiProviderAttestationClockScopeV1>(&invalid),
-                Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+                Err(norito::Error::InvalidValue {
+                    context: "hash lsb"
+                })
             ));
         }
     }
@@ -3345,7 +3347,12 @@ mod tests {
         let error = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
             .expect_err("unmarked hash must fail before constructing an owned scope");
         assert!(
-            matches!(error, norito::Error::Message(ref message) if message == "invalid hash lsb"),
+            matches!(
+                error,
+                norito::Error::InvalidValue {
+                    context: "hash lsb"
+                }
+            ),
             "{error:?}"
         );
     }

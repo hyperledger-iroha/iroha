@@ -6,7 +6,7 @@ use super::*;
 use crate::state::WorldReadOnly as _;
 use crate::sumeragi::{
     commitment::execution_commitment,
-    payload::{self, Assembly},
+    payload,
     schedule::{ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
 };
 use iroha_data_model::{
@@ -187,6 +187,102 @@ fn outcome(
         after_next,
     }
 }
+/// Build a certificate transcript proposal without claiming native State execution.
+/// Parent participation comes from the existing full pinned-prefix verifier; production
+/// payload assembly continues to require its independently published native execution tip.
+fn transcript_proposal(
+    state: &State,
+    history: &[iroha_data_model::block::SharedSignedBlock],
+    transaction: crate::tx::AcceptedTransaction<'static>,
+    time: Duration,
+) -> SignedBlock {
+    let parent = history.last().unwrap();
+    let height = parent.header().height().get() + 1;
+    let hashes = history.iter().map(|block| block.hash()).collect::<Vec<_>>();
+    let view = state.view();
+    assert_eq!(view.canonical_history().height(), 0);
+    assert!(view.native_execution_tip().is_none());
+    let reader = CertifiedChain::from_frames(view.chain_id(), view.network_id(), &hashes, history)
+        .unwrap()
+        .with_attestation_verifier(&TestAttestations);
+    let certified = reader.certified(height - 1).unwrap();
+    assert_eq!(certified.block_hash(), parent.hash());
+    let effects = (height > 2).then(|| {
+        assert_eq!(certified.verification(), QcVerification::Verified);
+        let original = certified.certificate().unwrap().commit_qc();
+        assert!(!original.is_empty());
+        assert!(original.len() <= iroha_data_model::consensus::PARENT_SERVICE_COMMIT_QC_MAX_BYTES);
+        iroha_data_model::consensus::NposConsensusEffects {
+            parent_service_commit_qc: Some(original.to_vec()),
+            ..Default::default()
+        }
+    });
+    let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
+    let route = routing
+        .inputs(view.world())
+        .execution_route(&transaction, height)
+        .unwrap()
+        .unwrap();
+    let context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+        iroha_data_model::block::ExternalExecutionContext::new(
+            transaction.hash_as_entrypoint(),
+            route.lane_id,
+            route.dataspace_id,
+        ),
+    ]);
+    let confidential =
+        crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
+    let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(time);
+    let proposal =
+        crate::block::BlockBuilder::new_with_time_source(vec![transaction.clone()], time_source)
+            .chain(0, Some(parent))
+            .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                height,
+            )))
+            .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+            .with_execution_context(Some(context))
+            .with_npos_consensus_effects(effects)
+            .with_network_input_time_floor(time)
+            .unwrap()
+            .into_unsigned_proposal();
+    assert_eq!(
+        crate::block::ValidBlock::sumeragi_block_time(
+            &proposal,
+            parent.header().creation_time(),
+            Duration::from_millis(1),
+        )
+        .unwrap(),
+        time,
+    );
+    if height <= 3 {
+        let assembled = payload::assemble(
+            state,
+            payload::Assembly {
+                parent,
+                view: 0,
+                cadence: Duration::from_millis(1),
+            },
+            &[transaction],
+        );
+        if height == 2 {
+            assert_eq!(
+                proposal.encode_wire().unwrap(),
+                assembled.unwrap().encode_wire().unwrap(),
+                "the first transcript proposal preserves every original assembly field"
+            );
+        } else {
+            assert!(
+                matches!(assembled, Err(payload::PayloadError::ParentService(message))
+                    if message.contains("Canonical history height 1")
+                        && message.contains("ending at `0`")),
+                "production assembly must refuse the absent committed parent history"
+            );
+        }
+    }
+    proposal
+}
+
 fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
@@ -214,9 +310,9 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
     assert_eq!(current.authorization.last_height, 6);
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
-    // This certificate-transcript fixture does not execute NPoS transitions, but the real
-    // payload builder still needs the original signed root-routing metadata. Project only
-    // that exact genesis parameter into its authoring World; absence never implies Global.
+    // This certificate-transcript fixture does not execute NPoS transitions. Its test-only
+    // proposal builder uses the original signed root-routing metadata. Project only that
+    // exact genesis parameter into its routing World; absence never implies Global.
     let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis).unwrap();
     let routing_world = World::new();
     {
@@ -292,80 +388,7 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
         )
         .unwrap();
         let entry_hash = transaction.hash_as_entrypoint();
-        // This is a certificate transcript, not executed State. Retain the
-        // original proposal fields and signed-root routing through their normal
-        // owners without claiming a committed parent-service source.
-        let view = world.view();
-        let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
-        let route = routing
-            .inputs(view.world())
-            .execution_route(&transaction, height)
-            .unwrap()
-            .expect("signed-root transcript route");
-        let confidential =
-            crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
-        assert_eq!(
-            view.height(),
-            0,
-            "transcript authoring does not execute State"
-        );
-        drop(view);
-        let mut block = crate::block::BlockBuilder::new_with_time_source(
-            vec![transaction.clone()],
-            time_source,
-        )
-        .chain(0, Some(parent.block()))
-        .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-            &world.nexus_snapshot(),
-            height,
-        )))
-        .with_confidential_features((!confidential.is_empty()).then_some(confidential))
-        .with_execution_context(Some(
-            iroha_data_model::block::BlockExecutionContextBundle::new(vec![
-                iroha_data_model::block::ExternalExecutionContext::new(
-                    entry_hash,
-                    route.lane_id,
-                    route.dataspace_id,
-                ),
-            ]),
-        ))
-        .with_network_input_time_floor(block_time)
-        .expect("bounded transcript time")
-        .into_unsigned_proposal();
-        assert_eq!(
-            crate::block::ValidBlock::sumeragi_block_time(
-                &block,
-                parent.block().header().creation_time(),
-                Duration::from_millis(1),
-            )
-            .unwrap(),
-            block_time,
-        );
-        if height <= 3 {
-            let assembled = payload::assemble(
-                &world,
-                Assembly {
-                    parent: parent.block(),
-                    view: 0,
-                    cadence: Duration::from_millis(1),
-                },
-                &[transaction],
-            );
-            if height == 2 {
-                assert_eq!(
-                    block.encode_wire().unwrap(),
-                    assembled.unwrap().encode_wire().unwrap(),
-                    "the first transcript proposal preserves every original assembly field"
-                );
-            } else {
-                assert!(
-                    matches!(assembled, Err(payload::PayloadError::ParentService(message))
-                        if message.contains("Canonical history height 1")
-                            && message.contains("ending at `0`")),
-                    "production assembly must refuse the absent committed parent history"
-                );
-            }
-        }
+        let mut block = transcript_proposal(&world, &history, transaction, block_time);
         assert_eq!(
             block.execution_context().unwrap().external,
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -373,7 +396,7 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
                 crate::sumeragi::lanes::routing::GLOBAL_LANE,
                 metadata.sumeragi_context.root_scope.dataspace_id(),
             )],
-            "transcript proposal retains the exact original signed-root route",
+            "certificate transcript commits the exact signed-root route",
         );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(

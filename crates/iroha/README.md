@@ -195,6 +195,9 @@ use the same capability through `iroha::blocking::Client`, without `.await`.
 The operation selects one response representation, enforces the context deadline
 and rejects oversized or ambiguously labelled responses. Transport errors retain
 their I/O category in `TransportErrorKind`; HTTP errors retain their bounded body.
+Canonical committee responses retain `DecodeAttemptError` and native finality
+errors as owned sources, distinguishing malformed bytes from an enclosing resource
+refusal. Inspect error variants and fields; the top-level error is move-only.
 
 Bind an operator with `client.operator_client(operator_key_pair)?`, then use
 `operator.consensus().diagnostics().await?` for queue pressure, NPoS election state
@@ -273,6 +276,14 @@ Subscription preparation returns a typed `SubscriptionDraft`; its payload varian
 owns `Box<TransactionPayload>`, and its instruction variant owns the instruction
 list. Its JSON representation retains the `kind` and `value` fields. Preparation
 futures are `Send`, and signing remains an explicit account operation.
+
+The gateway-compliance control methods on `Client` share the canonical HTTP projections and
+request-idempotency binding in `iroha_torii_shared::sorafs_gateway_compliance_api`. Status, stage,
+acknowledge and promote each use one bounded account-signed request under the existing deadline,
+without retries. Signed catalogs and acknowledgements use the sole `sorafs_manifest` protocol
+owner. Caller-selected trust is not network authentication, and returned status/action fields are
+runtime observations, not current native eligibility or package-read authority. Original signing,
+genuine reload observation and crash recovery belong to the managed publisher.
 
 ## Examples
 

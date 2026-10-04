@@ -13,6 +13,8 @@ use std::{
 mod fixed_frame;
 struct TrackingAllocator;
 thread_local! {
+    static REFUSE_SIZE: Cell<usize> = const { Cell::new(0) };
+    static MATCHES_BEFORE_REFUSAL: Cell<usize> = const { Cell::new(usize::MAX) };
     static TRACKING: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
     static REQUESTED_ALLOCATION_BYTES: Cell<usize> = const { Cell::new(0) };
@@ -23,6 +25,19 @@ thread_local! {
 static ALLOCATOR: TrackingAllocator = TrackingAllocator;
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if REFUSE_SIZE.with(|size| size.get() == layout.size())
+            && MATCHES_BEFORE_REFUSAL.with(|remaining| {
+                let current = remaining.get();
+                if current == 0 {
+                    true
+                } else {
+                    remaining.set(current - 1);
+                    false
+                }
+            })
+        {
+            return core::ptr::null_mut();
+        }
         TRACKING.with(|tracking| {
             if tracking.get() {
                 ALLOCATIONS.with(|allocations| allocations.set(allocations.get() + 1));
@@ -357,3 +372,15 @@ fn json_value_parser_charge_covers_physical_graph_requests_at_leaf_and_split_bou
 }
 #[path = "exact_field_streaming_allocations/nominal_text.rs"]
 mod nominal_text;
+
+#[path = "exact_field_streaming_allocations/prepared_scope.rs"]
+mod prepared_scope;
+
+#[path = "exact_field_streaming_allocations/field_destination.rs"]
+mod field_destination;
+
+#[path = "exact_field_streaming_allocations/budget_context.rs"]
+mod budget_context;
+
+#[path = "exact_field_streaming_allocations/prepared_sequence.rs"]
+mod prepared_sequence;

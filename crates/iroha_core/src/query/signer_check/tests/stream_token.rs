@@ -76,7 +76,8 @@ fn bind(
     state: &Arc<State>,
     instruction: &MutateSorafsStreamTokenAuthority,
 ) -> Result<BoundNativeCheckV1, Error> {
-    bind_signed_check_v1(
+    bind_fixture(
+        &state,
         round,
         NativeCustodyCheckRefV1::StreamToken(instruction),
         &state.view().chain_id().to_string(),
@@ -100,10 +101,11 @@ fn role11_check_binding_is_exact_and_cannot_cross_purpose() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotion,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Invalid),
     );
 
@@ -114,10 +116,11 @@ fn role11_check_binding_is_exact_and_cannot_cross_purpose() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::StreamToken,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::NotApplied),
     );
 }
@@ -130,7 +133,8 @@ fn role11_check_binding_rejects_substitutions_and_non_check_actions() {
     let mut changed = check.clone();
     changed.request.expected_control_digest = [0x99; 32];
     assert_eq!(
-        bind_signed_check_v1(
+        bind_fixture(
+            &state,
             &mut round,
             NativeCustodyCheckRefV1::StreamToken(&check),
             &state.view().chain_id().to_string(),
@@ -148,7 +152,8 @@ fn role11_check_binding_rejects_substitutions_and_non_check_actions() {
     let mut wrong_floor = floor();
     wrong_floor.height += 1;
     assert_eq!(
-        bind_signed_check_v1(
+        bind_fixture(
+            &state,
             &mut round,
             NativeCustodyCheckRefV1::StreamToken(&check),
             &state.view().chain_id().to_string(),

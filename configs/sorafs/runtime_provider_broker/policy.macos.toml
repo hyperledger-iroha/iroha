@@ -1,0 +1,4 @@
+# Public fields of [runtime_provider_broker], without a section header.
+endpoint_path = "/private/var/iroha/run/runtime-provider-broker-v1.sock"
+observer_operation_timeout_ms = 15000
+credential_max_memory_bytes = 67108864

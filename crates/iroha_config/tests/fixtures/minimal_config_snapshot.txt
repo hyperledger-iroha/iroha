@@ -154,6 +154,8 @@ Root {
         },
     },
     runtime_provider_broker: RuntimeProviderBroker {
+        observer_operation_timeout: 15s,
+        credential_max_memory_bytes: 67108864,
         endpoint_path: RuntimeProviderBrokerEndpointPath(
             "<platform-default broker endpoint>",
         ),
@@ -438,6 +440,7 @@ Root {
                     65536,
                 ),
             },
+            https: None,
             norito_rpc: NoritoRpcTransport {
                 enabled: true,
                 require_mtls: false,
@@ -802,7 +805,7 @@ Root {
                 67108864,
             ),
             retained_carrier_shell_bytes: 268435456,
-            consensus_evidence_preparation_bytes: 266155872,
+            consensus_evidence_preparation_bytes: 441187328,
             consensus_stake_index_bytes: 67108864,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,

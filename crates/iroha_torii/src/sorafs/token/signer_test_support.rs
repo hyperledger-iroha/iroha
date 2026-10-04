@@ -154,7 +154,11 @@ impl SignerFinalityV1 for SimulatedFinality {
     ) -> Result<super::signer_completed_finality::PendingCompletedFinalityV1, StreamTokenIssuerError>
     {
         self.require_completed_proof_source()?;
-        Ok(super::signer_completed_finality::PendingCompletedFinalityV1::Simulated)
+        Ok(
+            super::signer_completed_finality::PendingCompletedFinalityV1::Simulated {
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
+            },
+        )
     }
     fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError> {
         if !self.completed_proof_source_available.load(Ordering::SeqCst) {

@@ -151,7 +151,6 @@ fn executed_history_denial_precedes_cold_body_decode_and_projection() {
         state::{StateReadOnly as _, World},
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
-    use iroha_data_model::query::error::QueryExecutionFail;
     for corrupt in [false, true] {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
@@ -183,14 +182,16 @@ fn executed_history_denial_precedes_cold_body_decode_and_projection() {
         let denied = source.executed_block(nonzero!(2_usize), |blocks, bytes| {
             charged.push((blocks, bytes));
             assert_eq!((blocks, bytes), (1, tip_len));
-            Err(QueryExecutionFail::GasBudgetExceeded)
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ))
         });
         let Err(crate::execution_attempt::ExecutionAttemptError::Deferred(local)) = denied else {
             panic!("original source allowance must defer before reading");
         };
         assert_eq!(
             local.reason(),
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+            ivm::error::ExecutionDeferral::CanonicalHistoryCapacity
         );
         assert_eq!(charged, vec![(1, tip_len)]);
         assert_eq!(

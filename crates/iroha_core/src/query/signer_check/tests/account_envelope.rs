@@ -251,7 +251,9 @@ fn native_signed_envelope_owner_rejects_sidecars_extras_signatures_and_other_ent
     ] {
         assert_eq!(
             final_promotion_native_signed_entry_frame_v1(&entry),
-            Err(FinalPromotionAccountObservationErrorV1::Transaction)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                FinalPromotionAccountObservationErrorV1::Transaction
+            ))
         );
     }
     assert_eq!(original, payload(0));
@@ -275,7 +277,9 @@ fn native_signed_envelope_owner_uses_the_same_exact_complete_frame_ceiling() {
             if delta <= 0 {
                 Ok(exact)
             } else {
-                Err(FinalPromotionAccountObservationErrorV1::Transaction)
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    FinalPromotionAccountObservationErrorV1::Transaction,
+                ))
             }
         );
     }
@@ -309,7 +313,9 @@ fn native_signed_envelope_rejects_genuinely_signed_genesis_and_missing_lifetime(
         );
         assert_eq!(
             final_promotion_native_signed_entry_frame_v1(&TransactionEntrypoint::External(signed)),
-            Err(FinalPromotionAccountObservationErrorV1::Transaction)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                FinalPromotionAccountObservationErrorV1::Transaction
+            ))
         );
     }
 }
@@ -348,4 +354,25 @@ fn borrowed_signed_frame_preserves_canonical_bytes_and_original_resource_refusal
         "owned signed-frame decoding retains the encoding scope's cumulative debit"
     );
     assert_eq!(signed, original);
+}
+
+#[test]
+fn public_native_signed_frame_preserves_original_local_codec_refusal() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::query::final_promotion_account_custody::observation::final_promotion_native_signed_entry_frame_v1;
+    let entry = real_entry(&payload(0));
+    let expected = norito::encode_canonical(&entry).unwrap();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let error = norito::with_decode_limits_scope(zero, || {
+        final_promotion_native_signed_entry_frame_v1(&entry)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, ExecutionAttemptError::Deferred(_)),
+        "public frame helper retains actual codec refusal: {error:?}"
+    );
+    assert_eq!(
+        final_promotion_native_signed_entry_frame_v1(&entry).unwrap(),
+        expected
+    );
 }

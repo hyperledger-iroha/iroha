@@ -922,6 +922,7 @@ fn fixture_provider_attestations(
                 provider_id,
                 completed_by: owner.clone(),
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner.clone(),
                     owner,
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [policy_byte; 32],

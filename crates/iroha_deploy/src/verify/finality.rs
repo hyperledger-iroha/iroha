@@ -237,7 +237,7 @@ pub enum FinalityError {
     Genesis(#[from] iroha_data_model::sumeragi_finality::GenesisReadError),
     /// Original checkpoint decoder fields; the caller owns retry and format-limit policy.
     #[error("native checkpoint decoder resource: {0}")]
-    DecodeResource(norito::core::DecodeResourceError),
+    DecodeResource(#[source] norito::core::DecodeAttemptError),
     /// A zero challenge permits replay.
     #[error("the attestation challenge must be nonzero")]
     ZeroChallenge,

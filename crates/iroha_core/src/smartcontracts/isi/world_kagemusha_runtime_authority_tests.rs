@@ -106,6 +106,30 @@ fn parliament_runtime_preload_does_not_choose_governed_publication() {
             norito::encode_canonical(state.world.kagemusha_verifier_registry.view().get()).unwrap(),
             expected_bytes
         );
+        let (authority_observation, authority_current, authority_predecessor) = {
+            let pair = state
+                .world
+                .kagemusha_verifier_registry
+                .try_committed_borrow()
+                .unwrap();
+            let current_bytes = norito::encode_canonical(pair.current()).unwrap();
+            let predecessor_bytes = pair
+                .undo()
+                .as_ref()
+                .map(|value| norito::encode_canonical(value).unwrap());
+            assert_eq!(current_bytes, expected_bytes);
+            assert_eq!(
+                predecessor_bytes.as_ref().unwrap(),
+                &norito::encode_canonical(&predecessor).unwrap()
+            );
+            (
+                pair.release_observation().unwrap(),
+                current_bytes,
+                predecessor_bytes,
+            )
+        };
+        // RejectAll and the genuine predecessor-loaded (now stale) cache retain
+        // exactly the same canonical current and predecessor governed authority.
         let next_header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 1).unwrap(),
             None,
@@ -159,6 +183,24 @@ fn parliament_runtime_preload_does_not_choose_governed_publication() {
             let mut next = state.block(next_header);
             let mut tx = next.transaction();
             check_transaction(&mut tx, standby.release_id(), false, true);
+        }
+        assert!(authority_observation.try_matches_current().unwrap());
+        {
+            let pair = state
+                .world
+                .kagemusha_verifier_registry
+                .try_committed_borrow()
+                .unwrap();
+            assert_eq!(
+                norito::encode_canonical(pair.current()).unwrap(),
+                authority_current
+            );
+            assert_eq!(
+                pair.undo()
+                    .as_ref()
+                    .map(|value| norito::encode_canonical(value).unwrap()),
+                authority_predecessor
+            );
         }
         state
             .block(next_header)

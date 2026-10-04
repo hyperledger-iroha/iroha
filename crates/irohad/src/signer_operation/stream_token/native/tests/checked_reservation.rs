@@ -214,12 +214,10 @@ fn checked_context_rejects_a_genuine_capability_after_its_original_deadline() {
         .unwrap();
     let signed = source
         .transactions
-        .sign(prepared.instruction(), true)
+        .sign(prepared.instruction(), true, prepared.deadline())
         .unwrap();
-    let pending = prepared
-        .bind_signed_transaction(signed.transaction.clone())
-        .unwrap();
-    assert!(fixture.commit_signed(signed.transaction, now_ms()));
+    let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
+    assert!(fixture.commit_signed(signed, now_ms()));
     let checked = pending
         .verify_finalized(|| {
             source.time().map_err(|_| {

@@ -42,6 +42,7 @@ request resumes its pending journal; a completed request returns its receipt onl
 authenticated current alias and artifact readback. Changed input cannot replace unresolved
 work. Slot and journal locks serialize concurrent writers; recovery binds the journal location
 to its authenticated target and exact commit. Both fresh deployment and recovery require the
-caller's scope and fee review before execution.
+caller's scope and fee review before execution. Execution failures show their public cause and
+exact recovery journal together, while preserving the native error type for callers.
 
 Focused validation: `cargo test -p musubi --lib deployment_runtime`.

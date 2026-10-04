@@ -9,7 +9,7 @@ fn expected_header_policy() -> String {
     table.push_str("| Field | Policy |\n");
     table.push_str("|---|---|\n");
     table.push_str("| version_major | 1 |\n");
-    table.push_str("| version_minor | 0 or 1 (deployable CNTR contracts require 1) |\n");
+    table.push_str("| version_minor | 1 (sole current header for every profile) |\n");
     table.push_str(&format!(
         "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}) |\n"
     ));

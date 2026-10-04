@@ -679,4 +679,3 @@ impl Kura {
 thread_local! {
     static FAIL_ATOMIC_WRITE_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
-

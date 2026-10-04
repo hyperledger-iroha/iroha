@@ -159,19 +159,32 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
     ] {
         let expected = synthetic_executed_commitment(&block);
         let wire = block.encode_wire().expect("fixture wire");
-        let response = capture_request(
-            mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+        let received = wire.clone();
+        let received_address = received.as_ptr();
+        let received_capacity = received.capacity();
+        let response_slot = Mutex::new(Some(mk_response(
+            StatusCode::OK,
+            received,
+            Some(APPLICATION_NORITO),
+        )));
+        let response = with_mock_http(
+            move |_| {
+                Ok(response_slot
+                    .lock()
+                    .expect("response slot")
+                    .take()
+                    .expect("exactly one HTTP request"))
+            },
             |transport| {
                 let client = client.clone().with_test_http_transport(transport);
                 mark_data_model_compatible(&client);
                 client.get_canonical_executed_block_wire(height, &committed, &expected)
             },
         )
-        .0;
-        assert_eq!(
-            response.expect("exact Network sources and separate output trees verify"),
-            wire
-        );
+        .expect("exact Network sources and separate output trees verify");
+        assert_eq!(response, wire);
+        assert_eq!(response.as_ptr(), received_address);
+        assert_eq!(response.capacity(), received_capacity);
         for wrong_length in [false, true] {
             let mut wrong = expected;
             if wrong_length {

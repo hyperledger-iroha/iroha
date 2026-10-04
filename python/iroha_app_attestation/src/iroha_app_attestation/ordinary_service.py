@@ -17,6 +17,7 @@ from .ordinary_provider import OrdinaryCredentialRequest, OrdinaryRawAttestation
 from .service import _decode_base64, _decode_hex32, _unique_object
 from .ordinary_refresh_service import PATH as REFRESH_PATH, handle_refresh
 from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
+from .revocation import RevocationUnavailable
 
 SCHEMA = "iroha.kagemusha.ordinary-app-credential-request.v1"
 PATH = "/v1/kagemusha/ordinary-app-credentials"
@@ -121,6 +122,9 @@ class OrdinaryCredentialService:
         try:
             certificate = (self._issuer.accept_raw(request) if path == RAW_PATH
                            else self._issuer.issue(request))
+        except RevocationUnavailable:
+            # Unknown revocation status is not a rejected credential; retry.
+            return 503, b'{"error":"issuer_unavailable"}'
         except AttestationRejected:
             return 409, b'{"error":"credential_rejected"}'
         except Exception:

@@ -322,13 +322,17 @@ impl WithdrawalLifecycle {
         )?;
         let replay =
             submit_signed(&self.owner.client, self.withdrawal(&before)?.into(), false).await?;
+        ensure!(
+            replay.hash() != transaction.hash(),
+            "withdrawal replay must be a new signed transaction carrying the exact consumed plan"
+        );
         let after_replay = self.observe(observation_intent).await?;
         let replay_fee = actual_fee(
             &after,
             &after_replay,
             &replay,
             false,
-            None,
+            Some("validator has no retained positive stake custody"),
             self.escrow.definition(),
         )?;
         assert_effects(
@@ -413,6 +417,10 @@ fn actual_fee(
     rejection: Option<&str>,
     xor: &AssetDefinitionId,
 ) -> Result<Quantity> {
+    ensure!(
+        applied || rejection.is_some(),
+        "rejected monetary work must identify its exact executed business failure"
+    );
     let start = before.prepared.observed_height;
     let end = after.prepared.observed_height;
     ensure!(
@@ -465,13 +473,13 @@ fn actual_fee(
                     "withdrawal rejected for a different reason than the retained obligation"
                 );
             }
-            let Some(receipt) = output.result.nexus_fee_receipt() else {
-                ensure!(
-                    !applied,
-                    "applied monetary transaction omitted actual real-XOR fee settlement"
-                );
-                return Ok(Quantity::zero());
-            };
+            // Every interval here contains authored, separately funded work. The
+            // exact business-error check above excludes admission and fee-charge
+            // failures: successful work and these business rejections both settle
+            // their original Nexus fee basis through the canonical fee overlay.
+            let receipt = output.result.nexus_fee_receipt().ok_or_else(|| {
+                eyre!("executed monetary transaction omitted actual real-XOR fee settlement")
+            })?;
             ensure!(
                 receipt.source_id == *Hash::from(input.hash_as_entrypoint()).as_ref()
                     && receipt.block_height == block.height()

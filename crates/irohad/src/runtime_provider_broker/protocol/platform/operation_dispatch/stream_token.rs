@@ -50,19 +50,3 @@ pub(super) fn stream_token_sign_or_recover(
     })?;
     Ok(receipt.bytes().to_vec())
 }
-
-pub(super) fn stream_token_observe(
-    state: &BrokerServerStateV1,
-    request: &OperationRequestV1,
-) -> Result<Vec<u8>, BrokerError> {
-    let requalify =
-        || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
-    let query = decode_stream_token_observer_request(&request.binding, &request.payload)?;
-    let observer = broker_backend!(state, stream_token_state_observer);
-    let reply = observer
-        .observe(&query)
-        .map_err(|error| stream_token_backend_error(error, false))?;
-    let encoded = encode_stream_token_observer_reply(&query, &reply)?;
-    requalify()?;
-    Ok(encoded)
-}

@@ -153,6 +153,7 @@ from iroha_torii_client.governance_proposals import (
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
     GovernanceValidationFeePayoutBinding,
+    GovernanceValidationFeeRewardCustody,
     GovernanceValidationFeePolicy,
 )
 
@@ -11509,6 +11510,7 @@ __all__ = [
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
     "GovernanceValidationFeePayoutBinding",
+    "GovernanceValidationFeeRewardCustody",
     "GovernanceValidationFeePolicy",
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
@@ -15703,6 +15705,48 @@ class ToriiClient(
             return response
 
         raise RuntimeError("exhausted retries without receiving a response")
+
+    def prepare_public_lane_plan(self, request, xor_asset_definition_id: str):
+        """Read exact staking signing inputs under immutable network and explicit XOR pins.
+
+        No transaction is signed or submitted. The observation carries no state
+        proof; execution rechecks every effect and expiry. Transport dispatches
+        once, rejects redirects, byte-bounds success/error streams, and closes
+        after completion or failure. Requests enforces connect/read inactivity;
+        it does not enforce an absolute deadline across blocking streamed reads.
+        """
+        # TODO: qualify an absolute operation deadline in the canonical Requests
+        # owner before marking this route production-qualified. Chunk checks or
+        # a timer calling Response.close cannot interrupt every blocking read.
+        from .validator_staking import (
+            StakingPreparationRequestV1, StakingPreparationV1,
+            encode_staking_preparation_frame_v1, decode_staking_preparation_frame_v1,
+            validate_staking_preparation_v1,
+        )
+        from .address import asset_definition_id_to_bytes
+        network = self._require_local_signing_context("staking preparation").network_id
+        asset_definition_id_to_bytes(xor_asset_definition_id)
+        if type(request) is not StakingPreparationRequestV1:
+            raise TypeError("staking preparation requires an exact typed request")
+        body = encode_staking_preparation_frame_v1(request)
+        response = self._request("POST", "/v1/nexus/staking/prepare",
+            headers={"Content-Type": "application/x-norito", "Accept": "application/x-norito"},
+            data=body, stream=True, allow_retry=False, allow_redirects=False)
+        try:
+            if response.status_code == 200 and response.headers.get("Content-Type", "").strip().lower() != "application/x-norito":
+                raise ValueError("staking preparation requires application/x-norito")
+            raw = _read_bounded_response_body(response, 256 * 1024, "staking preparation")
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) != len(raw):
+                raise ValueError("staking preparation response length mismatch")
+            if response.status_code != 200:
+                error = requests.HTTPError(f"staking preparation HTTP {response.status_code}", response=response)
+                error.staking_preparation_body = raw
+                raise error
+            prepared = decode_staking_preparation_frame_v1(StakingPreparationV1, raw)
+            return validate_staking_preparation_v1(prepared, request, network, xor_asset_definition_id)
+        finally:
+            response.close()
 
     def _apply_backoff(self, current_delay: float) -> float:
         delay = current_delay

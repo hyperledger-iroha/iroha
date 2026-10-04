@@ -64,11 +64,11 @@ def _copy_fixture_tree(destination: Path) -> Path:
 
 def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
-    assert stats.fixtures == 305
-    assert stats.tests == 605
+    assert stats.fixtures == 308
+    assert stats.tests == 616
 
 
-def test_child_modules_seal_literal_and_both_canonical_pool_consumers() -> None:
+def test_child_modules_seal_literal_and_canonical_pool_consumers() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     compiler = payload["source_files"][0]
     assert compiler["test_modules"] == [
@@ -138,7 +138,7 @@ def test_child_module_file_is_required(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mutation", ["owner", "duplicate"])
 def test_shared_pool_fixture_requires_each_exact_test_consumer(tmp_path: Path, mutation: str) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
-    child = tmp_path / checker.EXPECTED_TEST_MODULES[checker.EXPECTED_SOURCES[0]][1][1]
+    child = tmp_path / dict(checker.EXPECTED_TEST_MODULES[checker.EXPECTED_SOURCES[0]])["rematerialized"]
     source = child.read_text(encoding="utf-8")
     if mutation == "owner":
         source = source.replace(

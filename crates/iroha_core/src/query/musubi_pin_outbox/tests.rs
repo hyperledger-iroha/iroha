@@ -159,7 +159,9 @@ fn native_readback_proves_authority_wide_absence_and_complete_present_row() {
             Instant::now() + Duration::from_secs(60)
         )
         .err(),
-        Some(Error::CurrentState)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::CurrentState
+        ))
     );
     let mut changed_row = f.expected();
     let MusubiPinOutboxCheckExpectationV1::Present(row) = &mut changed_row.expected else {
@@ -173,7 +175,9 @@ fn native_readback_proves_authority_wide_absence_and_complete_present_row() {
             Instant::now() + Duration::from_secs(60)
         )
         .err(),
-        Some(Error::CurrentState)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::CurrentState
+        ))
     );
 }
 
@@ -184,7 +188,7 @@ fn early_read_retains_original_paid_check_until_same_transaction_is_applied() {
     let deadline = pending.deadline();
     let original = exact(&pending);
     let failure = pending.verify_finalized().err().unwrap();
-    assert_eq!(failure.error(), Error::NotApplied);
+    assert_eq!(failure.rejection(), Some(Error::NotApplied));
     let pending = failure.into_pending();
     assert_eq!(pending.deadline(), deadline);
     assert_eq!(exact(&pending), original);
@@ -208,17 +212,35 @@ fn native_source_and_quota_refusals_retain_original_bytes_deadline_and_challenge
     let failure = norito::with_decode_limits_scope(zero, || pending.verify_finalized())
         .err()
         .unwrap();
-    assert_eq!(failure.error(), Error::Finality);
+    assert!(matches!(
+        failure.error(),
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+    ));
     let pending = failure.into_pending();
     assert_eq!(exact(&pending), original);
     assert_eq!(pending.deadline(), deadline);
+    let source_height = f.chain.height();
+    let original_qc = f
+        .chain
+        .committed(source_height)
+        .block()
+        .commit_certificate()
+        .unwrap()
+        .commit_qc()
+        .to_vec();
     f.chain
-        .corrupt_local_quorum_for_test(f.chain.height(), Signers::BelowQuorum);
+        .corrupt_local_quorum_for_test(source_height, Signers::BelowQuorum);
     let failure = pending.verify_finalized().err().unwrap();
-    assert_eq!(failure.error(), Error::Finality);
+    assert_eq!(failure.rejection(), Some(Error::Finality));
     let pending = failure.into_pending();
+    // Restore exactly the original stored QC; do not manufacture a replacement certificate.
     f.chain
-        .corrupt_local_quorum_for_test(f.chain.height(), Signers::Quorum);
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            core::num::NonZeroUsize::new(usize::try_from(source_height).unwrap()).unwrap(),
+            Some(original_qc),
+        )
+        .unwrap();
     assert_eq!(exact(&pending), original);
     assert_eq!(pending.deadline(), deadline);
     let verified = pending.verify_finalized().unwrap();
@@ -226,7 +248,10 @@ fn native_source_and_quota_refusals_retain_original_bytes_deadline_and_challenge
         norito::with_decode_limits_scope(zero, || verified.consume_current(f.chain.state()))
             .err()
             .unwrap();
-    assert_eq!(failure.error(), Error::Finality);
+    assert!(matches!(
+        failure.error(),
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+    ));
     let pending = failure.into_pending();
     assert_eq!(pending.deadline(), deadline);
     assert_eq!(exact(&pending), original);
@@ -250,25 +275,25 @@ fn current_row_and_publication_changes_require_fresh_native_verification() {
     let verified = pending.verify_finalized().unwrap();
     f.log();
     let failure = verified.consume_current(f.chain.state()).err().unwrap();
-    assert_eq!(failure.error(), Error::CurrentState);
+    assert_eq!(failure.rejection(), Some(Error::CurrentState));
     let pending = failure.into_pending();
     assert_eq!(pending.deadline(), deadline);
     assert_eq!(exact(&pending), original);
     let verified = pending.verify_finalized().unwrap();
     f.advance([0x72; 32]);
     let failure = verified.consume_current(f.chain.state()).err().unwrap();
-    assert_eq!(failure.error(), Error::CurrentState);
+    assert_eq!(failure.rejection(), Some(Error::CurrentState));
     let failure = failure.into_pending().verify_finalized().err().unwrap();
     assert_eq!(
-        failure.error(),
-        Error::CurrentState,
+        failure.rejection(),
+        Some(Error::CurrentState),
         "fresh proof cannot reinterpret the original Absent expectation"
     );
     let pending = f.applied();
     f.advance([0x73; 32]);
     assert_eq!(
-        pending.verify_finalized().err().unwrap().error(),
-        Error::CurrentState,
+        pending.verify_finalized().err().unwrap().rejection(),
+        Some(Error::CurrentState),
         "complete original Present row remains fixed"
     );
 }
@@ -279,10 +304,11 @@ fn equal_byte_foreign_views_and_recipient_states_never_supply_original_authority
     let pending = f.applied();
     let view = f.chain.state().view();
     let foreign_view = f.chain.state().view();
+    let mut original_bound = Some(pending.bound);
     let mut proof = PreparedCheckExecutionV1::new(
         &view,
         NativeCustodyCheckPurposeV1::MusubiPinOutbox,
-        pending.bound,
+        &mut original_bound,
         &pending.prepared.round,
     )
     .unwrap();
@@ -292,7 +318,12 @@ fn equal_byte_foreign_views_and_recipient_states_never_supply_original_authority
         .next()
         .unwrap()
         .unwrap();
-    assert_eq!(proof.consume(&receipt), Err(NativeCheckErrorV1::Finality));
+    assert_eq!(
+        proof.consume(&receipt),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            NativeCheckErrorV1::Finality
+        ))
+    );
     drop(receipt);
     drop(foreign);
     drop(proof);
@@ -313,8 +344,8 @@ fn equal_byte_foreign_views_and_recipient_states_never_supply_original_authority
             .err()
             .unwrap();
     assert_eq!(
-        failure.error(),
-        Error::CurrentState,
+        failure.rejection(),
+        Some(Error::CurrentState),
         "recipient identity precedes history/decoder admission"
     );
     let pending = failure.into_pending();
@@ -339,7 +370,10 @@ fn exact_binding_and_original_deadline_cannot_be_replaced() {
     changed.challenge[0] ^= 1;
     let changed = f.sign(changed.into());
     assert_eq!(
-        prepared.bind_signed_transaction(changed).err(),
+        prepared
+            .bind_signed_transaction(changed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
     let pending = f.applied();
@@ -349,7 +383,7 @@ fn exact_binding_and_original_deadline_cannot_be_replaced() {
     let expired = pending.deadline();
     for _ in 0..2 {
         let failure = pending.verify_finalized().err().unwrap();
-        assert_eq!(failure.error(), Error::Expired);
+        assert_eq!(failure.rejection(), Some(Error::Expired));
         pending = failure.into_pending();
         assert_eq!(pending.deadline(), expired);
         assert_eq!(exact(&pending), original);
@@ -367,7 +401,9 @@ fn original_floor_and_global_network_chain_are_independently_required() {
             Instant::now() + Duration::from_secs(60)
         )
         .err(),
-        Some(Error::Finality)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Finality
+        ))
     );
     f.log();
     let prepared = begin_musubi_pin_outbox_check_v1(
@@ -410,21 +446,24 @@ fn original_floor_and_global_network_chain_are_independently_required() {
             Instant::now() - Duration::from_secs(1)
         )
         .err(),
-        Some(Error::Expired)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Expired
+        ))
     );
 }
 
 #[test]
-fn completed_proof_wire_retention_refusal_returns_exact_original_bound() {
+fn completed_proof_retains_exact_original_backing_without_a_second_allocation() {
     let mut f = Fixture::new();
     let pending = f.applied();
     let original = exact(&pending);
     let deadline = pending.deadline();
     let view = f.chain.state().view();
+    let mut original_bound = Some(pending.bound);
     let mut proof = PreparedCheckExecutionV1::new(
         &view,
         NativeCustodyCheckPurposeV1::MusubiPinOutbox,
-        pending.bound,
+        &mut original_bound,
         &pending.prepared.round,
     )
     .unwrap();
@@ -433,17 +472,19 @@ fn completed_proof_wire_retention_refusal_returns_exact_original_bound() {
         proof.consume(&receipt.unwrap()).unwrap();
     }
     let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
-    let (bound, error) =
-        match norito::with_decode_limits_scope(zero, || proof.finish_retaining_attempt()) {
-            Err(failure) => failure,
-            Ok(_) => panic!("the complete copied wire requires the original allocation allowance"),
-        };
-    assert_eq!(error, NativeCheckErrorV1::Execution);
+    let cut = match norito::with_decode_limits_scope(zero, || proof.finish()) {
+        Ok(success) => success,
+        Err(_) => panic!("metadata-only finish must not allocate a second canonical frame"),
+    };
+    assert_ne!(cut.check_block_hash(), [0; 32]);
+    drop(cut);
     drop(reader);
     drop(view);
     let pending = PendingMusubiPinOutboxCheckV1 {
         prepared: pending.prepared,
-        bound,
+        bound: original_bound
+            .take()
+            .expect("finish retained original slot"),
     };
     assert_eq!(pending.deadline(), deadline);
     assert_eq!(exact(&pending), original);
@@ -581,6 +622,68 @@ fn genuine_private_root_with_native_floor_and_equal_chain_label_is_refused() {
             Instant::now() + Duration::from_secs(60)
         )
         .err(),
-        Some(Error::Finality)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Finality
+        ))
     );
+}
+
+mod binding_custody;
+
+#[test]
+fn original_state_verification_refusal_retains_exact_frame_and_signed_graph() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use iroha_allocation::AllocationRefusal;
+    // Views can reclaim old published State generations from this same pool. Keep those
+    // real EBR owners alive so only this Check's admissions change the exact counters below.
+    let _retirement_pin = crossbeam_epoch::pin();
+    let mut fixture = Fixture::new();
+    let pending = fixture.applied();
+    let budget = fixture.chain.state().ivm_execution_budget();
+    let retained = budget.reserved_bytes();
+    let deadline = pending.deadline();
+    let challenge = pending.prepared.instruction.challenge;
+    let frame = pending.bound.canonical_external().as_ptr();
+    let signed = match pending.signed_transaction().instructions() {
+        iroha_data_model::transaction::Executable::Instructions(instructions) => {
+            instructions.as_ptr()
+        }
+        _ => panic!("native instruction owner"),
+    };
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - retained)
+        .unwrap();
+    let failure = pending.verify_finalized().err().unwrap();
+    assert!(
+        matches!(failure.error(), ExecutionAttemptError::Deferred(original)
+        if matches!(original.allocation_refusal(), Some(AllocationRefusal::Capacity { .. })))
+    );
+    assert!(failure.is_retryable());
+    assert_eq!(failure.deadline(), deadline);
+    drop(held);
+    assert_eq!(budget.reserved_bytes(), retained);
+    let pending = failure.into_pending();
+    assert!(Arc::ptr_eq(&pending.prepared.state, fixture.chain.state()));
+    assert_eq!(pending.prepared.instruction.challenge, challenge);
+    assert_eq!(pending.bound.canonical_external().as_ptr(), frame);
+    match pending.signed_transaction().instructions() {
+        iroha_data_model::transaction::Executable::Instructions(instructions) => {
+            assert_eq!(instructions.as_ptr(), signed)
+        }
+        _ => panic!("same native instruction owner"),
+    }
+    let readback = pending
+        .verify_finalized()
+        .unwrap()
+        .consume_current(fixture.chain.state())
+        .unwrap();
+    assert_eq!(
+        readback.canonical_external().as_ptr(),
+        frame,
+        "successful discharge takes exactly the originally borrowed frame"
+    );
+    assert_eq!(budget.reserved_bytes(), retained);
+    let frame_len = readback.canonical_external().len();
+    drop(readback);
+    assert_eq!(budget.reserved_bytes(), retained - frame_len);
 }

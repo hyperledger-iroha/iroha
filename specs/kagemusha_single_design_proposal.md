@@ -673,6 +673,8 @@ unchanged in enrollment evidence. The Send statement binds the exact signed
 Request and verification dependencies carried in Payment by digest; its receipt
 binds that statement and proof. No unauthenticated extension can change the
 canonical Payment digest while preserving its authorization.
+The exact G1 field layouts, transcripts and bounds are recorded in the
+[wallet wire record](kagemusha_wallet_wire_v1.md).
 
 Text transport is `kgm1:` plus unpadded base64url; text/framing expansion is
 additional carrier overhead, not hidden in the binary budget.

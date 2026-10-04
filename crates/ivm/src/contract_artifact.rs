@@ -1,11 +1,11 @@
 //! Native preparation adapter for the shared artifact-admission crate.
 use crate::{
-    ProgramMetadata, SyscallPolicy,
+    SyscallPolicy,
     ivm::{
         decode_literal_table, prepare_instruction_stream, validate_indexed_literal_instructions,
     },
     ivm_cache::global_get,
-    metadata::{EmbeddedContractInterfaceV1, ParsedProgramMetadata},
+    metadata::EmbeddedContractInterfaceV1,
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
 pub use ivm_artifact_admission::{
@@ -90,20 +90,16 @@ impl PreparedContract {
         verified: VerifiedContractArtifact,
         budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<Self, ContractArtifactError> {
-        // Reparse only to recover native preparation ranges. Consensus policy
-        // and all artifact-derived outputs above came from the shared verifier.
-        let parsed = ProgramMetadata::parse(artifact.as_ref()).map_err(|error| {
-            ContractArtifactError::preparation("metadata reparse after shared admission", error)
-        })?;
-        ensure_shared_offsets_match(&parsed, &verified)?;
-        let decoded = decode_instruction_stream(artifact, &parsed, budget)?;
-        let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+        // The verifier just admitted these same borrowed bytes. Carry its exact ranges through
+        // native preparation instead of allocating and decoding the CNTR graph a second time.
+        let decoded = decode_instruction_stream(artifact, verified.code_offset, budget)?;
+        let instruction_region = artifact.get(verified.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
         let literal_table = decode_literal_table(
             artifact.as_ref(),
-            parsed.header_len,
-            parsed.literal_section,
+            verified.header_len,
+            verified.literal_section(),
             SyscallPolicy::AbiV1,
             budget,
         )
@@ -121,9 +117,13 @@ impl PreparedContract {
                 )
             },
         )?;
-        let instruction_entry_pc = u64::try_from(parsed.prefix_len()).map_err(|_| {
-            ContractArtifactError::invalid("executable stream offset does not fit a VM address")
-        })?;
+        let instruction_entry_pc = verified
+            .code_offset
+            .checked_sub(verified.header_len)
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or_else(|| {
+                ContractArtifactError::invalid("executable stream offset does not fit a VM address")
+            })?;
         let prepared_program = prepare_instruction_stream(
             instruction_region,
             decoded.as_ref(),
@@ -174,23 +174,12 @@ impl PreparedContract {
         .map_err(|error| ContractArtifactError::preparation("contract indexing", error))
     }
 }
-fn ensure_shared_offsets_match(
-    parsed: &ParsedProgramMetadata,
-    verified: &VerifiedContractArtifact,
-) -> Result<(), ContractArtifactError> {
-    if parsed.header_len != verified.header_len || parsed.code_offset != verified.code_offset {
-        return Err(ContractArtifactError::invalid(
-            "native metadata ranges diverge from shared artifact admission",
-        ));
-    }
-    Ok(())
-}
 fn decode_instruction_stream(
     artifact: &[u8],
-    parsed: &ParsedProgramMetadata,
+    code_offset: usize,
     budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<crate::ivm_cache::DecodedStream, ContractArtifactError> {
-    let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+    let instruction_region = artifact.get(code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
     })?;
     let decoded = match budget {
@@ -381,4 +370,52 @@ mod koto_test_harness_tests {
             "a production artifact must never become a test-harness capability"
         );
     }
+    #[test]
+    fn retired_header_rejects_compiler_harness_and_contract_without_granting_capability() {
+        let outputs = compile_suite();
+        let runtime = outputs.runtime.as_ref().unwrap();
+        let budget = iroha_allocation::AllocationBudget::new(16 * 1024 * 1024);
+        let mut vm = IVM::try_new_with_memory_budget(100_000, &budget).unwrap();
+        vm.set_register(7, 701);
+        let before = (
+            vm.pc(),
+            vm.remaining_gas(),
+            vm.code_hash(),
+            budget.reserved_bytes(),
+        );
+        budget.set_limit_bytes(0);
+        for output in [&outputs.suite, runtime] {
+            assert_eq!(output.artifact[5], 1);
+            let mut retired = output.artifact.clone();
+            retired[5] = 0;
+            let expected = VMError::UnsupportedProgramVersion { major: 1, minor: 0 };
+            assert_eq!(IVM::validate_program(&retired), Err(expected.clone()));
+            assert_eq!(vm.load_program(&retired), Err(expected));
+            assert_eq!(
+                (
+                    vm.pc(),
+                    vm.remaining_gas(),
+                    vm.code_hash(),
+                    budget.reserved_bytes()
+                ),
+                before
+            );
+            assert_eq!(vm.register(7), 701);
+            let error = prepare_contract_with_memory_budget(&retired, &budget).unwrap_err();
+            assert!(error.local_vm_error().is_none());
+            assert!(error.to_string().contains("program version 1.0"), "{error}");
+            let error =
+                prepare_koto_test_contract(Arc::from(retired), output.contract_interface().clone())
+                    .err()
+                    .expect("retired harness cannot grant a capability");
+            assert!(error.local_vm_error().is_none());
+            assert!(error.to_string().contains("program version 1.0"), "{error}");
+        }
+        drop(vm);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }
+
+#[cfg(test)]
+#[path = "contract_artifact/range_tests.rs"]
+mod range_tests;

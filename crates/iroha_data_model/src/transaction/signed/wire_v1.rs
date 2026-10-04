@@ -1,14 +1,9 @@
-//! UNLINKED DRAFT: one counted fixed-V1 payload for ordinary and admitted destinations.
+//! Sole counted fixed-V1 writer for ordinary and caller-admitted transaction destinations.
 //!
-//! This is the existing version byte followed by its default-layout bare Norito payload, not
-//! a header-framed transaction or a native external-entrypoint frame. A plan borrows the original
-//! value and measures a real serialization pass. Its count is only an output extent: it neither
-//! admits nor funds allocations made inside a concrete transaction's serializer.
-//!
-//! TODO: Link together with the inherent API and replace encode_default_layout_versioned in
-//! signed.rs for BOTH SignedTransaction and TransactionEntrypoint. Their ordinary Vec encoder,
-//! EncodeVersioned implementation and canonical decode re-encoding must use this same primitive.
-//! Audit and fund nested serializer scratch before any original-State custody producer is live.
+//! Both APIs encode the same version byte and default-layout bare Norito payload. Counting and
+//! writing traverse the canonical serializer; no second format or fallback decoder is retained.
+//! The output extent does not itself fund nested serializer scratch. Inherited Norito limits
+//! apply to both passes, and the ordinary vector debits its output before fallible allocation.
 
 use norito::core::{DecodeFlagsGuard, Encoder, Error, SerializePayload};
 use std::io::Write;
@@ -49,11 +44,18 @@ impl<'a> WireV1Plan<'a> {
         norito::core::serialize_to_writer_exact(&self.payload, output, self.length)
     }
 
-    /// Materialize the ordinary uncharged API's vector through the same exact writer.
+    /// Materialize this exact wire under a caller-selected complete byte ceiling.
     ///
-    /// This allocation is deliberately not represented as an original-State charged allocation.
-    /// Callers needing admitted storage supply their real destination to write_to instead.
-    pub(super) fn into_vec(self) -> Result<Vec<u8>, Error> {
+    /// Debit the inherited cumulative codec allowance before allocating the output. This does
+    /// not establish an original-State pool owner; such callers supply their admitted writer.
+    ///
+    /// # Errors
+    /// Preserves serializer/resource errors and refuses an extent above `maximum` before allocation.
+    pub fn into_vec_bounded(self, maximum: usize) -> Result<Vec<u8>, Error> {
+        if self.length > maximum {
+            return Err(Error::LengthMismatch);
+        }
+        norito::core::reserve_decode_allocation(self.length)?;
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(self.length)
@@ -62,6 +64,10 @@ impl<'a> WireV1Plan<'a> {
             })?;
         self.write_to(&mut bytes)?;
         Ok(bytes)
+    }
+
+    pub(super) fn into_vec(self) -> Result<Vec<u8>, Error> {
+        self.into_vec_bounded(usize::MAX)
     }
 }
 

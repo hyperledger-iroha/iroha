@@ -3,6 +3,8 @@
 //! The public Torii `SoraFS` upload route is deliberately not used here. Every request
 //! targets one fixed publication-specific route, carries a bounded canonical Norito
 //! authorization approved by the configured Iroha account controller, and rejects redirects.
+//! The same crate owns explicit native seed, replay-journal and clock provisioning. Local seed
+//! custody validates exact bytes; the daemon separately authenticates finalized registration.
 use base64::Engine as _;
 use iroha::client::Client;
 use iroha_crypto::{KeyPair, PublicKey, SignatureOf};
@@ -64,14 +66,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
+mod native_pin_session;
+pub use native_pin_session::NativeMusubiPinSessionV1;
 mod publication_clock;
 mod publication_journal;
-#[cfg(unix)]
-fn publication_filesystem_owner_probe(root: &std::path::Path) -> std::io::Result<u32> {
-    use std::os::unix::fs::MetadataExt as _;
-    let probe = tempfile::tempfile_in(root)?;
-    Ok(probe.metadata()?.uid())
-}
+mod seed_staging;
+pub use seed_staging::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod seed_test_support;
 pub use publication_clock::{
     DurableMusubiPublicationServiceClockOpenErrorV1, DurableMusubiPublicationServiceClockV1,
 };
@@ -800,6 +802,32 @@ pub struct MusubiStorageCoordinationRequestV1 {
     pub finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1,
 }
 impl MusubiStorageCoordinationRequestV1 {
+    /// Digest the exact canonical request using the storage-authorization domain.
+    /// # Errors
+    /// Refuses invalid or over-limit request encoding.
+    pub fn canonical_request_digest(
+        &self,
+    ) -> Result<[u8; 32], MusubiPublicationRuntimeTransportErrorV1> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        self.validate()?;
+        let invalid = || {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_STORAGE_COORDINATION_REQUEST_INVALID",
+            )
+        };
+        let length = norito::canonical_frame_len(self).map_err(|_| invalid())?;
+        if length > MAX_CONTROL_REQUEST_BYTES {
+            return Err(invalid());
+        }
+        norito::core::reserve_decode_allocation(length).map_err(|_| invalid())?;
+        let bytes = norito::core::to_bytes_bounded(self, length).map_err(|_| invalid())?;
+        request_digest(
+            MusubiPublicationRuntimeOperationV1::StorageCoordination,
+            &bytes,
+        )
+    }
+
     /// Validate every immutable storage-coordination input.
     ///
     /// # Errors
@@ -869,11 +897,11 @@ impl MusubiStorageCoordinationRequestV1 {
 )]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiStorageLocationDispositionV1")]
 pub enum MusubiStorageLocationDispositionV1 {
-    /// Coordinator has a pin/order and at least one finalized provider completion.
+    /// Coordinator observed the required finalized provider completions for this pin/order.
     #[codec(index = 0)]
     NeedsRegistration {
-        /// Provider-signed parsed-bundle attestations for the current order.
-        provider_attestations: Vec<MusubiProviderBundleVerificationAttestationV1>,
+        /// Sorted distinct completed provider identities. The publisher acquires their originals.
+        completed_providers: Vec<ProviderId>,
         /// Exact current archive location-set revision for compare-and-set.
         expected_location_revision: u64,
     },
@@ -895,6 +923,8 @@ pub enum MusubiStorageLocationDispositionV1 {
 pub struct MusubiStorageCoordinationResponseV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
+    /// Exact domain-separated digest of the complete authenticated coordination request.
+    pub request_digest: [u8; 32],
     /// Current finalized authoritative archive record observed by the coordinator.
     pub archive: MusubiArchiveRecordV1,
     /// Stable location identity reserved for this archive.
@@ -916,7 +946,7 @@ impl MusubiStorageCoordinationResponseV1 {
     /// # Errors
     ///
     /// Returns a stable permanent error when the request is invalid or any archive, location,
-    /// provider-attestation, pin, replication, or expiry binding differs.
+    /// completed-provider, pin, replication, or expiry binding differs.
     #[allow(
         clippy::too_many_lines,
         reason = "the closed storage response validator keeps all cross-field protocol invariants adjacent"
@@ -944,6 +974,7 @@ impl MusubiStorageCoordinationResponseV1 {
                 )
             })?;
         if self.version != 1
+            || self.request_digest != request.canonical_request_digest()?
             || self.archive.registration_projection()
                 != request.finalized_registration.registration.clone()
             || self.location_id.is_zero()
@@ -969,7 +1000,7 @@ impl MusubiStorageCoordinationResponseV1 {
         }
         match &self.disposition {
             MusubiStorageLocationDispositionV1::NeedsRegistration {
-                provider_attestations,
+                completed_providers,
                 expected_location_revision,
             } => {
                 if *expected_location_revision == 0
@@ -979,43 +1010,23 @@ impl MusubiStorageCoordinationResponseV1 {
                         .location_ids
                         .binary_search(&self.location_id)
                         .is_ok()
-                    || provider_attestations.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
-                    || provider_attestations.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+                    || completed_providers.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
+                    || completed_providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
                 {
                     return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                         "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
                     ));
                 }
-                let mut previous = None;
-                for attestation in provider_attestations {
-                    attestation
-                        .verify(&attestation.payload.binding)
-                        .map_err(|_| {
-                            MusubiPublicationRuntimeTransportErrorV1::permanent(
-                                "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
-                            )
-                        })?;
-                    let binding = &attestation.payload.binding;
-                    if binding.network_id != request.network_id
-                        || binding.archive_id != request.commitment.archive_id()
-                        || binding.replication_order != self.replication_order
-                        || binding.bundle_digest != request.commitment.bundle_digest
-                        || binding.descriptor_digest != request.commitment.descriptor_digest
-                        || binding.source_tree_digest != request.commitment.source_tree_digest
-                        || binding.semantic_release_manifest_digest
-                            != request
-                                .staging_receipt
-                                .payload
-                                .binding
-                                .semantic_release_manifest_digest
-                        || binding.verification_lock_digest != request.verification_lock_digest
-                        || previous.is_some_and(|provider| provider >= binding.provider_id)
-                    {
-                        return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                            "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
-                        ));
-                    }
-                    previous = Some(binding.provider_id);
+                if completed_providers
+                    .iter()
+                    .any(|provider| provider.as_bytes() == &[0; 32])
+                    || completed_providers
+                        .windows(2)
+                        .any(|pair| pair[0] >= pair[1])
+                {
+                    return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
+                        "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
+                    ));
                 }
             }
             MusubiStorageLocationDispositionV1::Registered(location) => {
@@ -1640,6 +1651,9 @@ pub trait MusubiSeedIngressBackendV1: Send {
         car: &[u8],
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
 }
+mod storage_authorization;
+pub use storage_authorization::VerifiedStorageCoordinationRequestV1;
+
 /// Backend coordinating permanent pins, replication, and finalized provider completions.
 pub trait MusubiStorageCoordinationBackendV1: Send {
     /// Recheck current finalized registration before replaying a cached response.
@@ -1662,6 +1676,9 @@ pub trait MusubiStorageCoordinationBackendV1: Send {
     /// later snapshot. The authenticated publisher request binds those bytes but is not itself a
     /// finality proof. Mutable location fields are returned from the backend's current read and
     /// are deliberately excluded from the historical registration evidence.
+    /// The verified request carries this call's original UTC and monotonic bounds. Retain the
+    /// first accepted operation's finite lifetime and configured spending limits before paid
+    /// work; retries cannot replace them. Recheck the original limits before every effect.
     ///
     /// # Errors
     ///
@@ -1669,7 +1686,7 @@ pub trait MusubiStorageCoordinationBackendV1: Send {
     /// finalized evidence retrieval cannot complete.
     fn coordinate_storage(
         &mut self,
-        request: &MusubiStorageCoordinationRequestV1,
+        request: &VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>;
 }
 /// Backend performing complete provider-specific archive and bundle verification.
@@ -2432,8 +2449,9 @@ impl MusubiPublicationPrivateServiceV1 {
                         MusubiPublicationServiceErrorCodeV1::MediaTypeInvalid,
                     ));
                 }
+                let observation_started = std::time::Instant::now();
                 let current_time_ms = self.sample_time()?;
-                self.handle_storage_coordination(request, current_time_ms)
+                self.handle_storage_coordination(request, current_time_ms, observation_started)
             }
             MusubiPublicationPrivateRouteV1::ProviderReadback => {
                 if request.content_type != APPLICATION_NORITO
@@ -2646,6 +2664,7 @@ impl MusubiPublicationPrivateServiceV1 {
         &mut self,
         http: MusubiPublicationPrivateHttpRequestV1<'_>,
         current_time_ms: u64,
+        observation_started: std::time::Instant,
     ) -> Result<Vec<u8>, MusubiPublicationServiceErrorV1> {
         let decoded = decode_canonical_body::<MusubiStorageCoordinationRequestV1>(
             http.body,
@@ -2752,24 +2771,30 @@ impl MusubiPublicationPrivateServiceV1 {
             }
             MusubiPublicationJournalBeginV1::Execute => {}
         }
-        let result = self
-            .storage
-            .coordinate_storage(&decoded.value)
-            .map_err(|error| {
+        let result = VerifiedStorageCoordinationRequestV1::from_verified(
+            &decoded.value,
+            digest,
+            &authorization.value,
+            current_time_ms,
+            observation_started,
+        )
+        .and_then(|verified| {
+            self.storage.coordinate_storage(&verified).map_err(|error| {
                 service_backend_error(
                     MusubiPublicationServiceErrorCodeV1::StorageCoordinationUnavailable,
                     error,
                 )
             })
-            .and_then(|response| {
-                response.validate_for(&decoded.value).map_err(|_| {
-                    MusubiPublicationServiceErrorV1::permanent(
-                        MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid,
-                    )
-                    .integrity_failure(MusubiIntegritySurfaceV1::Other)
-                })?;
-                encode_service_response(&response)
-            });
+        })
+        .and_then(|response| {
+            response.validate_for(&decoded.value).map_err(|_| {
+                MusubiPublicationServiceErrorV1::permanent(
+                    MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid,
+                )
+                .integrity_failure(MusubiIntegritySurfaceV1::Other)
+            })?;
+            encode_service_response(&response)
+        });
         self.finish_attempt(attempt.key, digest, result)
     }
     fn handle_provider_readback(
@@ -4413,5 +4438,8 @@ fn remote_transport_error(
 mod tests {
     include!("tests/service_journal.rs");
     include!("tests/private_service.rs");
+    mod storage_authorization {
+        include!("tests/storage_authorization.rs");
+    }
     pub mod wire_fixtures;
 }

@@ -10,7 +10,7 @@ use their actual owners directly.
 | VM and compiler | IVM and artifact admission use the compiler-independent ABI/surface. `kotodama_lang` owns compilation; `kotodama_toolchain` owns compiler tools. Core uses the compiler only for tests. Torii's contract-source API and JavaScript's `compileKotodama` API directly consume the compiler, so compiler edits can rebuild the daemon and JS host graphs. |
 | Privacy verification | `iroha_core_privacy` owns state-free engines, profiles, proof records and verification. Core retains committed-state admission and authenticated authority construction. Fixtures and negative source controls follow the moved implementation. |
 | Timed OVN | `iroha_core_timed_ovn` owns public evidence, archive/casting data and TLE verification. Core retains state reads, authenticated constructors, opaque authorizations and signing. Public data construction does not grant authority. |
-| Executable metadata | Thin `irohad` and `iroha_cli` packages provide compiled metadata to `irohad_lib` and `iroha_cli_lib`, whose extern crate names remain `irohad` and `iroha_cli`. Build scripts belong to executables. Version, source and wire identity diagnostics use the injected metadata. The CLI library always includes Core/node, crypto/consensus and Norito/node-codec; `cli` and `dev-tools` select binary targets. |
+| Executable metadata | Thin `irohad` and `iroha_cli` packages provide compiled metadata to `irohad_lib` and `iroha_cli_lib`, whose extern crate names remain `irohad` and `iroha_cli`. Source revision build scripts belong to executables; the daemon library only selects test-only mutations. Version, source and wire identity diagnostics use the injected metadata. The CLI library always includes Core/node, crypto/consensus and Norito/node-codec; `cli` and `dev-tools` select binary targets. |
 | Test parsing | P2P network, Kotodama compiler, model block and model proof each have one out-of-line `#[cfg(test)]` module. Production parsing skips their bodies. Test names, fixture bytes and ownership remain covered by logical-source readers and negative controls. |
 | Codec layouts | Norito accepts fixed-width and compact-length layouts. Retired packed-layout implementations and the last unused flag-name constant are removed. Header/layout and malformed-frame rejection controls remain required. |
 
@@ -45,10 +45,10 @@ source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. Current target-inventory validation admits 107 declared binaries and 24
-defaults. The canonical `ivm_artifact_admit` executable independently verifies
-contracts and creates their manifests without the node CLI; its exact shipping
-owner uses the existing final slot under the unchanged 24-default ceiling. The
+graphs. Current target-inventory validation admits 105 declared binaries and 23
+defaults. The canonical `ivm_artifact_admit` developer executable independently
+verifies contracts and creates their manifests without the node CLI; it requires
+explicit `dev-tools` selection under the unchanged 24-default ceiling. The
 installed-context developer tool remains non-default. Certificate, attestation,
 preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
@@ -66,8 +66,8 @@ offline Cargo resolution with all 120 manifest inputs and the lock unchanged.
 The current source budget passes with exact reviewed normal, optional and
 test-owner declaration costs, preserving ownership denials without growth
 headroom. All 230 pure dependency-guard tests and both actual Cargo boundary
-regressions pass. The compiler source guard seals 305 fixture includes and
-605 test names; all 43 Python source-reader controls pass, including the
+regressions pass. The compiler source guard seals 308 fixture includes and
+616 test names; all 43 Python source-reader controls pass, including the
 ordinary duplicate-fixture regression. Surface/toolchain workspace lint
 inheritance and Surface public Rustdoc still require correction.
 The normal production-feature

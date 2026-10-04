@@ -450,9 +450,6 @@ fn dispatch_server_operation_with_session(
         {
             stream_token_operations::stream_token_sign_or_recover(state, request)
         }
-        (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
-            stream_token_operations::stream_token_observe(state, request)
-        }
         (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
             stream_token_operations::stream_token_check(state, request)
         }
@@ -723,6 +720,9 @@ fn dispatch_server_operation(
         )?,
     };
     let _scope = admission.enter();
+    if request.operation == OPERATION_STREAM_TOKEN_OBSERVE_V1 {
+        return server_observation::dispatch_fixture(state, request, admission);
+    }
     let mut result = dispatch_server_operation_with_session(
         state,
         &mut PopBrokerServerSessionV1::default(),

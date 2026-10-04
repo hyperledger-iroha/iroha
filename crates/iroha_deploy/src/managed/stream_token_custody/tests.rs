@@ -2,7 +2,9 @@
 
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{sorafs::capacity::ProviderId, transaction::FeePaymentIntent};
+use iroha_data_model::{
+    account::AccountId, sorafs::capacity::ProviderId, transaction::FeePaymentIntent,
+};
 use sorafs_manifest::signer::{
     custody::SignerCustodyAuthorityV1,
     protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
@@ -64,7 +66,6 @@ fn original() -> Original {
             current: None,
         },
         action: Action::Configure(policy),
-        terms: Terms::new(now_ms().unwrap() + 60_000, &options()).unwrap(),
         // Codec-only fixture, never passed to a finality verifier or treated as an anchor.
         checkpoint: vec![1],
     }
@@ -74,59 +75,57 @@ fn original() -> Original {
 fn original_request_roundtrip_refuses_replacement_and_preserves_expired_terms() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("operation")).unwrap();
-    journal::require_empty(&directory).unwrap();
-    assert!(journal::read_original(&directory).unwrap().is_none());
-    let mut original = original();
-    original.terms.requested_deadline_unix_ms = now_ms().unwrap() - 100;
-    original.terms.signing_deadline_unix_ms = now_ms().unwrap() - 1_000;
-    journal::publish_original(&directory, &original).unwrap();
-    assert!(journal::publish_original(&directory, &original).is_err());
-    assert!(journal::require_empty(&directory).is_err());
+    require_empty(&directory).unwrap();
+    assert!(journal::read_intent(&directory).unwrap().is_none());
+    let original = original();
+    let mut terms = Terms::new(now_ms().unwrap() + 60_000, &options()).unwrap();
+    terms.requested_deadline_unix_ms = now_ms().unwrap() - 100;
+    terms.signing_deadline_unix_ms = now_ms().unwrap() - 1_000;
+    let terms_bytes = encode(&terms, 16 * 1024).unwrap();
+    let restored_terms: Terms = norito::decode_canonical_with_limits(
+        &terms_bytes,
+        norito::DecodeLimits::new(4096, 16 * 1024, 16 * 1024, 64 * 1024, 32),
+    )
+    .unwrap();
+    assert!(terms == restored_terms);
+    journal::publish_intent(&directory, &original).unwrap();
+    let mut replacement = original.clone();
+    replacement.checkpoint.push(2);
+    assert!(journal::publish_intent(&directory, &replacement).is_err());
+    assert!(require_empty(&directory).is_err());
     let saved = directory.read("original.nrt", 256 * 1024).unwrap();
-    let restored = journal::required_original(&directory).unwrap();
-    assert_eq!(
-        saved.as_slice(),
-        journal::encode(&restored, 256 * 1024).unwrap()
-    );
+    let restored = journal::read_intent(&directory).unwrap().unwrap();
+    assert_eq!(saved.as_slice(), encode(&restored, 256 * 1024).unwrap());
     assert!(
-        restored
-            .terms
+        restored_terms
             .signing_deadline(Instant::now() + Duration::from_secs(600))
             .is_err()
     );
-    let request = restored.request(Instant::now() + Duration::from_secs(600));
+    let request = restored
+        .request(
+            &restored_terms,
+            original.initial_observation(),
+            Instant::now() + Duration::from_secs(600),
+        )
+        .unwrap();
     let journal::Request::Configure(request) = request else {
         panic!("closed original purpose");
     };
-    assert_eq!(
-        request.deadline_unix_ms,
-        original.terms.signing_deadline_unix_ms
-    );
-    restored
-        .matches_configuration(
-            &request.policy,
-            original.terms.requested_deadline_unix_ms,
-            &request.options,
-        )
+    assert_eq!(request.deadline_unix_ms, terms.signing_deadline_unix_ms);
+    restored.matches_configuration(&request.policy).unwrap();
+    restored_terms
+        .matches(terms.requested_deadline_unix_ms, &request.options)
         .unwrap();
     let mut changed = request.options;
     changed.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
     assert!(
-        restored
-            .matches_configuration(
-                &request.policy,
-                original.terms.requested_deadline_unix_ms,
-                &changed
-            )
+        restored_terms
+            .matches(terms.requested_deadline_unix_ms, &changed)
             .is_err()
     );
     assert!(
-        restored
-            .matches_configuration(
-                &request.policy,
-                original.terms.requested_deadline_unix_ms + 1,
-                &options()
-            )
+        restored_terms
+            .matches(terms.requested_deadline_unix_ms + 1, &options())
             .is_err()
     );
     assert_eq!(
@@ -250,12 +249,12 @@ fn original_journal_rejects_trailing_and_oversized_policy_frames() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("operation")).unwrap();
     let mut original = original();
-    let mut bytes = journal::encode(&original, 256 * 1024).unwrap();
+    let mut bytes = encode(&original, 256 * 1024).unwrap();
     bytes.push(0);
     directory
         .write_atomic("original.nrt", &bytes, PublishMode::CreateNew)
         .unwrap();
-    assert!(journal::read_original(&directory).is_err());
+    assert!(journal::read_intent(&directory).is_err());
     let Action::Configure(policy) = &mut original.action else {
         panic!("configure");
     };
@@ -324,27 +323,26 @@ fn invalid_enrollment_interval_cannot_reserve_or_replace_original_journal() {
             },
             action: Action::Enroll {
                 anchor,
-                observed_at_unix_ms: now,
-                interval,
+                selected_at_unix_ms: now,
+                validity: journal::EnrollmentValidity::from_interval(interval),
                 enrollment: norito::encode_canonical(&SignerCustodyRecordV1 {
                     statement,
                     attestation,
                 })
                 .unwrap(),
             },
-            terms: Terms::new(interval.deadline_unix_ms, &options()).unwrap(),
             checkpoint: vec![1], // Codec/authorization fixture, never authenticated finality.
         }
     };
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("enroll")).unwrap();
     let excessive = make_original(45_000);
-    assert!(journal::publish_original(&directory, &excessive).is_err());
-    assert!(journal::read_original(&directory).unwrap().is_none());
+    assert!(journal::publish_intent(&directory, &excessive).is_err());
+    assert!(journal::read_intent(&directory).unwrap().is_none());
     let valid = make_original(20_000);
-    journal::publish_original(&directory, &valid).unwrap();
+    journal::publish_intent(&directory, &valid).unwrap();
     let saved = directory.read("original.nrt", 256 * 1024).unwrap();
-    assert!(journal::publish_original(&directory, &excessive).is_err());
+    assert!(journal::publish_intent(&directory, &excessive).is_err());
     assert_eq!(
         directory
             .read("original.nrt", 256 * 1024)
@@ -352,11 +350,39 @@ fn invalid_enrollment_interval_cannot_reserve_or_replace_original_journal() {
             .as_slice(),
         saved.as_slice()
     );
-    let restored = journal::required_original(&directory).unwrap();
-    let Action::Enroll { interval, .. } = restored.action else {
+    let restored = journal::read_intent(&directory).unwrap().unwrap();
+    let Action::Enroll { validity, .. } = restored.action else {
         panic!("enroll");
     };
-    restored.matches_enrollment(interval, &options()).unwrap();
+    let interval = validity.interval(now + 10_000);
+    let terms = Terms::new(interval.deadline_unix_ms, &options()).unwrap();
+    restored.matches_enrollment_policy(&policy).unwrap();
+    terms
+        .matches(interval.deadline_unix_ms, &options())
+        .unwrap();
+    let request = restored
+        .request(&terms, restored.initial_observation(), options().deadline)
+        .unwrap();
+    let journal::Request::Enroll(request) = request else {
+        panic!("enroll request");
+    };
+    assert_eq!(request.issued_at_unix_ms, interval.issued_at_unix_ms);
+    assert_eq!(request.expires_at_unix_ms, interval.expires_at_unix_ms);
+    let mut changed_policy = policy.clone();
+    changed_policy.max_anchor_age_ms += 1;
+    assert!(restored.matches_enrollment_policy(&changed_policy).is_err());
+    assert!(
+        terms
+            .matches(interval.deadline_unix_ms + 1, &options())
+            .is_err()
+    );
+    let mut changed_options = options();
+    changed_options.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
+    assert!(
+        terms
+            .matches(interval.deadline_unix_ms, &changed_options)
+            .is_err()
+    );
 }
 
 #[test]
@@ -372,49 +398,65 @@ fn generated_roles_and_original_genesis_are_required_before_coordinator_use() {
         None,
     )
     .unwrap();
-    let coordinator = ManagedStreamTokenCustody::open(&prepared).unwrap();
-    assert!(ManagedStreamTokenCustody::open(&prepared).is_err());
+    let coordinator = ManagedStreamTokenCustody::open(
+        &prepared,
+        crate::managed::native_operation::test_support::provider_id(&prepared, 0),
+    )
+    .unwrap();
+    assert!(
+        ManagedStreamTokenCustody::open(
+            &prepared,
+            crate::managed::native_operation::test_support::provider_id(&prepared, 0)
+        )
+        .is_err()
+    );
     // Exercise endpoint iteration only: no integer test value is used as native proof evidence.
     let mut calls = 0;
     let deadline = Instant::now() + Duration::from_secs(30);
-    let value = read_selected_peers(&coordinator.peers, deadline, |_, attempt_deadline| {
-        calls += 1;
-        assert!(attempt_deadline <= deadline);
-        if calls == 1 {
-            Err(invalid("selected peer unavailable"))
-        } else {
-            Ok(7)
-        }
-    })
+    let value = read_selected_peers(
+        &coordinator.authority.peers,
+        deadline,
+        |_, attempt_deadline| {
+            calls += 1;
+            assert!(attempt_deadline <= deadline);
+            if calls == 1 {
+                Err(invalid("selected peer unavailable"))
+            } else {
+                Ok(7)
+            }
+        },
+    )
     .unwrap();
     assert_eq!((calls, value), (2, 7));
     assert!(
-        read_selected_peers::<()>(&coordinator.peers, Instant::now(), |_, _| panic!(
+        read_selected_peers::<()>(&coordinator.authority.peers, Instant::now(), |_, _| panic!(
             "elapsed read budget must not contact a peer"
         ))
         .is_err()
     );
     let mut policy = policy();
-    policy.binding.chain_id = coordinator.config.chain.to_string();
-    policy.binding.network_id = *coordinator.config.network_id.as_bytes();
+    policy.binding.chain_id = coordinator.authority.config.chain.to_string();
+    policy.binding.network_id = *coordinator.authority.config.network_id.as_bytes();
     policy.binding.purpose = SignerPurposeBindingV1::StreamToken {
-        provider_id: *coordinator.manifest.provider_id.as_bytes(),
+        provider_id: *coordinator.authority.provider_id().unwrap().as_bytes(),
     };
     policy.binding.public_key = coordinator
-        .role(StreamTokenAuthorityRole::TokenSigner)
+        .authority
+        .provider_role(StreamTokenAuthorityRole::TokenSigner)
         .unwrap()
         .try_signatory()
         .unwrap()
         .clone();
     policy.attester_public_key = coordinator
-        .role(StreamTokenAuthorityRole::CustodyAttester)
+        .authority
+        .provider_role(StreamTokenAuthorityRole::CustodyAttester)
         .unwrap()
         .try_signatory()
         .unwrap()
         .clone();
     coordinator.validate_policy(&policy).unwrap();
     let selection = StreamTokenCustodySelection {
-        provider_id: coordinator.manifest.provider_id,
+        provider_id: coordinator.authority.provider_id().unwrap(),
         binding: policy.binding.clone(),
         expected_revision: 0,
         expected_digest: [0; 32],
@@ -443,11 +485,37 @@ fn generated_roles_and_original_genesis_are_required_before_coordinator_use() {
         coordinator.attester().unwrap().public_key(),
         &policy.attester_public_key
     );
-    policy.attester_public_key = coordinator.config.key_pair.public_key().clone();
+    policy.attester_public_key = coordinator.authority.config.key_pair.public_key().clone();
     assert!(coordinator.validate_policy(&policy).is_err());
     let mut changed = prepared.clone();
     changed.context.network_id = "another-network".into();
-    assert!(ManagedStreamTokenCustody::open(&changed).is_err());
+    assert!(
+        ManagedStreamTokenCustody::open(
+            &changed,
+            crate::managed::native_operation::test_support::provider_id(&prepared, 0)
+        )
+        .is_err()
+    );
     drop(coordinator);
-    ManagedStreamTokenCustody::open(&prepared).unwrap();
+    ManagedStreamTokenCustody::open(
+        &prepared,
+        crate::managed::native_operation::test_support::provider_id(&prepared, 0),
+    )
+    .unwrap();
+}
+
+#[test]
+fn original_custody_codec_preserves_checkpoint_larger_than_small_collection_limit() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(temporary.path().join("operation")).unwrap();
+    let mut original = original();
+    // Codec-only bytes exercise Vec<u8> admission; they are never a certified checkpoint.
+    original.checkpoint = vec![0x5a; 16 * 1024];
+    journal::publish_intent(&directory, &original).unwrap();
+    let restored = journal::read_intent(&directory).unwrap().unwrap();
+    assert_eq!(restored.checkpoint, original.checkpoint);
+    assert_eq!(
+        encode(&restored, 256 * 1024).unwrap(),
+        encode(&original, 256 * 1024).unwrap()
+    );
 }

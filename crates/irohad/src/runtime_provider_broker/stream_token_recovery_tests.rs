@@ -381,10 +381,7 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
         OPERATION_STREAM_TOKEN_OBSERVE_V1,
     )
     .unwrap();
-    assert_eq!(
-        pool.used_bytes.load(Ordering::SeqCst),
-        policy.max_composed_bytes
-    );
+    assert_eq!(pool.allocation.reserved_bytes(), policy.max_composed_bytes);
     let mut transport = Cursor::new(Vec::new());
     write_length_prefixed(
         &mut transport,
@@ -464,7 +461,7 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
     drop(owned_result);
     drop(admission);
     assert_eq!(
-        pool.used_bytes.load(Ordering::SeqCst),
+        pool.allocation.reserved_bytes(),
         0,
         "result-owned reservation released after final decode"
     );
@@ -784,3 +781,115 @@ include!("stream_token_window_tests.rs");
 include!("stream_token_check_tests.rs");
 
 include!("stream_token_blocking_worker_tests.rs");
+
+#[test]
+fn observer_evidence_codec_refusal_remains_local_after_exact_prefix() {
+    use norito::core::{with_decode_limits_measured, with_decode_limits_scope};
+
+    let binding = token_signer_binding();
+    let query = stream_token_signer_test_support::query();
+    let payload = query.encode_canonical().unwrap();
+    let claim = stream_token_signer_test_support::state_claim(&query);
+    let observation_bytes = claim.encode_canonical().unwrap();
+    let reply =
+        StreamTokenObserverReplyV1::current(vec![0xa4; 32], observation_bytes.clone()).unwrap();
+    let encoded = encode_stream_token_observer_reply(&query, &reply).unwrap();
+    let limits = |bytes| DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX);
+
+    assert_eq!(
+        with_decode_limits_scope(limits(0), || {
+            decode_stream_token_observer_request(&binding, &payload)
+        })
+        .err(),
+        Some(BrokerError::Unavailable),
+        "the real manifest request decoder preserves enclosing admission refusal"
+    );
+    // The reply path first decodes the original request and the broker envelope.
+    // Measure that exact prefix, so the next actual refusal occurs at the newly
+    // typed manifest observation decoder, not the separately owned broker codec.
+    let (_, prefix) = with_decode_limits_measured(limits(usize::MAX), || {
+        decode_stream_token_observer_request(&binding, &payload).unwrap();
+        decode_canonical_with_policy::<StreamTokenObserverReplyWireV1>(
+            &encoded,
+            MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
+            STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
+        )
+        .unwrap();
+    });
+    assert!(prefix.total_allocated_bytes() > 0);
+    assert_eq!(
+        with_decode_limits_scope(limits(prefix.total_allocated_bytes()), || {
+            decode_stream_token_observer_reply(&binding, &payload, &encoded)
+        })
+        .err(),
+        Some(BrokerError::Unavailable),
+        "a post-envelope evidence decoder refusal is operational"
+    );
+    assert_eq!(
+        stream_token_transport_error(BrokerError::Unavailable),
+        StreamTokenSignerCallErrorV1::Unavailable
+    );
+    let recovered = decode_stream_token_observer_reply(&binding, &payload, &encoded)
+        .expect("the exact same bytes decode after the enclosing scope retires");
+    assert_eq!(
+        recovered.current_evidence(),
+        Some((&[0xa4; 32][..], observation_bytes.as_slice()))
+    );
+    assert_eq!(query.encode_canonical().unwrap(), payload);
+    assert_eq!(
+        encode_stream_token_observer_reply(&query, &reply).unwrap(),
+        encoded
+    );
+}
+
+#[test]
+fn observer_evidence_semantic_rejections_keep_each_service_category() {
+    use norito::core::with_decode_limits_scope;
+
+    let binding = token_signer_binding();
+    let query = stream_token_signer_test_support::query();
+    let payload = query.encode_canonical().unwrap();
+    let mut malformed = payload.clone();
+    *malformed.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        with_decode_limits_scope(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || decode_stream_token_observer_request(&binding, &malformed),
+        )
+        .err(),
+        Some(BrokerError::Rejected),
+        "malformed canonical input is semantic even inside a zero allowance"
+    );
+    let mut invalid = query.clone();
+    invalid.challenge = [0; 32];
+    let original = invalid.encode_canonical().unwrap_err();
+    assert!(!original.is_retryable());
+    assert_eq!(
+        stream_token_transport_error(stream_token_evidence_error(
+            &original,
+            BrokerError::Rejected
+        )),
+        StreamTokenSignerCallErrorV1::Refused,
+        "client request encoding retains its original semantic category"
+    );
+    let invalid_payload = norito::encode_canonical(&invalid).unwrap();
+    assert_eq!(
+        decode_stream_token_observer_request(&binding, &invalid_payload).err(),
+        Some(BrokerError::Rejected)
+    );
+    let mut claim = stream_token_signer_test_support::state_claim(&query);
+    claim.body.request_digest = [0xa2; 32];
+    let reply =
+        StreamTokenObserverReplyV1::current(vec![0xa4; 32], claim.encode_canonical().unwrap())
+            .unwrap();
+    let encoded = encode_stream_token_observer_reply(&query, &reply).unwrap();
+    assert_eq!(
+        decode_stream_token_observer_reply(&binding, &payload, &encoded).err(),
+        Some(BrokerError::Protocol),
+        "substituted signed request claim is not a local capacity failure"
+    );
+    assert_eq!(
+        stream_token_transport_error(BrokerError::Protocol),
+        StreamTokenSignerCallErrorV1::InvalidResponse
+    );
+}

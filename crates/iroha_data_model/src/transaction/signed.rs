@@ -1,6 +1,10 @@
 //! Transaction structures and related implementations.
 pub use self::model::*;
 mod ivm_proved_intent;
+/// Exact original-pool allocation custody for closed native pin/outbox transaction graphs.
+pub mod pin_allocation;
+mod wire_v1;
+mod wire_v1_api;
 use super::{
     error,
     executable::{Executable, ExecutableBatchItem, IvmBytecode},
@@ -50,6 +54,7 @@ use std::{
     vec::Vec,
 };
 use thiserror::Error;
+pub use wire_v1::WireV1Plan;
 /// Default signature-bound lifetime assigned by [`TransactionBuilder`].
 ///
 /// Networks govern the admission ceiling through
@@ -1891,19 +1896,6 @@ impl iroha_version::Version for SignedTransaction {
         1..2
     }
 }
-fn encode_default_layout_versioned<T>(
-    version: u8,
-    value: &T,
-) -> Result<Vec<u8>, norito::core::Error>
-where
-    T: norito::NoritoSerialize,
-{
-    let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
-    bytes.push(version);
-    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::serialize_to_buffer(value, &mut bytes)?;
-    Ok(bytes)
-}
 impl SignedTransaction {
     /// Encode the complete canonical fixed-V1 transaction wire.
     ///
@@ -1917,7 +1909,7 @@ impl SignedTransaction {
     /// Returns an error if the transaction cannot be serialized with the canonical V1 Norito
     /// layout.
     pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
-        encode_default_layout_versioned(self.version(), self)
+        self.wire_plan_v1()?.into_vec()
     }
 }
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
@@ -1960,7 +1952,7 @@ impl TransactionEntrypoint {
     ///
     /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito layout.
     pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
-        encode_default_layout_versioned(self.version(), self)
+        self.wire_plan_v1()?.into_vec()
     }
 }
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {

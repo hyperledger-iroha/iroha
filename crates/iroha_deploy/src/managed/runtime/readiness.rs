@@ -8,6 +8,8 @@ use iroha_data_model::{
     isi::Log,
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+mod fees;
+
 use std::{
     sync::atomic::{AtomicBool, AtomicU8, Ordering},
     thread,
@@ -174,6 +176,7 @@ struct Native {
     config: iroha::config::Config,
     clients: Vec<Client>,
     deadline: Instant,
+    fee_payment: FeePaymentIntent,
 }
 
 impl Backend for Native {
@@ -197,14 +200,9 @@ impl Backend for Native {
             .map_err(|_| ())?
             .with_request_deadline(self.deadline);
         let submitter = Client::from_client(native).map_err(|_| ())?;
+        let signed = smoke_transaction(submitter.account_client(), self.fee_payment.clone())?;
         submitter
-            .submit(
-                Log::new(
-                    Level::INFO,
-                    format!("managed localnet readiness {}", store::random_token()),
-                ),
-                FeePaymentIntent::authority(Vec::new(), None),
-            )
+            .submit_transaction_and_wait(&signed)
             .map_err(|_| ())
     }
 
@@ -227,8 +225,68 @@ impl Backend for Native {
     }
 }
 
+// Use the canonical account builder/signature owner directly. The convenience submit API
+// requests a quote and replaces charge limits; this fixed local cap must remain signature-bound.
+fn smoke_transaction(
+    account: &iroha::client::AccountClient,
+    payment: FeePaymentIntent,
+) -> Result<SignedTransaction, ()> {
+    let payload = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [iroha_data_model::isi::InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("managed localnet readiness {}", store::random_token()),
+            ))],
+            payment,
+            iroha_model_base::metadata::Metadata::default(),
+        ))
+        .map_err(|_| ())?;
+    account.sign_transaction(payload).map_err(|_| ())
+}
+
+/// One successful paid smoke proof bound to its original generation and exact transaction.
+/// Private fields prevent callers from minting a receipt from an Applied DTO/hash alone.
+pub(super) struct Receipt {
+    prepared: PreparedLocalnet,
+    genesis_hash: HashOf<iroha_data_model::block::BlockHeader>,
+    transaction_hash: HashOf<SignedTransaction>,
+}
+
+impl std::fmt::Debug for Receipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadinessReceipt").finish_non_exhaustive()
+    }
+}
+
 pub(super) fn prove(
     prepared: &PreparedLocalnet,
+    started: Instant,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+    progress: &Progress,
+) -> Result<Receipt, Failure> {
+    let budget = Budget {
+        started,
+        timeout,
+        cancelled,
+        progress,
+        clock: &WallClock,
+    };
+    let (mut native, genesis_hash) = native(prepared, &budget)?;
+    let transaction_hash = run(&mut native, &budget)?;
+    Ok(Receipt {
+        prepared: prepared.clone(),
+        genesis_hash,
+        transaction_hash,
+    })
+}
+
+/// Recheck the original paid smoke after restart, without submitting another transaction.
+/// The process owner supplies the same activation budget across a restart. A later credential
+/// renewal gets a separately bounded read-only check of these exact original bytes.
+pub(super) fn reprove(
+    prepared: &PreparedLocalnet,
+    receipt: &Receipt,
     started: Instant,
     timeout: Duration,
     cancelled: &AtomicBool,
@@ -242,19 +300,35 @@ pub(super) fn prove(
         clock: &WallClock,
     };
     budget.remaining()?;
-    let deadline = started
-        .checked_add(timeout)
+    if prepared != &receipt.prepared {
+        return Err(budget.unconfirmed());
+    }
+    let (mut native, genesis_hash) = native(prepared, &budget)?;
+    if genesis_hash != receipt.genesis_hash {
+        return Err(budget.unconfirmed());
+    }
+    run_existing(&mut native, &budget, receipt.transaction_hash)
+}
+
+fn native(
+    prepared: &PreparedLocalnet,
+    budget: &Budget<'_>,
+) -> Result<(Native, HashOf<iroha_data_model::block::BlockHeader>), Failure> {
+    budget.progress.enter(Phase::Initialization);
+    budget.remaining()?;
+    let deadline = budget
+        .started
+        .checked_add(budget.timeout)
         .ok_or_else(|| budget.unconfirmed())?;
     let mut config = prepared
         .context
         .load_client_config()
         .map_err(|_| budget.unconfirmed())?;
+    let selected = fees::select(prepared, &config).map_err(|_| budget.unconfirmed())?;
+    budget.remaining()?;
     config.torii_request_timeout = Duration::from_millis(750);
-    config.transaction_status_timeout = timeout;
-    config.transaction_ttl = timeout.max(Duration::from_secs(60));
-    if prepared.peers.len() != 4 {
-        return Err(budget.unconfirmed());
-    }
+    config.transaction_status_timeout = budget.timeout;
+    config.transaction_ttl = budget.timeout.max(Duration::from_secs(60));
     let mut clients = Vec::with_capacity(4);
     for peer in &prepared.peers {
         let mut peer_config = config.clone();
@@ -265,14 +339,15 @@ pub(super) fn prove(
             .with_request_deadline(deadline);
         clients.push(Client::from_client(native).map_err(|_| budget.unconfirmed())?);
     }
-    run(
-        &mut Native {
+    Ok((
+        Native {
             config,
             clients,
             deadline,
+            fee_payment: selected.payment,
         },
-        &budget,
-    )
+        selected.genesis_hash,
+    ))
 }
 
 fn wait_status(backend: &mut impl Backend, budget: &Budget<'_>, mesh: bool) -> Result<(), Failure> {
@@ -291,7 +366,7 @@ fn wait_status(backend: &mut impl Backend, budget: &Budget<'_>, mesh: bool) -> R
     }
 }
 
-fn run(backend: &mut impl Backend, budget: &Budget<'_>) -> Result<(), Failure> {
+fn run<B: Backend>(backend: &mut B, budget: &Budget<'_>) -> Result<B::Hash, Failure> {
     budget.progress.enter(Phase::Genesis);
     wait_status(backend, budget, false)?;
     // Admission can retain this exact transaction while authenticated links establish. Only
@@ -301,6 +376,25 @@ fn run(backend: &mut impl Backend, budget: &Budget<'_>) -> Result<(), Failure> {
     let hash = backend
         .submit_and_confirm(remaining)
         .map_err(|()| budget.unconfirmed())?;
+    confirm_all(backend, budget, hash)?;
+    Ok(hash)
+}
+
+fn run_existing<B: Backend>(
+    backend: &mut B,
+    budget: &Budget<'_>,
+    hash: B::Hash,
+) -> Result<(), Failure> {
+    budget.progress.enter(Phase::Genesis);
+    wait_status(backend, budget, false)?;
+    confirm_all(backend, budget, hash)
+}
+
+fn confirm_all<B: Backend>(
+    backend: &mut B,
+    budget: &Budget<'_>,
+    hash: B::Hash,
+) -> Result<(), Failure> {
     budget.remaining()?;
     for (peer, phase) in [Phase::Peer0, Phase::Peer1, Phase::Peer2, Phase::Peer3]
         .into_iter()
@@ -439,6 +533,7 @@ mod tests {
                 clock: &clock,
             },
         )
+        .map(drop)
     }
 
     #[test]
@@ -646,6 +741,103 @@ mod tests {
     }
 
     #[test]
+    fn reproof_waits_for_the_original_hash_without_any_second_submission() {
+        let clock = FakeClock::new();
+        let progress = Progress::default();
+        let cancelled = AtomicBool::new(false);
+        let budget = Budget {
+            started: clock.now(),
+            timeout: Duration::from_secs(1),
+            cancelled: &cancelled,
+            progress: &progress,
+            clock: &clock,
+        };
+        let mut backend = Fake::default();
+        run_existing(&mut backend, &budget, 41).unwrap();
+        assert_eq!(backend.submits, 0);
+        assert_eq!(backend.applied, [(0, 41), (1, 41), (2, 41), (3, 41)]);
+        assert!(backend.mesh);
+    }
+
+    #[test]
+    fn reproof_refuses_changed_hash_and_elapsed_original_budget_without_resubmission() {
+        let clock = FakeClock::new();
+        let progress = Progress::default();
+        let cancelled = AtomicBool::new(false);
+        let budget = Budget {
+            started: clock.now(),
+            timeout: Duration::from_secs(1),
+            cancelled: &cancelled,
+            progress: &progress,
+            clock: &clock,
+        };
+        let mut backend = Fake {
+            wrong_hash: Some(2),
+            ..Fake::default()
+        };
+        assert_eq!(
+            run_existing(&mut backend, &budget, 41).unwrap_err().phase,
+            Phase::Peer2
+        );
+        assert_eq!(backend.submits, 0);
+        clock.wait(Duration::from_secs(1));
+        let mut backend = Fake::default();
+        assert_eq!(
+            run_existing(&mut backend, &budget, 41).unwrap_err().cause,
+            Cause::Deadline
+        );
+        assert_eq!(backend.submits, 0);
+        assert!(backend.applied.is_empty());
+    }
+
+    #[test]
+    fn later_finite_reproof_checks_all_original_hashes_without_another_payment() {
+        let clock = FakeClock::new();
+        let progress = Progress::default();
+        let cancelled = AtomicBool::new(false);
+        let initial = Budget {
+            started: clock.now(),
+            timeout: Duration::from_secs(120),
+            cancelled: &cancelled,
+            progress: &progress,
+            clock: &clock,
+        };
+        let mut first = Fake::default();
+        let original = run(&mut first, &initial).unwrap();
+        assert_eq!(first.submits, 1);
+        clock.wait(Duration::from_secs(43_200));
+        let mut restarted = Fake::default();
+        assert_eq!(
+            run_existing(&mut restarted, &initial, original)
+                .unwrap_err()
+                .cause,
+            Cause::Deadline
+        );
+        assert!(restarted.applied.is_empty());
+        let renewal = Budget {
+            started: clock.now(),
+            ..initial
+        };
+        run_existing(&mut restarted, &renewal, original).unwrap();
+        assert_eq!(restarted.submits, 0);
+        assert_eq!(
+            restarted.applied,
+            [(0, original), (1, original), (2, original), (3, original)]
+        );
+        assert!(restarted.mesh);
+        clock.wait(Duration::from_secs(120));
+        let mut late = Fake::default();
+        assert_eq!(
+            run_existing(&mut late, &renewal, original)
+                .unwrap_err()
+                .cause,
+            Cause::Deadline
+        );
+        assert_eq!(late.submits, 0);
+        assert!(late.applied.is_empty());
+    }
+
+    #[test]
     fn failure_messages_only_expose_closed_phases_and_causes() {
         let progress = Progress::default();
         for phase in [
@@ -677,3 +869,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "readiness/fee_tests.rs"]
+mod fee_tests;

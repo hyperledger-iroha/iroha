@@ -35,7 +35,6 @@ impl StateTransaction<'_, '_> {
         // a caller's narrower budget, and the callback charges before source I/O or decode.
         let mut work_left = max_work;
         let mut bytes_left = max_bytes;
-        let mut capacity_exhausted = false;
         let result = self
             .canonical_history()
             .executed_receipt(height, |work, bytes| {
@@ -47,17 +46,15 @@ impl StateTransaction<'_, '_> {
                     bytes_left = bytes;
                     Ok(())
                 } else {
-                    capacity_exhausted = true;
-                    Err(QueryExecutionFail::GasBudgetExceeded)
+                    Err(ExecutionAttemptError::Deferred(
+                        ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ))
                 }
             });
         let receipt = match result {
             Ok(receipt) => receipt,
             Err(error) => {
                 let reason = match error {
-                    // The source's callback bridge uses a generic query budget reason. Replace
-                    // only our own source allowance refusal, never a decoder/allocation owner.
-                    _ if capacity_exhausted => ExecutionDeferral::CanonicalHistoryCapacity.into(),
                     ExecutionAttemptError::Deferred(reason) => reason,
                     ExecutionAttemptError::Rejected(_) => {
                         ExecutionDeferral::CanonicalHistoryUnavailable.into()
@@ -96,7 +93,9 @@ impl State {
         crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
     > {
         if max_work == 0 || max_bytes == 0 {
-            return Err(QueryExecutionFail::GasBudgetExceeded.into());
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ));
         }
         let (hashes, tip) = loop {
             let generation = self.state_view_generation();
@@ -118,12 +117,16 @@ impl State {
         let mut work_left = max_work;
         let mut bytes_left = max_bytes;
         let receipt = source.executed_receipt(height, |work, bytes| {
-            work_left = work_left
-                .checked_sub(work)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            bytes_left = bytes_left
-                .checked_sub(bytes)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            work_left = work_left.checked_sub(work).ok_or(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            )?;
+            bytes_left = bytes_left.checked_sub(bytes).ok_or(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            )?;
             Ok(())
         })?;
         let target_work = u64::try_from(
@@ -133,9 +136,15 @@ impl State {
                 .max(receipt.block().execution_outputs().len())
                 .max(1),
         )
-        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        .map_err(|_| {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            )
+        })?;
         if target_work > work_left {
-            return Err(QueryExecutionFail::GasBudgetExceeded.into());
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ));
         }
         if self.block_hashes.view().get(height.get() - 1).copied() != Some(expected) {
             return Err(QueryExecutionFail::Conversion(
@@ -282,37 +291,22 @@ mod tests {
             .read_committed_execution(height, work, bytes)
             .unwrap();
         assert_eq!(receipt.block().encode_wire().unwrap(), wire);
-        for (work, bytes, source_refusal) in [
-            (work - 1, bytes, false),
-            (work, bytes - 1, true),
-            (0, bytes, false),
-            (work, 0, false),
-        ] {
+        for (work, bytes) in [(work - 1, bytes), (work, bytes - 1), (0, bytes), (work, 0)] {
             let error = chain
                 .state()
                 .read_committed_execution(height, work, bytes)
                 .unwrap_err();
-            if source_refusal {
-                let crate::execution_attempt::ExecutionAttemptError::Deferred(original) = error
-                else {
-                    panic!("source allowance refusal cannot become a finalized verdict: {error:?}");
-                };
-                assert_eq!(
-                    original.reason(),
-                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
-                );
-                assert!(
-                    original.allocation_refusal().is_none(),
-                    "logical source limits have no physical release owner"
-                );
-            } else {
-                assert_eq!(
-                    error,
-                    crate::execution_attempt::ExecutionAttemptError::Rejected(
-                        QueryExecutionFail::GasBudgetExceeded
-                    )
-                );
-            }
+            let crate::execution_attempt::ExecutionAttemptError::Deferred(original) = error else {
+                panic!("history allowance refusal cannot become a finalized verdict: {error:?}");
+            };
+            assert_eq!(
+                original.reason(),
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity
+            );
+            assert!(
+                original.allocation_refusal().is_none(),
+                "logical history limits have no physical release owner"
+            );
         }
     }
 
@@ -351,8 +345,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             work_refusal,
-            crate::execution_attempt::ExecutionAttemptError::Rejected(
-                QueryExecutionFail::GasBudgetExceeded
+            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into()
             )
         );
         let byte_refusal = chain
@@ -365,7 +359,7 @@ mod tests {
         };
         assert_eq!(
             original.reason(),
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+            ivm::error::ExecutionDeferral::CanonicalHistoryCapacity
         );
         assert!(original.allocation_refusal().is_none());
         chain

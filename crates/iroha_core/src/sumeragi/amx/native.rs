@@ -201,7 +201,7 @@ fn decode_global_source(
     iroha_data_model::block::SharedSignedBlock,
     crate::execution_attempt::ExecutionAttemptError<Error>,
 > {
-    use crate::execution_attempt::{norito_decode_attempt_error, versioned_decode_attempt_error};
+    use crate::execution_attempt::{canonical_decode_attempt_error, norito_decode_attempt_error};
     if wire.is_empty()
         || !u64::try_from(wire.len()).is_ok_and(|length| {
             length <= iroha_data_model::block::consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES
@@ -218,7 +218,7 @@ fn decode_global_source(
             iroha_data_model::block::decode_framed_signed_block(wire)
         })
         .map_err(|error| {
-            versioned_decode_attempt_error(error, |error| invalid(error.to_string()))
+            canonical_decode_attempt_error(error, |error| invalid(error.to_string()))
         })?;
     let identity = block
         .canonical_wire_identity()
@@ -429,7 +429,7 @@ impl Execute for PrepareAmxV1 {
             .leg(self.dataspace)
             .ok_or_else(|| invalid("native AMX transaction has no exact local leg"))?;
         let transfer = decode_leg(&leg.payload).map_err(|error| super::amx_error(error, state))?;
-        if (!cfg!(all(test, sumeragi_core_mutation = "HC87"))
+        if (!cfg!(all(test, sumeragi_core_mutation = "HC95"))
             && transfer.source.account() != authority)
             || transfer.source.scope() != &AssetBalanceScope::Dataspace(self.dataspace)
             || transfer.source.account() == &transfer.destination

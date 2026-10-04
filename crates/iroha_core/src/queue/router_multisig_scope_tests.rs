@@ -1078,37 +1078,67 @@ fn multisig_approve_rejects_corrupt_proposal_state_with_account_scope() {
     // A retained malformed row is rejection, even when the account has a real scope.
     // Only physical absence can use account-scope fallback.
     for (entrypoint, result) in [
-        ("route with view", router.try_route_with_view(&tx, &view).map(|_| ())),
-        ("route with state", router.try_route_with_state(&tx, &state).map(|_| ())),
-        ("plan with view", router.try_route_plan_with_view(&tx, &view).map(|_| ())),
-        ("plan with state", router.try_route_plan_with_state(&tx, &state).map(|_| ())),
+        (
+            "route with view",
+            router.try_route_with_view(&tx, &view).map(|_| ()),
+        ),
+        (
+            "route with state",
+            router.try_route_with_state(&tx, &state).map(|_| ()),
+        ),
+        (
+            "plan with view",
+            router.try_route_plan_with_view(&tx, &view).map(|_| ()),
+        ),
+        (
+            "plan with state",
+            router.try_route_plan_with_state(&tx, &state).map(|_| ()),
+        ),
         (
             "validation route",
             evaluate_policy_with_catalog_and_world(
-                &policy, router.lane_catalog.as_ref(), &view.nexus().dataspace_catalog,
-                &tx, view.world(),
-            ).map(|_| ()),
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .map(|_| ()),
         ),
         (
             "validation route at ledger time",
             evaluate_policy_with_catalog_and_world_at(
-                &policy, router.lane_catalog.as_ref(), &view.nexus().dataspace_catalog,
-                &tx, view.world(), 0,
-            ).map(|_| ()),
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+                0,
+            )
+            .map(|_| ()),
         ),
         (
             "validation plan",
             evaluate_policy_plan_with_catalog_and_world(
-                &policy, router.lane_catalog.as_ref(), &view.nexus().dataspace_catalog,
-                &tx, view.world(),
-            ).map(|_| ()),
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .map(|_| ()),
         ),
         (
             "validation plan at ledger time",
             evaluate_policy_plan_with_catalog_and_world_at(
-                &policy, router.lane_catalog.as_ref(), &view.nexus().dataspace_catalog,
-                &tx, view.world(), 0,
-            ).map(|_| ()),
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+                0,
+            )
+            .map(|_| ()),
         ),
         (
             "Nexus validation plan",
@@ -1118,23 +1148,37 @@ fn multisig_approve_rejects_corrupt_proposal_state_with_account_scope() {
         (
             "Nexus validation plan at block height",
             evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                view.nexus(), &tx, view.world(), 0, 1,
-            ).map(|_| ()),
+                view.nexus(),
+                &tx,
+                view.world(),
+                0,
+                1,
+            )
+            .map(|_| ()),
         ),
     ] {
-        assert!(
-            matches!(
-                result,
-                Err(RoutingResolveError::InvalidMultisigProposal {
-                    account,
-                    instructions_hash: rejected_hash,
-                    ..
-                }) if account == multisig_id && rejected_hash == instructions_hash
+        match result {
+            Err(RoutingResolveError::InvalidMultisigProposal {
+                account,
+                instructions_hash: rejected_hash,
+                reason,
+            }) => {
+                assert_eq!(account, multisig_id, "{entrypoint}");
+                assert_eq!(rejected_hash, instructions_hash, "{entrypoint}");
+                assert!(
+                    !reason.is_empty(),
+                    "{entrypoint} must retain its rejection reason"
+                );
+            }
+            result => panic!(
+                "{entrypoint} must reject the exact corrupt account/proposal row: {result:?}"
             ),
-            "{entrypoint} must reject the exact corrupt account/proposal row"
-        );
+        }
     }
-    assert_eq!(view.world().smart_contract_state().get(&key), Some(&corrupt));
+    assert_eq!(
+        view.world().smart_contract_state().get(&key),
+        Some(&corrupt)
+    );
 }
 #[test]
 fn multisig_approve_ignores_unrelated_persisted_proposal_hash() {

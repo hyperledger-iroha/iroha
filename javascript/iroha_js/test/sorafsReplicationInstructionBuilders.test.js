@@ -41,6 +41,7 @@ function completionOptions(overrides = {}) {
     completionEpoch: 27,
     expectedAuthority: {
       providerOwner: PROVIDER_OWNER,
+      completionSigner: PROVIDER_OWNER,
       signerPolicy: {
         policyId: POLICY_ID,
         revision: 2,
@@ -158,6 +159,7 @@ test("SoraFS completion instructions preserve canonical authority and finalized 
       completion_epoch: 27,
       expected_authority: {
         provider_owner: PROVIDER_OWNER,
+        completion_signer: PROVIDER_OWNER,
         signer_policy: {
           policy_id: POLICY_ID,
           revision: 2,
@@ -241,6 +243,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
       buildCompleteReplicationOrderInstruction(completionOptions({
         expectedAuthority: {
           providerOwner: PROVIDER_OWNER,
+          completionSigner: PROVIDER_OWNER,
           signerPolicy: {
             policyId: POLICY_ID,
             revision: 2,
@@ -256,6 +259,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
       buildCompleteReplicationOrderInstruction(completionOptions({
         expectedAuthority: {
           providerOwner: ` ${PROVIDER_OWNER}`,
+          completionSigner: PROVIDER_OWNER,
           signerPolicy: completionOptions().expectedAuthority.signerPolicy,
         },
       })),
@@ -322,6 +326,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           completion_epoch: 8,
           expected_authority: {
             provider_owner: PROVIDER_OWNER,
+            completion_signer: PROVIDER_OWNER,
             signer_policy: {
               policy_id: POLICY_ID,
               revision: 2,
@@ -461,3 +466,18 @@ for (const [label, mutate, message] of [
     });
   });
 }
+
+
+test("completion signer is a mandatory canonical governed identity", () => {
+  const missing = completionOptions();
+  delete missing.expectedAuthority.completionSigner;
+  assert.throws(() => buildCompleteReplicationOrderInstruction(missing), /completionSigner is required/);
+  for (const signer of [null, "", ` ${PROVIDER_OWNER}`]) {
+    const invalid = completionOptions();
+    invalid.expectedAuthority.completionSigner = signer;
+    assert.throws(() => buildCompleteReplicationOrderInstruction(invalid));
+  }
+  const native = buildCompleteReplicationOrderInstruction(completionOptions());
+  delete native.CompleteReplicationOrder.expected_authority.completion_signer;
+  assert.throws(() => noritoEncodeInstruction(native, 753), /completion_signer/);
+});

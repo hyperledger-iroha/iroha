@@ -1,85 +1,93 @@
-//! Explicit retained parent build registry for private developer environments.
+//! Operation-scoped prepared archive registries shared by Kagami and Mochi.
 //!
-//! This owner keeps a separate advancing finality journal, independent of the live attachment
-//! worker. It never derives a parent from the child's signer, network, or listener credential.
+//! Remote private environments retain their independently authenticated parent registry. Fresh
+//! generated localnets select only their original provider material; that intent is joined to
+//! fresh native discovery before the storage owner permits any provider request.
 
 use super::{Error, InstalledRuntime, ManagedStore, Result};
-use crate::bootstrap::{AuthenticatedBootstrap, BootstrapError, ParentFinalityStore};
+use crate::bootstrap::{BootstrapError, ParentFinalityStore};
 use iroha::config::Config;
-use iroha_data_model::sorafs::{
-    capacity::ProviderId,
-    provider_admission::discovery::account_read::VerifiedAccountReadProviderV1,
+use iroha_storage_client::musubi_archive_fetch::{
+    MusubiArchiveDiscoveryErrorV1, PreparedMusubiArchiveFetchConfigV1,
 };
 use std::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
-/// Independently bound parent signer and exclusive lazy provider-discovery checkpoint owner.
-#[derive(Clone)]
-pub struct ManagedBuildRegistry {
-    config: Config,
-    bootstrap: Arc<AuthenticatedBootstrap>,
-    finality: Arc<Mutex<ParentFinalityStore>>,
-}
-impl std::fmt::Debug for ManagedBuildRegistry {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ManagedBuildRegistry { retained parent context }")
-    }
-}
-impl ManagedBuildRegistry {
-    /// Exact parent-only registry client configuration; never the selected child configuration.
-    #[must_use]
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
+mod generated_local;
+pub(super) use generated_local::{GeneratedServiceObservation, observe_generated_service};
 
-    /// Reobserve the parent's quorum and authenticate provider policy/signer at that exact cut.
-    /// # Errors
-    /// Refuses a poisoned owner, expired deadline/release, unavailable quorum, or invalid evidence.
-    pub fn discover(
-        &self,
-        provider: ProviderId,
-        deadline: Instant,
-    ) -> std::result::Result<VerifiedAccountReadProviderV1, BootstrapError> {
-        if Instant::now() >= deadline {
-            return Err(BootstrapError::Invalid("build registry deadline expired"));
-        }
-        self.finality
-            .try_lock()
-            .map_err(|error| match error {
-                std::sync::TryLockError::WouldBlock => BootstrapError::Busy,
-                std::sync::TryLockError::Poisoned(_) => {
-                    BootstrapError::Invalid("build registry checkpoint owner is poisoned")
-                }
-            })?
-            .discover_build_provider(&self.bootstrap, &self.config, provider, deadline)
-    }
-}
+/// Shared native discovery freshness for registry consumers and managed service observations.
+pub(super) const DISCOVERY_FRESHNESS: Duration = Duration::from_secs(30);
+
 impl ManagedStore {
-    /// Resolve an explicit signed parent registry for the retained developer environment.
+    /// Prepare the retained registry only when a cold package graph actually needs it.
     ///
-    /// Absence means no retained remote binding or an explicitly absent signed registry policy.
-    /// The separate registry checkpoint prevents contention with the live attachment worker.
+    /// The returned configuration belongs to the registry network. Its prepared transport owns
+    /// the exclusive, separately advancing discovery journal through every derived archive client.
+    /// Generated local TLS roots and addresses come only from the validated original profile;
+    /// fresh native admission, advert and signer custody remain mandatory before provider I/O.
+    /// Standard localnets and private environments without a signed parent registry return `None`.
+    /// Each cold build supplies its own bounded deadline; reopening never reissues original keys,
+    /// certificates, admission intervals or signed network releases.
     /// # Errors
-    /// Invalid retained ownership, changed signed release, missing wallet custody, expired
-    /// deadline, or unavailable exclusive registry checkpoint ownership.
+    /// Invalid retained profile, changed release, unavailable custody, elapsed deadline, or a
+    /// concurrent registry operation for this generation.
     pub fn build_registry(
         &self,
         runtime: &InstalledRuntime,
         name: &str,
         deadline: Instant,
-    ) -> Result<Option<ManagedBuildRegistry>> {
-        let Some(context) = super::remote::build_registry_context(self, runtime, name, deadline)?
-        else {
-            return Ok(None);
-        };
-        let finality = ParentFinalityStore::open(&context.finality_path, &context.bootstrap)
-            .map_err(|error| Error::Invalid(error.to_string()))?;
-        Ok(Some(ManagedBuildRegistry {
-            config: context.parent,
-            bootstrap: Arc::new(context.bootstrap),
-            finality: Arc::new(Mutex::new(finality)),
-        }))
+    ) -> Result<Option<(Config, PreparedMusubiArchiveFetchConfigV1)>> {
+        super::native_operation::require_deadline(deadline)?;
+        if let Some(context) = super::remote::build_registry_context(self, runtime, name, deadline)?
+        {
+            let finality = ParentFinalityStore::open(&context.finality_path, &context.bootstrap)
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+            let finality = Mutex::new(finality);
+            let config = context.parent;
+            let selected = config.clone();
+            let transport = PreparedMusubiArchiveFetchConfigV1::from_account_registry(
+                config.clone(),
+                Arc::new(move |provider| {
+                    check_deadline(deadline)?;
+                    let mut finality = finality.try_lock().map_err(|error| match error {
+                        std::sync::TryLockError::WouldBlock => {
+                            MusubiArchiveDiscoveryErrorV1::Unavailable
+                        }
+                        std::sync::TryLockError::Poisoned(_) => {
+                            MusubiArchiveDiscoveryErrorV1::Rejected
+                        }
+                    })?;
+                    let result = finality.discover_build_provider(
+                        &context.bootstrap,
+                        &selected,
+                        provider,
+                        deadline,
+                    );
+                    check_deadline(deadline)?;
+                    result.map_err(|error| match error {
+                        BootstrapError::Busy | BootstrapError::Io(_) => {
+                            MusubiArchiveDiscoveryErrorV1::Unavailable
+                        }
+                        _ => MusubiArchiveDiscoveryErrorV1::Rejected,
+                    })
+                }),
+                DISCOVERY_FRESHNESS,
+            )
+            .map_err(|_| Error::Invalid("cannot prepare retained parent build registry".into()))?;
+            super::native_operation::require_deadline(deadline)?;
+            return Ok(Some((config, transport)));
+        }
+        generated_local::prepare(self.prepared(name)?, deadline)
+    }
+}
+
+fn check_deadline(deadline: Instant) -> std::result::Result<(), MusubiArchiveDiscoveryErrorV1> {
+    if Instant::now() >= deadline {
+        Err(MusubiArchiveDiscoveryErrorV1::Deadline)
+    } else {
+        Ok(())
     }
 }

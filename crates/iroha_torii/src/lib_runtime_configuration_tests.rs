@@ -2320,10 +2320,10 @@ mod gateway_runtime_config_tests {
                 BTreeSet::from([[0x71; 32], [0x72; 32]]),
             )]);
             Ok(sorafs::gateway::GatewayComplianceFeedTransportIdentityV1 {
-                provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+                provider_handle: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
                     .to_owned(),
-                revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-                policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+                revision: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+                policy_digest: sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest(
                     &pins_by_hostname,
                 )
                 .expect("test feed policy digest"),
@@ -2376,9 +2376,9 @@ mod gateway_runtime_config_tests {
             BTreeSet::from([[0x71; 32], [0x72; 32]]),
         )]);
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
-            provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
-            revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-            policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+            provider_handle: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
+            revision: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest(
                 &pins_by_hostname,
             )
             .expect("test feed transport policy digest"),

@@ -170,6 +170,17 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   supplied chunk plan so you can stage CAR artefacts without re-reading the
   payload later.
 
+The gateway transport accepts canonical HTTPS origins with nonzero ports and pins public DNS
+answers. Generated managed local providers use a separate bounded original selection joined to
+fresh native account-read discovery before provider I/O and every token mint. Its blocking
+control and asynchronous chunk clients share the exact original CA and leaf, hostname, port and sole
+`127.0.0.1` socket. Platform trust, DNS/hosts lookup, proxies and redirects cannot supply a local
+fallback. Normal WebPKI hostname, chain, certificate-time and TLS signature checks remain enabled before
+the additional exact-leaf check. The selection does
+not authenticate copied profile files or establish provider/service readiness; the managed
+profile and native discovery owners provide those separate inputs. Component loopback tests
+exercise TLS transport, not a complete native cold-package fetch or process/RSS qualification.
+
 ## Validation
 
 Focused library and CLI suites cover canonical CAR layout, plan-bound streaming,

@@ -24,6 +24,50 @@ macro_rules! capture_world_table_once {
             }
             Ok(Some(snapshot))
         }
+
+        // Rust's type and value namespaces keep the existing callable reader
+        // beside its one generated descriptor. Identity and both concrete field
+        // callbacks are declared together; the static catalog cannot pair them
+        // with a second independently maintained frozen registry.
+        $vis mod $name {
+            use super::*;
+
+            /// One declared native field with its two concrete observation forms.
+            pub(in crate::state::authority_registry::complete::table_capture) const MATERIALIZER: TableMaterializer = TableMaterializer::Native {
+                id: $identity,
+                capture: super::$name,
+                frozen,
+            };
+
+            fn frozen(
+                block: &StateBlock<'_>,
+                limits: LeafLimits,
+            ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+                let Some(fields) = block.fields.as_ref() else {
+                    return Ok(None);
+                };
+                if fields.world.publication != crate::state::block_field::AggregatePublication::Frozen {
+                    return Ok(None);
+                }
+                let Some(rows) = fields.world.$field.frozen_images() else {
+                    return Ok(None);
+                };
+                if !rows.belongs_to(&fields.state_ref.world.$field) {
+                    return Ok(None);
+                }
+                // Preserve the exact native storage mode (including prepaid
+                // OperationIndex trees) and original private current image. Do
+                // not acquire State views, refresh the source or accept a pool.
+                // This singleton does not certify other fields' identities or
+                // acquisition modes; complete publication must bind them jointly.
+                CanonicalTableLeafSet::paired_table_from_rows(
+                    $identity,
+                    limits,
+                    &fields.state_ref.ivm_execution_budget,
+                    rows.current_entries(),
+                ).map(Some)
+            }
+        }
     };
 }
 

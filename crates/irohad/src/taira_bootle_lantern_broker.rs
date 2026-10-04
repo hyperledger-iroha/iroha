@@ -7,12 +7,11 @@
 use crate::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerLifecycleV1, serve_runtime_provider_broker_with_lifecycle_v1,
+    RuntimeProviderBrokerLifecycleV1, load_runtime_provider_broker_policy_file_v1,
+    serve_runtime_provider_broker_with_lifecycle_v1,
 };
 use clap::{Args, Parser, Subcommand};
-use iroha_config::parameters::{
-    actual::RuntimeProviderBrokerEndpointPath, validate_production_runtime_handle,
-};
+use iroha_config::parameters::{actual::RuntimeProviderBroker, validate_production_runtime_handle};
 use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
     BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceAuthorizationV1,
     BootleLanternIssuanceErrorV1, BootleLanternIssuerKeyPairV1,
@@ -785,9 +784,9 @@ struct ServeArgsV1 {
     public: PublicArgsV1,
     #[command(flatten)]
     credentials: CredentialPathArgsV1,
-    /// Public absolute path of the authenticated local broker socket.
-    #[arg(long = "broker-endpoint", value_name = "ABSOLUTE_SOCKET_PATH")]
-    broker_endpoint: RuntimeProviderBrokerEndpointPath,
+    /// Absolute path to the public TOML broker policy.
+    #[arg(long = "broker-policy", value_name = "ABSOLUTE_TOML_PATH")]
+    broker_policy: PathBuf,
     /// Exact policy-record digest obtained from a reviewed `export-public` run.
     #[arg(long, value_parser = parse_nonzero_digest_hex_v1)]
     expected_policy_record_digest: [u8; 32],
@@ -823,6 +822,8 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
                 .map_err(|_| TairaBootleLanternBrokerErrorV1::OutputFailed)
         }
         BrokerCommandV1::Serve(args) => {
+            let policy = load_runtime_provider_broker_policy_file_v1(&args.broker_policy)
+                .map_err(|_| TairaBootleLanternBrokerErrorV1::BrokerFailed)?;
             let config = args.public.into_config()?;
             let backend = Arc::new(
                 TairaBootleLanternIssuanceBrokerBackendV1::load_from_hardened_service_credentials_v1(
@@ -848,13 +849,13 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
                 .map_err(|_| TairaBootleLanternBrokerErrorV1::InvalidPublicBinding)?;
             let backends =
                 RuntimeProviderBrokerBackendsV1::new().with_bootle_lantern_issuance(backend);
-            serve_until_termination_v1(bindings, args.broker_endpoint, backends).await
+            serve_until_termination_v1(bindings, policy, backends).await
         }
     }
 }
 async fn serve_until_termination_v1(
     bindings: IrohaRuntimeProviderBindingsV1,
-    endpoint_path: RuntimeProviderBrokerEndpointPath,
+    policy: RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), TairaBootleLanternBrokerErrorV1> {
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -862,7 +863,7 @@ async fn serve_until_termination_v1(
     let mut server = tokio::task::spawn_blocking(move || {
         serve_runtime_provider_broker_with_lifecycle_v1(
             &bindings,
-            &endpoint_path,
+            &policy,
             backends,
             server_lifecycle,
             || {},
@@ -2114,25 +2115,33 @@ mod tests {
         ]);
         assert!(
             BrokerCliV1::try_parse_from(serve.clone()).is_err(),
-            "serve requires its public endpoint"
+            "serve requires its public broker policy"
         );
-        serve.extend([
-            "--broker-endpoint",
-            "/var/iroha/run/runtime-provider-broker-v1.sock",
-        ]);
+        serve.extend(["--broker-policy", "/var/lib/iroha/broker-policy.toml"]);
         let parsed =
-            BrokerCliV1::try_parse_from(serve.clone()).expect("accept validated serve endpoint");
+            BrokerCliV1::try_parse_from(serve.clone()).expect("accept public serve policy path");
         let BrokerCommandV1::Serve(parsed) = parsed.command else {
             panic!("serve command was parsed");
         };
         assert_eq!(
-            parsed.broker_endpoint.as_path(),
-            Path::new("/var/iroha/run/runtime-provider-broker-v1.sock")
+            parsed.broker_policy.as_path(),
+            Path::new("/var/lib/iroha/broker-policy.toml")
         );
-        *serve.last_mut().expect("endpoint path") = "../runtime-provider-broker-v1.sock";
+        let mut retired = serve.clone();
+        retired.extend([
+            "--broker-endpoint",
+            "/var/iroha/run/runtime-provider-broker-v1.sock",
+        ]);
         assert!(
-            BrokerCliV1::try_parse_from(serve).is_err(),
-            "relative endpoint fails during CLI parsing"
+            BrokerCliV1::try_parse_from(retired).is_err(),
+            "endpoint-only server override is retired"
+        );
+        assert!(
+            matches!(
+                load_runtime_provider_broker_policy_file_v1(Path::new("../broker-policy.toml")),
+                Err(crate::RuntimeProviderBrokerExecutableErrorV1::InvalidPolicyPath)
+            ),
+            "relative policy fails before credential loading"
         );
         for forbidden in [
             "--issuer-seed",

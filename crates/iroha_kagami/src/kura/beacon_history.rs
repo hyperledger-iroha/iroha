@@ -416,8 +416,9 @@ pub(super) fn inspect(
         }
         let mut bytes = vec![0; usize::try_from(entry.length)?];
         store.read_block_data(entry.start, &mut bytes)?;
-        let block = decode_framed_signed_block(&bytes)
-            .map_err(|error| eyre!("invalid canonical block at height {}: {error}", index + 1))?;
+        let block = decode_framed_signed_block(&bytes).wrap_err_with(|| {
+            format!("failed to decode canonical block at height {}", index + 1)
+        })?;
         if block.header().height().get() != index + 1
             || previous.is_some_and(|hash| block.header().prev_block_hash() != Some(hash))
         {

@@ -4,6 +4,8 @@
 //! Their result is a read-only observation, never permission to initialize a replacement
 //! outbox, sign a pin, enter Queue, or publish. Those effects require their own closed owner.
 
+pub use crate::query::signer_check::NativeCheckBindingErrorV1;
+
 use std::{sync::Arc, time::Instant};
 
 use iroha_data_model::{
@@ -21,10 +23,11 @@ use mv::storage::StorageReadOnly as _;
 
 use crate::{
     query::signer_check::{
-        BorrowedCheckExecutionCutV1, BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1,
-        NativeCheckRoundV1, NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1,
-        PreparedCheckExecutionV1, SignerCertifiedWalkV1, bind_signed_check_v1,
-        validate_native_signatory_v1, with_native_check_read_limits,
+        BindingFailure, BindingScope, BorrowedCheckExecutionCutV1, BoundNativeCheckV1,
+        NativeCheckErrorV1, NativeCheckFloorV1, NativeCheckRoundV1, NativeCustodyCheckPurposeV1,
+        NativeCustodyCheckRefV1, PreparedCheckExecutionV1, SignedCheckAttempt,
+        SignerCertifiedWalkV1, bind_signed_check_v1, validate_native_signatory_v1,
+        with_native_check_read_limits,
     },
     state::{
         State, StateReadOnly as _, StateView, WorldReadOnly as _, is_stable_state_view_generation,
@@ -118,14 +121,36 @@ pub struct VerifiedMusubiPinOutboxCheckV1 {
 /// A failed read attempt retaining the unchanged original paid Check for reconciliation.
 /// No failure renews the challenge, signed bytes, floor, expected row or absolute deadline.
 pub struct MusubiPinOutboxCheckAttemptFailureV1 {
-    error: Error,
+    error: crate::execution_attempt::ExecutionAttemptError<Error>,
     pending: PendingMusubiPinOutboxCheckV1,
 }
 impl MusubiPinOutboxCheckAttemptFailureV1 {
-    /// Payload-free reason for this read refusal.
+    /// Borrow the unchanged typed cause without discarding original pending custody.
     #[must_use]
-    pub const fn error(&self) -> Error {
-        self.error
+    pub fn error(&self) -> &crate::execution_attempt::ExecutionAttemptError<Error> {
+        &self.error
+    }
+    /// Inspect only a completed semantic rejection.
+    pub fn rejection(&self) -> Option<Error> {
+        match &self.error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => Some(*error),
+            _ => None,
+        }
+    }
+    /// Whether the same original attempt may retry within its unchanged deadline.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+        )
+    }
+    /// Original absolute deadline, never renewed by verification or current-row retry.
+    pub fn deadline(&self) -> Instant {
+        self.pending.deadline()
+    }
+    /// Borrow the exact original signed transaction without re-signing.
+    pub fn signed_transaction(&self) -> &SignedTransaction {
+        self.pending.signed_transaction()
     }
     /// Recover original custody and require a fresh native verification before consumption.
     #[must_use]
@@ -155,7 +180,7 @@ impl std::error::Error for MusubiPinOutboxCheckAttemptFailureV1 {}
 pub struct MusubiPinOutboxCurrentReadbackV1 {
     instruction: CheckMusubiPinOutboxV1,
     applied_floor: MusubiPinOutboxCheckFloorV1,
-    canonical_external: Vec<u8>,
+    canonical_external: iroha_allocation::ChargedBuffer<u8>,
     check_block_hash: [u8; 32],
 }
 
@@ -217,12 +242,13 @@ pub fn begin_musubi_pin_outbox_check_v1(
     state: Arc<State>,
     expected: MusubiPinOutboxCheckExpectedV1,
     deadline: Instant,
-) -> Result<PreparedMusubiPinOutboxCheckV1, Error> {
-    let mut round = NativeCheckRoundV1::start_until(deadline)?;
+) -> Result<PreparedMusubiPinOutboxCheckV1, crate::execution_attempt::ExecutionAttemptError<Error>>
+{
+    let mut round = NativeCheckRoundV1::start_until(deadline).map_err(Error::from)?;
     with_native_check_read_limits(|| {
         iroha_primitives::chain_id::validate_chain_id(expected.chain_id.as_str())
             .map_err(|_| Error::Invalid)?;
-        validate_native_signatory_v1(&expected.pin_authority)?;
+        validate_native_signatory_v1(&expected.pin_authority).map_err(Error::from)?;
         let mut instruction = CheckMusubiPinOutboxV1 {
             network_id: expected.network_id,
             pin_authority: expected.pin_authority,
@@ -232,13 +258,14 @@ pub fn begin_musubi_pin_outbox_check_v1(
             floor: expected.floor,
             expected: expected.expected,
         };
-        if norito::canonical_frame_len(&instruction).map_err(|_| Error::Invalid)?
-            > MUSUBI_PIN_OUTBOX_CHECK_MAX_BYTES_V1
+        if norito::canonical_frame_len(&instruction).map_err(|error| {
+            crate::execution_attempt::norito_decode_attempt_error(error, |_| Error::Invalid)
+        })? > MUSUBI_PIN_OUTBOX_CHECK_MAX_BYTES_V1
         {
-            return Err(Error::Invalid);
+            return Err(Error::Invalid.into());
         }
         instruction.validate_fields().map_err(|_| Error::Invalid)?;
-        instruction.challenge = round.issue_challenge()?;
+        instruction.challenge = round.issue_challenge().map_err(Error::from)?;
         let prepared = PreparedMusubiPinOutboxCheckV1 {
             state,
             chain_id: expected.chain_id,
@@ -251,33 +278,34 @@ pub fn begin_musubi_pin_outbox_check_v1(
             || view.network_id() != &prepared.instruction.network_id
             || view.chain_id() != &prepared.chain_id
         {
-            return Err(Error::CurrentState);
+            return Err(Error::CurrentState.into());
         }
         current_row(&view, &prepared.instruction)?;
-        let chain = SignerCertifiedWalkV1::new(&view)?;
+        let chain =
+            SignerCertifiedWalkV1::new(&view).map_err(|error| error.map_rejection(Error::from))?;
         let expected_instance = global_instance(&prepared)?;
         let floor = prepared.instruction.floor;
         for receipt in chain.walk(floor.height, floor.height.max(2)) {
-            prepared.round.ensure_live()?;
-            let receipt = receipt?;
-            let block = receipt.in_view(&view)?;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let receipt = receipt.map_err(|error| error.map_rejection(Error::from))?;
+            let block = receipt.in_view(&view).map_err(Error::from)?;
             if block.height() == floor.height
                 && (*block.block_hash().as_ref() != floor.block_hash
                     || block.id() != floor.context_id)
             {
-                return Err(Error::Finality);
+                return Err(Error::Finality.into());
             }
             if block.height() >= 2
                 && block
                     .header()
                     .is_none_or(|header| header.instance != expected_instance)
             {
-                return Err(Error::Finality);
+                return Err(Error::Finality.into());
             }
         }
-        prepared.round.ensure_live()?;
+        prepared.round.ensure_live().map_err(Error::from)?;
         if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::CurrentState);
+            return Err(Error::CurrentState.into());
         }
         drop(chain);
         drop(view);
@@ -299,94 +327,166 @@ impl PreparedMusubiPinOutboxCheckV1 {
     /// Bind the exact sole signed native Check without renewing the original round.
     ///
     /// # Errors
-    /// Consumes the preparation on expiry, signature/profile failure, field substitution or capacity refusal.
+    /// Retains signed custody on expiry, signature/profile failure, substitution or local capacity refusal.
+    /// Every failure retains the exact signed graph and original preparation. Local refusals may
+    /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
     pub fn bind_signed_transaction(
-        mut self,
+        self,
         signed: SignedTransaction,
-    ) -> Result<PendingMusubiPinOutboxCheckV1, Error> {
-        let bound = bind_signed_check_v1(
-            &mut self.round,
-            NativeCustodyCheckRefV1::MusubiPinOutbox(&self.instruction),
-            self.chain_id.as_str(),
-            *self.instruction.network_id.as_bytes(),
-            &self.instruction.pin_authority,
-            native_floor(self.instruction.floor),
-            signed,
-        )?;
-        Ok(PendingMusubiPinOutboxCheckV1 {
-            prepared: self,
-            bound,
+    ) -> Result<PendingMusubiPinOutboxCheckV1, MusubiPinOutboxCheckBindingFailureV1> {
+        bind_signed_check_v1(self, SignedCheckAttempt::new(signed), Self::binding_scope)
+            .map(|(prepared, bound)| PendingMusubiPinOutboxCheckV1 { prepared, bound })
+            .map_err(MusubiPinOutboxCheckBindingFailureV1)
+    }
+
+    /// Bind the exact signed Check already copied under this original State's physical pool.
+    ///
+    /// The move-only graph owner survives binding/finality refusal and current-row retry. This
+    /// uses the same signature/profile/floor verifier as ordinary binding, not an admission bypass.
+    /// # Errors
+    /// Retains the complete original allocated graph on any refusal, including a foreign pool.
+    pub fn bind_allocated_transaction(
+        self,
+        signed: iroha_data_model::transaction::signed::pin_allocation::AllocatedPinTransactionV1,
+    ) -> Result<PendingMusubiPinOutboxCheckV1, MusubiPinOutboxCheckBindingFailureV1> {
+        bind_signed_check_v1(
+            self,
+            SignedCheckAttempt::from_allocated_pin(signed),
+            Self::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingMusubiPinOutboxCheckV1 { prepared, bound })
+        .map_err(MusubiPinOutboxCheckBindingFailureV1)
+    }
+
+    fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
+        Ok(BindingScope {
+            state: &self.state,
+            round: &mut self.round,
+            instruction: NativeCustodyCheckRefV1::MusubiPinOutbox(&self.instruction),
+            chain_id: self.chain_id.as_str(),
+            network_id: *self.instruction.network_id.as_bytes(),
+            authority: &self.instruction.pin_authority,
+            floor: native_floor(self.instruction.floor),
         })
     }
 }
 
-fn authenticate<'view, 'state>(
+fn authenticate<'view, 'state, 'bound>(
     view: &'view StateView<'state>,
     prepared: &PreparedMusubiPinOutboxCheckV1,
-    bound: BoundNativeCheckV1,
+    bound: &'bound mut Option<BoundNativeCheckV1>,
 ) -> Result<
-    (
-        BorrowedCheckExecutionCutV1<'view, 'state>,
-        BoundNativeCheckV1,
-    ),
-    (BoundNativeCheckV1, Error),
+    BorrowedCheckExecutionCutV1<'view, 'state, 'bound>,
+    crate::execution_attempt::ExecutionAttemptError<Error>,
 > {
     with_native_check_read_limits(|| {
-        let mut proof = PreparedCheckExecutionV1::new_retaining(
+        let mut proof = PreparedCheckExecutionV1::new(
             view,
             NativeCustodyCheckPurposeV1::MusubiPinOutbox,
             bound,
             &prepared.round,
         )
-        .map_err(|(bound, error)| (bound, error.into()))?;
-        let checked = (|| {
-            let chain = SignerCertifiedWalkV1::new(view)?;
-            let instance = global_instance(prepared)?;
-            for receipt in chain.walk(proof.floor_height(), proof.applied_height()) {
-                prepared.round.ensure_live()?;
-                let receipt = receipt?;
-                let block = receipt.in_view(view)?;
-                if block.height() >= 2
-                    && block
-                        .header()
-                        .is_none_or(|header| header.instance != instance)
-                {
-                    return Err(Error::Finality);
-                }
-                proof.consume(&receipt)?;
+        .map_err(|error| error.map_rejection(Error::from))?;
+        let chain =
+            SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
+        let instance = global_instance(prepared)?;
+        for receipt in chain.walk(proof.floor_height(), proof.applied_height()) {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let receipt = receipt.map_err(|error| error.map_rejection(Error::from))?;
+            let block = receipt.in_view(view).map_err(Error::from)?;
+            if block.height() >= 2
+                && block
+                    .header()
+                    .is_none_or(|header| header.instance != instance)
+            {
+                return Err(Error::Finality.into());
             }
-            current_row(view, &prepared.instruction)
-        })();
-        if let Err(error) = checked {
-            return Err((proof.into_bound(), error));
+            proof
+                .consume(&receipt)
+                .map_err(|error| error.map_rejection(Error::from))?;
         }
+        current_row(view, &prepared.instruction)?;
         proof
-            .finish_retaining_attempt()
-            .map_err(|(bound, error)| (bound, error.into()))
+            .finish()
+            .map_err(|error| error.map_rejection(Error::from))
     })
 }
 
 fn verify_attempt(
     prepared: &PreparedMusubiPinOutboxCheckV1,
-    bound: BoundNativeCheckV1,
-) -> Result<(BoundNativeCheckV1, u64, MusubiPinOutboxCheckFloorV1), (BoundNativeCheckV1, Error)> {
-    if let Err(error) = prepared.round.ensure_live() {
-        return Err((bound, error.into()));
-    }
+    bound: &mut Option<BoundNativeCheckV1>,
+) -> Result<
+    (u64, MusubiPinOutboxCheckFloorV1),
+    crate::execution_attempt::ExecutionAttemptError<Error>,
+> {
+    prepared.round.ensure_live().map_err(Error::from)?;
     let generation = prepared.state.state_view_generation();
     let view = prepared.state.view();
     if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
-    let (cut, bound) = authenticate(&view, prepared, bound)?;
+    let cut = authenticate(&view, prepared, bound)?;
     let applied_floor = public_floor(cut.applied_floor());
-    if let Err(error) = prepared.round.ensure_live() {
-        return Err((bound, error.into()));
-    }
+    prepared.round.ensure_live().map_err(Error::from)?;
     if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
-    Ok((bound, generation, applied_floor))
+    Ok((generation, applied_floor))
+}
+
+/// Exact original signed attempt retained after binding refusal.
+/// Retry cannot replace the signer output, challenge, State pool, or original deadline.
+#[must_use = "retain the original signed Check until binding completes or the attempt is retired"]
+pub struct MusubiPinOutboxCheckBindingFailureV1(
+    BindingFailure<PreparedMusubiPinOutboxCheckV1, Error>,
+);
+
+impl MusubiPinOutboxCheckBindingFailureV1 {
+    /// Borrow the original local refusal or completed rejection without erasing custody.
+    #[must_use]
+    pub fn error(&self) -> &NativeCheckBindingErrorV1<Error> {
+        &self.0.error
+    }
+
+    /// Inspect a completed native rejection; local refusals have no transaction verdict.
+    #[must_use]
+    pub fn rejection(&self) -> Option<Error> {
+        match &self.0.error {
+            NativeCheckBindingErrorV1::Rejected(error) => Some(*error),
+            _ => None,
+        }
+    }
+
+    /// The unchanged absolute deadline, including after any number of local retries.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.0.prepared.round.deadline()
+    }
+
+    /// Retry only this exact signed attempt; terminal failures return the same owner.
+    ///
+    /// # Errors
+    /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    pub fn retry(self) -> Result<PendingMusubiPinOutboxCheckV1, Self> {
+        if !self.0.error.is_retryable() {
+            return Err(self);
+        }
+        bind_signed_check_v1(
+            self.0.prepared,
+            self.0.signed,
+            PreparedMusubiPinOutboxCheckV1::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingMusubiPinOutboxCheckV1 { prepared, bound })
+        .map_err(Self)
+    }
+}
+impl std::fmt::Debug for MusubiPinOutboxCheckBindingFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MusubiPinOutboxCheckBindingFailureV1")
+            .field("error", &self.0.error)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PendingMusubiPinOutboxCheckV1 {
@@ -407,18 +507,21 @@ impl PendingMusubiPinOutboxCheckV1 {
     pub fn verify_finalized(
         self,
     ) -> Result<VerifiedMusubiPinOutboxCheckV1, MusubiPinOutboxCheckAttemptFailureV1> {
-        match verify_attempt(&self.prepared, self.bound) {
-            Ok((bound, generation, applied_floor)) => Ok(VerifiedMusubiPinOutboxCheckV1 {
+        let mut original = Some(self.bound);
+        match verify_attempt(&self.prepared, &mut original) {
+            Ok((generation, applied_floor)) => Ok(VerifiedMusubiPinOutboxCheckV1 {
                 prepared: self.prepared,
-                bound,
+                bound: original.take().expect("verified binding remains original"),
                 generation,
                 applied_floor,
             }),
-            Err((bound, error)) => Err(MusubiPinOutboxCheckAttemptFailureV1 {
+            Err(error) => Err(MusubiPinOutboxCheckAttemptFailureV1 {
                 error,
                 pending: PendingMusubiPinOutboxCheckV1 {
                     prepared: self.prepared,
-                    bound,
+                    bound: original
+                        .take()
+                        .expect("failed verification retains original binding"),
                 },
             }),
         }
@@ -427,41 +530,38 @@ impl PendingMusubiPinOutboxCheckV1 {
 
 fn consume_attempt(
     prepared: &PreparedMusubiPinOutboxCheckV1,
-    bound: BoundNativeCheckV1,
+    bound: &mut Option<BoundNativeCheckV1>,
     generation: u64,
     applied_floor: MusubiPinOutboxCheckFloorV1,
     expected_state: &Arc<State>,
-) -> Result<(Vec<u8>, [u8; 32]), (BoundNativeCheckV1, Error)> {
+) -> Result<
+    (iroha_allocation::ChargedBuffer<u8>, [u8; 32]),
+    crate::execution_attempt::ExecutionAttemptError<Error>,
+> {
     if !Arc::ptr_eq(expected_state, &prepared.state) {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
-    if let Err(error) = prepared.round.ensure_live() {
-        return Err((bound, error.into()));
-    }
+    prepared.round.ensure_live().map_err(Error::from)?;
     if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
     let view = prepared.state.view();
     if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
-    let (cut, bound) = authenticate(&view, prepared, bound)?;
+    let cut = authenticate(&view, prepared, bound)?;
     if public_floor(cut.applied_floor()) != applied_floor {
-        return Err((bound, Error::CurrentState));
+        return Err(Error::CurrentState.into());
     }
-    let checked = {
+    {
         let _publication = prepared.state.musubi_pin_outbox_publication_lease();
         if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            Err(Error::CurrentState)
-        } else {
-            current_row(&view, &prepared.instruction)
-                .and_then(|()| prepared.round.ensure_live().map_err(Error::from))
+            return Err(Error::CurrentState.into());
         }
-    };
-    match checked {
-        Ok(()) => Ok(cut.into_verified_entry()),
-        Err(error) => Err((bound, error)),
+        current_row(&view, &prepared.instruction)?;
+        prepared.round.ensure_live().map_err(Error::from)?;
     }
+    Ok(cut.into_verified_entry())
 }
 
 impl VerifiedMusubiPinOutboxCheckV1 {
@@ -479,9 +579,10 @@ impl VerifiedMusubiPinOutboxCheckV1 {
         self,
         expected_state: &Arc<State>,
     ) -> Result<MusubiPinOutboxCurrentReadbackV1, MusubiPinOutboxCheckAttemptFailureV1> {
+        let mut original = Some(self.bound);
         match consume_attempt(
             &self.prepared,
-            self.bound,
+            &mut original,
             self.generation,
             self.applied_floor,
             expected_state,
@@ -492,11 +593,13 @@ impl VerifiedMusubiPinOutboxCheckV1 {
                 canonical_external,
                 check_block_hash,
             }),
-            Err((bound, error)) => Err(MusubiPinOutboxCheckAttemptFailureV1 {
+            Err(error) => Err(MusubiPinOutboxCheckAttemptFailureV1 {
                 error,
                 pending: PendingMusubiPinOutboxCheckV1 {
                     prepared: self.prepared,
-                    bound,
+                    bound: original
+                        .take()
+                        .expect("failed consumption retains original binding"),
                 },
             }),
         }
@@ -525,7 +628,7 @@ impl MusubiPinOutboxCurrentReadbackV1 {
     /// Exact successfully executed canonical External bytes, retained within the shared bound.
     #[must_use]
     pub fn canonical_external(&self) -> &[u8] {
-        &self.canonical_external
+        self.canonical_external.as_slice()
     }
     /// Canonical hash of the block containing that exact successful Check.
     #[must_use]

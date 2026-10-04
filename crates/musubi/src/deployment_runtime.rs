@@ -6,7 +6,7 @@ use crate::archive_fetch::PreparedProductionSorafsArchiveTransportV1;
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::config::Config;
 use iroha_contract_deploy::{
-    DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
+    DeploymentError, DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
     DeploymentService, JournalDisposition, MAX_DEPLOYMENT_ARTIFACT_BYTES, PreparedDeployment,
 };
 use iroha_data_model::{
@@ -377,7 +377,7 @@ impl DeploymentRuntime {
                     }
                     let receipt = service
                         .resume(&journal, progress)
-                        .wrap_err_with(|| format!("deployment journal: {}", journal.display()))?;
+                        .map_err(|error| journal_failure(error, &journal))?;
                     return Ok(DeploymentRun { receipt, journal });
                 }
                 JournalDisposition::Pending { .. } => {
@@ -410,7 +410,7 @@ impl DeploymentRuntime {
         let journal = session.persist(&service, &prepared)?;
         let receipt = service
             .execute(&prepared, &journal, progress)
-            .wrap_err_with(|| format!("deployment journal: {}", journal.display()))?;
+            .map_err(|error| journal_failure(error, &journal))?;
         Ok(DeploymentRun { receipt, journal })
     }
 
@@ -453,13 +453,22 @@ impl DeploymentRuntime {
             &plan_journal_id(&retained_preflight)?,
         )?;
         let receipt = after_review(&retained_preflight, review, || {
-            Ok(service.resume(&retained, progress)?)
+            service
+                .resume(&retained, progress)
+                .map_err(|error| journal_failure(error, &retained))
         })?;
         Ok(DeploymentRun {
             receipt,
             journal: retained,
         })
     }
+}
+
+fn journal_failure(error: DeploymentError, journal: &Path) -> eyre::Report {
+    // Frontends commonly display only the outer message. Preserve the native public diagnostic
+    // alongside its exact recovery path without expanding arbitrary underlying error chains.
+    let message = format!("{error}\nDeployment journal: {}", journal.display());
+    eyre::Report::new(error).wrap_err(message)
 }
 
 fn after_review<T, R, F: FnMut(&T) -> Result<()> + ?Sized>(
@@ -583,6 +592,56 @@ mod tests {
     use tempfile::TempDir;
 
     const SOURCE: &str = "seiyaku Coffee { view fn quote(int cups) -> int { return cups * 10; } }";
+
+    #[test]
+    fn journal_failure_display_preserves_pending_hash_cause_and_exact_recovery_path() {
+        let hash = iroha::crypto::Hash::new(b"original attempted deployment").to_string();
+        let journal = Path::new("managed state/deployments/original journal");
+        let diagnostic =
+            eyre!("internal transport detail").wrap_err("the original finality deadline elapsed");
+        let error = journal_failure(
+            DeploymentError::Pending {
+                step: "upload".to_owned(),
+                hash: hash.clone(),
+                source: diagnostic,
+            },
+            journal,
+        );
+        let displayed = error.to_string();
+        assert!(displayed.contains("deployment step `upload`"));
+        assert!(displayed.contains(&hash));
+        assert!(displayed.contains("the original finality deadline elapsed"));
+        assert!(displayed.contains("resume this journal without creating another deployment"));
+        assert!(displayed.ends_with(&format!("Deployment journal: {}", journal.display())));
+        assert!(!displayed.contains("internal transport detail"));
+        assert!(matches!(
+            error.downcast_ref::<DeploymentError>(),
+            Some(DeploymentError::Pending { hash: original, .. }) if original == &hash
+        ));
+    }
+
+    #[test]
+    fn journal_failure_preserves_native_error_categories_and_public_messages() {
+        let journal = Path::new("managed state/original journal");
+        for native in [
+            DeploymentError::Preflight {
+                operation: "fee quote",
+                source: eyre!("approved fee cap exceeded"),
+            },
+            DeploymentError::Journal(eyre!("original journal is busy")),
+            DeploymentError::Readback(eyre!("alias differs from original contract")),
+        ] {
+            let public = native.to_string();
+            let error = journal_failure(native, journal);
+            assert!(error.to_string().starts_with(&public));
+            assert!(error.downcast_ref::<DeploymentError>().is_some());
+            assert!(
+                error
+                    .to_string()
+                    .ends_with(&format!("Deployment journal: {}", journal.display()))
+            );
+        }
+    }
 
     #[test]
     fn retained_plan_review_rejection_prevents_recovery_dispatch() {

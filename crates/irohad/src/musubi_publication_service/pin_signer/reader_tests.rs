@@ -91,12 +91,12 @@ fn original_state_capacity_refuses_before_clock_or_signing_and_preserves_retry_o
     let (held, registration) = exhaust_original_budget(&budget);
     let mut clock = ClosedClock { calls: 0 };
     let error = signer
-        .sign_finalized_archive(&fixture.query, &mut clock)
+        .prepare_finalized_archive(&fixture.query, &mut clock, 200_000)
         .expect_err("original State capacity is occupied");
     assert_eq!(clock.calls, 0, "refuse before clock, fees or signing");
     require_original_release(error, &budget, held, registration);
     assert_eq!(
-        signer.sign_finalized_archive(&fixture.query, &mut clock),
+        signer.prepare_finalized_archive(&fixture.query, &mut clock, 200_000),
         Err(MusubiPublicationPinSigningErrorV1::Clock),
         "retry of the same source passes native finality after its original refund"
     );
@@ -160,7 +160,7 @@ fn initial_and_final_reads_distinguish_locally_future_evidence_from_invalid_fina
         }
         let mut clock = ClosedClock { calls: 0 };
         assert_eq!(
-            signer.sign_finalized_archive(&future, &mut clock),
+            signer.prepare_finalized_archive(&future, &mut clock, 200_000),
             Err(MusubiPublicationPinSigningErrorV1::LocallyAhead)
         );
         assert_eq!(clock.calls, 0);
@@ -173,7 +173,7 @@ fn initial_and_final_reads_distinguish_locally_future_evidence_from_invalid_fina
     substituted.snapshot.finalized_block_hash = [0xD2; 32];
     let mut clock = ClosedClock { calls: 0 };
     assert_eq!(
-        signer.sign_finalized_archive(&substituted, &mut clock),
+        signer.prepare_finalized_archive(&substituted, &mut clock, 200_000),
         Err(MusubiPublicationPinSigningErrorV1::Finality)
     );
     assert_eq!(clock.calls, 0);

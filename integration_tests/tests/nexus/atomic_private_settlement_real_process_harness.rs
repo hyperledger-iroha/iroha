@@ -5583,7 +5583,10 @@ fn observe_idempotent_finalized_retry(
 ) -> Result<FaultStateSnapshotV1> {
     let before = wait_for_converged_fault_state_snapshot(network, "before-finalized-retry")?;
     let fee_before = sponsor_nexus_fee_balance(sponsor)?;
-    let observed_height = sponsor.client().get_privacy_capabilities()?.committed_height;
+    let observed_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
     ensure!(
         observed_height >= receipt.finalized_height
             && observed_height >= manifest.authority_context_height
@@ -5625,7 +5628,9 @@ fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height() {
         carrier_id,
         accepted_at_height: 10,
     };
-    assert!(ensure_finalized_retry_acknowledgment(&expected, bundle_id, carrier_id, 10, 11).is_ok());
+    assert!(
+        ensure_finalized_retry_acknowledgment(&expected, bundle_id, carrier_id, 10, 11).is_ok()
+    );
     for changed in [
         iroha::client::PrivateSettlementBundleSubmitResponseV1 {
             bundle_id: Hash::new(b"substituted bundle"),
@@ -5648,7 +5653,9 @@ fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height() {
             ..expected
         },
     ] {
-        assert!(ensure_finalized_retry_acknowledgment(&changed, bundle_id, carrier_id, 10, 11).is_err());
+        assert!(
+            ensure_finalized_retry_acknowledgment(&changed, bundle_id, carrier_id, 10, 11).is_err()
+        );
     }
     let overflow = iroha::client::PrivateSettlementBundleSubmitResponseV1 {
         accepted_at_height: u64::MAX,
@@ -8237,7 +8244,7 @@ fn certified_native_history_from_proofs(
             "native history proof differs from requested height"
         );
         proof.decode_checked()?;
-        let block = iroha::data_model::block::decode_versioned_signed_block(&proof.block_wire)?;
+        let block = iroha::data_model::block::decode_framed_signed_block(&proof.block_wire)?;
         let block = iroha::data_model::block::SharedSignedBlock::try_new(block, &budget)
             .map_err(|(_, error)| error)?;
         if at == 1 {
@@ -8537,7 +8544,7 @@ fn validate_transparent_native_receipt(
         receipt.entrypoint_hash == transaction.hash_as_entrypoint(),
         "native carrier does not bind the original settlement transaction"
     );
-    let block = iroha_data_model::block::decode_versioned_signed_block(&receipt.block_wire)?;
+    let block = iroha_data_model::block::decode_framed_signed_block(&receipt.block_wire)?;
     ensure!(
         block.header() == receipt.block_header
             && block
@@ -8876,8 +8883,9 @@ fn run_real_process_transparent_control_benchmark(
     // Rejected results may be recorded in canonical history. Their exact
     // typed failure was authenticated on every peer above; no applied replay is accepted.
 
-    let signed_rs16_da_observations =
-        owner.verify_signed_rs16_finality(carrier.height().get())?.observations;
+    let signed_rs16_da_observations = owner
+        .verify_signed_rs16_finality(carrier.height().get())?
+        .observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -9954,8 +9962,9 @@ fn run_real_process_private_benchmark(
         atomicity_observations.len() == network.all_peers().count(),
         "private benchmark atomicity observer omitted a validator or committee observer"
     );
-    let signed_rs16_da_observations =
-        owner.verify_signed_rs16_finality(receipt.finalized_height)?.observations;
+    let signed_rs16_da_observations = owner
+        .verify_signed_rs16_finality(receipt.finalized_height)?
+        .observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"

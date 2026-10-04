@@ -230,3 +230,52 @@ fn retained_payload_source_check_is_exact_and_survives_original_field_movement()
     without_allocations(|| drop(owner));
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn retained_byte_total_counts_original_spare_capacity_and_survives_payload_movement() {
+    for ledger_capacity in [0, 3] {
+        let budget = AllocationBudget::new(4096);
+        let mut ledger = ChargedBuffer::new(ledger_capacity, &budget).unwrap();
+        if ledger_capacity == 0 {
+            // SAFETY: the unit payload owns no allocations; the zero-capacity
+            // ledger is still the actual original-pool ledger owner.
+            let owner = unsafe { RetainedPayload::try_new((), ledger, &budget) }
+                .unwrap_or_else(|(_, _, error)| panic!("empty original ledger: {error}"));
+            assert_eq!(without_allocations(|| owner.allocation_bytes()), Some(0));
+            drop(owner);
+        } else {
+            let mut bytes = ChargedBuffer::<u8>::new(17, &budget).unwrap();
+            bytes.append(&[7, 11]).unwrap();
+            let pointer = bytes.as_slice().as_ptr();
+            let exact = 17 + Layout::array::<AllocationCharge>(3).unwrap().size();
+            // SAFETY: retain the exact capacity-17 allocation even though only two
+            // values are initialized. It moves with its original charge immediately.
+            let (bytes, charge) = unsafe { bytes.into_allocation_parts() };
+            ledger.push_reserved(charge);
+            let owner = unsafe { RetainedPayload::try_new(bytes, ledger, &budget) }
+                .unwrap_or_else(|(_, _, error)| panic!("original ledger: {error}"));
+            assert_eq!(owner.get().len(), 2);
+            assert_eq!(owner.get().capacity(), 17);
+            assert_eq!(budget.reserved_bytes(), exact);
+            assert_eq!(
+                without_allocations(|| owner.allocation_bytes()),
+                Some(exact)
+            );
+            let moved = without_allocations(|| {
+                // SAFETY: the identical original allocation moves into one tuple
+                // field without cloning, growing, dropping or exporting it.
+                unsafe { owner.map_payload(|bytes| (bytes, 31u16)) }
+            });
+            assert_eq!(moved.get().0.as_ptr(), pointer);
+            assert!(moved.belongs_to(&budget));
+            assert_eq!(
+                without_allocations(|| moved.allocation_bytes()),
+                Some(exact)
+            );
+            assert_eq!(budget.reserved_bytes(), exact);
+            drop(moved);
+        }
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

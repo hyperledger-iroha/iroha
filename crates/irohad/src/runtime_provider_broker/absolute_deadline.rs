@@ -1,4 +1,4 @@
-//! One monotonic client exchange deadline across lock admission and partial socket I/O.
+//! One monotonic broker operation deadline across admission and partial socket I/O.
 
 use super::BrokerError;
 use std::{

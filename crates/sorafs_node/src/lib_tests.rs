@@ -957,6 +957,7 @@ fn finalized_provider_ingest_local_storage_awaits_signing_and_survives_restart()
         policy_digest: [0xA2; 32],
     };
     let completion_authority = ProviderIngestCompletionAuthorityV1::new(
+        (fixture.order.issued_by.clone()).clone(),
         fixture.order.issued_by.clone(),
         completion_signer_policy,
     );
@@ -974,7 +975,7 @@ fn finalized_provider_ingest_local_storage_awaits_signing_and_survives_restart()
         order_id: fixture.order.order_id,
         provider_id: fixture.provider_id,
         completion_epoch,
-        expected_authority: completion_authority,
+        expected_authority: completion_authority.clone(),
         expected_assignment_revision: fixture.order.assignment_revision,
         finalized_anchor: ProviderIngestFinalizedAnchorV1 {
             height: fixture.ingest_cursor.height,
@@ -999,8 +1000,7 @@ fn finalized_provider_ingest_local_storage_awaits_signing_and_survives_restart()
             ProviderIngestCompletionSigningContextV1 {
                 baseline_finalized_cursor: fixture.ingest_cursor,
                 network_id,
-                provider_owner: completion_payload.authority.clone(),
-                signer_policy: completion_signer_policy,
+                expected_authority: completion_authority,
                 assignment_revision: fixture.order.assignment_revision,
                 completion_epoch,
                 expected_payload: completion_payload,

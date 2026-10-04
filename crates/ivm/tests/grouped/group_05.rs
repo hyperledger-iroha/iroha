@@ -6,12 +6,16 @@ mod kotodama_amounts;
 mod kotodama_argument_record;
 #[path = "../kotodama_checked_arithmetic.rs"]
 mod kotodama_checked_arithmetic;
+#[path = "../kotodama_dead_operands.rs"]
+mod kotodama_dead_operands;
 #[path = "../kotodama_lists.rs"]
 mod kotodama_lists;
 #[path = "../kotodama_simple_contracts.rs"]
 mod kotodama_simple_contracts;
 #[path = "../kotodama_state_aggregate_literal_runtime.rs"]
 mod kotodama_state_aggregate_literal_runtime;
+#[path = "../kotodama_state_borrowed_operands.rs"]
+mod kotodama_state_borrowed_operands;
 #[path = "../kotodama_state_map_lowering.rs"]
 mod kotodama_state_map_lowering;
 #[path = "../kotodama_state_map_pointer.rs"]

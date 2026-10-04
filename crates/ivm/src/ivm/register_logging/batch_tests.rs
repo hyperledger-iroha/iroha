@@ -216,6 +216,14 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
     }
 }
 
+// Admit the earlier cycle-delta owner so these tests pressure the intended
+// register-row/shell boundary, using its canonical public layout exactly.
+fn initial_cycle_delta_bytes() -> usize {
+    let mut deltas = zk::DeltaTraceLog::new(None);
+    deltas.prepare_batch(1, 256, 0, None).unwrap();
+    deltas.allocated_bytes().unwrap()
+}
+
 #[test]
 fn ordinary_instruction_shortage_precedes_gas_cycles_registers_and_shared_allowance() {
     let original = AllocationBudget::new(LIMIT);
@@ -226,7 +234,8 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_registers_and_shared_allowa
     let baseline = original.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
     let steps = 4 * size_of::<zk::StepEntry>();
-    original.set_limit_bytes(baseline + shell + steps + 4 * ROW - 1);
+    let deltas = initial_cycle_delta_bytes();
+    original.set_limit_bytes(baseline + shell + steps + deltas + 4 * ROW - 1);
     let start = vm.pc;
     let allowance = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(2).unwrap());
     assert!(
@@ -560,7 +569,8 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycle_allowance() {
         let shell = zk::SharedRegLog::allocation_layout().size();
         let rows = event_counts::instruction(word, 1, false, false).unwrap() * ROW;
         let steps = 4 * size_of::<zk::StepEntry>();
-        original.set_limit_bytes(baseline + shell + steps + rows + shell - 1);
+        let deltas = initial_cycle_delta_bytes();
+        original.set_limit_bytes(baseline + shell + steps + deltas + rows + shell - 1);
         let allowance = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(2).unwrap());
         let mut host = AllRegisters {
             reject_prepare: false,
@@ -590,7 +600,10 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycle_allowance() {
                 .as_slice()
                 .is_empty()
         );
-        assert_eq!(original.reserved_bytes(), baseline + shell + steps + rows);
+        assert_eq!(
+            original.reserved_bytes(),
+            baseline + shell + steps + deltas + rows
+        );
         drop((vm, previous));
         assert_eq!(original.reserved_bytes(), 0);
     }

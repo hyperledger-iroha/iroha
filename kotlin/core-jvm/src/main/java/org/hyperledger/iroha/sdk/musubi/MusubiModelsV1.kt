@@ -2022,18 +2022,24 @@ class MusubiProviderIngestCompletionSignerPolicyV1(
     )
 }
 
-/** Chain-authoritative provider owner and governed completion signer policy. */
+/** Chain-authoritative provider owner, completion signer and governed signer policy. */
 class MusubiProviderIngestCompletionAuthorityV1(
     @JvmField val providerOwner: String,
+    @JvmField val completionSigner: String,
     @JvmField val signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1,
 ) : MusubiWireValueV1() {
     internal val providerOwnerPayload = MusubiValidationV1.canonicalAccountPayload(
         providerOwner,
         "providerCompletionAuthority.providerOwner",
     )
+    internal val completionSignerPayload = MusubiValidationV1.canonicalAccountPayload(
+        completionSigner,
+        "providerCompletionAuthority.completionSigner",
+    )
 
     override fun wireValue(): Any = linkedMapOf(
         "provider_owner" to providerOwner,
+        "completion_signer" to completionSigner,
         "signer_policy" to signerPolicy.wireValue(),
     )
 }
@@ -2091,8 +2097,8 @@ class MusubiProviderBundleVerificationBindingV1(
             completedBy,
             "providerAttestation.completedBy",
         )
-        require(completedByPayload.contentEquals(completionAuthority.providerOwnerPayload)) {
-            "Provider attestation completer must equal the completion-authority owner"
+        require(completedByPayload.contentEquals(completionAuthority.completionSignerPayload)) {
+            "Provider attestation completer must equal the completion-authority signer"
         }
         MusubiValidationV1.requireU64(assignmentRevision, "provider assignment revision")
         MusubiValidationV1.requireU64(completionEpoch, "provider completion epoch")
@@ -2140,7 +2146,7 @@ class MusubiProviderBundleVerificationPayloadV1(
     )
 }
 
-/** One provider-owner controller approval over a bundle-verification payload. */
+/** One completion-signer controller approval over a bundle-verification payload. */
 class MusubiProviderBundleVerificationApprovalV1(
     @JvmField val publicKey: String,
     @JvmField val signature: String,
@@ -2209,6 +2215,13 @@ class MusubiProviderBundleAttestationKeyV1(
         "replication_order" to replicationOrder.wireValue(),
         "provider_id" to listOf(providerId),
     )
+
+    companion object {
+        /** Decode the exact Norito-JSON query through the canonical SDK codec. */
+        @JvmStatic
+        fun fromJsonBytes(payload: ByteArray): MusubiProviderBundleAttestationKeyV1 =
+            MusubiJsonV1.parseProviderBundleAttestationKey(payload)
+    }
 }
 
 /** Complete immutable provider proof stored under its exact archive/order/provider key. */
@@ -2260,6 +2273,13 @@ class MusubiProviderBundleAttestationRecordV1(
         "registered_by" to registeredBy,
         "registered_at_height" to registeredAtHeight,
     )
+
+    companion object {
+        /** Decode the exact Norito-JSON record and its complete authority binding. */
+        @JvmStatic
+        fun fromJsonBytes(payload: ByteArray): MusubiProviderBundleAttestationRecordV1 =
+            MusubiJsonV1.parseProviderBundleAttestation(payload)
+    }
 }
 
 /** Authoritative immutable archive registration independent of renewable locations. */

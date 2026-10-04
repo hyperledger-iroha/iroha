@@ -118,19 +118,20 @@ fn signed_source_matches(
     entry: &TransactionEntrypoint,
     network_id: [u8; 32],
     block_time: u64,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let execution = execution_for(record, kind)?;
     let TransactionEntrypoint::External(signed) = entry else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
-    native_signed_entry_frame_v1(entry).map_err(|_| Error::Execution)?;
+    native_signed_entry_frame_v1(entry)
+        .map_err(|error| error.map_rejection(|_| Error::Execution))?;
     if signed.network_id().map(|id| *id.as_bytes()) != Some(network_id)
         || signed.authority() != &execution.authority
         || *entry.hash().as_ref() != execution.transaction_hash
         || signed.hash_as_entrypoint() != entry.hash()
         || block_time != execution.recorded_at_unix_ms
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let index = usize::try_from(execution.instruction_index).map_err(|_| Error::Execution)?;
     let item = match signed.instructions() {
@@ -153,7 +154,7 @@ fn signed_source_matches(
         || request.provider_id != row.provider_id
         || request_digest(item, signed.authority())? != record.request_digest
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let exact_action = match (kind, &request.action, &row.operation.outcome) {
         (TargetKind::Reserved, Action::Reserve(reviewed), StreamTokenOutcomeV1::Reserved) => {
@@ -183,7 +184,7 @@ fn signed_source_matches(
         _ => false,
     };
     if !exact_action {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     Ok(())
 }
@@ -193,7 +194,7 @@ fn authenticate_target(
     record: &OperationRecordV1,
     kind: TargetKind,
     target: &CertifiedBlock,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let execution = execution_for(record, kind)?;
     let entry_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         execution.transaction_hash,
@@ -205,7 +206,7 @@ fn authenticate_target(
             .map(|height| height.get())
             != usize::try_from(execution.height).ok()
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let anchor = target
         .entry_anchor(&entry_hash)
@@ -215,7 +216,7 @@ fn authenticate_target(
         .network_execution_proof(&entry_hash)
         .ok_or(Error::Execution)?;
     if !proof.verify(&anchor) || anchor.entry_index() != execution.entry_index {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let entry = block
         .network_entrypoint_at(
@@ -226,7 +227,7 @@ fn authenticate_target(
         .network_output_at(execution.entry_index)
         .ok_or(Error::Execution)?;
     if !output.result.is_ok() {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     signed_source_matches(
         record,
@@ -257,12 +258,16 @@ pub fn authenticate_stream_token_history_to_floor_v1<'view, 'state>(
     provider: ProviderId,
     operation_id: [u8; 32],
     floor: StreamTokenFinalityFloorV1,
-) -> Result<VerifiedStreamTokenHistoryV1<'view, 'state>, Error> {
+) -> Result<
+    VerifiedStreamTokenHistoryV1<'view, 'state>,
+    crate::execution_attempt::ExecutionAttemptError<Error>,
+> {
     crate::query::signer_check::with_native_check_read_limits(|| {
         let mut proof = PreparedStreamTokenHistoryV1::new(view, provider, operation_id, floor)?;
-        let chain = SignerCertifiedWalkV1::new(view).map_err(|_| Error::Finality)?;
+        let chain = SignerCertifiedWalkV1::new(view)
+            .map_err(|error| error.map_rejection(|_| Error::Finality))?;
         for block in chain.walk(proof.start_height(), floor.height) {
-            proof.consume(&block.map_err(|_| Error::Finality)?)?;
+            proof.consume(&block.map_err(|error| error.map_rejection(|_| Error::Finality))?)?;
         }
         proof.finish()
     })

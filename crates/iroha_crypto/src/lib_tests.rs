@@ -22,7 +22,10 @@ mod tests {
         ];
         #[cfg(not(feature = "gost"))]
         let gost_algorithms: [Algorithm; 0] = [];
+        #[cfg(feature = "pqc")]
         let ml_dsa_algorithms = [Algorithm::MlDsa];
+        #[cfg(not(feature = "pqc"))]
+        let ml_dsa_algorithms: [Algorithm; 0] = [];
         #[cfg(feature = "bls")]
         let bls_algorithms = [Algorithm::BlsNormal, Algorithm::BlsSmall];
         #[cfg(not(feature = "bls"))]
@@ -39,14 +42,18 @@ mod tests {
             .copied()
             .collect()
     }
+    #[cfg(feature = "pqc")]
     #[derive(Debug)]
     struct FailingTryRngError;
+    #[cfg(feature = "pqc")]
     impl core::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("failing ML-DSA signing RNG")
         }
     }
+    #[cfg(feature = "pqc")]
     struct FailingTryRng;
+    #[cfg(feature = "pqc")]
     impl rand_core::TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
@@ -59,10 +66,13 @@ mod tests {
             Err(FailingTryRngError)
         }
     }
+    #[cfg(feature = "pqc")]
     impl rand_core::TryCryptoRng for FailingTryRng {}
+    #[cfg(feature = "pqc")]
     struct FixedTryRng {
         byte: u8,
     }
+    #[cfg(feature = "pqc")]
     impl rand_core::TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
@@ -76,7 +86,9 @@ mod tests {
             Ok(())
         }
     }
+    #[cfg(feature = "pqc")]
     impl rand_core::TryCryptoRng for FixedTryRng {}
+    #[cfg(feature = "pqc")]
     fn seeded_ml_dsa_secret(seed: &[u8]) -> (PublicKey, MlDsaSecretKey) {
         use pqcrypto_traits::sign::SecretKey as _;
         let (public, private) =
@@ -218,6 +230,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn mldsa65_parse_signature_rejects_inert_or_malformed_lengths() {
         let key_pair = checked_seed_keypair(&[0x32; 32], Algorithm::MlDsa);
         let signature = checked_signature(key_pair.private_key(), b"mldsa65 parse signature");
@@ -341,6 +354,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(feature = "rand")]
     fn try_random_with_algorithm_ed25519_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("checked Ed25519 random keypair");
@@ -356,6 +370,7 @@ mod tests {
             .expect_err("signature must reject wrong Ed25519 key");
     }
     #[test]
+    #[cfg(feature = "rand")]
     fn try_random_with_algorithm_secp256k1_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
             .expect("checked secp256k1 random keypair");
@@ -387,6 +402,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(all(feature = "rand", feature = "pqc"))]
     fn try_random_with_algorithm_ml_dsa_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
             .expect("checked ML-DSA random keypair");
@@ -403,6 +419,7 @@ mod tests {
     }
     #[cfg(feature = "sm")]
     #[test]
+    #[cfg(feature = "rand")]
     fn try_random_with_algorithm_sm2_signs_and_verifies() {
         let key_pair =
             KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("checked SM2 random keypair");
@@ -427,6 +444,7 @@ mod tests {
         assert_eq!(derived_public, key_pair.public_key().clone());
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn try_from_seed_ml_dsa_is_deterministic_and_signs() {
         let seed = b"iroha:top-level-ml-dsa-seed";
         let first = KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
@@ -445,6 +463,7 @@ mod tests {
             .expect("signature verifies");
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn try_from_seed_ml_dsa_rejects_empty_seed_material() {
         match KeyPair::try_from_seed(Vec::new(), Algorithm::MlDsa) {
             Err(Error::KeyGen(message)) => assert!(message.contains("empty")),
@@ -831,6 +850,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
         use crate::mldsa_seed::mldsa65 as seeded;
         use pqcrypto_traits::sign::SecretKey as _;
@@ -855,6 +875,7 @@ mod tests {
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_secret_key_zeroizer_overwrites_the_full_backend_payload() {
         use pqcrypto_traits::sign::SecretKey as _;
 
@@ -870,6 +891,7 @@ mod tests {
         assert!(raw_secret.as_bytes().iter().all(|byte| *byte == 0));
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_try_sign_with_rng_reports_rng_failure() {
         let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-rng-failure");
         let mut rng = FailingTryRng;
@@ -882,6 +904,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_try_sign_with_rng_rejects_all_zero_seed_material() {
         let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-all-zero");
         let mut rng = FixedTryRng { byte: 0 };
@@ -894,6 +917,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_try_sign_with_rng_accepts_nonzero_seed_material() {
         let (public, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-nonzero");
         let mut rng = FixedTryRng { byte: 0x42 };
@@ -906,6 +930,7 @@ mod tests {
             .expect("ML-DSA signature should verify");
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_private_key_from_bytes_signs_after_local_scrub() {
         use crate::mldsa_seed::mldsa65 as seeded;
         let (public, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:from-bytes-scrub")
@@ -920,6 +945,7 @@ mod tests {
             .expect("parsed ML-DSA private key signs");
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_private_key_parse_rejects_all_zero_material() {
         let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::secret_key_bytes()];
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
@@ -931,6 +957,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_private_key_parse_uses_strict_secret_validator_for_component_drift() {
         use crate::mldsa_seed::mldsa65 as seeded;
         let (_, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:strict-secret-parse")
@@ -948,9 +975,10 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
-        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
-            .expect("checked ML-DSA random keypair");
+        let key_pair =
+            checked_seed_keypair(b"iroha:test:mldsa:public-key-length", Algorithm::MlDsa);
         let (_, public_payload) = key_pair.public_key().to_bytes();
         let parsed = PublicKey::from_bytes(Algorithm::MlDsa, public_payload);
         assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
@@ -963,6 +991,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn ml_dsa_public_key_parse_rejects_all_zero_material() {
         let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::public_key_bytes()];
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &all_zero)
@@ -973,6 +1002,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "pqc")]
     fn pqc_verify_aggregate_rejects_empty_input() {
         let empty: [&[u8]; 0] = [];
         let err = pqc_verify_aggregate(&empty, &empty, &empty)
@@ -1101,13 +1131,19 @@ mod tests {
     #[cfg(feature = "bls")]
     fn bls_pop_prove_and_verify_roundtrip() {
         // Generate a BLS-normal key pair
-        let kp = checked_random_keypair(Algorithm::BlsNormal);
+        let kp = checked_seed_keypair(
+            b"iroha:test:bls_pop_prove_and_verify_roundtrip:1",
+            Algorithm::BlsNormal,
+        );
         // Prove possession
         let pop = bls_normal_pop_prove(kp.private_key()).expect("pop prove");
         // Verify
         bls_normal_pop_verify(kp.public_key(), &pop).expect("pop verify");
         // Negative: wrong key should fail
-        let other = checked_random_keypair(Algorithm::BlsNormal);
+        let other = checked_seed_keypair(
+            b"iroha:test:bls_pop_prove_and_verify_roundtrip:2",
+            Algorithm::BlsNormal,
+        );
         assert!(bls_normal_pop_verify(other.public_key(), &pop).is_err());
     }
     #[test]
@@ -1115,7 +1151,10 @@ mod tests {
     fn bls_pop_rejects_unhashed_message() {
         use crate::secrecy::ExposeSecret;
         // PoP signed over POP_DST || pk (unhashed) must be rejected.
-        let kp = checked_random_keypair(Algorithm::BlsNormal);
+        let kp = checked_seed_keypair(
+            b"iroha:test:bls_pop_rejects_unhashed_message:1",
+            Algorithm::BlsNormal,
+        );
         let (algorithm, pk_bytes) = kp
             .public_key()
             .try_to_bytes()
@@ -1137,10 +1176,11 @@ mod tests {
     #[test]
     #[cfg(feature = "bls")]
     fn bls_small_pop_roundtrip() {
-        let kp = checked_random_keypair(Algorithm::BlsSmall);
+        let kp = checked_seed_keypair(b"iroha:test:bls_small_pop_roundtrip:1", Algorithm::BlsSmall);
         let pop = bls_small_pop_prove(kp.private_key()).expect("small pop prove");
         bls_small_pop_verify(kp.public_key(), &pop).expect("small pop verify");
-        let other = checked_random_keypair(Algorithm::BlsSmall);
+        let other =
+            checked_seed_keypair(b"iroha:test:bls_small_pop_roundtrip:2", Algorithm::BlsSmall);
         assert!(bls_small_pop_verify(other.public_key(), &pop).is_err());
     }
     #[test]
@@ -1168,7 +1208,10 @@ mod tests {
     }
     #[test]
     fn private_key_format_or_serialize_redacted() {
-        let key_pair = checked_random_keypair(Algorithm::default());
+        let key_pair = checked_seed_keypair(
+            b"iroha:test:private_key_format_or_serialize_redacted:1",
+            Algorithm::default(),
+        );
         let (_, private_key) = key_pair.into_parts();
         assert_eq!(
             norito::json::to_json(&private_key).expect("Couldn't serialize key"),
@@ -1219,7 +1262,7 @@ mod tests {
                 Algorithm::Gost3410_2012_512ParamSetA,
                 Algorithm::Gost3410_2012_512ParamSetB,
             ] {
-                let key_pair = checked_random_keypair(algorithm);
+                let key_pair = checked_seed_keypair(b"iroha:test:key_pair_match:1", algorithm);
                 let public: PublicKey = key_pair
                     .public_key()
                     .to_string()

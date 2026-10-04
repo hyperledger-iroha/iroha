@@ -379,7 +379,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     let mut roots = Roots::new();
     let transaction = roots.transaction(100, 1);
     let begin = roots.begin(&transaction);
-    // HC87: a valid foreign Begin never authorizes a different signed debit source.
+    // HC95: a valid foreign Begin never authorizes a different signed debit source.
     let thief = roots.participants[0].sign(
         &receiver(),
         [PrepareAmxV1 {

@@ -280,9 +280,9 @@ fn read_admitted_execution_frame(
             crate::kura::Error::NoritoFrame(error) => norito_decode_attempt_error(error, |error| {
                 rejected(crate::kura::Error::NoritoFrame(error))
             }),
-            crate::kura::Error::VersionedCodec(error) => {
-                crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                    rejected(crate::kura::Error::VersionedCodec(error))
+            crate::kura::Error::BlockDecode(error) => {
+                crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+                    rejected(crate::kura::Error::BlockDecode(error))
                 })
             }
             completed => ExecutionAttemptError::Rejected(rejected(completed)),
@@ -329,7 +329,7 @@ fn read_admitted_execution_frame(
     let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
         .map_err(|error| NativeExecutionReadError::Deferred(error.into()))?;
     let block = iroha_data_model::block::decode_framed_signed_block(&wire).map_err(|error| {
-        match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+        match crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
             NativeExecutionReadError::Storage {
                 height: current,
                 reason: error.to_string(),

@@ -127,7 +127,7 @@ pub(crate) fn current_location_providers(
         // The exact sorted prefix was fully initialized and checked above.
         let completion = completion.as_ref()?;
         let binding = &record.attestation.payload.binding;
-        if completion.completed_by == *owner
+        if completion.completed_by == completion.completion_authority.completion_signer
             && completion.completion_authority.provider_owner == *owner
             && binding.provider_id == *provider
             && binding.completed_by == completion.completed_by

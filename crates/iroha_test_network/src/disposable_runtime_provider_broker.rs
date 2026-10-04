@@ -52,6 +52,7 @@ pub(super) struct DisposableBrokerConfig {
     directory: Arc<TempDir>,
     endpoint: RuntimeProviderBrokerEndpointPath,
     catalog_path: PathBuf,
+    policy_path: PathBuf,
     credential_bundle: Zeroizing<Vec<u8>>,
     beacon_binding: DisposableBeaconProviderBinding,
 }
@@ -62,6 +63,7 @@ impl fmt::Debug for DisposableBrokerConfig {
             .debug_struct("DisposableBrokerConfig")
             .field("endpoint", &self.endpoint)
             .field("catalog_path", &self.catalog_path)
+            .field("policy_path", &self.policy_path)
             .field("beacon_binding", &self.beacon_binding)
             .field("credential_bundle", &"[REDACTED]")
             .finish()
@@ -194,10 +196,32 @@ impl DisposableBrokerConfig {
         .map_err(|_| eyre!("owner-private broker socket path is not canonical or is too long"))?;
         let catalog_path = directory.path().join("catalog.norito");
         publish_public_catalog(directory.path(), &catalog_path, catalog)?;
+        let policy_path = directory.path().join("broker-policy.toml");
+        let mut policy = toml::Table::new();
+        policy.insert(
+            "endpoint_path".into(),
+            toml::Value::String(
+                endpoint
+                    .as_path()
+                    .to_str()
+                    .ok_or_else(|| eyre!("broker endpoint must be UTF-8"))?
+                    .into(),
+            ),
+        );
+        policy.insert(
+            "observer_operation_timeout_ms".into(),
+            toml::Value::Integer(15_000),
+        );
+        publish_public_catalog(
+            directory.path(),
+            &policy_path,
+            toml::to_string(&policy)?.as_bytes(),
+        )?;
         Ok(Self {
             directory,
             endpoint,
             catalog_path,
+            policy_path,
             credential_bundle,
             beacon_binding,
         })
@@ -296,8 +320,8 @@ impl NetworkPeer {
         command
             .arg("--catalog")
             .arg(&configured.catalog_path)
-            .arg("--broker-endpoint")
-            .arg(configured.endpoint.as_path())
+            .arg("--broker-policy")
+            .arg(&configured.policy_path)
             .current_dir(configured.directory.path())
             .env_clear()
             .stdin(Stdio::piped())
@@ -393,6 +417,17 @@ mod tests {
             Some("runtime-provider-broker-v1.sock")
         );
         assert_eq!(fs::read(&prepared.catalog_path)?, b"public-catalog");
+        let policy = iroha_config::parameters::actual::RuntimeProviderBroker::from_toml_source(
+            iroha_config::base::toml::TomlSource::inline(
+                fs::read_to_string(&prepared.policy_path)?.parse()?,
+            ),
+        )?;
+        assert_eq!(policy.endpoint_path, prepared.endpoint);
+        assert_eq!(policy.observer_operation_timeout, Duration::from_secs(15));
+        assert_eq!(
+            fs::symlink_metadata(&prepared.policy_path)?.mode() & 0o7777,
+            0o400
+        );
         assert_eq!(
             fs::symlink_metadata(&prepared.catalog_path)?.mode() & 0o7777,
             0o400

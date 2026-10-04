@@ -5,6 +5,8 @@
 //! The native envelope profile uses Ed25519 single-signature accounts. Historical certificates
 //! are checked in one ascending walk per verification, bounded to 64 MiB of certificate frames.
 
+pub use crate::query::signer_check::NativeCheckBindingErrorV1;
+
 use std::{sync::Arc, time::Instant};
 
 use iroha_crypto::HashOf;
@@ -37,8 +39,9 @@ use super::{
 };
 use crate::{
     query::signer_check::{
-        BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1, NativeCheckRoundV1,
-        NativeCustodyCheckRefV1, bind_signed_check_v1, validate_native_signatory_v1,
+        BindingFailure, BindingScope, BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1,
+        NativeCheckRoundV1, NativeCustodyCheckRefV1, SignedCheckAttempt, bind_signed_check_v1,
+        validate_native_signatory_v1,
     },
     state::{State, StateReadOnly, StateView, WorldReadOnly, is_stable_state_view_generation},
 };
@@ -158,6 +161,8 @@ pub struct PreparedStreamTokenGatewayCheckV1 {
     instruction: MutateSorafsStreamTokenGateway,
     chain_id: String,
     round: NativeCheckRoundV1,
+    // A successful observation establishes this floor for every later local retry.
+    accepted_earliest_unix_ms: Option<u64>,
 }
 /// Move-only exact signed Check and its original monotonic lifetime.
 #[must_use = "submit and consume this exact signed gateway Check once"]
@@ -195,7 +200,6 @@ pub struct VerifiedStreamTokenGatewayCheckV1 {
     readback: StreamTokenGatewayCheckReadbackV1,
     applied_floor: Floor,
     entry_hash: HashOf<TransactionEntrypoint>,
-    canonical_external: Vec<u8>,
     check_block_hash: [u8; 32],
     time: Time,
 }
@@ -385,6 +389,7 @@ pub fn begin_stream_token_gateway_check_v1(
         instruction,
         chain_id,
         round,
+        accepted_earliest_unix_ms: None,
     })
 }
 
@@ -498,25 +503,29 @@ impl PreparedStreamTokenGatewayCheckV1 {
     ///
     /// # Errors
     /// Rejects signed body, authority, network, floor, size or deadline substitution.
+    /// Every failure retains the exact signed graph and original preparation. Local refusals may
+    /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
     pub fn bind_signed_transaction(
-        mut self,
+        self,
         signed: SignedTransaction,
-    ) -> Result<PendingStreamTokenGatewayCheckV1, Error> {
+    ) -> Result<PendingStreamTokenGatewayCheckV1, StreamTokenGatewayCheckBindingFailureV1> {
+        bind_signed_check_v1(self, SignedCheckAttempt::new(signed), Self::binding_scope)
+            .map(|(prepared, bound)| PendingStreamTokenGatewayCheckV1 { prepared, bound })
+            .map_err(StreamTokenGatewayCheckBindingFailureV1)
+    }
+
+    fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
         let Action::Check(check) = &self.instruction.request.action else {
-            return Err(Error::Invalid);
+            return Err(NativeCheckErrorV1::Invalid);
         };
-        let bound = bind_signed_check_v1(
-            &mut self.round,
-            NativeCustodyCheckRefV1::StreamTokenGateway(&self.instruction),
-            &self.chain_id,
-            *self.expected.network_id.as_bytes(),
-            &self.expected.observer,
-            native_floor(check.floor),
-            signed,
-        )?;
-        Ok(PendingStreamTokenGatewayCheckV1 {
-            prepared: self,
-            bound,
+        Ok(BindingScope {
+            state: &self.state,
+            round: &mut self.round,
+            instruction: NativeCustodyCheckRefV1::StreamTokenGateway(&self.instruction),
+            chain_id: &self.chain_id,
+            network_id: *self.expected.network_id.as_bytes(),
+            authority: &self.expected.observer,
+            floor: native_floor(check.floor),
         })
     }
 }
@@ -583,6 +592,61 @@ fn verified_origin(
     }
 }
 
+/// Exact original signed attempt retained after binding refusal.
+/// Retry cannot replace the signer output, challenge, State pool, or original deadline.
+#[must_use = "retain the original signed Check until binding completes or the attempt is retired"]
+pub struct StreamTokenGatewayCheckBindingFailureV1(
+    BindingFailure<PreparedStreamTokenGatewayCheckV1, Error>,
+);
+
+impl StreamTokenGatewayCheckBindingFailureV1 {
+    /// Borrow the original local refusal or completed rejection without erasing custody.
+    #[must_use]
+    pub fn error(&self) -> &NativeCheckBindingErrorV1<Error> {
+        &self.0.error
+    }
+
+    /// Inspect a completed native rejection; local refusals have no transaction verdict.
+    #[must_use]
+    pub fn rejection(&self) -> Option<Error> {
+        match &self.0.error {
+            NativeCheckBindingErrorV1::Rejected(error) => Some(*error),
+            _ => None,
+        }
+    }
+
+    /// The unchanged absolute deadline, including after any number of local retries.
+    #[must_use]
+    pub fn deadline(&self) -> std::time::Instant {
+        self.0.prepared.round.deadline()
+    }
+
+    /// Retry only this exact signed attempt; terminal failures return the same owner.
+    ///
+    /// # Errors
+    /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    pub fn retry(self) -> Result<PendingStreamTokenGatewayCheckV1, Self> {
+        if !self.0.error.is_retryable() {
+            return Err(self);
+        }
+        bind_signed_check_v1(
+            self.0.prepared,
+            self.0.signed,
+            PreparedStreamTokenGatewayCheckV1::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingStreamTokenGatewayCheckV1 { prepared, bound })
+        .map_err(Self)
+    }
+}
+impl std::fmt::Debug for StreamTokenGatewayCheckBindingFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StreamTokenGatewayCheckBindingFailureV1")
+            .field("error", &self.0.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PendingStreamTokenGatewayCheckV1 {
     /// Original absolute deadline, unchanged by signed binding or submission.
     #[must_use]
@@ -605,59 +669,98 @@ impl PendingStreamTokenGatewayCheckV1 {
     /// Consume same-view signed execution/history and current authority after proof completion.
     ///
     /// # Errors
-    /// Any missing proof, changed row/permission/policy, invalid UTC interval or deadline consumes
-    /// the attempt. Both clock endpoints must satisfy the exact original subject predicate.
+    /// Any missing proof, changed row/permission/policy, invalid UTC interval or deadline returns
+    /// the attempt to the caller unchanged. Both clock endpoints must satisfy the original subject.
     pub fn verify_finalized(
         self,
         sample_time: impl FnOnce() -> Result<Time, Error>,
-    ) -> Result<VerifiedStreamTokenGatewayCheckV1, Error> {
-        let prepared = self.prepared;
-        prepared.round.ensure_live()?;
-        let generation = prepared.state.state_view_generation();
-        let view = prepared.state.view();
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let (cut, bound) = history::authenticate(&view, &prepared, self.bound)?;
-        prepared.round.ensure_live()?;
-        let time = sample_time().map_err(|_| Error::Clock)?;
-        validate_time(time)?;
-        let snapshot = check::evaluate_current(
-            cut.view(),
-            &prepared.instruction.request,
-            time.earliest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        check::evaluate_current(
-            cut.view(),
-            &prepared.instruction.request,
-            time.latest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        prepared.round.ensure_live()?;
-        let floor = cut.applied_floor();
-        let applied_floor = Floor {
-            height: floor.height,
-            block_hash: floor.block_hash,
-            context_id: floor.context_id,
-        };
-        let entry_hash = cut.entry_hash();
-        let origin = verified_origin(cut.view(), &prepared.instruction)?;
-        let (canonical_external, check_block_hash) = cut.into_verified_entry();
-        let readback = public_readback(snapshot.value, prepared.expected.qualification);
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        drop(view);
+    ) -> Result<VerifiedStreamTokenGatewayCheckV1, StreamTokenGatewayCheckAttemptFailureV1> {
+        let Self {
+            mut prepared,
+            bound: original,
+        } = self;
+        let mut bound = Some(original);
+        let result = (|| -> Result<_, crate::execution_attempt::ExecutionAttemptError<Error>> {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let generation = prepared.state.state_view_generation();
+            let view = prepared.state.view();
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let cut = history::authenticate(&view, &prepared, &mut bound)?;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let time = sample_time().map_err(|_| Error::Clock)?;
+            validate_time(time)?;
+            if prepared
+                .accepted_earliest_unix_ms
+                .is_some_and(|floor| time.earliest_unix_ms < floor)
+            {
+                return Err(Error::Clock.into());
+            }
+            let snapshot = check::evaluate_current(
+                cut.view(),
+                &prepared.instruction.request,
+                time.earliest_unix_ms,
+            )
+            .map_err(|_| Error::Authority)?;
+            check::evaluate_current(
+                cut.view(),
+                &prepared.instruction.request,
+                time.latest_unix_ms,
+            )
+            .map_err(|_| Error::Authority)?;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let floor = cut.applied_floor();
+            let applied_floor = Floor {
+                height: floor.height,
+                block_hash: floor.block_hash,
+                context_id: floor.context_id,
+            };
+            let entry_hash = cut.entry_hash();
+            let origin = verified_origin(cut.view(), &prepared.instruction)?;
+            let check_block_hash = cut.check_block_hash();
+            let readback = public_readback(snapshot.value, prepared.expected.qualification);
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            drop(cut);
+            drop(view);
+            Ok((
+                generation,
+                origin,
+                readback,
+                applied_floor,
+                entry_hash,
+                check_block_hash,
+                time,
+            ))
+        })();
+        let (generation, origin, readback, applied_floor, entry_hash, check_block_hash, time) =
+            match result {
+                Ok(verified) => verified,
+                Err(error) => {
+                    return Err(StreamTokenGatewayCheckAttemptFailureV1 {
+                        error,
+                        pending: Self {
+                            prepared,
+                            bound: bound
+                                .take()
+                                .expect("original binding survives failed verification"),
+                        },
+                    });
+                }
+            };
+        prepared.accepted_earliest_unix_ms = Some(time.earliest_unix_ms);
         Ok(VerifiedStreamTokenGatewayCheckV1 {
             prepared,
-            bound,
+            bound: bound.take().expect("verified original binding"),
             generation,
             origin,
             readback,
             applied_floor,
             entry_hash,
-            canonical_external,
             check_block_hash,
             time,
         })
@@ -711,7 +814,7 @@ impl VerifiedStreamTokenGatewayCheckV1 {
     /// Canonical signed External entry authenticated by the native output proof.
     #[must_use]
     pub fn canonical_external(&self) -> &[u8] {
-        &self.canonical_external
+        self.bound.canonical_external()
     }
     /// Certified block containing the exact successful Check.
     #[must_use]
@@ -751,97 +854,122 @@ impl VerifiedStreamTokenGatewayCheckV1 {
         original: &Record,
         sample_time: impl FnOnce() -> Result<Time, Error>,
         capture: impl FnOnce(VerifiedStreamTokenReputationDeliveryV1<'_>) -> T,
-    ) -> Result<T, Error> {
-        use iroha_data_model::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryDispositionV1 as Disposition;
-        self.ensure_live()?;
-        let Selector::Admission(request) = &self.prepared.expected.selector else {
-            return Err(Error::Authority);
-        };
-        let StreamTokenGatewayCheckReadbackV1::Admission(result) = self.readback else {
-            return Err(Error::Authority);
-        };
-        if result.record != *original {
-            return Err(Error::Authority);
-        }
-        result
-            .validate_for_request(request, self.prepared.expected.qualification)
-            .map_err(|_| Error::Authority)?;
-        let prepared = self.prepared;
-        let generation = self.generation;
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let view = prepared.state.view();
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let (cut, _spent_bound) = history::authenticate(&view, &prepared, self.bound)?;
-        if cut.applied_floor() != native_floor(self.applied_floor) {
-            return Err(Error::Authority);
-        }
-        prepared.round.ensure_live()?;
-        let _publication = prepared.state.stream_token_gateway_publication_lease();
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let time = sample_time().map_err(|_| Error::Clock)?;
-        validate_time(time)?;
-        if time.earliest_unix_ms < self.time.earliest_unix_ms {
-            return Err(Error::Clock);
-        }
-        for now in [time.earliest_unix_ms, time.latest_unix_ms] {
-            check::evaluate_current_rows(cut.view(), &prepared.instruction.request, now)
+    ) -> Result<T, StreamTokenGatewayCheckAttemptFailureV1> {
+        let Self {
+            prepared,
+            bound: original_bound,
+            generation,
+            readback,
+            applied_floor,
+            time: time_at_verification,
+            ..
+        } = self;
+        let mut bound = Some(original_bound);
+        let result = (|| -> Result<T, crate::execution_attempt::ExecutionAttemptError<Error>> {
+            use iroha_data_model::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryDispositionV1 as Disposition;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let Selector::Admission(request) = &prepared.expected.selector else {
+                return Err(Error::Authority.into());
+            };
+            let StreamTokenGatewayCheckReadbackV1::Admission(result) = readback else {
+                return Err(Error::Authority.into());
+            };
+            if result.record != *original {
+                return Err(Error::Authority.into());
+            }
+            result
+                .validate_for_request(request, prepared.expected.qualification)
                 .map_err(|_| Error::Authority)?;
-        }
-        let (source, delivery) =
-            crate::smartcontracts::isi::sorafs_reputation::stream_token_delivery::read(
-                cut.view().world(),
-                &prepared.expected.network_id,
-                original,
-            )
-            .map_err(|_| Error::Authority)?;
-        let height =
-            u64::try_from(cut.view().block_hashes().len()).map_err(|_| Error::Execution)?;
-        let mut may_append = false;
-        let mut needs_terminal_check = false;
-        if delivery.disposition == Disposition::Pending {
-            let intent = source.intent.as_ref().ok_or(Error::Authority)?;
-            needs_terminal_check = intent
-                .expired_at(height, time.latest_unix_ms)
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let view = prepared.state.view();
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let cut = history::authenticate(&view, &prepared, &mut bound)?;
+            if cut.applied_floor() != native_floor(applied_floor) {
+                return Err(Error::Authority.into());
+            }
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let _publication = prepared.state.stream_token_gateway_publication_lease();
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let time = sample_time().map_err(|_| Error::Clock)?;
+            validate_time(time)?;
+            if time.earliest_unix_ms < time_at_verification.earliest_unix_ms {
+                return Err(Error::Clock.into());
+            }
+            for now in [time.earliest_unix_ms, time.latest_unix_ms] {
+                check::evaluate_current_rows(cut.view(), &prepared.instruction.request, now)
+                    .map_err(|_| Error::Authority)?;
+            }
+            let (source, delivery) =
+                crate::smartcontracts::isi::sorafs_reputation::stream_token_delivery::read(
+                    cut.view().world(),
+                    &prepared.expected.network_id,
+                    original,
+                )
                 .map_err(|_| Error::Authority)?;
-            if !needs_terminal_check {
-                let permission: iroha_data_model::permission::Permission =
+            let height =
+                u64::try_from(cut.view().block_hashes().len()).map_err(|_| Error::Execution)?;
+            let mut may_append = false;
+            let mut needs_terminal_check = false;
+            if delivery.disposition == Disposition::Pending {
+                let intent = source.intent.as_ref().ok_or(Error::Authority)?;
+                needs_terminal_check = intent
+                    .expired_at(height, time.latest_unix_ms)
+                    .map_err(|_| Error::Authority)?;
+                if !needs_terminal_check {
+                    let permission: iroha_data_model::permission::Permission =
                     iroha_executor_data_model::permission::sorafs::CanRecordSorafsReputationJournal
                         .into();
-                let world = cut.view().world();
-                let account = &intent.payload.authority;
-                use mv::storage::StorageReadOnly;
-                if world.accounts().get(account).is_none()
-                    || !(world.account_contains_inherent_permission(account, &permission)
-                        || world
-                            .account_roles_iter(account)
-                            .filter_map(|id| world.roles().get(id))
-                            .any(|role| role.permissions().any(|token| token == &permission)))
-                {
-                    return Err(Error::Authority);
+                    let world = cut.view().world();
+                    let account = &intent.payload.authority;
+                    use mv::storage::StorageReadOnly;
+                    if world.accounts().get(account).is_none()
+                        || !(world.account_contains_inherent_permission(account, &permission)
+                            || world
+                                .account_roles_iter(account)
+                                .filter_map(|id| world.roles().get(id))
+                                .any(|role| role.permissions().any(|token| token == &permission)))
+                    {
+                        return Err(Error::Authority.into());
+                    }
+                    may_append = true;
                 }
-                may_append = true;
             }
+            prepared.round.ensure_live().map_err(Error::from)?;
+            Ok(capture(VerifiedStreamTokenReputationDeliveryV1 {
+                source: &source,
+                disposition: &delivery.disposition,
+                may_append,
+                needs_terminal_check,
+            }))
+        })();
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => Err(StreamTokenGatewayCheckAttemptFailureV1 {
+                error,
+                pending: PendingStreamTokenGatewayCheckV1 {
+                    prepared,
+                    bound: bound
+                        .take()
+                        .expect("original binding survives refused consumption"),
+                },
+            }),
         }
-        prepared.round.ensure_live()?;
-        Ok(capture(VerifiedStreamTokenReputationDeliveryV1 {
-            source: &source,
-            disposition: &delivery.disposition,
-            may_append,
-            needs_terminal_check,
-        }))
     }
 
     /// Consume a Serving proof at the final synchronous response-capture boundary.
     ///
     /// Reauthenticate the original signed Check and durable certificates before acquiring the
     /// publication lease. Any State publication since verification rejects this capability;
-    /// retry requires a fresh Check with the same enclosing absolute deadline. While holding
+    /// retry reauthenticates the same exact Check with its original absolute deadline. While holding
     /// the lease, only sample UTC, recheck in-memory current rows and invoke the short capture
     /// handoff. The capture callback must not reconcile callbacks, perform I/O or wait on consensus.
     /// The State publication lease does not serialize external removal of Kura certificates;
@@ -849,69 +977,97 @@ impl VerifiedStreamTokenGatewayCheckV1 {
     ///
     /// # Errors
     /// Rejects a changed publication, purpose/attempt, durable proof, permission, policy, original
-    /// lease deadline or UTC endpoint. Failure consumes the original capability without renewal.
+    /// lease deadline or UTC endpoint. Failure retains the original Pending without renewal.
     pub fn consume_for_serving<T>(
         self,
         original: &Request,
         sample_time: impl FnOnce() -> Result<Time, Error>,
         capture: impl FnOnce(Record) -> T,
-    ) -> Result<T, Error> {
-        self.ensure_live()?;
-        let Selector::Serving(expected) = &self.prepared.expected.selector else {
-            return Err(Error::Authority);
-        };
-        let StreamTokenGatewayCheckReadbackV1::Serving(result) = self.readback else {
-            return Err(Error::Authority);
-        };
-        if expected != original {
-            return Err(Error::Authority);
-        }
-        let prepared = self.prepared;
-        let generation = self.generation;
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let view = prepared.state.view();
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        // One final source-bound walk; the retained binding is moved, never reconstructed from
-        // DTOs or a cached success. Local QC loss since initial verification must fail closed.
-        let (cut, _spent_bound) = history::authenticate(&view, &prepared, self.bound)?;
-        if cut.applied_floor() != native_floor(self.applied_floor) {
-            return Err(Error::Authority);
-        }
-        prepared.round.ensure_live()?;
-        let _publication = prepared.state.stream_token_gateway_publication_lease();
-        if !is_stable_state_view_generation(generation, prepared.state.state_view_generation()) {
-            return Err(Error::Authority);
-        }
-        let time = sample_time().map_err(|_| Error::Clock)?;
-        validate_time(time)?;
-        if time.earliest_unix_ms < self.time.earliest_unix_ms {
-            return Err(Error::Clock);
-        }
-        // These predicates use only the source view's in-memory World. Floor/Kura validation
-        // happened above, outside the publication lease, on that same original source cut.
-        check::evaluate_current_rows(
-            cut.view(),
-            &prepared.instruction.request,
-            time.earliest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        check::evaluate_current_rows(
-            cut.view(),
-            &prepared.instruction.request,
-            time.latest_unix_ms,
-        )
-        .map_err(|_| Error::Authority)?;
-        result
-            .validate_for_request(original, prepared.expected.qualification)
+    ) -> Result<T, StreamTokenGatewayCheckAttemptFailureV1> {
+        let Self {
+            prepared,
+            bound: original_bound,
+            generation,
+            readback,
+            applied_floor,
+            time: time_at_verification,
+            ..
+        } = self;
+        let mut bound = Some(original_bound);
+        let result = (|| -> Result<T, crate::execution_attempt::ExecutionAttemptError<Error>> {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let Selector::Serving(expected) = &prepared.expected.selector else {
+                return Err(Error::Authority.into());
+            };
+            let StreamTokenGatewayCheckReadbackV1::Serving(result) = readback else {
+                return Err(Error::Authority.into());
+            };
+            if expected != original {
+                return Err(Error::Authority.into());
+            }
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let view = prepared.state.view();
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            // One final source-bound walk; the retained binding is moved, never reconstructed from
+            // DTOs or a cached success. Local QC loss since initial verification must fail closed.
+            let cut = history::authenticate(&view, &prepared, &mut bound)?;
+            if cut.applied_floor() != native_floor(applied_floor) {
+                return Err(Error::Authority.into());
+            }
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let _publication = prepared.state.stream_token_gateway_publication_lease();
+            if !is_stable_state_view_generation(generation, prepared.state.state_view_generation())
+            {
+                return Err(Error::Authority.into());
+            }
+            let time = sample_time().map_err(|_| Error::Clock)?;
+            validate_time(time)?;
+            if time.earliest_unix_ms < time_at_verification.earliest_unix_ms {
+                return Err(Error::Clock.into());
+            }
+            // These predicates use only the source view's in-memory World. Floor/Kura validation
+            // happened above, outside the publication lease, on that same original source cut.
+            check::evaluate_current_rows(
+                cut.view(),
+                &prepared.instruction.request,
+                time.earliest_unix_ms,
+            )
             .map_err(|_| Error::Authority)?;
-        prepared.round.ensure_live()?;
-        Ok(capture(result.record))
+            check::evaluate_current_rows(
+                cut.view(),
+                &prepared.instruction.request,
+                time.latest_unix_ms,
+            )
+            .map_err(|_| Error::Authority)?;
+            result
+                .validate_for_request(original, prepared.expected.qualification)
+                .map_err(|_| Error::Authority)?;
+            prepared.round.ensure_live().map_err(Error::from)?;
+            Ok(capture(result.record))
+        })();
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => Err(StreamTokenGatewayCheckAttemptFailureV1 {
+                error,
+                pending: PendingStreamTokenGatewayCheckV1 {
+                    prepared,
+                    bound: bound
+                        .take()
+                        .expect("original binding survives refused consumption"),
+                },
+            }),
+        }
     }
 }
+
+mod attempt_failure;
+pub use attempt_failure::StreamTokenGatewayCheckAttemptFailureV1;
 
 mod history;
 #[cfg(test)]

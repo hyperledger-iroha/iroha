@@ -2200,6 +2200,7 @@ impl ChaosState {
         let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
         let completion_authority = ProviderIngestCompletionAuthorityV1::new(
             self.treasury.id.clone(),
+            self.treasury.id.clone(),
             ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: *Hash::new(b"izanami-sorafs-completion-policy").as_ref(),
                 revision: 1,

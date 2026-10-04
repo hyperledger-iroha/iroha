@@ -3,8 +3,8 @@
 //! The definition capture supplies its existing reader and work allowance. This
 //! helper never reacquires definitions, allocates a replacement index, or treats
 //! `zk_assets` as the authority for an asset definition's pending transition.
-//! TODO: link into `CheckedAssetDefinitions` and its catalog after the current
-//! shared validation candidate is frozen; this unlinked draft supplies no root.
+//! Both original indexes remain with `CheckedAssetDefinitions` through encoding;
+//! this scoped check supplies no finalized State authority.
 
 use super::*;
 use iroha_data_model::asset::{AssetDefinition, AssetDefinitionId};

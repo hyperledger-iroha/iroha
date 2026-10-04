@@ -233,10 +233,10 @@ impl NativeBeaconProducer {
             let record = world.global_beacon_key_sessions().get(&id).ok_or_else(|| {
                 NativeBeaconError::Source("active readiness session is absent".into())
             })?;
-            // Validate the acquired record once within this probe. Every retry still
+            // Check the installed sealed record within this probe. Every retry still
             // reacquires its original State view and re-probes the installed custodian.
-            let session = record
-                .validated_session()
+            record
+                .validate()
                 .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
             let binding = InstalledBeaconEpochBindingV1 {
                 session_id: id,
@@ -249,16 +249,15 @@ impl NativeBeaconProducer {
                 && (current.authorization.beacon == BeaconEpochBindingV1::Bootstrap
                     || current.authorization.beacon == BeaconEpochBindingV1::Installed(binding));
             if authenticated {
-                let peers = current
-                    .committee
-                    .iter()
-                    .map(|seat| seat.validator.clone())
-                    .collect::<Vec<_>>();
-                let roster_hash =
-                    authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
-                        .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+                let peers = current.committee.iter().map(|seat| &seat.validator);
+                let roster_hash = authenticated_global_threshold_beacon_roster_hash_iter_v1(
+                    &record.session,
+                    peers,
+                )
+                .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+                let session = &record.session;
                 session
-                    .validate_binding(&GlobalThresholdBeaconSessionBindingV1 {
+                    .check_binding(&GlobalThresholdBeaconSessionBindingV1 {
                         network_id: current.network_id,
                         session_id: id,
                         roster_hash,

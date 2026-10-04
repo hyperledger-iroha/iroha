@@ -3,9 +3,8 @@
 use super::*;
 use iroha_core::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, GlobalThresholdBeaconVerificationError,
+        GlobalThresholdBeaconError, GlobalThresholdBeaconSessionBindingV1,
         global_threshold_beacon_roster_hash_iter_v1,
-        validate_global_threshold_beacon_session_with_admission_v1,
     },
     state::{StateReadOnly, WorldReadOnly},
     sumeragi::certified_chain::CertifiedChain,
@@ -65,13 +64,8 @@ fn artifact_error(error: NativeFinalityArtifactError) -> Error {
     }
 }
 
-fn beacon_error(error: GlobalThresholdBeaconVerificationError<norito::Error>) -> Error {
-    match error {
-        GlobalThresholdBeaconVerificationError::Resource(_) => capacity(),
-        GlobalThresholdBeaconVerificationError::Invalid(error) => {
-            invalid(format!("invalid prepared committee beacon: {error}"))
-        }
-    }
+fn beacon_binding_error(error: GlobalThresholdBeaconError) -> Error {
+    invalid(format!("invalid prepared committee beacon: {error}"))
 }
 
 fn response_error(error: crate::utils::BoundedResponseEncodeError) -> Error {
@@ -121,17 +115,25 @@ fn load(
     let mut source_blocks_left = limits.block_count as u64;
     let mut source_bytes_left = limits.journal_bytes as u64;
     use iroha_data_model::query::error::QueryExecutionFail;
-    let query_error = |error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error));
+    let query_error = crate::canonical_history::query_attempt_error;
     let mut admit = |work, bytes| {
         if bytes > limits.block_bytes as u64 {
-            return Err(QueryExecutionFail::GasBudgetExceeded);
+            return Err(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            );
         }
-        let remaining_blocks = source_blocks_left
-            .checked_sub(work)
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-        let remaining_bytes = source_bytes_left
-            .checked_sub(bytes)
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        let remaining_blocks = source_blocks_left.checked_sub(work).ok_or(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ),
+        )?;
+        let remaining_bytes = source_bytes_left.checked_sub(bytes).ok_or(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ),
+        )?;
         source_blocks_left = remaining_blocks;
         source_bytes_left = remaining_bytes;
         Ok(())
@@ -237,12 +239,13 @@ fn load(
             candidate_keys.push(admitted_copy(candidate, limits.block_bytes)?);
         }
     }
-    let pending_beacon_session = selected
-        .as_ref()
-        .map(|selection| {
-            let preparation = &selection.transition.preparation;
-            let session_id = preparation.beacon_session_id().map_err(invalid)?;
-            state
+    let pending_beacon_session =
+        selected
+            .as_ref()
+            .map(|selection| {
+                let preparation = &selection.transition.preparation;
+                let session_id = preparation.beacon_session_id().map_err(invalid)?;
+                state
                 .world()
                 .global_beacon_key_sessions()
                 .get(&session_id)
@@ -265,13 +268,7 @@ fn load(
                         ),
                         transcript_hash: record.session.transcript_hash,
                     };
-                    let session = admitted_copy(&record.session, limits.block_bytes)?;
-                    let validated = validate_global_threshold_beacon_session_with_admission_v1(
-                        session,
-                        &binding,
-                        &mut norito::core::reserve_decode_allocation,
-                    )
-                    .map_err(beacon_error)?;
+                    record.session.check_binding(&binding).map_err(beacon_binding_error)?;
                     if selection
                         .transition
                         .credentials
@@ -286,12 +283,12 @@ fn load(
                             "prepared committee beacon differs from fixed credentials",
                         ));
                     }
-                    Ok(validated.into_record())
+                    admitted_copy(record.session.record(), limits.block_bytes)
                 })
                 .transpose()
-        })
-        .transpose()?
-        .flatten();
+            })
+            .transpose()?
+            .flatten();
     if pending_beacon_session.is_none()
         && selected
             .as_ref()
@@ -427,15 +424,13 @@ mod tests {
         .expect_err("original zero allocation owner refuses its first byte");
         assert!(resource.is_decode_resource_limit());
         assert!(matches!(
-            beacon_error(GlobalThresholdBeaconVerificationError::Resource(resource)),
+            codec_error(resource),
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 QueryExecutionFail::GasBudgetExceeded
             ))
         ));
         assert!(matches!(
-            beacon_error(GlobalThresholdBeaconVerificationError::Invalid(
-                iroha_core::beacon::GlobalThresholdBeaconError::TranscriptMismatch
-            )),
+            beacon_binding_error(GlobalThresholdBeaconError::TranscriptMismatch),
             Error::Query(iroha_data_model::ValidationFail::InternalError(message))
                 if message.contains("invalid prepared committee beacon")
         ));
@@ -557,7 +552,7 @@ mod tests {
             matches!(
                 read(refused),
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::GasBudgetExceeded
+                    QueryExecutionFail::CapacityLimit
                 )))
             ),
             "the former generic decode unit cannot admit this genuine finalized source"
@@ -598,7 +593,7 @@ mod tests {
         assert!(matches!(
             read(insufficient_source),
             Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::GasBudgetExceeded
+                QueryExecutionFail::CapacityLimit
             )))
         ));
         assert!(
@@ -623,7 +618,7 @@ mod tests {
             assert!(matches!(
                 refused,
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::GasBudgetExceeded
+                    QueryExecutionFail::CapacityLimit
                 )))
             ));
         }
@@ -669,7 +664,7 @@ mod tests {
             assert!(matches!(
                 load(&view, None, refused),
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::GasBudgetExceeded
+                    QueryExecutionFail::CapacityLimit
                 )))
             ));
         }

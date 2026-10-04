@@ -275,6 +275,7 @@ from .client import (
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
     GovernanceValidationFeePayoutBinding,
+    GovernanceValidationFeeRewardCustody,
     GovernanceValidationFeePolicy,
     GovernanceLockCustody,
     GovernanceLockRecord,
@@ -789,6 +790,7 @@ _BASE_EXPORTS = [
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
     "GovernanceValidationFeePayoutBinding",
+    "GovernanceValidationFeeRewardCustody",
     "GovernanceValidationFeePolicy",
     "GovernanceLockCustody",
     "GovernanceLockRecord",
@@ -1418,3 +1420,39 @@ try:
     __version__ = metadata.version("iroha-python")
 except metadata.PackageNotFoundError:  # pragma: no cover - dev installs
     __version__ = "0.0.0.dev0"
+
+from .validator_staking import (
+    StakingScopeV1,
+    StakingAssetScopeV1,
+    StakingAssetIdV1,
+    StakingPeerIdV1,
+    StakingMonetaryRegistrationV1,
+    StakingMonetaryBondV1,
+    StakingMonetaryUnbondV1,
+    StakingMonetarySlashV1,
+    StakingMonetaryPreconditionV1,
+    StakingMonetaryPlanV1,
+    StakingRewardClaimStateV1,
+    StakingRewardRecordRefV1,
+    StakingRewardClaimSourceV1,
+    StakingFeeRewardClaimV1,
+    StakingRewardClaimPlanV1,
+    StakingValidatorKeysV1,
+    StakingAuthorityGenerationV1,
+    StakingInstalledBeaconV1,
+    StakingEpochAuthorizationV1,
+)
+
+__all__ += ['StakingScopeV1', 'StakingAssetScopeV1', 'StakingAssetIdV1', 'StakingPeerIdV1', 'StakingMonetaryRegistrationV1', 'StakingMonetaryBondV1', 'StakingMonetaryUnbondV1', 'StakingMonetarySlashV1', 'StakingMonetaryPreconditionV1', 'StakingMonetaryPlanV1', 'StakingRewardClaimStateV1', 'StakingRewardRecordRefV1', 'StakingRewardClaimSourceV1', 'StakingFeeRewardClaimV1', 'StakingRewardClaimPlanV1', 'StakingValidatorKeysV1', 'StakingAuthorityGenerationV1', 'StakingInstalledBeaconV1', 'StakingEpochAuthorizationV1']
+
+from .validator_staking import (
+    StakingPrepareRegistrationV1, StakingPrepareBondV1, StakingPrepareUnbondV1,
+    StakingPrepareClaimV1, StakingPreparationOperationV1, StakingPreparationRequestV1,
+    StakingPreparationBalanceV1, StakingPreparationV1,
+    encode_staking_preparation_frame_v1, decode_staking_preparation_frame_v1,
+    validate_staking_preparation_v1,
+)
+__all__ += ["StakingPrepareRegistrationV1", "StakingPrepareBondV1", "StakingPrepareUnbondV1",
+    "StakingPrepareClaimV1", "StakingPreparationOperationV1", "StakingPreparationRequestV1",
+    "StakingPreparationBalanceV1", "StakingPreparationV1", "encode_staking_preparation_frame_v1",
+    "decode_staking_preparation_frame_v1", "validate_staking_preparation_v1"]

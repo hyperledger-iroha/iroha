@@ -5,10 +5,8 @@ use super::*;
 fn session_for_generation(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     generation: u64,
-) -> (
-    FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    Vec<PeerId>,
-) {
+) -> (RetainedFinalizedGlobalThresholdBeaconSessionV1, Vec<PeerId>) {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let peers = authority
         .validators
         .iter()
@@ -19,22 +17,28 @@ fn session_for_generation(
         &generation.to_le_bytes(),
     ])
     .as_ref();
-    let (session, _) = prepared_session_and_signers_fixture_v1(GlobalThresholdBeaconDkgSessionV1 {
-        version: 1,
-        network_id: authority.network_id,
-        session_id,
-        attempt_id: session_id,
-        authority_generation: generation,
-        roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&peers),
-        committee_size: peers.len() as u16,
-        threshold: ((peers.len() - 1) / 3 + 1) as u16,
-        start_height: 1,
-        commitments_end_height: 2,
-        deliveries_end_height: 3,
-        acceptances_end_height: 4,
-    });
-    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())
-        .expect("the complete DKG is independently valid for its signed generation");
+    let (session, _) = prepared_session_and_signers_fixture_v1(
+        GlobalThresholdBeaconDkgSessionV1 {
+            version: 1,
+            network_id: authority.network_id,
+            session_id,
+            attempt_id: session_id,
+            authority_generation: generation,
+            roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&peers),
+            committee_size: peers.len() as u16,
+            threshold: ((peers.len() - 1) / 3 + 1) as u16,
+            start_height: 1,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
+        },
+        &budget,
+    );
+    let record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session,
+        activated_at_height: None,
+        retired_at_height: None,
+    };
     (record, peers)
 }
 

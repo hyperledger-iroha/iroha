@@ -1058,7 +1058,9 @@ pub fn indexed_kaigi_signal_candidates_page(
                         if work.try_charge(limits, wire_bytes, 0, source_blocks) {
                             Ok(())
                         } else {
-                            Err(QueryExecutionFail::GasBudgetExceeded)
+                            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                            ))
                         }
                     })
                     .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
@@ -1278,6 +1280,9 @@ fn walk_committed_transactions(
         };
         (NonZeroUsize::MIN, last)
     };
+    // This query-owned callback returns semantic query outcomes, including its query
+    // work limit. Declare that at the source bridge rather than inferring locality from
+    // a wire-shaped budget error. Original source/decoder refusals stay typed below.
     // Both callbacks use the same admission owner sequentially; no charge borrow
     // survives either callback or the walker's subsequent source operation.
     let before_project = std::cell::RefCell::new(before_project);
@@ -1286,7 +1291,10 @@ fn walk_committed_transactions(
         .visit_executed_backwards_until(
             first,
             last,
-            |source_blocks, wire_len| before_project.borrow_mut()(source_blocks, wire_len),
+            |source_blocks, wire_len| {
+                before_project.borrow_mut()(source_blocks, wire_len)
+                    .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
+            },
             |receipt| {
                 let height = NonZeroUsize::new(
                     usize::try_from(receipt.height())
@@ -1314,7 +1322,7 @@ fn walk_committed_transactions(
                     resume.offset_in(height.get(), transaction_count)
                 })?;
                 if transaction_offset > transaction_count {
-                    return Err(QueryExecutionFail::CursorMismatch);
+                    return Err(QueryExecutionFail::CursorMismatch.into());
                 }
                 for index in transaction_offset..transaction_count {
                     let input_index = projection.count - 1 - index as u32;
@@ -3012,14 +3020,18 @@ pub(crate) mod tests {
             .visit_executed_backwards_until(
                 first,
                 last,
-                |_, _| Err(QueryExecutionFail::GasBudgetExceeded),
+                |_, _| {
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ))
+                },
                 |_| panic!("unpaid source cannot reach a receipt visitor"),
             )
             .expect_err("source work and bytes are admitted before physical I/O");
         assert_eq!(
             err,
             crate::execution_attempt::ExecutionAttemptError::Deferred(
-                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into()
             )
         );
         assert_eq!(store.kura.canonical_query_reads_for_test(), (0, 0));
@@ -3118,10 +3130,12 @@ pub(crate) mod tests {
             .expect("original wire is nonempty") ^= 1;
         let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
             .expect_err("altered source must fail its canonical frame checksum");
-        assert!(
-            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
-            if message == "checksum mismatch")
+        assert_eq!(
+            codec_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
         );
+        let codec_error = codec_error.into_error();
+        assert!(matches!(codec_error, norito::Error::ChecksumMismatch));
         let expected_error = QueryExecutionFail::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();

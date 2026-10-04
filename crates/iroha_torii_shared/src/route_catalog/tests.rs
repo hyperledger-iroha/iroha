@@ -16,6 +16,22 @@ mod tests {
         assert!(CATALOGED_ROUTES.contains(&route));
     }
     #[test]
+    fn reserve_account_proof_is_an_account_authenticated_private_read() {
+        let route = contracts_and_verification_keys::SORAFS_RESERVE_ACCOUNT_PROOF_GET;
+        assert_eq!(
+            route.path(),
+            "/v1/sorafs/reserve/providers/{provider_id}/proof/{height}"
+        );
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn staking_preparation_is_bounded_read_only_post() {
         let route = core::NEXUS_STAKING_PREPARATION_POST;
         assert_eq!(route.path(), "/v1/nexus/staking/prepare");

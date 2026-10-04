@@ -11151,3 +11151,55 @@ pub(super) fn ordinary_qualification_wallet_account_v1(
 #[cfg(all(test, unix))]
 #[path = "ordinary_full_money_cycle_tests.rs"]
 mod ordinary_full_money_cycle;
+
+/// Test-only entry to the production Eq proving path for the crate-level prover goldens.
+///
+/// Runs [`create_eq_proof_with_key_v1`] unchanged with the state-carrier recovery
+/// label: recovery-seed ChaCha stream, KAGEMUSHA Poseidon transcript and
+/// folded-generator augmentation.
+#[cfg(test)]
+pub(crate) fn create_state_carrier_eq_proof_for_golden_test_v1<C>(
+    parameters: &ParamsIPA<EqAffine>,
+    proving_key: &ProvingKey<EqAffine>,
+    circuit: C,
+    instances: &[Fp],
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1>
+where
+    C: halo2_proofs::plonk::Circuit<Fp>,
+{
+    create_eq_proof_with_key_v1(
+        parameters,
+        proving_key,
+        circuit,
+        instances,
+        KagemushaProofRecoveryPhaseV1::StateCarrier,
+        recovery_seed,
+    )
+}
+
+/// Test-only entry to the production Ep proving path for the crate-level prover goldens.
+///
+/// Runs [`create_ep_proof_with_key_v1`] unchanged with the state-carrier recovery
+/// label: recovery-seed ChaCha stream, KAGEMUSHA Poseidon transcript and
+/// folded-generator augmentation.
+#[cfg(test)]
+pub(crate) fn create_state_carrier_ep_proof_for_golden_test_v1<C>(
+    parameters: &ParamsIPA<EpAffine>,
+    proving_key: &ProvingKey<EpAffine>,
+    circuit: C,
+    instances: &[Fq],
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1>
+where
+    C: halo2_proofs::plonk::Circuit<Fq>,
+{
+    create_ep_proof_with_key_v1(
+        parameters,
+        proving_key,
+        circuit,
+        instances,
+        KagemushaProofRecoveryPhaseV1::StateCarrier,
+        recovery_seed,
+    )
+}

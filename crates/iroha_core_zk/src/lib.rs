@@ -7466,9 +7466,13 @@ mod halo2_ipa_parameter_source_tests {
     }
 }
 #[cfg(test)]
+mod g3_proof_scaling_measurement_tests;
+#[cfg(test)]
 mod kaigi_authorization_v1_tests;
 #[cfg(test)]
 mod kaigi_usage_v1_tests;
+#[cfg(test)]
+mod prover_golden_tests;
 
 /// Halo2 envelope parsing helpers.
 ///

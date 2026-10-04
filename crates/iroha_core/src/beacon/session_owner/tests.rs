@@ -21,7 +21,7 @@ fn fixture(seats: u16) -> AdaptiveBeaconFixture {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>(),
     );
-    adaptive_beacon_fixture_for_session_and_keys(session, &keys)
+    adaptive_beacon_fixture_for_session_and_keys(session, &keys, &fixture_budget())
 }
 
 fn distinct<T>(source: &[T], captured: &[T]) {
@@ -30,7 +30,7 @@ fn distinct<T>(source: &[T], captured: &[T]) {
         assert_ne!(source.as_ptr(), captured.as_ptr());
     }
 }
-fn check_allocations(
+pub(super) fn check_allocations(
     source: &GlobalThresholdBeaconKeySessionV1,
     captured: &GlobalThresholdBeaconKeySessionV1,
 ) {
@@ -257,10 +257,13 @@ fn graph_custody_preserves_empty_invalid_bytes_without_claiming_validation() {
     );
     assert!(matches!(
         crate::beacon::validate_global_threshold_beacon_session_v1(
-            captured.get().clone(),
-            &fixture.binding
+            captured.get(),
+            &fixture.binding,
+            &budget,
         ),
-        Err(crate::beacon::GlobalThresholdBeaconError::UnsupportedVersion { actual: 0 })
+        Err(crate::beacon::GlobalThresholdBeaconSessionError::Invalid(
+            crate::beacon::GlobalThresholdBeaconError::UnsupportedVersion { actual: 0 }
+        ))
     ));
     drop(captured);
     assert_eq!(budget.reserved_bytes(), 0);

@@ -17,6 +17,9 @@ mod frozen_read;
 #[path = "storage/original_read.rs"]
 mod original_read;
 pub use original_read::CommittedStorageView;
+#[path = "storage/original_images.rs"]
+mod original_images;
+pub use original_images::FrozenStorageImages;
 #[path = "storage/physical.rs"]
 mod physical;
 pub use detached_publication::DetachedPublicationSlot;

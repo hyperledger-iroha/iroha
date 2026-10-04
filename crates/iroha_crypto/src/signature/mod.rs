@@ -2,7 +2,11 @@
 #![allow(clippy::redundant_pub_crate)]
 pub(crate) mod admission;
 mod allocation;
+#[cfg(feature = "bls")]
+pub use allocation::PrepaidBlsSignatureError;
 pub use allocation::{ChargedSignature, SignatureAllocationError};
+#[cfg(feature = "bls")]
+pub use bls::BlsSigningError;
 #[cfg(feature = "bls")]
 pub(crate) mod bls;
 pub(crate) mod ed25519;
@@ -498,16 +502,36 @@ fn reject_unsupported_signing_context(context: &[u8], algorithm: Algorithm) -> R
 fn signature_payload_is_all_zero(payload: &[u8]) -> bool {
     !payload.is_empty() && payload.iter().all(|&byte| byte == 0)
 }
-fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseError> {
+/// Fixed canonical signature-payload rejection; it establishes no signature authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignaturePayloadError {
+    /// The encoded signature has no bytes.
+    Empty,
+    /// Every encoded signature byte is zero.
+    AllZero,
+}
+
+impl core::fmt::Display for SignaturePayloadError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "signature payload must not be empty",
+            Self::AllZero => "signature payload must not be all zero",
+        })
+    }
+}
+impl std::error::Error for SignaturePayloadError {}
+
+pub(crate) fn validate_signature_payload(payload: &[u8]) -> Result<(), SignaturePayloadError> {
     if payload.is_empty() {
-        return Err(ParseError("signature payload must not be empty".to_owned()));
+        return Err(SignaturePayloadError::Empty);
     }
     if signature_payload_is_all_zero(payload) {
-        return Err(ParseError(
-            "signature payload must not be all zero".to_owned(),
-        ));
+        return Err(SignaturePayloadError::AllZero);
     }
     Ok(())
+}
+fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseError> {
+    validate_signature_payload(payload).map_err(|error| ParseError(error.to_string()))
 }
 
 #[allow(unsafe_code)]
@@ -532,15 +556,22 @@ fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::E
 
 /// Decode the canonical `ConstVec<u8>` layout: a sequence count
 /// followed by one exactly framed byte per element.
-fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
+pub(crate) fn signature_payload_geometry(bytes: &[u8]) -> Result<(usize, usize), ncore::Error> {
     let (count, raw_start) = ncore::read_seq_len_slice(bytes)?;
     if count > bytes.len().saturating_sub(raw_start) {
         return Err(ncore::Error::LengthMismatch);
     }
-    let mut offset = raw_start;
-    // The sequence reader already charged one retained byte per u8 element.
-    let mut payload = allocate_signature_payload_exact(count)?;
-    for destination in &mut payload {
+    Ok((count, raw_start))
+}
+
+/// Fill the original initialized destination using the sole signature element walk.
+/// Geometry accounting precedes this kernel exactly once in both callers.
+pub(crate) fn decode_signature_payload_elements(
+    bytes: &[u8],
+    mut offset: usize,
+    destination: &mut [u8],
+) -> Result<(), ncore::Error> {
+    for destination in destination {
         let (elem_len, header_len) = ncore::inspect_len_from_slice(
             bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?,
         )?;
@@ -558,8 +589,17 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
     if offset != bytes.len() {
         return Err(ncore::Error::LengthMismatch);
     }
+    Ok(())
+}
+
+fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
+    let (count, raw_start) = signature_payload_geometry(bytes)?;
+    // The sequence reader already charged one retained byte per u8 element.
+    let mut payload = allocate_signature_payload_exact(count)?;
+    decode_signature_payload_elements(bytes, raw_start, &mut payload)?;
     Ok(ConstVec::new(payload))
 }
+
 fn decode_signature_payload_from_slice(
     bytes: &[u8],
 ) -> Result<(ConstVec<u8>, usize), ncore::Error> {
@@ -832,7 +872,7 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Algorithm, HashOf, KeyGenOption, KeyPair, PublicKeyCompact};
+    use crate::{Algorithm, KeyGenOption, KeyPair, PublicKeyCompact};
     #[cfg(feature = "rand")]
     fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")
@@ -1320,6 +1360,7 @@ mod tests {
         assert!(matches!(err, Error::BadSignature));
     }
     #[test]
+    #[cfg(feature = "json")]
     fn signature_serialized_representation() {
         let input = norito::json!(
             "3A7991AF1ABB77F3FD27CC148404A6AE4439D095A63591B77C788D53F708A02A1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
@@ -1334,6 +1375,7 @@ mod tests {
         assert_eq!(value.payload.as_ref(), &hex::decode(payload).unwrap());
     }
     #[test]
+    #[cfg(feature = "json")]
     fn signature_json_rejects_empty_payload() {
         let input = norito::json!("");
         let err = norito::json::from_value::<Signature>(input)
@@ -1344,6 +1386,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "json")]
     fn signature_json_rejects_all_zero_payload() {
         let input = norito::json!("00".repeat(64));
         let err = norito::json::from_value::<Signature>(input)
@@ -1371,6 +1414,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "json")]
     fn signature_of_json_rejects_empty_payload() {
         let input = norito::json!("");
         let err = norito::json::from_value::<SignatureOf<()>>(input)
@@ -1381,6 +1425,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(feature = "json")]
     fn signature_of_json_rejects_all_zero_payload() {
         let input = norito::json!("00".repeat(64));
         let err = norito::json::from_value::<SignatureOf<()>>(input)

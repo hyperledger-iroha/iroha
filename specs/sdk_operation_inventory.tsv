@@ -332,6 +332,7 @@ contracts.sorafs_por_ingestion_by_manifest_digest_hex_get	GET	/v1/sorafs/por/ing
 contracts.sorafs_por_report_by_iso_week_get	GET	/v1/sorafs/por/report/{iso_week}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 contracts.sorafs_por_status_get	GET	/v1/sorafs/por/status	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 contracts.sorafs_por_vrf_post	POST	/v1/sorafs/por/vrf	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	false	false	true
+contracts.sorafs_reserve_account_proof_get	GET	/v1/sorafs/reserve/providers/{provider_id}/proof/{height}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_appeals_by_appeal_id_hex_decision_post	POST	/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	false	false	false
 contracts.sorafs_reserve_appeals_by_appeal_id_hex_get	GET	/v1/sorafs/reserve/appeals/{appeal_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_appeals_get	GET	/v1/sorafs/reserve/appeals	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
@@ -345,6 +346,7 @@ contracts.sorafs_reserve_movements_by_movement_id_hex_decision_post	POST	/v1/sor
 contracts.sorafs_reserve_movements_by_movement_id_hex_get	GET	/v1/sorafs/reserve/movements/{movement_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_movements_get	GET	/v1/sorafs/reserve/movements	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_policy_get	GET	/v1/sorafs/reserve/policy	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
+contracts.sorafs_reserve_policy_proof_get	GET	/v1/sorafs/reserve/policy/{height}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_providers_by_provider_id_hex_get	GET	/v1/sorafs/reserve/providers/{provider_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_providers_get	GET	/v1/sorafs/reserve/providers	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_top_up_post	POST	/v1/sorafs/reserve/top-up	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	false	false	false
@@ -619,6 +621,7 @@ sorafs.pop.wallet.import	POST	/v1/sorafs/pop/wallet/import	public	protocol_hands
 sorafs.pop.wallet.prove	POST	/v1/sorafs/pop/wallet/prove	public	protocol_handshake	authenticated_protocol_principal	compute	http	feature(app_api)	true	true	false	false
 sorafs.pop.wallet.synchronize	POST	/v1/sorafs/pop/wallet/synchronize	public	protocol_handshake	authenticated_protocol_principal	mutation	http	feature(app_api)	true	true	false	false
 sorafs.proof_stream.build	POST	/v1/sorafs/proof/stream	public	operator_signature	operator	compute	http	feature(app_api)	true	true	false	true
+sorafs.provider.attestation	POST	/v1/sorafs/provider/attestation	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 sorafs.provider.list	GET	/v1/sorafs/providers	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.provider.source	POST	/v1/sorafs/provider/source	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 sorafs.provider_advert.submit	POST	/v1/sorafs/providers/advert	public	protocol_handshake	authenticated_protocol_principal	mutation	http	feature(app_api)	true	true	false	false
@@ -641,6 +644,7 @@ sorafs.storage_peer.list	GET	/v1/sorafs/storage/peers	public	torii_default	publi
 sorafs.storage_plan.read	GET	/v1/sorafs/storage/plan/{manifest_id}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.storage_state.read	GET	/v1/sorafs/storage/state	operator	operator_signature	operator	read	http	feature(app_api)	false	false	false	true
 sorafs.storage_token.issue	POST	/v1/sorafs/storage/token	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true
+sorafs.stream_token_custody.read	GET	/v1/sorafs/providers/{provider_id}/custody/{height}	public	torii_default	public	read	http	feature(app_api)	true	false	false	true
 sorafs.transparency_cycle.list	GET	/v1/sorafs/transparency/cycles	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.transparency_cycle.read	GET	/v1/sorafs/transparency/cycles/{cycle_id_hex}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.transparency_cycle_entry.read	GET	/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false

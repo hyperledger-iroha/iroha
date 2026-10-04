@@ -38,21 +38,28 @@ pub(crate) fn current_global_tip(
     let mut frames_left = limits.block_count as u64;
     let mut bytes_left = limits.journal_bytes as u64;
     let mut admit = |frames: u64, bytes: u64| {
-        use iroha_data_model::query::error::QueryExecutionFail;
         if bytes > limits.block_bytes as u64 {
-            return Err(QueryExecutionFail::GasBudgetExceeded);
+            return Err(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            );
         }
-        let next_frames = frames_left
-            .checked_sub(frames)
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-        let next_bytes = bytes_left
-            .checked_sub(bytes)
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        let next_frames = frames_left.checked_sub(frames).ok_or(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ),
+        )?;
+        let next_bytes = bytes_left.checked_sub(bytes).ok_or(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ),
+        )?;
         frames_left = next_frames;
         bytes_left = next_bytes;
         Ok(())
     };
-    let query_error = |error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error));
+    let query_error = crate::canonical_history::query_attempt_error;
     let chain = CertifiedChain::new_with_source_admission(view, &mut admit).map_err(query_error)?;
     let certified = chain
         .certified_from_execution(index, &mut admit)

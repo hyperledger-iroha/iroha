@@ -306,18 +306,18 @@ pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> Result<u64, IvmAdmissi
 }
 /// Map a VM execution error into a user-facing validation failure.
 #[must_use]
-pub fn map_vm_error_to_validation(err: &ivm::VMError) -> ValidationFail {
+fn map_vm_error_to_validation(err: &ivm::VMError) -> ValidationFail {
     ValidationFail::NotPermitted(err.to_string())
 }
-fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
-    let mut message = diag.message.clone();
+fn format_vm_diagnostic(diag: ivm::VmExecutionDiagnostic<'_>, error: &ivm::VMError) -> String {
+    let mut message = error.to_string();
     use std::fmt::Write as _;
     let _ = write!(&mut message, " at pc=0x{:x}", diag.pc);
     if let Some(function) = diag
         .source
         .as_ref()
-        .and_then(|source| source.function.as_deref())
-        .or(diag.context.current_function.as_deref())
+        .and_then(|source| source.function)
+        .or(diag.context.current_function)
     {
         let _ = write!(&mut message, " fn={function}");
     }
@@ -338,38 +338,53 @@ fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
     }
     message
 }
-/// Map a VM execution error into a validation failure enriched with VM context.
+/// Classify an original VM failure before rendering completed semantic rejection context.
+///
+/// Local refusals retain their original release owner and never enter diagnostic
+/// formatting. Output allocation for completed validation messages remains separate.
 #[must_use]
 pub fn map_vm_error_with_context_to_validation(
     vm: &ivm::IVM,
-    err: &ivm::VMError,
-) -> ValidationFail {
-    if let ivm::VMError::ContractAbort {
-        contract,
-        name,
-        error_type,
-        schema_hash,
-        code,
-        message,
-    } = err.as_unmetered()
-    {
-        // The host authenticated these fields against the originating signed CNTR. Carrying
-        // them in the error preserves callee identity through arbitrarily nested calls.
-        return ValidationFail::ContractRejected(ContractRejection {
-            contract: contract.clone(),
-            error_type: error_type.clone(),
-            schema_hash: *schema_hash,
-            name: name.clone(),
-            code: *code,
-            message: message.clone(),
-        });
-    }
-    if let Some(diag) = vm.last_diagnostic() {
-        ValidationFail::NotPermitted(format_vm_diagnostic(diag))
-    } else {
-        map_vm_error_to_validation(err)
-    }
+    error: ivm::VMError,
+) -> crate::execution_attempt::ExecutionAttemptError<ValidationFail> {
+    crate::execution_attempt::vm_attempt_error(error, |error| {
+        // The declared rejection already owns its authenticated strings. Remove
+        // metering wrappers only for that variant so all other displays retain
+        // their original error context.
+        let error = if matches!(error.as_unmetered(), ivm::VMError::ContractAbort { .. }) {
+            error.into_unmetered()
+        } else {
+            error
+        };
+        if let ivm::VMError::ContractAbort {
+            contract,
+            name,
+            error_type,
+            schema_hash,
+            code,
+            message,
+        } = error
+        {
+            // Transfer the original completed output without cloning its backing.
+            return ValidationFail::ContractRejected(ContractRejection {
+                contract,
+                error_type,
+                schema_hash,
+                name,
+                code,
+                message,
+            });
+        }
+        if let Some(diagnostic) = vm.last_diagnostic() {
+            ValidationFail::NotPermitted(format_vm_diagnostic(diagnostic, &error))
+        } else {
+            map_vm_error_to_validation(&error)
+        }
+    })
 }
+#[cfg(test)]
+#[path = "ivm/diagnostic_tests.rs"]
+mod diagnostic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,7 +673,7 @@ mod tests {
     fn gas_limit_for_meta_rejects_zero_cycle_budget() {
         let zero = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 0,
@@ -763,7 +778,9 @@ mod tests {
             }
         );
         assert_eq!(
-            map_vm_error_with_context_to_validation(&vm, &error),
+            crate::execution_attempt::expect_completed_rejection(
+                map_vm_error_with_context_to_validation(&vm, error),
+            ),
             ValidationFail::ContractRejected(ContractRejection {
                 contract: "LiquidityPolicy".into(),
                 error_type: descriptor.identity.clone(),

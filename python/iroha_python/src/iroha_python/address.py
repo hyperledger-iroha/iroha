@@ -126,6 +126,22 @@ def require_canonical_asset_definition_id(value: object, context: str) -> str:
     return value
 
 
+def asset_definition_id_to_bytes(value: object) -> bytes:
+    """Return the exact canonical UUID bytes of a validated asset address."""
+    literal = require_canonical_asset_definition_id(value, "asset definition")
+    index = {character: position for position, character in enumerate(BASE58_ALPHABET)}
+    return bytes(decode_base_n([index[character] for character in literal], len(BASE58_ALPHABET))[1:17])
+
+
+def asset_definition_id_from_bytes(value: bytes) -> str:
+    """Render and validate canonical UUIDv4 bytes with the existing address owner."""
+    if type(value) not in (bytes, bytearray, memoryview) or len(value) != 16:
+        raise ValueError("asset definition UUID must contain 16 bytes")
+    payload = b"\x01" + bytes(value)
+    address = "".join(BASE58_ALPHABET[digit] for digit in encode_base_n(payload + blake3(payload).digest()[:4], len(BASE58_ALPHABET)))
+    return require_canonical_asset_definition_id(address, "asset definition")
+
+
 class AccountAddressError(ValueError):
     """Raised when an address cannot be parsed or encoded."""
 

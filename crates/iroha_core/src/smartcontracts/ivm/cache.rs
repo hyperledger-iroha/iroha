@@ -1002,8 +1002,8 @@ impl IvmCache {
         &mut self,
         bytecode: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        let parsed = ProgramMetadata::parse(bytecode)?;
-        if parsed.contract_interface.is_some() {
+        let header = ProgramMetadata::parse_header(bytecode)?;
+        if header.declares_contract_interface() {
             self.summarize_program(bytecode)
                 .map(ExecutableProgramSummary::Contract)
         } else {
@@ -2876,3 +2876,7 @@ mod analysis_memory_tests;
 
 #[cfg(test)]
 mod preparation_refund_tests;
+
+#[cfg(test)]
+#[path = "cache/range_tests.rs"]
+mod range_tests;

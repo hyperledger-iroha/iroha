@@ -40,7 +40,7 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestRecord, PinStatus, ProviderIngestCompletionSignerPolicyV1,
+            PinManifestRecord, PinStatus, ProviderIngestCompletionAuthorityV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus,
         },
@@ -295,8 +295,8 @@ pub struct ProviderIngestFinalizedProviderProjectionV1 {
     pub provider_id: ProviderId,
     /// Current registered owner expected by completion execution.
     pub expected_owner: Option<AccountId>,
-    /// Exact current signer-policy identity, revision, predecessor, and digest.
-    pub expected_signer_policy: Option<ProviderIngestCompletionSignerPolicyV1>,
+    /// Exact current owner, completion signer, and governed signer-policy binding.
+    pub expected_authority: Option<ProviderIngestCompletionAuthorityV1>,
     /// Assigned orders in strict replication-order identity order.
     pub orders: Vec<ProviderIngestFinalizedArchivedOrderV1>,
 }
@@ -359,16 +359,18 @@ impl ProviderIngestFinalizedProjectionV1 {
             previous_provider = Some(provider.provider_id);
             match (
                 provider.expected_owner.as_ref(),
-                provider.expected_signer_policy,
+                provider.expected_authority.as_ref(),
             ) {
                 (None, Some(_)) => {
                     return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
                         reason: "signer policy cannot exist without a registered provider owner",
                     });
                 }
-                (_, Some(policy)) if !policy.is_valid() => {
+                (owner, Some(authority))
+                    if !authority.is_valid() || owner != Some(&authority.provider_owner) =>
+                {
                     return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
-                        reason: "provider signer policy is noncanonical",
+                        reason: "provider completion authority is noncanonical or differs from registered owner",
                     });
                 }
                 _ => {}
@@ -462,7 +464,7 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     /// Exact expected provider owner, absent only while completion is disabled.
     pub expected_owner: Option<AccountId>,
     /// Exact expected signer-policy identity/revision/digest chain.
-    pub expected_signer_policy: Option<ProviderIngestCompletionSignerPolicyV1>,
+    pub expected_authority: Option<ProviderIngestCompletionAuthorityV1>,
     /// Monotonic canonical assignment revision expected at commit.
     pub expected_assignment_revision: u64,
     /// Exact finalized committed-chain prefix expected at commit.
@@ -1277,7 +1279,7 @@ struct ProviderPolicyDigestHistoryCheckpointV1 {
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyHistoryCheckpointV1 {
     provider_id: ProviderId,
-    last: ProviderIngestCompletionSignerPolicyV1,
+    last: ProviderIngestCompletionAuthorityV1,
     active: bool,
     seen_policy_digests: Vec<ProviderPolicyDigestHistoryCheckpointV1>,
 }
@@ -2683,7 +2685,7 @@ impl ProviderIngestFinalizedArchiveV1 {
 #[derive(Debug)]
 struct ProviderProjectionBuilderV1 {
     expected_owner: Option<AccountId>,
-    expected_signer_policy: Option<ProviderIngestCompletionSignerPolicyV1>,
+    expected_authority: Option<ProviderIngestCompletionAuthorityV1>,
     orders: BTreeMap<ReplicationOrderId, ProviderIngestFinalizedArchivedOrderV1>,
 }
 fn capture_projection(
@@ -2707,7 +2709,7 @@ fn capture_projection(
             *provider_id,
             ProviderProjectionBuilderV1 {
                 expected_owner: Some(owner.clone()),
-                expected_signer_policy: None,
+                expected_authority: None,
                 orders: BTreeMap::new(),
             },
         );
@@ -2728,7 +2730,7 @@ fn capture_projection(
                 reason: "completion authority differs from the registered provider owner",
             });
         }
-        provider.expected_signer_policy = Some(authority.signer_policy);
+        provider.expected_authority = Some(authority.clone());
     }
     let mut total_orders = 0_usize;
     for (order_id, order_record) in world.replication_orders().iter() {
@@ -2813,7 +2815,7 @@ fn capture_projection(
                     provider_id,
                     ProviderProjectionBuilderV1 {
                         expected_owner: None,
-                        expected_signer_policy: None,
+                        expected_authority: None,
                         orders: BTreeMap::new(),
                     },
                 );
@@ -2869,7 +2871,7 @@ fn capture_projection(
         ProviderIngestFinalizedProviderProjectionV1 {
             provider_id,
             expected_owner: provider.expected_owner,
-            expected_signer_policy: provider.expected_signer_policy,
+            expected_authority: provider.expected_authority,
             orders: provider.orders.into_values().collect(),
         }
     }));
@@ -2898,7 +2900,7 @@ fn project_archive_assignment(
     ProviderIngestFinalizedArchiveAssignmentV1 {
         provider_id: provider.provider_id,
         expected_owner: provider.expected_owner.clone(),
-        expected_signer_policy: provider.expected_signer_policy,
+        expected_authority: provider.expected_authority.clone(),
         expected_assignment_revision: order.replication_order.assignment_revision,
         finalized_anchor: key.finalized_anchor(),
         finalized_at_unix_ms: key.finalized_at_unix_ms,
@@ -3064,7 +3066,7 @@ fn validate_archived_order(
             || completion.assignment_revision == 0
             || completion.assignment_revision != archived.replication_order.assignment_revision
             || !completion.completion_authority.is_valid()
-            || completion.completion_authority.provider_owner != completion.completed_by
+            || completion.completion_authority.completion_signer != completion.completed_by
             || !completion.finalized_anchor.is_valid()
             || completion.completion_epoch < archived.replication_order.issued_epoch
             || completion.completion_epoch > archived.replication_order.deadline_epoch
@@ -3162,7 +3164,7 @@ fn validate_projection_transition(
 }
 #[derive(Debug)]
 struct ProviderPolicyHistoryV1 {
-    last: ProviderIngestCompletionSignerPolicyV1,
+    last: ProviderIngestCompletionAuthorityV1,
     active: bool,
     seen_policy_digests: BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>,
 }
@@ -3278,13 +3280,14 @@ fn seed_policy_history(
     history: &mut BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
 ) {
     history.extend(providers.iter().filter_map(|(provider_id, provider)| {
-        provider.expected_signer_policy.map(|policy| {
+        provider.expected_authority.as_ref().map(|authority| {
+            let policy = authority.signer_policy;
             let mut seen_policy_digests = BTreeMap::new();
             seen_policy_digests.insert(policy.policy_id, BTreeSet::from([policy.policy_digest]));
             (
                 *provider_id,
                 ProviderPolicyHistoryV1 {
-                    last: policy,
+                    last: authority.clone(),
                     active: true,
                     seen_policy_digests,
                 },
@@ -3299,16 +3302,17 @@ fn observe_policy_history(
     for (provider_id, observed) in history.iter_mut() {
         if providers
             .get(provider_id)
-            .and_then(|provider| provider.expected_signer_policy)
+            .and_then(|provider| provider.expected_authority.as_ref())
             .is_none()
         {
             observed.active = false;
         }
     }
     for (provider_id, provider) in providers {
-        let Some(next) = provider.expected_signer_policy else {
+        let Some(next_authority) = provider.expected_authority.as_ref() else {
             continue;
         };
+        let next = next_authority.signer_policy;
         let Some(observed) = history.get_mut(provider_id) else {
             if next.revision != 1 || next.predecessor_digest.is_some() {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
@@ -3320,14 +3324,15 @@ fn observe_policy_history(
             history.insert(
                 *provider_id,
                 ProviderPolicyHistoryV1 {
-                    last: next,
+                    last: next_authority.clone(),
                     active: true,
                     seen_policy_digests,
                 },
             );
             continue;
         };
-        if observed.last == next {
+        // Equal policy bytes alone must never conceal a changed owner or signer.
+        if &observed.last == next_authority {
             if !observed.active {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
                     provider_id: *provider_id,
@@ -3335,14 +3340,14 @@ fn observe_policy_history(
             }
             continue;
         }
-        let valid = if observed.last.policy_id == next.policy_id {
-            observed
-                .last
+        let previous = observed.last.signer_policy;
+        let valid = if previous.policy_id == next.policy_id {
+            previous
                 .revision
                 .checked_add(1)
                 .is_some_and(|revision| revision == next.revision)
-                && next.predecessor_digest == Some(observed.last.policy_digest)
-                && next.policy_digest != observed.last.policy_digest
+                && next.predecessor_digest == Some(previous.policy_digest)
+                && next.policy_digest != previous.policy_digest
                 && !observed
                     .seen_policy_digests
                     .get(&next.policy_id)
@@ -3353,7 +3358,7 @@ fn observe_policy_history(
                 && !observed.seen_policy_digests.contains_key(&next.policy_id)
         };
         if !valid {
-            return Err(if observed.last.policy_id == next.policy_id {
+            return Err(if previous.policy_id == next.policy_id {
                 ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
                     provider_id: *provider_id,
                 }
@@ -3363,7 +3368,7 @@ fn observe_policy_history(
                 }
             });
         }
-        observed.last = next;
+        observed.last = next_authority.clone();
         observed.active = true;
         observed
             .seen_policy_digests
@@ -3430,8 +3435,8 @@ fn validate_provider_authority_transition(
     current: &ProviderIngestFinalizedProviderProjectionV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     if previous.expected_owner != current.expected_owner
-        && previous.expected_signer_policy == current.expected_signer_policy
-        && current.expected_signer_policy.is_some()
+        && previous.expected_authority == current.expected_authority
+        && current.expected_authority.is_some()
     {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::AuthoritySubstitution {
@@ -3440,36 +3445,40 @@ fn validate_provider_authority_transition(
         );
     }
     match (
-        previous.expected_signer_policy,
-        current.expected_signer_policy,
+        previous.expected_authority.as_ref(),
+        current.expected_authority.as_ref(),
     ) {
         (_, None) => Ok(()),
-        // The adjacent view cannot distinguish a brand-new identity from a
-        // strict successor reactivated after revocation. The full-chain policy
-        // history validator resolves that distinction before publication.
+        // Full-chain history distinguishes first activation from reactivation.
         (None, Some(_)) => Ok(()),
         (Some(previous), Some(next)) if previous == next => Ok(()),
-        (Some(previous), Some(next)) if previous.policy_id == next.policy_id => {
-            if previous
-                .revision
-                .checked_add(1)
-                .is_some_and(|revision| revision == next.revision)
-                && next.predecessor_digest == Some(previous.policy_digest)
-                && next.policy_digest != previous.policy_digest
-            {
+        (Some(previous), Some(next)) => {
+            let previous = previous.signer_policy;
+            let next = next.signer_policy;
+            if previous.policy_id == next.policy_id {
+                if previous
+                    .revision
+                    .checked_add(1)
+                    .is_some_and(|revision| revision == next.revision)
+                    && next.predecessor_digest == Some(previous.policy_digest)
+                    && next.policy_digest != previous.policy_digest
+                {
+                    Ok(())
+                } else {
+                    Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
+                        provider_id: current.provider_id,
+                    })
+                }
+            } else if next.revision == 1 && next.predecessor_digest.is_none() {
                 Ok(())
             } else {
-                Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
-                    provider_id: current.provider_id,
-                })
+                Err(
+                    ProviderIngestFinalizedArchiveErrorV1::AuthoritySubstitution {
+                        provider_id: current.provider_id,
+                    },
+                )
             }
         }
-        (Some(_), Some(next)) if next.revision == 1 && next.predecessor_digest.is_none() => Ok(()),
-        (Some(_), Some(_)) => Err(
-            ProviderIngestFinalizedArchiveErrorV1::AuthoritySubstitution {
-                provider_id: current.provider_id,
-            },
-        ),
     }
 }
 fn canonical_order_map(
@@ -3794,7 +3803,7 @@ fn policy_history_to_checkpoint(
         .map(
             |(provider_id, observed)| ProviderPolicyHistoryCheckpointV1 {
                 provider_id: *provider_id,
-                last: observed.last,
+                last: observed.last.clone(),
                 active: observed.active,
                 seen_policy_digests: observed
                     .seen_policy_digests
@@ -3842,13 +3851,13 @@ fn policy_history_from_checkpoint(
         if provider.provider_id.as_bytes() == &[0; 32]
             || !provider.last.is_valid()
             || !seen_policy_digests
-                .get(&provider.last.policy_id)
-                .is_some_and(|digests| digests.contains(&provider.last.policy_digest))
+                .get(&provider.last.signer_policy.policy_id)
+                .is_some_and(|digests| digests.contains(&provider.last.signer_policy.policy_digest))
             || history
                 .insert(
                     provider.provider_id,
                     ProviderPolicyHistoryV1 {
-                        last: provider.last,
+                        last: provider.last.clone(),
                         active: provider.active,
                         seen_policy_digests,
                     },
@@ -3878,10 +3887,11 @@ fn validate_policy_history_checkpoint(
     let projected = projection
         .providers
         .iter()
-        .map(|provider| (provider.provider_id, provider.expected_signer_policy))
+        .map(|provider| (provider.provider_id, provider.expected_authority.as_ref()))
         .collect::<BTreeMap<_, _>>();
     for (provider_id, observed) in &history {
-        if projected.get(provider_id).copied().flatten() != observed.active.then_some(observed.last)
+        if projected.get(provider_id).copied().flatten()
+            != observed.active.then_some(&observed.last)
         {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidCheckpoint {
                 reason: "checkpoint active policy differs from retained provider projection",
@@ -6990,7 +7000,8 @@ mod tests {
         block::BlockHeader,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy,
-            ProviderIngestCompletionAuthorityV1, ReplicationOrderCompletionRecord,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ReplicationOrderCompletionRecord,
         },
     };
     use iroha_model_base::metadata::Metadata;
@@ -7145,6 +7156,13 @@ mod tests {
         record.issued_epoch = issued_epoch;
         record.deadline_epoch = deadline_epoch;
     }
+    fn completion_authority(
+        owner_seed: u8,
+        policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> ProviderIngestCompletionAuthorityV1 {
+        let owner = account(owner_seed);
+        ProviderIngestCompletionAuthorityV1::new(owner.clone(), owner, policy)
+    }
     fn projection(height: u64) -> ProviderIngestFinalizedProjectionV1 {
         let key = key(height);
         let shared = archived_order(0x21, &[PROVIDER_A, PROVIDER_B]);
@@ -7155,23 +7173,94 @@ mod tests {
                 ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id: PROVIDER_A,
                     expected_owner: Some(account(0x11)),
-                    expected_signer_policy: Some(policy(0xA1, 1)),
+                    expected_authority: Some(completion_authority(0x11, policy(0xA1, 1))),
                     orders: vec![shared.clone(), only_a],
                 },
                 ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id: PROVIDER_B,
                     expected_owner: Some(account(0x22)),
-                    expected_signer_policy: Some(policy(0xB1, 1)),
+                    expected_authority: Some(completion_authority(0x22, policy(0xB1, 1))),
                     orders: vec![shared],
                 },
                 ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id: PROVIDER_EMPTY,
                     expected_owner: Some(account(0x33)),
-                    expected_signer_policy: None,
+                    expected_authority: None,
                     orders: Vec::new(),
                 },
             ],
         }
+    }
+    #[test]
+    fn full_completion_authority_survives_checkpoint_and_rejects_same_policy_key_substitution() {
+        let mut first = projection(7);
+        first.providers[0]
+            .expected_authority
+            .as_mut()
+            .unwrap()
+            .completion_signer = account(0x71);
+        first.validate(bounds()).unwrap();
+        let providers = first
+            .providers
+            .iter()
+            .cloned()
+            .map(|p| (p.provider_id, p))
+            .collect::<BTreeMap<_, _>>();
+        let mut history = BTreeMap::new();
+        seed_policy_history(&providers, &mut history);
+        let checkpoint = policy_history_to_checkpoint(&history);
+        let bytes = norito::to_bytes(&checkpoint).unwrap();
+        let decoded: Vec<ProviderPolicyHistoryCheckpointV1> =
+            norito::decode_from_bytes(&bytes).unwrap();
+        validate_policy_history_checkpoint(&first, &decoded).unwrap();
+        let mut recovered = policy_history_from_checkpoint(&decoded).unwrap();
+        assert_eq!(
+            recovered[&PROVIDER_A].last,
+            first.providers[0].expected_authority.clone().unwrap()
+        );
+        observe_policy_history(&providers, &mut recovered).expect("exact full-authority replay");
+        let mut changed = first.clone();
+        changed.providers[0]
+            .expected_authority
+            .as_mut()
+            .unwrap()
+            .completion_signer = account(0x72);
+        let changed_map = changed
+            .providers
+            .iter()
+            .cloned()
+            .map(|p| (p.provider_id, p))
+            .collect::<BTreeMap<_, _>>();
+        assert!(matches!(
+            observe_policy_history(&changed_map, &mut recovered),
+            Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
+                provider_id: PROVIDER_A
+            })
+        ));
+        assert!(
+            validate_provider_authority_transition(&first.providers[0], &changed.providers[0])
+                .is_err()
+        );
+        assert!(validate_policy_history_checkpoint(&changed, &decoded).is_err());
+        changed.providers[0]
+            .expected_authority
+            .as_mut()
+            .unwrap()
+            .signer_policy = policy(0xA1, 2);
+        validate_provider_authority_transition(&first.providers[0], &changed.providers[0]).unwrap();
+        let changed_map = changed
+            .providers
+            .iter()
+            .cloned()
+            .map(|p| (p.provider_id, p))
+            .collect::<BTreeMap<_, _>>();
+        observe_policy_history(&changed_map, &mut recovered)
+            .expect("explicit successor may change key");
+        validate_policy_history_checkpoint(&changed, &policy_history_to_checkpoint(&recovered))
+            .unwrap();
+        let mut owner_mismatch = changed;
+        owner_mismatch.providers[0].expected_owner = Some(account(0x73));
+        assert!(owner_mismatch.validate(bounds()).is_err());
     }
     #[test]
     fn exact_assignment_lookup_matches_committed_page_root_and_excludes_other_providers() {
@@ -7355,7 +7444,7 @@ mod tests {
                 providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id: PROVIDER_A,
                     expected_owner: Some(account(0x11)),
-                    expected_signer_policy: Some(policy(0xA1, 1)),
+                    expected_authority: Some(completion_authority(0x11, policy(0xA1, 1))),
                     orders,
                 }],
             })
@@ -7961,13 +8050,14 @@ mod tests {
             .insert(first.clone())
             .expect("insert policy floor");
         let mut replacement = advance_projection(&first, 8);
-        replacement.providers[0].expected_signer_policy = Some(policy(0xC1, 1));
+        replacement.providers[0].expected_authority =
+            Some(completion_authority(0x11, policy(0xC1, 1)));
         policy_archive
             .insert(replacement.clone())
             .expect("insert policy replacement");
         let _ = compact_for_test(&policy_archive, replacement.key.clone());
         let mut cycled = advance_projection(&replacement, 9);
-        cycled.providers[0].expected_signer_policy = Some(policy(0xA1, 1));
+        cycled.providers[0].expected_authority = Some(completion_authority(0x11, policy(0xA1, 1)));
         assert!(matches!(
             policy_archive.insert(cycled),
             Err(
@@ -8210,6 +8300,9 @@ mod tests {
         ));
         let mut conflict = second.clone();
         conflict.providers[0].expected_owner = Some(account(0x77));
+        let authority = conflict.providers[0].expected_authority.as_mut().unwrap();
+        authority.provider_owner = account(0x77);
+        authority.completion_signer = account(0x77);
         assert!(matches!(
             archive.insert(conflict),
             Err(ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection { .. })
@@ -8224,13 +8317,15 @@ mod tests {
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
         let mut rollback = advance_projection(&first, 8);
-        rollback.providers[0].expected_signer_policy =
-            Some(ProviderIngestCompletionSignerPolicyV1 {
+        rollback.providers[0].expected_authority = Some(completion_authority(
+            0x11,
+            ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0xA1; 32],
                 revision: 2,
                 predecessor_digest: Some([0xFE; 32]),
                 policy_digest: [2; 32],
-            });
+            },
+        ));
         assert!(matches!(
             archive.insert(rollback),
             Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
@@ -8241,11 +8336,7 @@ mod tests {
         owner_substitution.providers[0].expected_owner = Some(account(0x66));
         assert!(matches!(
             archive.insert(owner_substitution),
-            Err(
-                ProviderIngestFinalizedArchiveErrorV1::AuthoritySubstitution {
-                    provider_id: PROVIDER_A
-                }
-            )
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
         ));
         let mut assignment_rollback = advance_projection(&first, 8);
         for provider in &mut assignment_rollback.providers {
@@ -8260,7 +8351,8 @@ mod tests {
                 | Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
         ));
         let mut valid_rotation = advance_projection(&first, 8);
-        valid_rotation.providers[0].expected_signer_policy = Some(policy(0xA1, 2));
+        valid_rotation.providers[0].expected_authority =
+            Some(completion_authority(0x11, policy(0xA1, 2)));
         archive
             .insert(valid_rotation)
             .expect("exact predecessor-bound signer rotation");
@@ -8272,12 +8364,13 @@ mod tests {
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
                 .expect("open archive");
         let mut floor = projection(7);
-        floor.providers[0].expected_signer_policy = Some(policy(0xA1, 5));
+        floor.providers[0].expected_authority = Some(completion_authority(0x11, policy(0xA1, 5)));
         archive
             .insert(floor.clone())
             .expect("insert explicit mid-history activation floor");
         let mut successor = advance_projection(&floor, 8);
-        successor.providers[0].expected_signer_policy = Some(policy(0xA1, 6));
+        successor.providers[0].expected_authority =
+            Some(completion_authority(0x11, policy(0xA1, 6)));
         archive
             .insert(successor)
             .expect("insert exact successor to floor policy");
@@ -8416,6 +8509,7 @@ mod tests {
             completion_epoch: 7,
             assignment_revision: 1,
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                account(0x11).clone(),
                 account(0x11),
                 policy(0xA1, 1),
             ),
@@ -8516,6 +8610,7 @@ mod tests {
             completion_epoch: 900,
             assignment_revision: 1,
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by.clone(),
                 completed_by,
                 policy(0xA1, 1),
             ),
@@ -8570,6 +8665,7 @@ mod tests {
                 completion_epoch: 900,
                 assignment_revision: 1,
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner_a.clone(),
                     owner_a,
                     policy(0xA1, 1),
                 ),
@@ -8581,6 +8677,7 @@ mod tests {
                 completion_epoch: 899,
                 assignment_revision: 1,
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner_b.clone(),
                     owner_b,
                     policy(0xB1, 1),
                 ),
@@ -8653,12 +8750,12 @@ mod tests {
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
         let mut revoked = advance_projection(&first, 8);
-        revoked.providers[0].expected_signer_policy = None;
+        revoked.providers[0].expected_authority = None;
         archive
             .insert(revoked.clone())
             .expect("record signer revocation");
         let mut reused = advance_projection(&revoked, 9);
-        reused.providers[0].expected_signer_policy = Some(policy(0xA1, 1));
+        reused.providers[0].expected_authority = Some(completion_authority(0x11, policy(0xA1, 1)));
         assert!(matches!(
             archive.insert(reused),
             Err(ProviderIngestFinalizedArchiveErrorV1::AuthorityRollback {
@@ -8666,7 +8763,8 @@ mod tests {
             })
         ));
         let mut successor = advance_projection(&revoked, 9);
-        successor.providers[0].expected_signer_policy = Some(policy(0xA1, 2));
+        successor.providers[0].expected_authority =
+            Some(completion_authority(0x11, policy(0xA1, 2)));
         archive
             .insert(successor)
             .expect("strict successor may reactivate a revoked policy identity");
@@ -8680,12 +8778,13 @@ mod tests {
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
         let mut replacement = advance_projection(&first, 8);
-        replacement.providers[0].expected_signer_policy = Some(policy(0xC1, 1));
+        replacement.providers[0].expected_authority =
+            Some(completion_authority(0x11, policy(0xC1, 1)));
         archive
             .insert(replacement.clone())
             .expect("insert replacement policy identity");
         let mut cycled = advance_projection(&replacement, 9);
-        cycled.providers[0].expected_signer_policy = Some(policy(0xA1, 1));
+        cycled.providers[0].expected_authority = Some(completion_authority(0x11, policy(0xA1, 1)));
         assert!(matches!(
             archive.insert(cycled),
             Err(

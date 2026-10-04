@@ -144,7 +144,7 @@ pub fn verify_global_threshold_beacon_seat_readiness_v1(
     }
     let partial = adaptive_partial_signature_from_dto_v1(proof).map_err(|_| InvalidProof)?;
     session
-        .transcript
+        .transcript()
         .verify_partial_signature(challenge.as_ref(), &partial)
         .map_err(|_| InvalidProof)
 }
@@ -179,7 +179,11 @@ mod tests {
             .collect::<Vec<_>>();
         let mut dkg = adaptive_dkg_session_fixture();
         dkg.roster_hash = global_threshold_beacon_roster_hash_v1(&peers);
-        let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg, &keys);
+        let fixture = adaptive_beacon_fixture_for_session_and_keys(
+            dkg,
+            &keys,
+            &crate::beacon::fixtures::fixture_budget(),
+        );
         let roster = peers
             .into_iter()
             .map(|validator| ValidatorPower {
@@ -225,7 +229,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-            &fixture.session.transcript,
+            fixture.session.transcript(),
             &private_shares,
         )
         .unwrap();
@@ -320,7 +324,7 @@ mod tests {
         assert!(
             fixture
                 .session
-                .transcript
+                .transcript()
                 .verify_partial_signature(b"unrelated pulse-domain payload", &partial)
                 .is_err()
         );

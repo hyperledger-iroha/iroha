@@ -131,6 +131,12 @@ into the output directory.
   actions contain exact argument arrays bound to the opened state store; reset reports the
   matching next startup action. Human output lists the action, name and state path separately.
 
+`kagami dataspace up ALIAS --network NETWORK`
+- Uses the installed parent profile and retains the original attachment work for recovery.
+- Failed attachment reports any retained child and parent status separately, plus exact
+  `dataspace status` and `localnet logs` actions for the requested context and state store.
+  Observation or output failures preserve the original startup error and nonzero result.
+
 `kagami contract deploy`
 - Compiles `.ko`, verifies `.to`, or resolves a Musubi package through shared services.
 - Derives a contract alias inside the selected environment's authorized dataspace.

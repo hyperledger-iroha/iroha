@@ -63,7 +63,7 @@ impl ProviderIngestCompletionPayloadBuilderV1 for TestPayloadBuilder {
             }
             let mut builder = TransactionBuilder::new(
                 network_id,
-                request.provider_owner,
+                request.expected_authority.completion_signer.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([InstructionBox::from(CompleteReplicationOrder {
@@ -189,6 +189,7 @@ struct TestIngress {
     observation: Mutex<ProviderIngestTransactionObservationV1>,
     observe_calls: AtomicUsize,
     events: Mutex<Vec<&'static str>>,
+    exposed: Mutex<Option<SignedTransaction>>,
 }
 impl ProviderIngestTransactionIngressV1 for TestIngress {
     type Prepared = SignedTransaction;
@@ -221,6 +222,7 @@ impl ProviderIngestTransactionIngressV1 for TestIngress {
         transaction: SignedTransaction,
     ) -> ProviderIngestFutureV1<'a, ProviderIngestIngressDispositionV1> {
         assert_eq!(prepared, transaction);
+        *self.exposed.lock().unwrap() = Some(transaction.clone());
         let state = self.outbox.status(self.job_id).unwrap().state;
         assert!(matches!(
             state,
@@ -301,6 +303,7 @@ fn test_runtime_with_network_id(
         observation: Mutex::new(ProviderIngestTransactionObservationV1::Unavailable),
         observe_calls: AtomicUsize::new(0),
         events: Mutex::new(Vec::new()),
+        exposed: Mutex::new(None),
     });
     let payload_builder = Arc::new(TestPayloadBuilder { network_id });
     let runtime = ProviderIngestRuntimeV1::new(
@@ -2021,6 +2024,7 @@ async fn owner_rotation_reconciles_exposed_transaction_before_authority_change()
         };
         page.rows[0].provider_owner = Some(account(9));
         page.rows[0].completion_authority = Some(ProviderIngestCompletionAuthorityV1::new(
+            (account(9)).clone(),
             account(9),
             completion_signer_policy(1),
         ));
@@ -2146,6 +2150,7 @@ async fn owner_rotation_invalidates_never_exposed_signed_bytes_without_preflight
         };
         page.rows[0].provider_owner = Some(account(9));
         page.rows[0].completion_authority = Some(ProviderIngestCompletionAuthorityV1::new(
+            (account(9)).clone(),
             account(9),
             completion_signer_policy(1),
         ));
@@ -2459,4 +2464,44 @@ async fn pre_signalled_shutdown_returns_without_detaching_work() {
     let (sender, receiver) = watch::channel(true);
     runtime.run(receiver).await.expect("clean shutdown");
     drop(sender);
+}
+
+// Component runtime control: TestLedger/TestIngress remain explicit non-native test owners.
+#[tokio::test]
+async fn dedicated_completion_key_drives_full_runtime_without_using_owner_to_sign() {
+    let mut row = fixture_row(0xE4);
+    row.provider_owner = Some(account(9));
+    row.completion_authority.as_mut().unwrap().provider_owner = account(9);
+    let expected = row.completion_authority.clone().unwrap();
+    assert_ne!(expected.provider_owner, expected.completion_signer);
+    let (mut runtime, _, fetch, ingress) = test_runtime(
+        row,
+        true,
+        Ok(vec![0xA5]),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    let outcome = runtime.tick().await.unwrap();
+    assert_eq!(outcome.completions_signed, 1);
+    assert_eq!(outcome.completion_submissions, 1);
+    assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
+    let retained = ingress.exposed.lock().unwrap().clone().unwrap();
+    assert_eq!(retained.authority(), &expected.completion_signer);
+    let Executable::Instructions(instructions) = retained.instructions() else {
+        panic!("instructions")
+    };
+    let completion = instructions[0]
+        .as_any()
+        .downcast_ref::<CompleteReplicationOrder>()
+        .unwrap();
+    assert_eq!(completion.expected_authority(), &expected);
+    let outcome = runtime.tick().await.unwrap();
+    assert_eq!(outcome.completions_signed, 0);
+    assert_eq!(outcome.completion_submissions, 0);
+    assert_eq!(
+        *ingress.events.lock().unwrap(),
+        vec!["prepare_signed", "expose_ambiguous"]
+    );
+    assert_eq!(ingress.exposed.lock().unwrap().as_ref(), Some(&retained));
 }

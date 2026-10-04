@@ -354,7 +354,11 @@ fn verified_pulse(
         roster_hash: session.roster_hash,
         transcript_hash: session.transcript_hash,
     };
-    let validated = validate_global_threshold_beacon_session_v1(session.clone(), &binding)?;
+    let validated = validate_global_threshold_beacon_session_v1(
+        session,
+        &binding,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+    )?;
     verify_finalized_global_threshold_beacon_pulse_v1(
         &validated,
         &pulse,

@@ -345,8 +345,16 @@ The duplicate Java implementation is removed. `SorafsCapacityDeclarationJavaCons
 preserves payload/action/Base64 coverage and replaces retired projection assertions with
 explicit refusal tests through the canonical Kotlin API. The focused `:core-jvm:test --tests
 org.hyperledger.iroha.sdk.sorafs.SorafsCapacityDeclarationJavaConsumerTest` passed with JDK 21
-and the enforced JDK 8 API/source targets. The remaining capacity dispute/pricing/credit Java
+and the enforced JDK 8 API/source targets. The remaining capacity dispute/pricing Java
 builders are unchanged.
+
+`UpsertProviderCreditInstruction` has one Kotlin-owned argument template with an
+explicit absence/exact-current-record hash guard. The duplicate Java builder is
+removed. `SorafsProviderCreditJavaConsumerTest` preserves its four action, nominal
+credit, strike-count and metadata assertions through the canonical Kotlin constructor;
+Kotlin tests add required-guard, roundtrip and defensive-copy controls. These are
+argument-template checks, not native transaction-wire or provider-readiness proofs.
+Current-candidate JVM execution and native fixture capture remain validation gates.
 
 ## Kotodama manifest parser ownership (2026-09-23)
 
@@ -460,3 +468,20 @@ This records source retirement and test declarations. The new controls have not
 yet executed; JNI, physical hardware, genuine monetary/proof admission and
 release qualification are separate. Original retired sources and assertion maps
 are retained in the source packet.
+
+## Provider-ingest completion authority ownership
+
+Kotlin owns the mandatory provider owner, completion signer and signer-policy
+record for both JVM languages. The affected Java Musubi provider attestation
+models, JSON parser, instruction encoder and digest implementation are retired.
+The Java transport consumes Kotlin's exact request/record types and canonical
+record decoder; existing Java fixture, signed-request and mismatch assertions
+remain Java-source consumers. Unrelated Java Musubi capabilities remain tracked
+for their own retirement.
+
+The separate Java replication completion authority, policy, anchor and instruction
+builders are retired. `ReplicationOrderJavaConsumerTest` in Kotlin core preserves
+every former issue/complete/expire builder assertion through Kotlin's typed API
+and adds mandatory-signer/retired-layout controls. Canonical fixture regeneration
+and combined Kotlin/Swift/Java validation remain required for this source change;
+no new fixture hashes or runtime qualification are implied.

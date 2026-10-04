@@ -12,6 +12,30 @@ mod attachment_installed;
 #[path = "installed_tests.rs"]
 mod installed;
 
+#[test]
+fn global_and_private_requests_select_only_their_original_scope_prerequisites() {
+    use crate::localnet::LocalnetServiceProfile;
+    let launcher = PathBuf::from("installed-kagami");
+    let daemon = PathBuf::from("installed-iroha3d");
+    let global = LocalnetRequest::new(launcher.clone(), daemon.clone());
+    let private = LocalnetRequest::private_root(launcher.clone(), daemon.clone());
+    assert_eq!(
+        global.service_profile,
+        LocalnetServiceProfile::StreamTokenAuthorities
+    );
+    assert_eq!(private.service_profile, LocalnetServiceProfile::Standard);
+    assert_eq!(
+        LocalnetServiceProfile::default(),
+        LocalnetServiceProfile::Standard
+    );
+    for request in [&global, &private] {
+        assert_eq!(request.name, "local");
+        assert_eq!(request.launcher, launcher);
+        assert_eq!(request.daemon, daemon);
+        assert_eq!(request.startup_timeout, Duration::from_secs(30));
+    }
+}
+
 // These lifecycle fixtures reuse only immutable public bytes from genuine executed genesis.
 // They do not cache any runtime authority, current-state observation or finalized proof.
 fn standard_fixture_genesis() -> &'static (Vec<u8>, String, String) {
@@ -19,10 +43,12 @@ fn standard_fixture_genesis() -> &'static (Vec<u8>, String, String) {
     GENESIS.get_or_init(|| {
         let temporary = tempfile::tempdir().unwrap();
         let ports = LocalnetPorts::reserve().unwrap();
-        let prepared = crate::localnet::prepare_localnet(
+        let prepared = crate::localnet::prepare_localnet_at(
             "fixture-genesis",
             &temporary.path().join("generation"),
             &ports,
+            crate::localnet::LocalnetServiceProfile::Standard,
+            None,
         )
         .unwrap();
         assert!(prepared.stream_token_authorities().unwrap().is_none());
@@ -145,7 +171,7 @@ fn retained_root_kind_is_mandatory_and_private_identity_cannot_replace_global() 
     assert!(decode::<RetainedLocalnet>(&norito::json::to_vec(&value).unwrap()).is_err());
     let spec = private_spec();
     let binary = directory.path().join("fixture-executable");
-    let request = LocalnetRequest::new(binary.clone(), binary);
+    let request = LocalnetRequest::private_root(binary.clone(), binary);
     let error = store.up_private_root(&request, &spec).unwrap_err();
     assert!(
         error
@@ -198,7 +224,7 @@ fn incomplete_managed_preparation_never_creates_a_replacement_generation() {
         )
         .unwrap();
     let binary = directory.path().join("not-executable");
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     assert!(store.up_private_root(&request, &private_spec()).is_err());
     assert!(store.create_localnet(&request).is_err());
@@ -234,7 +260,7 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
         .unwrap();
     let binary = directory.path().join("not-executable");
     let store = ManagedStore::open(directory.path()).unwrap();
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     request.startup_timeout = Duration::from_secs(120);
     let spec = private_spec();
@@ -402,7 +428,7 @@ fn create_only_rejects_retained_global_and_private_names_under_the_operation_loc
             let networks = PrivateDirectory::open(root.join("networks")).unwrap();
             let directory = networks.create_child("concurrent").unwrap();
             let binary = selected_directory.path().join("fixture-executable");
-            let mut request = LocalnetRequest::new(binary.clone(), binary);
+            let mut request = LocalnetRequest::private_root(binary.clone(), binary);
             request.name = "concurrent".into();
             let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
             let ports = LocalnetPorts::reserve().unwrap();

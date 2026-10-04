@@ -137,7 +137,7 @@ fn native_finality_schemas_are_exact_closed_and_bounded() {
 #[test]
 fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_fields() {
     use iroha_core::{state::World, sumeragi::{finality::{build_checkpoint, build_proof}, test_chain::{CertifiedTestChain, TestChainConfig}}};
-    use iroha_data_model::{block::{CommitCertificate, decode_versioned_signed_block}, parameter::{Parameter, system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters}}, sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier}};
+    use iroha_data_model::{block::{CommitCertificate, decode_framed_signed_block}, parameter::{Parameter, system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters}}, sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier}};
     let mut config = TestChainConfig::new(World::new(), 1_000);
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.genesis_parameters.push(Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()));
@@ -184,15 +184,15 @@ fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_field
     let wire = verified.canonical_executed_wire().unwrap();
     assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
     assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));
-    let mut missing_result = proof.clone(); let mut block = decode_versioned_signed_block(&missing_result.block_wire).unwrap();
+    let mut missing_result = proof.clone(); let mut block = decode_framed_signed_block(&missing_result.block_wire).unwrap();
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new(), certificate.availability().to_vec())));
     missing_result.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_result).is_err(), "missing canonical execution preimage");
-    let mut missing_availability = proof.clone(); let mut block = decode_versioned_signed_block(&missing_availability.block_wire).unwrap();
+    let mut missing_availability = proof.clone(); let mut block = decode_framed_signed_block(&missing_availability.block_wire).unwrap();
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), certificate.result_preimage().to_vec(), Vec::new())));
     missing_availability.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_availability).is_err(), "missing signed payload availability");
-    let mut forged_qc = proof.clone(); let mut block = decode_versioned_signed_block(&forged_qc.block_wire).unwrap();
+    let mut forged_qc = proof.clone(); let mut block = decode_framed_signed_block(&forged_qc.block_wire).unwrap();
     let mut qc = qc; qc.agg_sig.0[0] ^= 0x80;
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec(), certificate.availability().to_vec())));
     forged_qc.block_wire = block.encode_wire().unwrap(); assert!(verifier.verify_retained_decision(&forged_qc).is_err(), "forged exact native QC");

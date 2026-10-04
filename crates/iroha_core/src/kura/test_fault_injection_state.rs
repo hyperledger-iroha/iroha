@@ -55,4 +55,3 @@ fn should_fail_after_bound_progress_append_build_for_tests() -> bool {
 }
 const CANONICAL_HASH_READER_OBSERVED: usize = 1 << 0;
 const CANONICAL_BLOCK_READER_OBSERVED: usize = 1 << 1;
-

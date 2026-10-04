@@ -2,7 +2,7 @@ use ivm::{IVM, ProgramMetadata, VMError, decode, encoding};
 #[test]
 fn decoder_traps_on_misaligned_fetch() {
     // Minimal program: valid header + a single 32-bit HALT instruction
-    let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(10_000);
     vm.load_program(&program).expect("load program");

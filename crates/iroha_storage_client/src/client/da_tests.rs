@@ -139,15 +139,19 @@ async fn storage_manifest_preserves_sdk_http_and_response_bound_errors() {
         .da_manifest(&ticket())
         .await
         .unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<Error>(),
-        Some(&Error::Http {
-            operation: OPERATION,
-            status: 503,
-            retry_after: Some(Duration::from_secs(4)),
-            body: b"not ready".to_vec(),
-        })
-    );
+    let Some(Error::Http {
+        operation,
+        status,
+        retry_after,
+        body,
+    }) = error.downcast_ref::<Error>()
+    else {
+        panic!("expected structured HTTP error, got {error:?}");
+    };
+    assert_eq!(*operation, OPERATION);
+    assert_eq!(*status, 503);
+    assert_eq!(*retry_after, Some(Duration::from_secs(4)));
+    assert_eq!(body, b"not ready");
     assert_eq!(requests.lock().unwrap().len(), 1);
 
     let (client, requests, _) = attach(
@@ -167,13 +171,11 @@ async fn storage_manifest_preserves_sdk_http_and_response_bound_errors() {
         .unwrap_err();
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        error.downcast_ref::<Error>(),
-        Some(&Error::ResponseTooLarge {
-            maximum: requests[0].max_response_bytes,
-            actual: None,
-        })
-    );
+    let Some(Error::ResponseTooLarge { maximum, actual }) = error.downcast_ref::<Error>() else {
+        panic!("expected structured response bound error, got {error:?}");
+    };
+    assert_eq!(*maximum, requests[0].max_response_bytes);
+    assert_eq!(*actual, None);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -243,12 +245,10 @@ async fn proof_manifest_timeout_cancels_before_gateway_work() {
         )
         .await
         .unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<Error>(),
-        Some(&Error::Timeout {
-            operation: OPERATION
-        })
-    );
+    let Some(Error::Timeout { operation }) = error.downcast_ref::<Error>() else {
+        panic!("expected structured timeout error, got {error:?}");
+    };
+    assert_eq!(*operation, OPERATION);
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
 }

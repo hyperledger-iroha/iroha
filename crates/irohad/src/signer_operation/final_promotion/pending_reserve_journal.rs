@@ -46,7 +46,8 @@ const RECORD_VERSION: u8 = 1;
 pub enum FinalPromotionPendingReserveJournalErrorV1 {
     /// Private record or authoritative identity unavailable or invalid.
     Unavailable,
-    /// Local inventory resources are busy; retain the same signed pending operation.
+    /// Local inventory or canonical-frame resources are unavailable; retain the same signed
+    /// pending operation. This fixed error does not itself carry a retry continuation.
     LocalCapacity,
 }
 impl std::fmt::Display for FinalPromotionPendingReserveJournalErrorV1 {
@@ -172,8 +173,7 @@ impl FinalPromotionPendingReserveJournalV1 {
         reserve: &SignedTransaction,
     ) -> Result<RecoveredPendingReserveV1, Error> {
         let reserve_entry = TransactionEntrypoint::External(reserve.clone());
-        let signed_reserve = final_promotion_native_signed_entry_frame_v1(&reserve_entry)
-            .map_err(|_| Error::Unavailable)?;
+        let signed_reserve = encode_signed_frame(&reserve_entry)?;
         let record = PendingReserveRecordV1 {
             intent: PendingReserveIntentV1 {
                 version: RECORD_VERSION,
@@ -263,10 +263,7 @@ impl RecoveredPendingReserveV1 {
             || self.record.intent.reserve_entry_hash != *reserve.hash_as_entrypoint().as_ref()
             || self.record.signed_current_check != current_check.canonical_external()
             || self.record.signed_reserve
-                != final_promotion_native_signed_entry_frame_v1(&TransactionEntrypoint::External(
-                    reserve.clone(),
-                ))
-                .map_err(|_| Error::Unavailable)?
+                != encode_signed_frame(&TransactionEntrypoint::External(reserve.clone()))?
         {
             return Err(Error::Unavailable);
         }
@@ -405,6 +402,16 @@ fn validate_record(record: &PendingReserveRecordV1) -> Result<(), Error> {
     Ok(())
 }
 
+// The caller retains any live signed Reserve; this fixed staging error does not create a
+// signing retry continuation. Local frame refusal cannot be labelled malformed journal content.
+fn encode_signed_frame(entry: &TransactionEntrypoint) -> Result<Vec<u8>, Error> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    final_promotion_native_signed_entry_frame_v1(entry).map_err(|error| match error {
+        ExecutionAttemptError::Deferred(_) => Error::LocalCapacity,
+        ExecutionAttemptError::Rejected(_) => Error::Unavailable,
+    })
+}
+
 fn decode_signed_frame(frame: &[u8]) -> Result<SignedTransaction, Error> {
     if frame.is_empty() || frame.len() > SIGNED_FRAME_MAX_BYTES {
         return Err(Error::Unavailable);
@@ -414,9 +421,7 @@ fn decode_signed_frame(frame: &[u8]) -> Result<SignedTransaction, Error> {
         norito::DecodeLimits::new(16 * 1024, SIGNED_FRAME_MAX_BYTES, 8192, 256 * 1024, 24),
     )
     .map_err(|_| Error::Unavailable)?;
-    if final_promotion_native_signed_entry_frame_v1(&entry).map_err(|_| Error::Unavailable)?
-        != frame
-    {
+    if encode_signed_frame(&entry)? != frame {
         return Err(Error::Unavailable);
     }
     let TransactionEntrypoint::External(signed) = entry else {

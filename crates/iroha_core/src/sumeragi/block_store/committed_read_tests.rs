@@ -339,8 +339,7 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
 fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
     use crate::test_allocations::refuse_one_layout_during;
     use iroha_data_model::{
-        block::decode_versioned_signed_block,
-        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+        block::decode_framed_signed_block, sumeragi_finality::test_fixtures::NativeFinalityFixture,
     };
     let fixture = NativeFinalityFixture::new();
     let parent = fixture
@@ -351,7 +350,7 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
         panic!("original genesis authenticates successor");
     };
     let source = crate::block::reserve_block_for_tests()
-        .initialize(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
+        .initialize(decode_framed_signed_block(&fixture.latest().block_wire).unwrap());
     let crypto = Arc::new(BlsCrypto::new());
     crypto
         .admit_committee(

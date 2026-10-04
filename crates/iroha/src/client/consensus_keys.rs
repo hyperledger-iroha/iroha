@@ -31,7 +31,7 @@ impl Client {
         let records: Vec<ConsensusKeyRecord> = Self::decode_canonical_norito_response(
             &response,
             CONSENSUS_KEY_SNAPSHOT_MAX_BYTES,
-            "Failed to get consensus-key snapshot",
+            "sumeragi.consensus_keys.read",
         )?;
         if records.len() > CONSENSUS_KEY_SNAPSHOT_MAX_RECORDS {
             return Err(eyre!("consensus-key snapshot exceeds its record limit"));

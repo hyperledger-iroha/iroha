@@ -10,6 +10,8 @@ use std::{
 
 use ivm::cache_memory::{SharedAllocation, SharedValue, memory_stats};
 
+#[path = "shared_owner_custody/diagnostics.rs"]
+mod diagnostics;
 #[path = "shared_owner_custody/read_log.rs"]
 mod read_log;
 #[path = "shared_owner_custody/register_paths.rs"]

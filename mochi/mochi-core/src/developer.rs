@@ -15,10 +15,7 @@ pub use iroha_deploy::managed::{
     ManagedConfirmedAnchor, ManagedDataspaceStatus, ManagedDeploymentReport, ManagedPhase,
 };
 pub use musubi::deployment_runtime::ContractInput;
-use musubi::{
-    archive_fetch::{MusubiArchiveDiscoveryErrorV1, PreparedProductionSorafsArchiveTransportV1},
-    deployment_runtime::{AliasSelection, DeploymentRuntime},
-};
+use musubi::deployment_runtime::{AliasSelection, DeploymentRuntime};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -322,32 +319,7 @@ impl DeveloperWorkspace {
                 // hits cannot satisfy the graph. Selecting a private context does no parent I/O.
                 let deadline = Instant::now() + Duration::from_secs(60);
                 let store = ManagedStore::open(&registry_root)?;
-                let Some(registry) =
-                    store.build_registry(&installed, &registry_context, deadline)?
-                else {
-                    return Ok(None);
-                };
-                let parent = registry.config().clone();
-                let transport = PreparedProductionSorafsArchiveTransportV1::from_account_registry(
-                    parent.clone(),
-                    Arc::new(move |provider| {
-                        registry.discover(provider, deadline).map_err(|error| {
-                            if Instant::now() >= deadline {
-                                MusubiArchiveDiscoveryErrorV1::Deadline
-                            } else {
-                                match error {
-                                    iroha_deploy::bootstrap::BootstrapError::Busy
-                                    | iroha_deploy::bootstrap::BootstrapError::Io(_) => {
-                                        MusubiArchiveDiscoveryErrorV1::Unavailable
-                                    }
-                                    _ => MusubiArchiveDiscoveryErrorV1::Rejected,
-                                }
-                            }
-                        })
-                    }),
-                    Duration::from_secs(30),
-                )?;
-                Ok(Some((parent, transport)))
+                Ok(store.build_registry(&installed, &registry_context, deadline)?)
             }))
     }
 }
@@ -544,7 +516,7 @@ mod tests {
         let store = ManagedStore::open(desktop.state_root()).unwrap();
         let request = desktop
             .runtime
-            .localnet_request("private", Duration::from_secs(120));
+            .private_root_request("private", Duration::from_secs(120));
         assert!(
             matches!(
                 store.up_private_root(&request, &spec),

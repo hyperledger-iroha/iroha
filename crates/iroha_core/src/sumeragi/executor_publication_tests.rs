@@ -158,10 +158,13 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
         ] {
             let error = norito::with_decode_limits_scope(limits, || {
-                iroha_data_model::block::decode_versioned_signed_block(block.payload().as_slice())
+                iroha_data_model::block::decode_framed_signed_block(block.payload().as_slice())
             })
             .unwrap_err();
-            assert!(error.is_decode_resource_limit(), "{error:?}");
+            assert!(
+                error.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit,
+                "{error:?}"
+            );
             assert_eq!(
                 norito::with_decode_limits_scope(limits, || payload::decode(
                     block.payload().as_slice()
@@ -394,7 +397,7 @@ fn malformed_available_payload_remains_invalid_and_negatively_cached() {
     });
 }
 
-fn proposal_with_transaction(
+pub(super) fn proposal_with_transaction(
     chain: &CertifiedTestChain,
     worker: &Worker<'_>,
     transaction: impl FnOnce(

@@ -19,6 +19,9 @@
 
 use norito::{NoritoSchema, codec::Encode};
 
+// Borrow concrete original current/undo owners without admitting arbitrary row suppliers.
+pub(super) mod original_images;
+
 mod account_alias_ownership;
 
 mod account_identity_ownership;
@@ -244,14 +247,6 @@ mod fraud_policy;
     )
 )]
 mod governance_policy;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: compare Kagemusha runtime authority with governed release State before complete-root publication"
-    )
-)]
-mod kagemusha_policy;
 #[cfg_attr(
     not(test),
     expect(

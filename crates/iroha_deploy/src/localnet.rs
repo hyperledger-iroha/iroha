@@ -1288,7 +1288,11 @@ fn generate_localnet_runtime<T: Write>(
         &onboarding_identity.account_id,
     )?;
     if let Some(authorities) = service_authorities.as_ref() {
-        genesis = authorities.append_genesis(genesis, &client_identity.account_id)?;
+        genesis = authorities.append_genesis(
+            genesis,
+            &client_identity.account_id,
+            &genesis_account_id,
+        )?;
     }
     genesis = service_authorities::append_profile(
         genesis,
@@ -1414,7 +1418,7 @@ fn generate_localnet_runtime<T: Write>(
     );
     let bootstrap_config = match service_authorities.as_ref() {
         Some(authorities) => {
-            authorities.seed_provider_owner(&bootstrap_config, chain_discriminant)?
+            authorities.configure_peer(&bootstrap_config, chain_discriminant, &out_dir, 0)?
         }
         None => bootstrap_config,
     };
@@ -1435,6 +1439,9 @@ fn generate_localnet_runtime<T: Write>(
     )?;
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
+        creation_time_ms: service_authorities
+            .as_ref()
+            .map(|authorities| authorities.creation_time_ms()),
         public_key: &genesis_public_key,
         private_key: genesis_private.clone(),
         config: &config,
@@ -1517,7 +1524,7 @@ fn generate_localnet_runtime<T: Write>(
             );
             let rendered = match service_authorities.as_ref() {
                 Some(authorities) => {
-                    authorities.seed_provider_owner(&rendered, chain_discriminant)?
+                    authorities.configure_peer(&rendered, chain_discriminant, render_root, idx)?
                 }
                 None => rendered,
             };
@@ -1541,6 +1548,16 @@ fn generate_localnet_runtime<T: Write>(
                 parsed_config.genesis.expected_hash,
                 genesis_expected_hash
             ));
+        }
+        if idx < 3 && managed {
+            if let Some(authorities) = service_authorities.as_ref() {
+                authorities.initialize_native_attestation(
+                    &out_dir,
+                    &parsed_config.torii.sorafs_storage.data_dir,
+                    genesis_expected_hash,
+                    idx,
+                )?;
+            }
         }
         let rendered = match publication_root {
             Some(root) => render(root)?,
@@ -4512,6 +4529,7 @@ struct GenesisConsensusPolicies {
     confidential_policy_hash: [u8; 32],
 }
 struct GenesisWriteContext<'a> {
+    creation_time_ms: Option<u64>,
     manifest: &'a RawGenesisTransaction,
     public_key: &'a iroha_crypto::PublicKey,
     private_key: ExposedPrivateKey,
@@ -4523,6 +4541,7 @@ struct GenesisWriteContext<'a> {
 }
 fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>> {
     let GenesisWriteContext {
+        creation_time_ms,
         manifest,
         public_key,
         private_key,
@@ -4554,7 +4573,7 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
         Some(config),
         policies.da_proof_policies,
         policies.confidential_policy_hash,
-        None,
+        creation_time_ms,
     )
     .wrap_err("stage and sign genesis block")?;
     let mut bound_json =
@@ -4643,7 +4662,7 @@ fn write_genesis_key_files(
     custody::write(public_path, public.as_bytes())
         .wrap_err_with(|| format!("write genesis public-key file {}", public_path.display()))
 }
-fn parse_localnet_peer_config(
+pub(crate) fn parse_localnet_peer_config(
     rendered_config: &str,
     config_path: Option<&Path>,
 ) -> Result<actual::Root> {
@@ -4839,7 +4858,16 @@ pub fn validate_beacon_launch(
             beacon_credential,
             MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
         )?;
+        // One pool belongs to this launch operation and its parsed public policy. Imported
+        // session owners retain this pool until the complete seat validation finishes.
+        let credential_budget = iroha_core::state::AllocationBudget::new(
+            projected
+                .runtime_provider_broker
+                .credential_max_memory_bytes
+                .get(),
+        );
         validate_beacon_credential_seat(
+            &credential_budget,
             &credential_bytes,
             &network_id,
             handle,
@@ -5067,6 +5095,7 @@ fn reserve_private_beacon_listeners(
 
 #[cfg(unix)]
 fn validate_beacon_credential_seat(
+    budget: &iroha_core::state::AllocationBudget,
     bytes: &[u8],
     network_id: &NetworkId,
     handle: &str,
@@ -5078,7 +5107,7 @@ fn validate_beacon_credential_seat(
 ) -> Result<()> {
     let shares =
         iroha_core::beacon::credential::decode_global_beacon_partial_signer_credential_shares_v1(
-            bytes, network_id, handle, revision, digest,
+            bytes, network_id, handle, revision, digest, budget,
         )
         .map_err(|_| eyre!("beacon credential does not authenticate this provider and network"))?;
     ensure!(
@@ -5340,6 +5369,7 @@ mod private_beacon_launch_tests {
         for bytes in [b"".as_slice(), b"not a native beacon credential".as_slice()] {
             assert!(
                 validate_beacon_credential_seat(
+                    &iroha_core::state::AllocationBudget::new(0),
                     bytes,
                     &network,
                     "software://iroha/beacon/seat-1",
@@ -7406,6 +7436,14 @@ mod managed_tests {
         assert_eq!(prepared.context.dataspace_alias, "universal");
         assert_eq!(prepared.context.dataspace_id, 0);
         let config = prepared.context.load_client_config().unwrap();
+        assert_eq!(
+            prepared.service_profile,
+            LocalnetServiceProfile::StreamTokenAuthorities
+        );
+        let authorities = prepared.stream_token_authorities().unwrap().unwrap();
+        assert_eq!(authorities.authorities.len(), 11);
+        assert_eq!(authorities.network_id, config.network_id);
+        assert_eq!(authorities.manager, config.account);
         let operator = prepared.load_operator_key_pair().unwrap();
         assert_ne!(operator.public_key(), config.key_pair.public_key());
         for (index, peer) in prepared.peers.iter().enumerate() {
@@ -7416,6 +7454,16 @@ mod managed_tests {
                 Some(&peer.config_path),
             )
             .unwrap();
+            assert!(!config.torii.sorafs_storage.stream_tokens.enabled);
+            assert!(config.torii.sorafs_storage.stream_tokens.signer.is_none());
+            assert!(
+                config
+                    .torii
+                    .sorafs_storage
+                    .stream_tokens
+                    .admission_native
+                    .is_none()
+            );
             assert_eq!(
                 config.network.connect_startup_delay,
                 std::time::Duration::ZERO
@@ -7738,7 +7786,9 @@ fn localnet_script_command(script_name: &str) -> String {
 #[path = "localnet/tests.rs"]
 mod tests;
 
-/// Generate the stock four-validator developer sandbox and bind its retained client identity.
+/// Generate the stock managed four-validator Global sandbox and its service-authority prerequisites.
+///
+/// Original signed genesis binds the retained client and service roles. Token services remain disabled.
 ///
 /// # Errors
 /// Rejects unsafe custody, invalid generated configuration, and failed authenticated genesis.
@@ -7751,7 +7801,7 @@ pub fn prepare_localnet(
         name,
         directory,
         ports,
-        LocalnetServiceProfile::Standard,
+        LocalnetServiceProfile::StreamTokenAuthorities,
         None,
     )
 }

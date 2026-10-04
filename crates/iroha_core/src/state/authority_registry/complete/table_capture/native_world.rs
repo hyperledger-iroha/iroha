@@ -317,11 +317,6 @@ capture_world_table_once!(
     "world.ministry_agenda_proposals"
 );
 capture_world_table_once!(
-    pub(super) capture_governance_proposals_once,
-    governance_proposals,
-    "world.governance_proposals"
-);
-capture_world_table_once!(
     pub(super) capture_governance_referenda_once,
     governance_referenda,
     "world.governance_referenda"

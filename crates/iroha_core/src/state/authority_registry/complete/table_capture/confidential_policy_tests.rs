@@ -1,7 +1,4 @@
 //! Actual definition catalog rejects untrusted transition projections at both cuts.
-//!
-//! TODO: link this regression module with the confidential-policy definition
-//! checker after the currently shared build has completed.
 
 use super::*;
 use crate::{
@@ -16,8 +13,10 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
     asset::{
-        AssetBalancePolicy, AssetConfidentialPolicy, AssetDefinition, AssetDefinitionId,
-        ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        AssetBalancePolicy, AssetDefinition, AssetDefinitionId,
+        definition::{
+            AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        },
     },
     prelude::Registrable,
 };

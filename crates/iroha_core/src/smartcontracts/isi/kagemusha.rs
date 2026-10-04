@@ -23,8 +23,7 @@ mod ordinary_mint_submission;
 pub(crate) mod runtime_publication_tests;
 
 pub(crate) use authority::{
-    KagemushaVerifierAuthorityV1, runtime_matches_governed_registry, runtime_verifier_authority,
-    validate_runtime_cache_for_publication,
+    runtime_matches_governed_registry, validate_runtime_cache_for_publication,
 };
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};

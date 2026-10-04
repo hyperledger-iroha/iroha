@@ -5,7 +5,7 @@
 use iroha_data_model::{
     block::{
         consensus::{ExecKv, ExecWitness},
-        decode_versioned_signed_block,
+        decode_framed_signed_block,
     },
     isi::sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1, RelayAmxPreparedV1},
     sumeragi_amx::{
@@ -84,7 +84,7 @@ impl Dataspace {
             ..ExecWitness::default()
         };
         let proof = self.chain.certify_with_witness(block, &witness);
-        let certified = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certified = decode_framed_signed_block(&proof.block_wire).unwrap();
         AmxRecordProofV1::from_writes(
             AmxCertifiedBlockV1::from_certificate(certified.commit_certificate().unwrap()),
             writes

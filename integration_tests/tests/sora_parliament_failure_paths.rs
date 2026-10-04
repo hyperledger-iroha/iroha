@@ -67,9 +67,13 @@ async fn install_threshold_sessions(
     client: &Client,
 ) -> Result<ThresholdSessionsV1> {
     let ordered_roster = ordered_validator_roster(network, client).await?;
-    let beacon_record =
-        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
-            .wrap_err("derive failure-corridor beacon fixture")?;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let beacon_record = deterministic_parliament_beacon_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+        &beacon_budget,
+    )
+    .wrap_err("derive failure-corridor beacon fixture")?;
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive failure-corridor TLE fixture")?;
