@@ -6,7 +6,9 @@ This page documents how server-side queries select cursor behavior when executin
 
 Iroha runs read-only queries against a captured `StateView` snapshot for determinism. Iterable queries can operate in two modes:
 
-- ephemeral: returns only the first batch. The server does not keep a cursor. Clients page by reissuing a new Start request with updated pagination parameters.
+- ephemeral: returns only the first batch. The server does not keep a cursor;
+  signed-query admission requires zero offset, so this mode cannot page through
+  a larger result set.
 - stored: returns the first batch and a server cursor. Clients can continue the same snapshot using the cursor.
 
 Mode selection is configurable and can be overridden per request.
@@ -23,11 +25,8 @@ The `/v1/query` endpoint accepts optional query-string parameters (reserved for 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: integer; required when `pipeline.query_stored_min_gas_units > 0` and `cursor_mode=stored`. When insufficient, the server rejects the request with a validation error.
 - Stored `Continue` requests embed the gas budget in the Norito payload via `ForwardCursor.gas_budget` so the server can re-validate stored cursors.
-- Stored transaction-history queries enforce the validated `Start` value as a
-  per-request projection allowance. Each unsorted continuation enforces the
-  current cursor value before resolving its certified merge sidecar; sorted
-  queries charge their bounded global scan during `Start` and reuse the
-  materialized window on continuation.
+- Transaction history is read through the [collection query
+  endpoints](torii/collection_queries.md), with their own cursor contract.
 - The normative storage, authorization, expiry, and count rules are defined in
   [Cursor pagination](torii/cursor_pagination.md).
 
@@ -46,11 +45,11 @@ When telemetry is enabled (`telemetry_profile` is not `disabled`):
 
 ### Determinism and Snapshot Semantics
 
-- The initial request executes against a captured `StateView`. Exact or
-  materialized stored queries retain their iterator, while bounded unsorted
-  continuations may replay against a fresh view. See
+- The initial request executes against a captured `StateView`. Admitted stored
+  queries retain their initial snapshot tail for continuation. See
   [Cursor pagination](torii/cursor_pagination.md) for the precise lifecycle.
-- Ephemeral mode materializes the first batch and returns it. Clients must paginate by issuing new Start requests with updated pagination.
+- Ephemeral mode returns only the first batch. Use stored mode for admitted
+  iterable queries that need continuation, or collection cursors for listings.
 
 ### Examples (Conceptual)
 
@@ -92,6 +91,14 @@ budget. Response charges are conservative ceiling reservations, not measured
 encoded lengths. Each returned response still passes the existing wire-byte
 ceiling. Source and page storage fit the combined fresh and retained admission
 leases; neither a live-State replay nor a generic producer fallback is used.
-Other predicates, selectors, offsets and sorting remain closed until their
-source-specific adapters exist. The remaining inventory is 35 world producers
-and three Kura producers; peers support the bounded ephemeral adapter.
+Peers support the bounded ephemeral adapter, and `FindTriggers` and
+`FindActiveTriggerIds` follow the same unfiltered, unsorted, zero-offset shape.
+Every other iterable query, and these with a predicate, offset or sorting, is
+refused before execution with the stable reason
+`signed_query_shape_not_admitted`; the refusal names the query and lists the
+Torii collection endpoints (`/v1/domains`, `/v1/accounts`,
+`/v1/assets/definitions`, `/v1/nfts`, `/v1/rwas`, `/v1/accounts/{id}/assets`,
+`/v1/assets/{definition}/holders`, `/v1/transactions/query`,
+`/v1/repo/agreements`) that serve listing reads. See
+[Query JSON envelope](query_json.md#admission-on-signed-v1query) and
+[Torii collection queries](torii/collection_queries.md).

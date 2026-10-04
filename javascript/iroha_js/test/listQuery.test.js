@@ -48,6 +48,18 @@ test("golden vectors: every filter parses, renders canonically and round-trips i
   }
 });
 
+test("golden vectors: JSON-form filters decode to their normalized tree", () => {
+  assert(VECTORS.json_filters.length > 0);
+  for (const vector of VECTORS.json_filters) {
+    const label = JSON.stringify(vector.json);
+    const decoded = Filter.fromJSON(vector.json);
+    assert.equal(decoded.toString(), vector.canonical, label);
+    assert.deepEqual(decoded.toJSON(), vector.normalized, label);
+    assert.deepEqual(Filter.parse(vector.canonical).toJSON(), vector.normalized, label);
+    assert.deepEqual(ListQuery.fromJSON({ filter: vector.json }).toJSON(), { filter: vector.normalized }, label);
+  }
+});
+
 test("golden vectors: filter syntax errors report the reason, line and column", () => {
   for (const vector of VECTORS.filter_errors) {
     assert.throws(
@@ -238,11 +250,116 @@ test("range comparisons need numbers, decimals or strings", () => {
 });
 
 test("field paths are validated", () => {
-  for (const path of ["", "a b", "a..b", ".a", "a\u0007"]) {
+  for (const path of ["", "a b", "a..b", ".a", "a\u0007", "a\u007f", "a`b"]) {
     assert.throws(() => field(path), (error) => assertListQueryError(error, "invalid_filter"), path);
   }
   assert.throws(() => field(42), (error) => assertListQueryError(error, "invalid_filter"));
   assert.throws(() => new SortKey("a b"), (error) => assertListQueryError(error, "invalid_sort"));
+});
+
+test("field paths must not contain backticks, which the text form cannot quote", () => {
+  assert.throws(
+    () => field("metadata.a`b"),
+    (error) => {
+      assertListQueryError(error, "invalid_filter", "filter");
+      assert.equal(error.reason, "invalid field `metadata.a`b`: field paths must not contain backticks");
+      return true;
+    },
+  );
+  assert.throws(
+    () => Filter.fromJSON({ op: "exists", args: ["a`b"] }),
+    (error) => assertListQueryError(error, "invalid_filter", "filter") && /must not contain backticks/u.test(error.reason),
+  );
+  assert.throws(() => Filter.fromJSON({ op: "in", args: ["a`b", [1]] }), /must not contain backticks/u);
+  assert.throws(() => new SortKey("a`b"), (error) => assertListQueryError(error, "invalid_sort", "sort"));
+  assert.throws(() => ListQuery.fromJSON({ select: ["a`b"] }), (error) => assertListQueryError(error, "invalid_select", "select"));
+  assert.throws(() => ListQuery.from({ select: ["id", "a`b"] }), (error) => assertListQueryError(error, "invalid_select", "select"));
+  // A backtick in the text form always opens or closes a quoted segment.
+  assert.equal(Filter.parse("`a-b`.c = 1").toJSON().args[0], "a-b.c");
+});
+
+test("string literals accept raw DEL and C1 characters but not U+0000..U+001F", () => {
+  const raw = "x\u007fy\u0080\u0085\u009fz";
+  const parsed = Filter.parse(`a = "${raw}"`);
+  assert.deepEqual(parsed.toJSON(), { op: "eq", args: ["a", raw] });
+  assert.equal(parsed.toString(), `a = "${raw}"`, "DEL and C1 render raw");
+  assert.deepEqual(Filter.parse(`a = '${raw}'`).toJSON(), parsed.toJSON());
+  for (const control of ["\u0000", "\u0001", "\t", "\n", "\u001f"]) {
+    assert.throws(
+      () => Filter.parse(`a = "x${control}y"`),
+      (error) => {
+        assert(error instanceof FilterSyntaxError);
+        assert.equal(error.reason, "control characters must be escaped inside string literals");
+        return true;
+      },
+      JSON.stringify(control),
+    );
+  }
+  // Only `"`, `\` and U+0000..U+001F are escaped, with JSON's short forms.
+  const value = "q\"b\\s\b\f\n\r\t\u0000\u001f\u007f\u0085/'";
+  const rendered = field("a").eq(value).toString();
+  assert.equal(rendered, 'a = "q\\"b\\\\s\\b\\f\\n\\r\\t\\u0000\\u001f\u007f\u0085/\'"');
+  assert.deepEqual(Filter.parse(rendered).toJSON(), { op: "eq", args: ["a", value] });
+});
+
+test("a one-operand and/or in the JSON form decodes to its operand", () => {
+  const leaf = { op: "eq", args: ["a", 1] };
+  for (const op of ["and", "or"]) {
+    const decoded = Filter.fromJSON({ op, args: [leaf] });
+    assert.equal(decoded.op, "eq");
+    assert.deepEqual(decoded.toJSON(), leaf);
+    assert.equal(decoded.toString(), "a = 1");
+  }
+  const nested = Filter.fromJSON({
+    op: "and",
+    args: [{ op: "or", args: [{ op: "and", args: [leaf, { op: "is_null", args: ["b"] }] }] }, { op: "or", args: [leaf] }],
+  });
+  assert.equal(nested.toString(), "(a = 1 and b is null) and a = 1");
+  assert.deepEqual(nested.toJSON(), {
+    op: "and",
+    args: [{ op: "and", args: [leaf, { op: "is_null", args: ["b"] }] }, leaf],
+  });
+  assert.throws(() => Filter.fromJSON({ op: "and", args: [] }), /needs at least one operand/u);
+  // The collapsed connective still counts toward the depth limit.
+  let deep = leaf;
+  for (let index = 0; index <= 10; index += 1) deep = { op: "and", args: [deep] };
+  assert.throws(() => Filter.fromJSON(deep), /nesting depth limit of 10/u);
+});
+
+test("aggregates reject unknown members, bound their size and validate their paths", () => {
+  const count = { alias: "n", fn: "count" };
+  const rejected = [
+    [{ aggregate: { groupby: ["a"], metrics: [count] } }, /unknown member `groupby`/u],
+    [{ aggregate: { metrics: [{ ...count, feild: "a" }] } }, /unknown metrics\[0\] member `feild`/u],
+    [{ aggregate: { group_by: "abcdefghi".split(""), metrics: [count] } }, /`group_by` lists at most 8 fields/u],
+    [
+      { aggregate: { metrics: Array.from({ length: 17 }, (_, index) => ({ alias: `m${index}`, fn: "count" })) } },
+      /`metrics` lists at most 16 metrics/u,
+    ],
+    [{ aggregate: { group_by: ["a..b"], metrics: [count] } }, /invalid field `a\.\.b`/u],
+    [{ aggregate: { group_by: ["a`b"], metrics: [count] } }, /must not contain backticks/u],
+    [{ aggregate: { metrics: [{ alias: "s", fn: "sum", field: "a b" }] } }, /invalid field `a b`/u],
+  ];
+  for (const [body, pattern] of rejected) {
+    assert.throws(
+      () => ListQuery.fromJSON(body),
+      (error) => assertListQueryError(error, "invalid_aggregate", "aggregate") && pattern.test(error.reason),
+      JSON.stringify(body),
+    );
+  }
+  const widest = {
+    group_by: "abcdefgh".split(""),
+    metrics: Array.from({ length: 16 }, (_, index) => ({ alias: `m${index}`, fn: "count" })),
+  };
+  assert.deepEqual(ListQuery.fromJSON({ aggregate: widest }).toJSON(), { aggregate: widest });
+  assert.throws(
+    () => ListQuery.from({ aggregate: { groupBy: "abcdefghi".split(""), metrics: [count] } }),
+    (error) => assertListQueryError(error, "invalid_aggregate", "aggregate"),
+  );
+  assert.throws(
+    () => ListQuery.from({ aggregate: { metrics: [{ ...count, feild: "a" }] } }),
+    (error) => assertListQueryError(error, "invalid_aggregate", "aggregate"),
+  );
 });
 
 test("structural limits apply to built, parsed and decoded filters", () => {
@@ -422,21 +539,24 @@ test("page envelopes reject malformed members and keep unknown ones out", () => 
   assert.throws(() => decodePage([]), (error) => error instanceof ToriiError && error.code === "invalid_response");
   assert.throws(() => decodePage({ items: {} }), /`items` array/u);
   assert.throws(() => decodePage({ items: [], next_cursor: 7 }), /next_cursor/u);
-  assert.throws(() => decodePage({ items: [], total: -1 }), /total/u);
-  assert.throws(() => decodePage({ items: [], total: 2n ** 64n }), /total/u);
-  assert.throws(() => decodePage({ items: [], total: 1.5 }), /total/u);
-  assert.equal(decodePage({ items: [], total: 2n ** 60n }).total, 2n ** 60n);
+  assert.throws(() => decodePage({ items: [], next_cursor: null, total: -1 }), /total/u);
+  assert.throws(() => decodePage({ items: [], next_cursor: null, total: 2n ** 64n }), /total/u);
+  assert.throws(() => decodePage({ items: [], next_cursor: null, total: 1.5 }), /total/u);
+  assert.equal(decodePage({ items: [], next_cursor: null, total: 2n ** 60n }).total, 2n ** 60n);
   assert.equal(
     decodePageText('{"items":[],"next_cursor":null,"total":18446744073709551615}').total,
     18_446_744_073_709_551_615n,
     "a u64 total beyond 2^53 is a bigint",
   );
-  assert.equal(decodePageText('{"items":[],"total":12}').total, 12);
-  assert.deepEqual(decodePage({ items: [1], next_cursor: null, has_more: true, count_mode: "x" }), {
-    items: [1],
-    nextCursor: null,
-    total: undefined,
-  });
+  assert.equal(decodePageText('{"items":[],"next_cursor":null,"total":12}').total, 12);
+  for (const payload of [
+    { items: [] },
+    { items: [], next_cursor: "" },
+    { items: [1], next_cursor: null, total: 0 },
+    { items: [], next_cursor: null, total: null },
+    { items: [], next_cursor: null, has_more: false },
+    { items: [], next_cursor: null, count_mode: "exact" },
+  ]) assert.throws(() => decodePage(payload), error => error.code === "invalid_response");
 });
 
 test("the browser aggregate exports the same query API", () => {

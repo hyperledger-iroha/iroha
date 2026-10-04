@@ -11,7 +11,7 @@ use iroha::{
         query::{
             account::prelude::FindAccounts,
             asset::prelude::FindAssetById,
-            asset::prelude::FindAssetsDefinitions,
+            asset::prelude::FindAssetDefinitions,
             domain::prelude::FindDomains,
             error::{FindError, QueryExecutionFail},
         },
@@ -271,7 +271,7 @@ fn wait_for_setup_state(
     loop {
         let domains = client.client().query(FindDomains).execute_all();
         let accounts = client.client().query(FindAccounts).execute_all();
-        let asset_defs = client.client().query(FindAssetsDefinitions).execute_all();
+        let asset_defs = client.client().query(FindAssetDefinitions).execute_all();
         match (domains, accounts, asset_defs) {
             (Ok(domains), Ok(accounts), Ok(asset_defs)) => {
                 let domain_ok = domains.iter().any(|domain| domain.id() == domain_id);

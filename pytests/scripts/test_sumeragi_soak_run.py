@@ -97,7 +97,7 @@ for name in filter(None, os.environ.get("SOAK_TEST_FAIL_FIRST_BOOT", "").split("
 (out / "client.toml").write_text(
     'network_id_file = "genesis.expected_hash"\n'
     f'torii_url = "http://127.0.0.1:{args.base_api_port}/"\n'
-    '\n[account]\ndomain = "wonderland"\nprivate_key = "802620CLIENTSECRET"\npublic_key  = "ed0120CLIENT"\n'
+    '\n[account]\nchain_discriminant = 753\nprivate_key = "802620CLIENTSECRET"\npublic_key  = "ed0120CLIENT"\n'
 )
 (out / "start.sh").write_text("""#!/usr/bin/env bash
 set -euo pipefail

@@ -137,7 +137,7 @@ from .client_status_models import (
     SumeragiEvidenceOffender,
     parse_sumeragi_json_object,
 )
-from .collection import CollectionsMixin
+from .collection import Collection, CollectionsMixin
 from .election_tally import ElectionTally
 from .errors import error_for_response
 from .governance_ballot_client import create_governance_ballot_client_mixin
@@ -733,7 +733,6 @@ __all__ = [
     "UaidManifestEntry",
     "UaidManifest",
     "UaidManifestRecord",
-    "UaidManifestsResponse",
     "LaneRuntimeUpgradeHook",
     "LaneGovernanceSnapshot",
     "DataspaceCatalogEntry",
@@ -774,11 +773,8 @@ __all__ = [
     "UnverifiedKagemushaOperationStatusV1",
     "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
-    "SubscriptionPlanListItem",
-    "SubscriptionPlanListPage",
     "SubscriptionCreateResult",
-    "SubscriptionListItem",
-    "SubscriptionListPage",
+    "SubscriptionGetResponse",
     "SubscriptionActionResult",
     "SubscriptionUsageDraft",
     "SumeragiParamsSnapshot",
@@ -2724,53 +2720,8 @@ class SubscriptionPlanCreateResult(AppApiTransactionDraft):
 
 
 @dataclass(frozen=True)
-class SubscriptionPlanListItem:
-    """Subscription plan record returned from ``GET /v1/subscriptions/plans``."""
-
-    plan_id: str
-    plan: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListItem":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription plan list item must be an object")
-        plan_id = payload.get("plan_id")
-        if not isinstance(plan_id, str) or not plan_id:
-            raise RuntimeError("subscription plan list item missing `plan_id`")
-        plan_value = payload.get("plan")
-        if not isinstance(plan_value, Mapping):
-            raise RuntimeError("subscription plan list item missing `plan` object")
-        return cls(plan_id=plan_id, plan=dict(plan_value))
-
-
-@dataclass(frozen=True)
-class SubscriptionPlanListPage:
-    """Paginated list of subscription plans."""
-
-    items: List[SubscriptionPlanListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription plan list response must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("subscription plan list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("subscription plan list `total` must be numeric") from exc
-        items = [SubscriptionPlanListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
-
-
-@dataclass(frozen=True)
-class SubscriptionListItem:
-    """Subscription record returned by list/get endpoints."""
+class SubscriptionGetResponse:
+    """Subscription detail returned by the single-resource endpoint."""
 
     subscription_id: str
     subscription: Dict[str, Any]
@@ -2778,7 +2729,7 @@ class SubscriptionListItem:
     plan: Optional[Dict[str, Any]]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListItem":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionGetResponse":
         if not isinstance(payload, Mapping):
             raise RuntimeError("subscription item must be an object")
         subscription_id = payload.get("subscription_id")
@@ -2802,31 +2753,6 @@ class SubscriptionListItem:
             invoice=optional_object("invoice"),
             plan=optional_object("plan"),
         )
-
-
-@dataclass(frozen=True)
-class SubscriptionListPage:
-    """Paginated list of subscriptions."""
-
-    items: List[SubscriptionListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription list response must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("subscription list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("subscription list `total` must be numeric") from exc
-        items = [SubscriptionListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
 
 
 @dataclass(frozen=True)
@@ -3605,20 +3531,7 @@ class UaidManifestRecord:
     manifest: UaidManifest
 
 
-@dataclass(frozen=True)
-class UaidManifestsResponse:
-    """Typed response for ``GET /v1/space-directory/uaids/{uaid}/manifests``."""
-
-    uaid: str
-    total: int
-    has_more: bool
-    count_mode: str
-    manifests: List[UaidManifestRecord]
-
-
 UAID_MANIFEST_STATUS_VALUES = {"Pending", "Active", "Expired", "Revoked"}
-UAID_MANIFEST_STATUS_FILTER_VALUES = {"active", "inactive", "all"}
-UAID_MANIFEST_COUNT_MODE_VALUES = {"bounded", "exact"}
 
 
 @dataclass(frozen=True)
@@ -5033,39 +4946,6 @@ class ToriiClient(
     # ------------------------------------------------------------------
     # Subscriptions
     # ------------------------------------------------------------------
-    def list_subscription_plans(
-        self,
-        *,
-        provider: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> SubscriptionPlanListPage:
-        """List subscription plans via ``GET /v1/subscriptions/plans``."""
-
-        params: Dict[str, Any] = {}
-        if provider is not None:
-            params["provider"] = self._normalize_optional_string(
-                provider,
-                "subscriptions.plans.provider",
-            )
-        limit_value = self._normalize_optional_int(limit, "subscriptions.plans.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = self._normalize_optional_int(
-            offset,
-            "subscriptions.plans.offset",
-            allow_zero=True,
-        )
-        if offset_value is not None:
-            params["offset"] = offset_value
-        response = self._request(
-            "GET",
-            "/v1/subscriptions/plans",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return SubscriptionPlanListPage.from_payload(response.json())
-
     def create_subscription_plan(
         self,
         *,
@@ -5098,51 +4978,6 @@ class ToriiClient(
                 "subscription plan create response plan_id does not match the request"
             )
         return result
-
-    def list_subscriptions(
-        self,
-        *,
-        owned_by: Optional[str] = None,
-        provider: Optional[str] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> SubscriptionListPage:
-        """List subscriptions via ``GET /v1/subscriptions``."""
-
-        params: Dict[str, Any] = {}
-        if owned_by is not None:
-            params["owned_by"] = self._normalize_optional_string(
-                owned_by,
-                "subscriptions.owned_by",
-            )
-        if provider is not None:
-            params["provider"] = self._normalize_optional_string(
-                provider,
-                "subscriptions.provider",
-            )
-        if status is not None:
-            params["status"] = normalize_subscription_status(
-                status,
-                "subscriptions.status",
-            )
-        limit_value = self._normalize_optional_int(limit, "subscriptions.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = self._normalize_optional_int(
-            offset,
-            "subscriptions.offset",
-            allow_zero=True,
-        )
-        if offset_value is not None:
-            params["offset"] = offset_value
-        response = self._request(
-            "GET",
-            "/v1/subscriptions",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return SubscriptionListPage.from_payload(response.json())
 
     def create_subscription(
         self,
@@ -5203,7 +5038,7 @@ class ToriiClient(
         )
         return SubscriptionCreateResult.from_payload(body)
 
-    def get_subscription(self, subscription_id: str) -> Optional[SubscriptionListItem]:
+    def get_subscription(self, subscription_id: str) -> Optional[SubscriptionGetResponse]:
         """Fetch a single subscription (`GET /v1/subscriptions/{subscription_id}`)."""
 
         normalized_id = self._require_non_empty_string(
@@ -5216,7 +5051,7 @@ class ToriiClient(
             return None
         self._expect_status(response, {200})
         payload = self._ensure_mapping(response.json(), "subscription get response")
-        return SubscriptionListItem.from_payload(payload)
+        return SubscriptionGetResponse.from_payload(payload)
 
     def pause_subscription(
         self,
@@ -5481,57 +5316,23 @@ class ToriiClient(
         mapping = self._ensure_mapping(payload, "uaid bindings response")
         return self._parse_uaid_bindings_response(mapping, context="uaid bindings response")
 
-    def get_uaid_manifests(
-        self,
-        uaid: str,
-        *,
-        dataspace_id: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> UaidManifestsResponse:
-        """Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
+    def uaid_manifests(self, uaid: str) -> Collection[UaidManifestRecord]:
+        """Space Directory manifests with the shared filter, sort and cursor contract."""
 
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
-        params: Dict[str, Any] = {}
-        if dataspace_id is not None:
-            params["dataspace"] = _require_u64(
-                dataspace_id,
-                "get_uaid_manifests.dataspace_id",
-            )
-        if status is not None:
-            status = _require_exact_non_empty_string(status, "get_uaid_manifests.status")
-            if status not in UAID_MANIFEST_STATUS_FILTER_VALUES:
-                raise ValueError("get_uaid_manifests.status must be active, inactive, or all")
-            params["status"] = status
-        if limit is not None:
-            checked_limit = _require_u64(limit, "get_uaid_manifests.limit")
-            if checked_limit == 0:
-                raise ValueError("get_uaid_manifests.limit must be positive")
-            params["limit"] = checked_limit
-        if offset is not None:
-            params["offset"] = _require_u64(offset, "get_uaid_manifests.offset")
-        if count_mode is not None:
-            count_mode = _require_exact_non_empty_string(
-                count_mode,
-                "get_uaid_manifests.count_mode",
-            )
-            if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
-                raise ValueError("get_uaid_manifests.count_mode must be bounded or exact")
-            params["count_mode"] = count_mode
-        response = self._request(
-            "GET",
+
+        def parse(row: Any) -> UaidManifestRecord:
+            record = self._parse_uaid_manifest_record(row, context="uaid manifest row")
+            if record.manifest.uaid != canonical:
+                raise ValueError("uaid manifest row UAID differs from the requested UAID")
+            return record
+
+        return Collection(
+            self,
             f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
-            params=self._clean_params(params),
-            headers={"Accept": "application/json"},
+            parse,
+            "uaid manifests",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("uaid manifests endpoint returned no payload")
-        mapping = self._ensure_mapping(payload, "uaid manifests response")
-        return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
 
     # ------------------------------------------------------------------
     # KAGEMUSHA V1 readiness
@@ -10142,39 +9943,6 @@ class ToriiClient(
                 record["accounts"],
                 context=f"{context}.accounts",
             ),
-        )
-
-    @staticmethod
-    def _parse_uaid_manifests_response(payload: Mapping[str, Any], *, context: str) -> UaidManifestsResponse:
-        record = ToriiClient._ensure_mapping(payload, context)
-        ToriiClient._validate_exact_fields(
-            record,
-            {"uaid", "total", "has_more", "count_mode", "manifests"},
-            context,
-        )
-        uaid_literal = ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid")
-        manifests_value = record["manifests"]
-        if not isinstance(manifests_value, list):
-            raise RuntimeError(f"{context}.manifests must be a list")
-        has_more = record["has_more"]
-        if not isinstance(has_more, bool):
-            raise RuntimeError(f"{context}.has_more must be a boolean")
-        count_mode = _require_exact_non_empty_string(
-            record["count_mode"],
-            f"{context}.count_mode",
-        )
-        if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
-            raise RuntimeError(f"{context}.count_mode must be bounded or exact")
-        manifests = [
-            ToriiClient._parse_uaid_manifest_record(entry, context=f"{context}.manifests[{index}]")
-            for index, entry in enumerate(manifests_value)
-        ]
-        return UaidManifestsResponse(
-            uaid=uaid_literal,
-            total=_require_u64(record["total"], f"{context}.total"),
-            has_more=has_more,
-            count_mode=count_mode,
-            manifests=manifests,
         )
 
     @staticmethod

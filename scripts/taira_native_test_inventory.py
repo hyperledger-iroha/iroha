@@ -150,6 +150,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'cold_prepare_refusal_retains_original_finishing_owner_and_exact_release',
         'cold_prepare_validation_refusals_retain_original_storage_owners',
         'validation_wrappers_keep_real_capacity_and_terminal_custody_distinct',
+        'original_local_custody_invariant_halts_worker_without_fee_result_or_quarantine',
+        'native_source_publication_change_retries_without_recovery_or_quarantine',
     )),
     ('native publication refusal identity', 'sumeragi/executor/publication.rs', 'sumeragi/executor/publication/tests.rs', 'tests', 'sumeragi::executor::publication::tests', (
         'state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
@@ -175,6 +177,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'genesis_only_snapshot_cannot_decode_its_unsigned_result_into_authority',
         'funded_tip_admission_is_atomic_and_original_pool_bound',
         'snapshot_json_preserves_genesis_undo_absence_distinction',
+        'restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix',
     )),
     ('native certified history', 'sumeragi/certified_chain.rs', 'sumeragi/certified_chain/tests.rs', 'tests', 'sumeragi::certified_chain::tests', (
         'committed_and_certified_reads_of_a_real_chain',

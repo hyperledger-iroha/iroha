@@ -167,7 +167,7 @@ fn find_existing_domains(client: &Client) -> Result<HashSet<DomainId>> {
 fn find_existing_asset_defs(client: &Client) -> Result<HashSet<AssetDefinitionId>> {
     let definitions = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .execute_all()
         .wrap_err("Failed to query existing asset definitions")?;
     Ok(definitions

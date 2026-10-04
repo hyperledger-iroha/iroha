@@ -110,6 +110,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 mod private_root;
 pub(crate) use custody::sync_private_tree;
+pub(crate) use private_root::private_fee_policy;
 pub use private_root::{PrivateRootSpec, prepare_private_root};
 pub(crate) use private_root::{prepare_private_root_at, verify_retained as verify_private_root};
 
@@ -463,13 +464,17 @@ const LOCALNET_IVM_GAS_LIMIT_PER_BLOCK: u64 = 50_000_000;
 /// Default IVM gas price for localnet fee assets.
 const LOCALNET_IVM_GAS_UNITS_PER_GAS: u64 = 1;
 /// Default Torii tx rate limit (per authority) for localnet.
-const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 = 1_000_000;
+const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 =
+    iroha_config::parameters::defaults::torii::DEFAULT_REQUEST_RATE_PER_SEC;
 /// Default Torii tx burst limit (per authority) for localnet.
-const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
+const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 =
+    iroha_config::parameters::defaults::torii::DEFAULT_REQUEST_BURST;
 /// Default Torii pre-auth rate limit (per IP) for localnet.
-const LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC: u32 = 1_000_000;
+const LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC: u32 =
+    iroha_config::parameters::defaults::torii::DEFAULT_REQUEST_RATE_PER_SEC;
 /// Default Torii pre-auth burst limit (per IP) for localnet.
-const LOCALNET_TORII_PREAUTH_BURST_PER_IP: u32 = 2_000_000;
+const LOCALNET_TORII_PREAUTH_BURST_PER_IP: u32 =
+    iroha_config::parameters::defaults::torii::DEFAULT_REQUEST_BURST;
 /// Torii request body cap emitted explicitly in localnet configs.
 const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
@@ -733,7 +738,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
 pub fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
     canonical_asset_definition_id(domain, name).canonical_address()
 }
-fn localnet_xor_asset_definition_id() -> AssetDefinitionId {
+pub(crate) fn localnet_xor_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
         .expect("canonical isolated-network XOR definition")
 }
@@ -7230,6 +7235,8 @@ fn copy_rans_tables(out_dir: &Path) -> Result<PathBuf> {
     }
     Ok(canonical_seed_path)
 }
+/// Local account domain for the operator alias, onboarding credential scope and onboarding
+/// permissions. Client configurations carry no account domain.
 const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -7444,7 +7451,11 @@ mod managed_tests {
         assert_eq!(authorities.network.authorities.len(), 2);
         assert_eq!(authorities.providers.len(), 3);
         for provider in &authorities.providers {
-            assert_eq!(provider.authorities.len(), 10);
+            assert_eq!(
+                provider.authorities.len(),
+                10,
+                "every original provider holds its ten fixed service roles"
+            );
         }
         assert_eq!(authorities.network_id, config.network_id);
         assert_eq!(authorities.manager, config.account);
@@ -7602,6 +7613,10 @@ fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
     crate::localnet::custody::write_private_file_atomic(path, contents)
         .wrap_err_with(|| format!("write owner-only localnet file {}", path.display()))
 }
+/// Write the operator client configuration.
+///
+/// Its account network context is always explicit: the configured chain prefix, or the node
+/// default that peers rendered without `chain_discriminant` run with.
 fn write_client_config(
     out_dir: &Path,
     base_api_port: u16,
@@ -7613,9 +7628,8 @@ fn write_client_config(
     let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
-    let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
-        format!("chain_discriminant = {value}\n")
-    });
+    let chain_discriminant = chain_discriminant
+        .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
     let rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -7628,8 +7642,7 @@ fn write_client_config(
             "nonce = false\n",
             "\n",
             "[account]\n",
-            "domain = \"{domain}\"\n",
-            "{chain_discriminant_line}",
+            "chain_discriminant = {chain_discriminant}\n",
             "private_key = \"{private_key}\"\n",
             "public_key  = \"{public_key}\"\n",
             "\n",
@@ -7643,8 +7656,7 @@ fn write_client_config(
         torii_host = torii_host,
         ttl_ms = LOCALNET_CLIENT_TTL_MS,
         status_timeout_ms = LOCALNET_CLIENT_STATUS_TIMEOUT_MS,
-        domain = CLIENT_ACCOUNT_DOMAIN,
-        chain_discriminant_line = chain_discriminant_line,
+        chain_discriminant = chain_discriminant,
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     ));

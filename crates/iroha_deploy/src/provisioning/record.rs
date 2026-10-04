@@ -7,6 +7,7 @@ impl Binding {
         bootstrap: &AuthenticatedBootstrap,
         child: &Config,
         alias: String,
+        account_alias: String,
         registration: PrivateDataspaceRegistration,
     ) -> Result<Self> {
         let release = bootstrap.release();
@@ -21,6 +22,7 @@ impl Binding {
             parent_profile: release.account_chain_discriminant,
             parent_torii_root: release.torii_roots[0].clone(),
             alias,
+            account_alias,
             owner: child.account.clone(),
             registration,
             faucet,
@@ -38,6 +40,7 @@ impl Binding {
     }
 
     pub(super) fn validate_parent(&self, bootstrap: &AuthenticatedBootstrap) -> Result<()> {
+        self.owner_alias()?;
         let release = bootstrap.release();
         if self.parent_name != release.network_name
             || self.parent_generation != release.generation
@@ -131,9 +134,9 @@ impl Binding {
     }
 
     pub(super) fn validate_namespace(&self, request: &AliasSetupPlanRequestV1) -> Result<()> {
-        let [intent] = request.intents.as_slice() else {
+        let [intent, account_intent] = request.intents.as_slice() else {
             return Err(ProvisioningError::Invalid(
-                "namespace request must contain exactly one dataspace intent",
+                "namespace request must contain the ordered dataspace and owner alias intents",
             ));
         };
         let AliasIntentV1::Dataspace(desired) = &intent.intent else {
@@ -141,20 +144,42 @@ impl Binding {
                 "namespace request substituted another resource",
             ));
         };
+        let AliasIntentV1::AccountAlias(account) = &account_intent.intent else {
+            return Err(ProvisioningError::Invalid(
+                "namespace request substituted the owner alias",
+            ));
+        };
+        let rent = intent
+            .quote_guard
+            .max_amount
+            .checked_add(&account_intent.quote_guard.max_amount)
+            .map_err(|_| ProvisioningError::Invalid("namespace rent overflow"))?;
         if request.schema_version != AliasSetupPlanRequestV1::VERSION
             || desired.dataspace.canonical_name.as_ref() != self.alias
             || desired.dataspace.dataspace_id != self.registration.scope.dataspace_id()
             || desired.owner != self.owner
+            || account.alias != self.owner_alias()?
+            || account.target_account != self.owner
+            || account.provision != iroha_data_model::alias_setup::AccountProvisionV1::Existing
+            || account.role != iroha_data_model::alias_setup::AccountAliasRoleV1::Additional
             || intent.acquisition.term_years != 1
+            || account_intent.acquisition.term_years != 1
             || intent.quote_guard.expected_payment_asset != self.faucet.asset_definition_id
-            || intent.quote_guard.max_amount > self.faucet.max_namespace_rent
+            || account_intent.quote_guard.expected_payment_asset != self.faucet.asset_definition_id
+            || rent > self.faucet.max_namespace_rent
             || intent.quote_guard.valid_until_ms == 0
+            || account_intent.quote_guard.valid_until_ms != intent.quote_guard.valid_until_ms
         {
             return Err(ProvisioningError::Invalid(
                 "namespace quote exceeds original owner, identity, term or spending allowance",
             ));
         }
         Ok(())
+    }
+
+    fn owner_alias(&self) -> Result<iroha_data_model::alias_setup::ResolvedAccountAliasV1> {
+        iroha_wallet::namespace::resolve_private_owner_alias(&self.alias, &self.account_alias)
+            .map_err(|_| ProvisioningError::Invalid("invalid retained private owner alias"))
     }
 
     pub(super) fn lease_generation(
@@ -195,6 +220,7 @@ impl Binding {
 
 impl Record {
     pub(super) fn validate(&self) -> Result<()> {
+        self.binding.owner_alias()?;
         self.binding
             .registration
             .validate()

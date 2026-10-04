@@ -29,8 +29,8 @@ class FieldPath private constructor(
 
         /**
          * Validate a dotted path: non-empty segments, at most [MAX_BYTES] UTF-8 bytes and no
-         * whitespace or control characters. Whether a collection exposes the field is decided by
-         * Torii.
+         * whitespace, control characters or backticks. Whether a collection exposes the field is
+         * decided by Torii.
          */
         @JvmStatic
         fun of(path: String): FieldPath {
@@ -65,6 +65,8 @@ class FieldPath private constructor(
                 path.any { Character.isWhitespace(it) || Character.isISOControl(it) || isUnicodeSpace(it) } ->
                     "field paths must not contain whitespace or control characters"
                 path.split('.').any { it.isEmpty() } -> "field path segments must not be empty"
+                // The text form quotes segments with backticks and has no escape.
+                path.indexOf('`') >= 0 -> "field paths must not contain backticks"
                 else -> return null
             }
             return "invalid field `$path`: $reason"

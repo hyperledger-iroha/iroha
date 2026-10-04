@@ -37,24 +37,6 @@ mod app_api_integration_tests {
             set_app_query_limits(self.previous);
         }
     }
-    #[test]
-    fn manifest_fanout_window_is_limited_to_one_configured_page() {
-        let _limits = AppQueryLimitsOverride::new(AppQueryLimits::new(1, 3, 10, 1));
-        assert_eq!(
-            space_directory_manifest_pagination(Some(2), 2)
-                .expect("the direct route may use the larger fetch window"),
-            (2, 2),
-        );
-        let error = space_directory_manifest_fanout_window(2, 2)
-            .expect_err("fanout currently requires one shard page for the global prefix");
-        assert!(matches!(
-            error,
-            Error::AppQueryValidation {
-                code: "invalid_pagination",
-                ..
-            }
-        ));
-    }
     fn checked_app_api_keypair(
         seed: u8,
         algorithm: iroha_crypto::Algorithm,
@@ -101,7 +83,7 @@ mod app_api_integration_tests {
         ))
     }
     #[test]
-    fn collect_projected_account_assets_reads_only_scoped_account_assets() {
+    fn projected_account_assets_stream_scoped_rows_and_charge_skipped_candidates() {
         let _guard = app_query_limits_guard();
         let alice_id =
             checked_app_api_account_id(0x75, "derive projected account assets Alice fixture key");
@@ -138,13 +120,20 @@ mod app_api_integration_tests {
         );
         let world = state.world_view();
         let scoped_accounts = vec![alice_id.clone()];
-        let projected = collect_projected_account_assets(
+        let projected: Vec<_> = projected_account_assets(
             &world,
             &scoped_accounts,
             Some(&rose_def),
             None,
             &DataspaceReadVisibility::all_for_tests(),
+        )
+        .collect();
+        assert_eq!(
+            projected.len(),
+            2,
+            "the filtered balance still consumes scan work"
         );
+        let projected: Vec<_> = projected.into_iter().flatten().collect();
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].account_id, alice_id.to_string());
         assert_eq!(projected[0].asset, rose_def.to_string());

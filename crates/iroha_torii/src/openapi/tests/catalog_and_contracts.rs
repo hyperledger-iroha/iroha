@@ -1116,6 +1116,7 @@ fn generated_spec_includes_documented_paths() {
         assert!(paths.contains_key(path), "missing current route: {path}");
     }
     for retired in [
+        "/v1/transactions/history",
         "/v1/node/query/projection/checkpoint/plan",
         "/v1/node/query/projection/checkpoint/publish",
     ] {

@@ -29,7 +29,7 @@ fn client(network_id: NetworkId, endpoint: &str) -> Client {
         network_id = (network_id.to_string())
         torii_url = endpoint
         [account]
-        domain = "tests.universal"
+        chain_discriminant = 753
         public_key = (key.public_key().to_string())
         private_key = (iroha_crypto::ExposedPrivateKey(key.private_key().clone()).to_string())
     };

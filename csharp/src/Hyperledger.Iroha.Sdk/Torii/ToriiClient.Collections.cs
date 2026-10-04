@@ -28,6 +28,119 @@ public sealed partial class ToriiClient
     public ToriiCollection<RepoAgreementRow> RepoAgreements =>
         new(this, "/v1/repo/agreements", RepoAgreementRow.Read, typedRows: true);
 
+    /// <summary>Effective direct and role-granted account permissions.</summary>
+    public ToriiCollection<ToriiAccountPermission> AccountPermissions(string accountId) =>
+        new(this, $"/v1/accounts/{EncodeAccountIdPathSegment(accountId, nameof(accountId))}/permissions",
+            ReadPermissionRow, typedRows: true);
+
+    /// <summary>Subscription plans in identifier order.</summary>
+    public ToriiCollection<SubscriptionPlanRow> SubscriptionPlans =>
+        new(this, "/v1/subscriptions/plans", SubscriptionPlanRow.Read, typedRows: true);
+
+    /// <summary>Flattened subscription state in identifier order.</summary>
+    public ToriiCollection<SubscriptionRow> Subscriptions =>
+        new(this, "/v1/subscriptions", SubscriptionRow.Read, typedRows: true);
+
+    /// <summary>Manifest rows for one canonical UAID.</summary>
+    public ToriiCollection<ToriiUaidManifestRecord> UaidManifests(string uaid)
+    {
+        var canonical = NormalizeUaidLiteral(uaid);
+        return new(this, $"/v1/space-directory/uaids/{EncodePathSegment(canonical)}/manifests", (row, context) =>
+        {
+            var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(row.GetRawText()));
+            reader.Read();
+            var manifest = ToriiUaidJson.ReadUaidManifestRecord(ref reader, context);
+            if (manifest.Manifest["uaid"]!.GetValue<string>() != canonical)
+                throw new JsonException($"{context}.manifest.uaid must match the requested UAID.");
+            return manifest;
+        }, typedRows: true);
+    }
+
+    /// <summary>Contract calls, newest first, with bounded history controls.</summary>
+    public ToriiCollection<System.Text.Json.Nodes.JsonObject> ContractActivity =>
+        new(this, "/v1/contracts/activity", PageReader.JsonRows, typedRows: false, historyId: "contract_activity");
+
+    /// <summary>Contract events, newest first, with bounded history controls.</summary>
+    public ToriiCollection<System.Text.Json.Nodes.JsonObject> ContractEvents =>
+        new(this, "/v1/contracts/events", PageReader.JsonRows, typedRows: false, historyId: "contract_events");
+
+    /// <summary>Account movements, newest first, with bounded history controls.</summary>
+    public ToriiCollection<System.Text.Json.Nodes.JsonObject> AccountHistory(string accountId) =>
+        new(this, $"/v1/accounts/{EncodeAccountIdPathSegment(accountId, nameof(accountId))}/history",
+            PageReader.JsonRows, typedRows: false, historyId: "account_history");
+
+    /// <summary>Explorer accounts in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerAccount> ExplorerAccounts =>
+        new(this, "/v1/explorer/accounts", ReadExplorerRow<ToriiExplorerAccount>, typedRows: true, historyId: "explorer_accounts");
+
+    /// <summary>Explorer domains in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerDomain> ExplorerDomains =>
+        new(this, "/v1/explorer/domains", ReadExplorerRow<ToriiExplorerDomain>, typedRows: true, historyId: "explorer_domains");
+
+    /// <summary>Explorer asset definitions in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerAssetDefinition> ExplorerAssetDefinitions =>
+        new(this, "/v1/explorer/asset-definitions", ReadExplorerRow<ToriiExplorerAssetDefinition>, typedRows: true, historyId: "explorer_asset_definitions");
+
+    /// <summary>Explorer assets in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerAsset> ExplorerAssets =>
+        new(this, "/v1/explorer/assets", ReadExplorerRow<ToriiExplorerAsset>, typedRows: true, historyId: "explorer_assets");
+
+    /// <summary>Explorer NFTs in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerNft> ExplorerNfts =>
+        new(this, "/v1/explorer/nfts", ReadExplorerRow<ToriiExplorerNft>, typedRows: true, historyId: "explorer_nfts");
+
+    /// <summary>Explorer RWA lots in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerRwa> ExplorerRwas =>
+        new(this, "/v1/explorer/rwas", ReadExplorerRow<ToriiExplorerRwa>, typedRows: true, historyId: "explorer_rwas");
+
+    /// <summary>Explorer blocks in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerBlock> ExplorerBlocks =>
+        new(this, "/v1/explorer/blocks", ReadExplorerRow<ToriiExplorerBlock>, typedRows: true, historyId: "explorer_blocks");
+
+    /// <summary>Explorer transactions in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerTransaction> ExplorerTransactions =>
+        new(this, "/v1/explorer/transactions", ReadExplorerRow<ToriiExplorerTransaction>, typedRows: true, historyId: "explorer_transactions");
+
+    /// <summary>Latest Explorer transactions in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerTransaction> ExplorerLatestTransactions =>
+        new(this, "/v1/explorer/transactions/latest", ReadExplorerRow<ToriiExplorerTransaction>, typedRows: true, historyId: "explorer_transactions_latest");
+
+    /// <summary>Explorer instructions in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerInstruction> ExplorerInstructions =>
+        new(this, "/v1/explorer/instructions", ReadExplorerRow<ToriiExplorerInstruction>, typedRows: true, historyId: "explorer_instructions");
+
+    /// <summary>Latest Explorer instructions in fixed server order, with bounded query controls.</summary>
+    public ToriiCollection<ToriiExplorerInstruction> ExplorerLatestInstructions =>
+        new(this, "/v1/explorer/instructions/latest", ReadExplorerRow<ToriiExplorerInstruction>, typedRows: true, historyId: "explorer_instructions_latest");
+
+    internal static T ReadExplorerRow<T>(JsonElement row, string context) where T : class
+    {
+        try
+        {
+            return row.Deserialize<T>(SerializerOptions) ?? throw new JsonException($"{context} must be an object.");
+        }
+        catch (JsonException error)
+        {
+            var rowContext = typeof(T) == typeof(ToriiExplorerAssetDefinition) ? "explorer asset definition"
+                : typeof(T) == typeof(ToriiExplorerAccount) ? "explorer account"
+                : typeof(T) == typeof(ToriiExplorerDomain) ? "explorer domain"
+                : typeof(T) == typeof(ToriiExplorerAsset) ? "explorer asset"
+                : typeof(T) == typeof(ToriiExplorerNft) ? "explorer NFT"
+                : typeof(T) == typeof(ToriiExplorerRwa) ? "explorer RWA"
+                : typeof(T) == typeof(ToriiExplorerBlock) ? "explorer block"
+                : typeof(T) == typeof(ToriiExplorerTransaction) ? "explorer transaction"
+                : "explorer instruction";
+            throw ToriiExplorerJson.RewriteContext(error, rowContext, context);
+        }
+    }
+
+    internal static ToriiAccountPermission ReadPermissionRow(JsonElement row, string context)
+    {
+        var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(row.GetRawText()));
+        reader.Read();
+        return ToriiAccountQueryJson.ReadAccountPermission(ref reader, context);
+    }
+
     /// <summary>The assets held by one account; default order <c>asset</c>, <c>scope</c>.</summary>
     /// <param name="accountId">The canonical I105 account id.</param>
     public ToriiCollection<AccountAssetRow> AccountAssets(string accountId) =>

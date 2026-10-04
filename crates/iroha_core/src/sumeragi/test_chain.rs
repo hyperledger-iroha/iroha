@@ -2170,7 +2170,6 @@ mod tests {
             assert_eq!(
                 crate::sns::get_name_record(
                     view.world(),
-                    &catalog,
                     crate::sns::SnsNamespace::AccountAlias,
                     "merchant@bootstrap.universal",
                     1_000,

@@ -22,7 +22,7 @@ use iroha::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
+        prelude::{FindAssetById, FindAssetDefinitions, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -133,7 +133,7 @@ fn assert_soracloud_hf_lease_asset_ready(
     let asset_definition_id = soracloud_hf_lease_asset_definition();
     let asset_definition_exists = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .execute_all()?
         .into_iter()
         .any(|definition| definition.id == asset_definition_id);

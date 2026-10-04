@@ -421,7 +421,8 @@ mod tests {
             iroha_config::base::toml::TomlSource::inline(
                 fs::read_to_string(&prepared.policy_path)?.parse()?,
             ),
-        )?;
+        )
+        .map_err(|error| eyre!("parse staged disposable broker policy: {error:?}"))?;
         assert_eq!(policy.endpoint_path, prepared.endpoint);
         assert_eq!(policy.observer_operation_timeout, Duration::from_secs(15));
         assert_eq!(

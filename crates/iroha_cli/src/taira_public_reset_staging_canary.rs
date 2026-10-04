@@ -852,8 +852,8 @@ fn validate_native_client_shape(input: &PinnedInput) -> Result<()> {
             .get("account")
             .and_then(toml::Value::as_table)
             .ok_or_else(|| eyre!("stage client omits its inline native account"))?;
-        if account.len() != 4
-            || ["domain", "chain_discriminant", "public_key", "private_key"]
+        if account.len() != 3
+            || ["chain_discriminant", "public_key", "private_key"]
                 .iter()
                 .any(|key| !account.contains_key(*key))
         {
@@ -1183,7 +1183,7 @@ mod tests {
         let path = root.path().join("client.toml");
         for dependency in [
             "network_id_file = '/var/lib/taira/genesis.hash'\n",
-            "[account]\ndomain = 'wonderland.universal'\nchain_discriminant = 369\npublic_key = 'fixture-public'\nprivate_key_file = '/var/lib/taira/signer.key'\n",
+            "[account]\nchain_discriminant = 369\npublic_key = 'fixture-public'\nprivate_key_file = '/var/lib/taira/signer.key'\n",
         ] {
             let text = format!(
                 "chain = '{CHAIN_ID}'\nnetwork_id = 'fixture-network'\ntorii_url = 'http://127.0.0.1:28080/'\n{dependency}"

@@ -11,9 +11,6 @@ fn fanout_memory_test_request(
                 fetch_size: Some(1),
                 sort_by_metadata_key: None,
                 order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
             },
             predicate: None,
         }
@@ -635,7 +632,7 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
 #[test]
 fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
     let aggregate = 64_000_000;
-    let geometry = query_memory_geometry(aggregate, 64_000_000, 32)
+    let geometry = query_memory_geometry(aggregate, 48_000_000, 64_000_000, 32)
         .expect("default-sized aggregate pool should admit both lanes");
     assert_eq!(geometry.ingress_slots.get(), QUERY_INGRESS_SLOT_COUNT);
     assert!(geometry.ingress.phases_fit());
@@ -652,6 +649,7 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
                 iroha_config::parameters::defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1
             )
             .expect("V1 pool minimum fits usize"),
+            48_000_000,
             1,
             32,
         )
@@ -659,9 +657,112 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
         "the minimum pool must admit fixed overhead even with a one-byte general body cap"
     );
     assert!(
-        query_memory_geometry(64_000_000, 1, 32).is_some(),
+        query_memory_geometry(64_000_000, 48_000_000, 1, 32).is_some(),
         "small valid body limits must derive a complete slot instead of being disabled"
     );
+}
+
+#[test]
+fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
+    let cap = 48_000_000;
+    let small = query_memory_geometry(64_000_000, cap, 64_000_000, 32).unwrap();
+    let default = query_memory_geometry(512_000_000, cap, 64_000_000, 32).unwrap();
+    assert_eq!(small.fanout_working_set_bytes, cap);
+    assert_eq!(default.fanout_working_set_bytes, cap);
+    assert_eq!(small.fanout_slots.get(), 1);
+    assert_eq!(default.fanout_slots.get(), 8);
+    assert_eq!(default.fanout_pool_bytes, 384_000_000);
+    assert_eq!(
+        default.ingress.slot_bytes * default.ingress_slots.get(),
+        128_000_000
+    );
+    assert!(default.ingress.phases_fit());
+    let envelope = QueryFanoutMemoryEnvelope::for_body_admission(cap).unwrap();
+    assert!(envelope.phases_fit());
+    assert!(default.ingress.body_bytes <= envelope.route_body_bytes);
+    let bounded = query_memory_geometry(512_000_000, cap, 64_000_000, 2).unwrap();
+    assert_eq!(bounded.fanout_slots.get(), 2);
+    let smaller = query_memory_geometry(48_000_000, cap, 64_000_000, 32).unwrap();
+    assert_eq!(smaller.fanout_working_set_bytes, 36_000_000);
+    assert!(
+        QueryFanoutMemoryEnvelope::for_body_admission(smaller.fanout_working_set_bytes)
+            .unwrap()
+            .phases_fit()
+    );
+    assert!(query_memory_geometry(512_000_000, 0, 64_000_000, 32).is_none());
+    assert!(query_memory_geometry(512_000_000, 1, 64_000_000, 32).is_none());
+}
+
+#[test]
+fn query_memory_parser_geometry_matches_runtime_complete_phases() {
+    use iroha_config::parameters::defaults::torii as config;
+    assert_eq!(
+        query_fanout_fixed_overhead_bytes().unwrap() as u64,
+        config::QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1
+    );
+    assert_eq!(
+        query_ingress_fixed_overhead_bytes().unwrap() as u64,
+        config::QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1
+    );
+    assert_eq!(
+        QUERY_FANOUT_PREBODY_UNITS as u64,
+        config::QUERY_FANOUT_PREBODY_UNITS_V1
+    );
+    assert_eq!(
+        QUERY_INGRESS_POOL_DIVISOR as u64,
+        config::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1
+    );
+    assert_eq!(
+        QUERY_INGRESS_SLOT_COUNT as u64,
+        config::QUERY_MEMORY_INGRESS_SLOTS_V1
+    );
+    assert_eq!(
+        QUERY_INGRESS_PHASE_UNITS as u64,
+        config::QUERY_INGRESS_PHASE_UNITS_V1
+    );
+    for (aggregate, ceiling, content) in [
+        (20_000_000, 48_000_000, 64_000_000),
+        (64_000_000, 48_000_000, 64_000_000),
+        (512_000_000, 48_000_000, 64_000_000),
+        (512_000_000, 36_000_000, 64_000_000),
+        (512_000_000, 48_000_000, 8 * 1024),
+    ] {
+        let geometry = query_memory_geometry(aggregate, ceiling, content, 32).unwrap();
+        let envelope =
+            QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+                .unwrap();
+        assert_eq!(
+            geometry.fanout_working_set_bytes as u64,
+            config::query_fanout_working_set_bytes(
+                aggregate as u64,
+                ceiling as u64,
+                content as u64
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            envelope.route_body_bytes as u64,
+            config::app_api_routed_read_route_body_phase_bytes(
+                aggregate as u64,
+                ceiling as u64,
+                content as u64
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            geometry.ingress.body_bytes as u64,
+            config::query_ingress_body_phase_bytes(
+                aggregate as u64,
+                ceiling as u64,
+                content as u64
+            )
+            .unwrap()
+        );
+        assert!(geometry.ingress.body_bytes >= 8 * 1024);
+        assert!(envelope.route_body_bytes >= 8 * 1024);
+        assert!(geometry.ingress.phases_fit());
+        assert!(envelope.phases_fit());
+    }
 }
 #[test]
 fn ingress_envelope_accounts_raw_decode_canonical_and_scope_phases() {
@@ -712,7 +813,7 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
 }
 #[test]
 fn public_ingress_and_local_clone_share_one_fanout_decode_phase() {
-    let geometry = query_memory_geometry(64_000_000, 64_000_000, 32)
+    let geometry = query_memory_geometry(64_000_000, 48_000_000, 64_000_000, 32)
         .expect("default query-memory geometry should fit");
     let provisional =
         QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
@@ -734,7 +835,7 @@ fn public_ingress_and_local_clone_share_one_fanout_decode_phase() {
 #[test]
 fn skewed_query_memory_pool_cannot_raise_ingress_above_fanout_or_content_cap() {
     let max_content = 1;
-    let geometry = query_memory_geometry(1024 * 1024 * 1024, max_content, 32)
+    let geometry = query_memory_geometry(1024 * 1024 * 1024, 48_000_000, max_content, 32)
         .expect("large aggregate and minimum content geometry should fit");
     let fanout = QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
         .expect("derived fanout geometry should fit");
@@ -794,7 +895,7 @@ fn fanout_decode_limits_use_the_reserved_allocation_phase() {
 }
 #[test]
 fn ingress_scope_cannot_borrow_the_larger_unowned_fanout_limit() {
-    let geometry = query_memory_geometry(64_000_000, 64_000_000, 32)
+    let geometry = query_memory_geometry(64_000_000, 48_000_000, 64_000_000, 32)
         .expect("default query-memory geometry should fit");
     let fanout = QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
         .expect("default fanout envelope should fit");
@@ -1148,8 +1249,10 @@ async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
 async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() {
     let authority = routed_read_test_account(0xda);
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let fanout =
-        try_acquire_query_fanout_memory(&app).expect("fixture occupies the available fanout lane");
+    let fanout = app
+        .query_fanout_inflight
+        .try_acquire_parts([app.query_fanout_inflight.capacity_bytes()])
+        .expect("fixture occupies the entire fanout pool");
     let ingress_before = app.query_ingress_inflight.available_permits();
     let ingress = acquire_query_ingress_memory(&app)
         .await

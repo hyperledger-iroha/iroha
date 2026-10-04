@@ -80,7 +80,13 @@ import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
 import org.hyperledger.iroha.sdk.alias.AccountAliasName
 import org.hyperledger.iroha.sdk.client.collections.AccountAssetRow
+import org.hyperledger.iroha.sdk.client.collections.AccountHistoryRow
 import org.hyperledger.iroha.sdk.client.collections.AccountRow
+import org.hyperledger.iroha.sdk.client.collections.AccountPermissionRow
+import org.hyperledger.iroha.sdk.client.collections.SubscriptionPlanRow
+import org.hyperledger.iroha.sdk.client.collections.SubscriptionRow
+import org.hyperledger.iroha.sdk.client.collections.ContractActivityRow
+import org.hyperledger.iroha.sdk.client.collections.ContractEventRow
 import org.hyperledger.iroha.sdk.client.collections.AssetDefinitionRow
 import org.hyperledger.iroha.sdk.client.collections.AssetHolderRow
 import org.hyperledger.iroha.sdk.client.collections.CollectionQueryTransport
@@ -343,6 +349,34 @@ class HttpClientTransport private constructor(
     @get:JvmName("repoAgreements")
     val repoAgreements: ToriiCollection<RepoAgreementRow> = collection("/v1/repo/agreements", ::RepoAgreementRow)
 
+    /** Effective direct and role-granted permissions for the account. */
+    fun accountPermissions(accountId: String): ToriiCollection<AccountPermissionRow> =
+        collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/permissions", ::AccountPermissionRow)
+
+    /** Subscription plans, ordered by id. */
+    @get:JvmName("subscriptionPlans")
+    val subscriptionPlans: ToriiCollection<SubscriptionPlanRow> = collection("/v1/subscriptions/plans", ::SubscriptionPlanRow)
+
+    /** Flattened subscriptions, ordered by id. */
+    @get:JvmName("subscriptions")
+    val subscriptions: ToriiCollection<SubscriptionRow> = collection("/v1/subscriptions", ::SubscriptionRow)
+
+    /** Space-directory manifests for one canonical UAID. */
+    fun uaidManifests(uaid: String): ToriiCollection<UaidManifestRecord> {
+        val canonical = UaidLiteral.canonicalize(uaid, "uaid manifests")
+        return collection("/v1/space-directory/uaids/${encodePathSegment(canonical)}/manifests", {
+            UaidJsonParser.parseManifestRecord(it.toJsonBytes(), canonical)
+        })
+    }
+
+    /** Contract transaction history, newest first; sort, aggregate and include_total are unsupported. */
+    @get:JvmName("contractActivity")
+    val contractActivity: ToriiCollection<ContractActivityRow> = collection("/v1/contracts/activity", ::ContractActivityRow, history = true)
+
+    /** Contract event history, newest first; sort, aggregate and include_total are unsupported. */
+    @get:JvmName("contractEvents")
+    val contractEvents: ToriiCollection<ContractEventRow> = collection("/v1/contracts/events", ::ContractEventRow, history = true)
+
     /**
      * Balances of [accountId] (`/v1/accounts/{account_id}/assets`), default order `asset`, `scope`.
      * [accountId] is a canonical I105 literal or an on-chain alias.
@@ -375,6 +409,65 @@ class HttpClientTransport private constructor(
             ::TransactionRow,
             history = true,
         )
+
+    /** Account movements, newest first, with cursor-bounded history controls. */
+    fun accountHistory(accountId: String): ToriiCollection<AccountHistoryRow> =
+        collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/history", ::AccountHistoryRow, history = true)
+
+    /** Explorer accounts rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAccounts")
+    val explorerAccounts: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/accounts", { it }, history = true).json()
+
+    /** Explorer domains rows, with bounded cursor pagination. */
+    @get:JvmName("explorerDomains")
+    val explorerDomains: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/domains", { it }, history = true).json()
+
+    /** Explorer asset-definitions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAssetDefinitions")
+    val explorerAssetDefinitions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/asset-definitions", { it }, history = true).json()
+
+    /** Explorer assets rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAssets")
+    val explorerAssets: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/assets", { it }, history = true).json()
+
+    /** Explorer nfts rows, with bounded cursor pagination. */
+    @get:JvmName("explorerNfts")
+    val explorerNfts: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/nfts", { it }, history = true).json()
+
+    /** Explorer rwas rows, with bounded cursor pagination. */
+    @get:JvmName("explorerRwas")
+    val explorerRwas: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/rwas", { it }, history = true).json()
+
+    /** Explorer blocks rows, with bounded cursor pagination. */
+    @get:JvmName("explorerBlocks")
+    val explorerBlocks: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/blocks", { it }, history = true).json()
+
+    /** Explorer transactions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerTransactions")
+    val explorerTransactions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/transactions", { it }, history = true).json()
+
+    /** Explorer transactions/latest rows, with bounded cursor pagination. */
+    @get:JvmName("explorerLatestTransactions")
+    val explorerLatestTransactions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/transactions/latest", { it }, history = true).json()
+
+    /** Explorer instructions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerInstructions")
+    val explorerInstructions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/instructions", { it }, history = true).json()
+
+    /** Explorer instructions/latest rows, with bounded cursor pagination. */
+    @get:JvmName("explorerLatestInstructions")
+    val explorerLatestInstructions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/instructions/latest", { it }, history = true).json()
 
     private fun <T> collection(
         path: String,
@@ -535,12 +628,6 @@ class HttpClientTransport private constructor(
         val canonical = UaidLiteral.canonicalize(uaid, "uaid bindings")
         val params = query?.toQueryParameters() ?: emptyMap()
         return fetchJson(buildJsonGetRequest("/v1/space-directory/uaids/${encodePathSegment(canonical)}", params), UaidJsonParser::parseBindings, "UAID bindings")
-    }
-
-    fun getUaidManifests(uaid: String, query: UaidManifestQuery?): CompletableFuture<UaidManifestsResponse> {
-        val canonical = UaidLiteral.canonicalize(uaid, "uaid manifests")
-        val params = query?.toQueryParameters() ?: emptyMap()
-        return fetchJson(buildJsonGetRequest("/v1/space-directory/uaids/${encodePathSegment(canonical)}/manifests", params), UaidJsonParser::parseManifests, "UAID manifests")
     }
 
     fun listIdentifierPolicies(): CompletableFuture<IdentifierPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/identifier-policies", emptyMap()), IdentifierJsonParser::parsePolicyList, "identifier policy list")

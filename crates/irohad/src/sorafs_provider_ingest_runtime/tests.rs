@@ -286,7 +286,7 @@ impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
         Box::pin(async { Err(MusubiProviderAttestationSignerErrorV1::Rejected) })
     }
 }
-fn test_musubi_attestation_payload(
+pub(super) fn test_musubi_attestation_payload(
     owner_key: &KeyPair,
 ) -> MusubiProviderBundleVerificationPayloadV1 {
     let owner = AccountId::new(owner_key.public_key().clone());

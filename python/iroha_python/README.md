@@ -157,14 +157,26 @@ Every Torii collection is read with one query language
 ([`specs/torii/collection_queries.md`](../../specs/torii/collection_queries.md))
 through one client surface: `client.domains`, `client.accounts`,
 `client.asset_definitions`, `client.nfts`, `client.rwas`,
-`client.transactions`, `client.repo_agreements`, and the nested
-`client.accounts.assets(account_id)`, `client.accounts.transactions(account_id)`
+`client.transactions`, `client.repo_agreements`, `client.subscription_plans`,
+`client.subscriptions`, `client.contract_activity`, `client.contract_events`,
+`client.uaid_manifests(uaid)`, and the nested
+`client.accounts.assets(account_id)`, `client.accounts.transactions(account_id)`,
+`client.accounts.permissions(account_id)`, `client.accounts.history(account_id)`
 and `client.asset_definitions.holders(definition_id)`. Each collection offers
 `list` (one typed page), `iter` (every row, following `next_cursor`), `pages`,
 `rows`/`iter_rows` (JSON objects; the calls that accept `select` and
 `aggregate`) and `count`. Requests are signed when `canonical_request_auth` is
 configured (a signature only widens visibility into restricted dataspaces) and
 are anonymous otherwise.
+
+Explorer uses the same surface through `client.explorer_accounts`,
+`client.explorer_domains`, `client.explorer_asset_definitions`,
+`client.explorer_assets`, `client.explorer_nfts`, `client.explorer_rwas`,
+`client.explorer_blocks`, `client.explorer_transactions`,
+`client.explorer_latest_transactions`, `client.explorer_instructions` and
+`client.explorer_latest_instructions`. Explorer and history collections have a
+fixed server order and reject `sort`, `include_total=True` and `aggregate`.
+An empty page may carry a continuation cursor; the iterators follow it.
 
 ```python
 from decimal import Decimal
@@ -218,10 +230,9 @@ strictly (`id`; `account_id`, `asset`, `scope` and `quantity` for balances;
 `entrypoint_hash`, `block_height` and `block_index` for transactions); every
 other field may be null or absent and decodes as `None`.
 
-Aggregates are `POST`-only and computed where the rows live: Torii rejects a
-read whose visible rows span several dataspace routes with
-`400 invalid_aggregate`, because overlapping routes cannot be summed exactly;
-page through the rows without `aggregate` instead.
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and `POST` aggregates, visible rows contribute
+exactly once even when they span several dataspace routes.
 
 ### Transaction history
 
@@ -836,12 +847,12 @@ lots = client.rwas.list(filter=(F.status == "active") & (F.quantity > Decimal("1
 for lot in client.rwas.iter(filter=F.owned_by == canonical_i105_account_id):
     print(lot.id, lot.quantity, lot.is_frozen)
 
-detail_page = client.list_explorer_rwas_typed(domain="commodities", limit=25)
-if detail_page.pagination.has_more:
-    next_page = client.list_explorer_rwas_typed(
-        domain="commodities",
+detail_page = client.explorer_rwas.list(filter=F.domain == "commodities", limit=25)
+if detail_page.next_cursor is not None:
+    next_page = client.explorer_rwas.list(
+        filter=F.domain == "commodities",
         limit=25,
-        cursor=detail_page.pagination.next_cursor,
+        cursor=detail_page.next_cursor,
     )
 detail = client.get_explorer_rwa_detail_typed("lot-001$commodities")
 ```
@@ -2193,14 +2204,12 @@ bindings = client.get_uaid_bindings_typed(uaid_literal)
 for slice in bindings.dataspaces:
     print(slice.dataspace_alias, slice.accounts)
 
-manifests = client.list_space_directory_manifests_typed(
-    uaid_literal,
-    dataspace=11,
-    status="active",
-    count_mode="exact",
+manifests = client.uaid_manifests(uaid_literal).list(
+    filter=(F.dataspace_id == 11) & (F.status == "Active"),
+    include_total=True,
 )
 print("total", manifests.total, "has more", manifests.has_more)
-for record in manifests.manifests:
+for record in manifests.items:
     print(record.dataspace_alias, record.status, record.manifest_hash)
 
 # Torii returns canonical transaction drafts; the client must already have an
@@ -2227,7 +2236,7 @@ revoke_draft = client.revoke_space_directory_manifest(
 
 All helpers require exact lowercase `uaid:<64-hex>` literals with LSB=1, validate query parameters, and
 return rich dataclasses (`UaidPortfolioSnapshot`, `UaidBindingsSnapshot`,
-`SpaceDirectoryManifestList`) so callers can render dashboards or build evidence bundles for the
+`Page[SpaceDirectoryManifestRecord]`) so callers can render dashboards or build evidence bundles for the
 NX-16 rollout with deterministic parsing.
 
 ## Trigger lifecycle walkthrough
@@ -2289,8 +2298,8 @@ operator_client = ToriiClient(
 )
 
 # Batched history: inspect the latest committed blocks.
-recent_blocks = client.list_blocks(limit=5)
-print([row["height"] for row in recent_blocks.get("items", [])])
+recent_blocks = client.explorer_blocks.list(limit=5)
+print([row["height"] for row in recent_blocks.items])
 
 # Detailed recovery snapshot for a specific height.
 sidecar = operator_client.get_pipeline_recovery(height=42)

@@ -2893,7 +2893,7 @@ state_test! { sync state_snapshot_rejects_serialized_asset_definition_domain_ind
 }
 state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_restore
     use iroha_data_model::events::{EventFilter, data::prelude::*};
-    use iroha_data_model::query::asset::{FindAssets, FindAssetsDefinitions};
+    use iroha_data_model::query::asset::{FindAssets, FindAssetDefinitions};
     let (mut state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
     let_row! { domain_id = state .world_view() .asset_definitions() .get(&definition_id) .expect("fixture definition") .owning_domain() .clone() .expect("fixture definition has an explicit owner") };
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
@@ -2962,7 +2962,7 @@ state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id().definition(), &definition_id);
     let_row! { definition_filter = CompoundPredicate::<AssetDefinition>::build(|predicate| { predicate.equals("domain", domain_id.to_string()) }) };
-    let_row! { definitions: Vec<_> = FindAssetsDefinitions .execute(definition_filter, &view) .expect("domain-filtered definition query after restart") .collect() };
+    let_row! { definitions: Vec<_> = FindAssetDefinitions .execute(definition_filter, &view) .expect("domain-filtered definition query after restart") .collect() };
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions[0].id(), &definition_id);
     drop(view);

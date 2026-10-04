@@ -50,6 +50,25 @@ use validation::{DeploymentReadContext, validate_plan, validate_read_plan};
 pub const RECEIPT_FILE_NAME: &str = "receipt.json";
 /// Maximum immutable artifact bytes accepted by this service.
 pub const MAX_DEPLOYMENT_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+/// A completed deployment and its exact retained, admission-verified artifact.
+///
+/// Only the native service constructs this value after authenticated current alias, artifact,
+/// and state-resolved Applied readback; callers cannot substitute endpoint-selected code.
+#[derive(Debug)]
+pub struct CompletedContract {
+    receipt: DeploymentReceipt,
+    artifact: Vec<u8>,
+}
+impl CompletedContract {
+    /// Original verified deployment receipt.
+    pub fn receipt(&self) -> &DeploymentReceipt {
+        &self.receipt
+    }
+    /// Complete exact compiled bytes retained by the signed deployment plan.
+    pub fn artifact(&self) -> &[u8] {
+        &self.artifact
+    }
+}
 /// Categorized deployment failure, retaining underlying SDK diagnostics.
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -496,6 +515,34 @@ impl DeploymentService {
         };
         self.read_back(&record, &receipt.commit)?;
         Ok(Some(receipt))
+    }
+    /// Authenticate a completed current deployment and recover its exact local artifact.
+    ///
+    /// This read never signs or submits. Both the receipt and bytes come from one exclusively
+    /// locked journal after current authenticated alias/artifact readback.
+    ///
+    /// # Errors
+    /// Rejects unsafe custody, changed context, incomplete execution or substituted state.
+    pub fn current_completed_contract(
+        &self,
+        journal_dir: &Path,
+    ) -> DeploymentResult<CompletedContract> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        let receipt = self
+            .verify_completed_receipt(&record, &journal)?
+            .ok_or_else(|| {
+                DeploymentError::InvalidRequest("contract deployment is not completed".into())
+            })?;
+        self.read_back(&record, &receipt.commit)?;
+        let artifact = hex::decode(&record.artifact_hex).map_err(|error| {
+            DeploymentError::Artifact(format!("invalid retained artifact: {error}"))
+        })?;
+        Ok(CompletedContract { receipt, artifact })
     }
     /// Authenticate an existing completed journal and recheck its exact commit on this network.
     ///

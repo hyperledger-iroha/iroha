@@ -433,7 +433,7 @@ fn native_iterable_query_access(
         iroha_data_model::asset::definition::AssetDefinition,
         AssetDefinition
     ) {
-        if any_exact!(payload; data_model_query::asset::prelude::FindAssetsDefinitions) {
+        if any_exact!(payload; data_model_query::asset::prelude::FindAssetDefinitions) {
             return Ok(NativeQueryAccess::Registered);
         }
         return Err(invalid_native_iterable_query());
@@ -10912,9 +10912,10 @@ mod tests {
                 Account::new(other.clone()).build(&other),
                 Account::new(escrow.clone()).build(&escrow),
             ],
-            [AssetDefinition::numeric(
+            [AssetDefinition::new(
                 definition,
-                "Staked XOR",
+                "Staked XOR".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -17752,21 +17753,47 @@ mod tests {
         let source = prepared.genesis.block();
         let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
         let index = exact_native_genesis_fixture_index(source, &instruction);
+        // Each phase retains one original acquisition in its own debug stack frame
+        // while checking the same signed sources and refusal assertions.
+        assert_native_genesis_absent_original_source(&prepared, &instruction, index);
+        assert_native_genesis_component_identity_refusals(&prepared, &instruction, index);
+        assert_native_genesis_foreign_signed_source(&prepared);
+        assert_native_genesis_foreign_state_network(&prepared, &instruction, index);
+        assert_native_genesis_successor_header(&prepared, &instruction, index);
+        assert_native_genesis_committed_bootstrap_refusal(&prepared, &instruction, index);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_absent_original_source(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut absent = prepared.state.block(source.header());
         assert!(
             absent
-                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
                 .is_err(),
             "H1 without retained original route must refuse"
         );
         drop(absent);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_component_identity_refusals(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut block = prepared
             .state
             .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
             .unwrap();
         assert!(
             block
-                .transaction_for_original_genesis_testing(source, index, &BOB_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &BOB_ID, instruction)
                 .is_err(),
             "configured signer mismatch must refuse"
         );
@@ -17776,14 +17803,14 @@ mod tests {
                     source,
                     source.network_entrypoint_count(),
                     &ALICE_ID,
-                    &instruction
+                    instruction
                 )
                 .is_err(),
             "absent original ordinal must refuse"
         );
         assert!(
             block
-                .transaction_for_original_genesis_testing(source, 0, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, 0, &ALICE_ID, instruction)
                 .is_err(),
             "a different valid original ordinal must not authenticate the tested instruction"
         );
@@ -17795,12 +17822,24 @@ mod tests {
                 .is_err(),
             "authentic RegisterDomain must not bless a substituted Log"
         );
+        drop(block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_foreign_signed_source(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+    ) {
+        let source = prepared.genesis.block();
         let other_domain = DomainId::try_new("foreign-source", "universal").unwrap();
         let foreign = prepared_native_domain_genesis_fixture(&other_domain);
         let foreign_instruction: InstructionBox =
             Register::domain(Domain::new(other_domain)).into();
         let foreign_index =
             exact_native_genesis_fixture_index(foreign.genesis.block(), &foreign_instruction);
+        let mut block = prepared
+            .state
+            .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
+            .unwrap();
         assert!(
             block
                 .transaction_for_original_genesis_testing(
@@ -17813,16 +17852,34 @@ mod tests {
             "foreign signed source/hash must refuse"
         );
         drop(block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_foreign_state_network(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let foreign_network_state = state_for_testing(World::new());
         let mut foreign_network_block = foreign_network_state
             .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
             .unwrap();
         let network_error = foreign_network_block
-            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
             .err()
             .expect("a source cannot grant bootstrap scope to another State network");
         assert!(network_error.contains("another State network"));
         drop(foreign_network_block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_successor_header(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut wrong_header = prepared.state.block(BlockHeader::new(
             nonzero!(2_u64),
             Some(source.hash()),
@@ -17831,11 +17888,20 @@ mod tests {
             0,
         ));
         let header_error = wrong_header
-            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
             .err()
             .expect("a source cannot grant bootstrap scope to a successor header");
         assert!(header_error.contains("another block header"));
         drop(wrong_header);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_committed_bootstrap_refusal(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         crate::sumeragi::startup::apply_genesis(
             &prepared.state,
             source.clone(),
@@ -17850,7 +17916,7 @@ mod tests {
             .unwrap();
         assert!(
             replay
-                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
                 .is_err(),
             "committed history must not regain original bootstrap scope"
         );

@@ -70,6 +70,7 @@ fn default_app_routed_read_transport_frame_fits_derived_phase() {
     let default = load_root(base_table());
     let phase = defaults::torii::app_api_routed_read_route_body_phase_bytes(
         default.torii.query_fanout_max_retained_bytes.get(),
+        default.torii.query_fanout_max_working_set_bytes.get(),
         default.torii.max_content_len.get(),
     )
     .expect("default routed-read phase");

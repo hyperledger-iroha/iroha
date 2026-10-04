@@ -49,10 +49,10 @@ impl ToriiRoutedReadMemoryBudget {
 fn torii_routed_read_request_decode_plan(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {
-    ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    ToriiRoutedReadMemoryBudget::from_envelope(
+        current_routed_read_memory_envelope(app)?,
         app.torii_proxy_max_response_bytes,
-    )?
+    )
     .request_decode_plan()
 }
 impl ToriiRoutedReadRequestDecodePlan {
@@ -816,7 +816,7 @@ mod torii_routed_read_request_tests {
             "limit=%",
             "limit=%FF",
         ] {
-            let response = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(query))
+            let response = decode_torii_proxy_query::<Value>(plan, Some(query))
                 .expect_err("noncanonical query must fail");
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
             assert_eq!(
@@ -944,18 +944,13 @@ mod torii_routed_read_request_tests {
                 .expect("test geometry")
                 .request_decode_plan()
                 .expect("request plan");
-        let valid = br#"{"limit":7,"offset":0}"#;
-        let decoded =
-            decode_torii_proxy_json_body::<routing::ListFilterParams>(plan, valid, "list filter")
-                .expect("small request decodes");
-        assert_eq!(decoded.limit, Some(7));
+        let valid = br#"{"limit":7}"#;
+        let decoded = decode_torii_proxy_json_body::<Value>(plan, valid, "list filter")
+            .expect("small request decodes");
+        assert_eq!(decoded["limit"].as_u64(), Some(7));
         let oversized = vec![b' '; plan.raw_input_limit_bytes + 1];
-        let response = decode_torii_proxy_json_body::<routing::ListFilterParams>(
-            plan,
-            &oversized,
-            "list filter",
-        )
-        .expect_err("raw limit plus one is rejected");
+        let response = decode_torii_proxy_json_body::<Value>(plan, &oversized, "list filter")
+            .expect_err("raw limit plus one is rejected");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
     #[test]

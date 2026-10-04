@@ -27,7 +27,7 @@ pub(super) fn run_build(
             CompilerActionV1::Check
         },
     )?;
-    let chain_discriminant = graph.account_chain_discriminant();
+    let chain_discriminant = graph.account_chain_discriminant()?;
     let mut data = Map::from_iter([
         ("network".to_owned(), network.json()),
         (
@@ -230,7 +230,7 @@ pub(super) fn prepare_build(
         Some(cache) => ensure_graph_archives(cache, &graph, args.mode)?,
         None => Vec::new(),
     };
-    let chain_discriminant = graph.account_chain_discriminant();
+    let chain_discriminant = graph.account_chain_discriminant()?;
     let execution = execute_compiler_graph(
         cache.as_ref(),
         &workspace,
@@ -406,7 +406,7 @@ pub(super) fn build_runtime_package(
         cached_source,
         prepared_archive_fetch: archive_transport.map(Ok),
         platform_config_provenance: None,
-        account_chain_discriminant: config.account_chain_discriminant,
+        account_chain_discriminant: Some(config.account_chain_discriminant),
     };
     let cache = if graph.lock.nodes.is_empty() {
         None

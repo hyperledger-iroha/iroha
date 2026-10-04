@@ -5769,83 +5769,6 @@ impl UaidManifestStatus {
         }
     }
 }
-/// Filter for `/v1/space-directory/uaids/{uaid}/manifests`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UaidManifestStatusFilter {
-    /// Return only active manifests.
-    Active,
-    /// Return pending/expired/revoked manifests.
-    Inactive,
-    /// Return every manifest regardless of lifecycle.
-    All,
-}
-
-/// Count policy requested from and reported by the UAID manifest endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UaidManifestCountMode {
-    /// Count every filtered manifest exactly.
-    Exact,
-    /// Bound work to the requested page plus one continuation probe.
-    Bounded,
-}
-impl UaidManifestCountMode {
-    fn as_query_str(self) -> &'static str {
-        match self {
-            Self::Exact => "exact",
-            Self::Bounded => "bounded",
-        }
-    }
-    fn from_str(raw: &str, context: &str) -> Result<Self> {
-        match raw {
-            "exact" => Ok(Self::Exact),
-            "bounded" => Ok(Self::Bounded),
-            _ => Err(eyre!("{context} must be exactly `exact` or `bounded`")),
-        }
-    }
-}
-impl UaidManifestStatusFilter {
-    fn as_query_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Inactive => "inactive",
-            Self::All => "all",
-        }
-    }
-}
-/// Query parameters accepted by the UAID manifest endpoint.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct UaidManifestQuery {
-    /// Optional dataspace filter.
-    pub dataspace_id: Option<u64>,
-    /// Optional lifecycle filter.
-    pub status: Option<UaidManifestStatusFilter>,
-    /// Maximum number of manifests to return.
-    pub limit: Option<u32>,
-    /// Number of manifests to skip before collecting results.
-    pub offset: Option<u32>,
-    /// Optional exact or bounded count policy.
-    pub count_mode: Option<UaidManifestCountMode>,
-}
-impl UaidManifestQuery {
-    fn apply(&self, mut builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(id) = self.dataspace_id {
-            builder = builder.param("dataspace", &id);
-        }
-        if let Some(status) = self.status {
-            builder = builder.param("status", status.as_query_str());
-        }
-        if let Some(limit) = self.limit {
-            builder = builder.param("limit", &limit);
-        }
-        if let Some(offset) = self.offset {
-            builder = builder.param("offset", &offset);
-        }
-        if let Some(count_mode) = self.count_mode {
-            builder = builder.param("count_mode", count_mode.as_query_str());
-        }
-        builder
-    }
-}
 /// UAID manifest entry returned by `/v1/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidManifestRecord {
@@ -5863,20 +5786,6 @@ pub struct UaidManifestRecord {
     pub accounts: Vec<String>,
     /// Canonical manifest payload.
     pub manifest: AssetPermissionManifest,
-}
-/// Response returned by `/v1/space-directory/uaids/{uaid}/manifests`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UaidManifestsResponse {
-    /// Canonical UAID literal (`uaid:<64-lowercase-hex>`).
-    pub uaid: String,
-    /// Total count under the reported count policy.
-    pub total: u64,
-    /// Whether another manifest follows this page.
-    pub has_more: bool,
-    /// Count policy used by Torii for this page.
-    pub count_mode: UaidManifestCountMode,
-    /// Manifest entries visible to the caller.
-    pub manifests: Vec<UaidManifestRecord>,
 }
 impl UaidPortfolioResponse {
     fn from_value(value: JsonValue, expected_uaid: &str) -> Result<Self> {
@@ -6161,60 +6070,21 @@ impl UaidBindingsDataspace {
         })
     }
 }
-impl UaidManifestsResponse {
-    fn from_value(value: JsonValue, expected_uaid: &str) -> Result<Self> {
-        let JsonValue::Object(map) = value else {
-            return Err(eyre!("uaid manifests response must be an object"));
-        };
-        require_exact_fields(
-            &map,
-            &["uaid", "total", "has_more", "count_mode", "manifests"],
-            "uaid manifests response",
-        )?;
-        let uaid_raw = require_string(map.get("uaid"), "uaid manifests response.uaid")?;
-        let uaid = canonicalize_uaid_literal(uaid_raw, "uaid manifests response.uaid")?;
-        if uaid != expected_uaid {
-            return Err(eyre!(
-                "uaid manifests response.uaid does not match the requested UAID"
-            ));
-        }
-        let total = parse_required_json_u64(map.get("total"), "uaid manifests response.total")?;
-        let has_more =
-            parse_required_bool(map.get("has_more"), "uaid manifests response.has_more")?;
-        let count_mode_raw =
-            require_string(map.get("count_mode"), "uaid manifests response.count_mode")?;
-        let count_mode =
-            UaidManifestCountMode::from_str(count_mode_raw, "uaid manifests response.count_mode")?;
-        let manifest_entries =
-            required_owned_array(map.get("manifests"), "uaid manifests response.manifests")?;
-        let manifests = manifest_entries
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                UaidManifestRecord::from_value(
-                    entry,
-                    &uaid,
-                    &format!("uaid manifests response.manifests[{index}]"),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let page_len = u64::try_from(manifests.len())
-            .map_err(|_| eyre!("uaid manifests response page length overflows u64"))?;
-        if total < page_len {
-            return Err(eyre!(
-                "uaid manifests response.total cannot be smaller than the page"
-            ));
-        }
-        Ok(Self {
-            uaid,
-            total,
-            has_more,
-            count_mode,
-            manifests,
-        })
-    }
-}
 impl UaidManifestRecord {
+    /// Decode a complete manifest collection row and bind it to the requested UAID.
+    ///
+    /// Use with `Collection::UaidManifests` and an unprojected `ListQuery` page.
+    ///
+    /// # Errors
+    /// Rejects noncanonical rows, a different UAID or dataspace, and inconsistent lifecycle state.
+    pub fn from_json_value(value: JsonValue, expected_uaid: &UniversalAccountId) -> Result<Self> {
+        Self::from_value(
+            value,
+            &expected_uaid.to_string(),
+            "UAID manifest collection row",
+        )
+    }
+
     fn from_value(value: JsonValue, expected_uaid: &str, context: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
@@ -6452,13 +6322,6 @@ fn parse_required_nullable_json_u64(
     match value {
         Some(JsonValue::Null) => Ok(None),
         Some(other) => parse_required_json_u64(Some(other), context).map(Some),
-        None => Err(eyre!("{context} is missing")),
-    }
-}
-fn parse_required_bool(value: Option<&JsonValue>, context: &str) -> Result<bool> {
-    match value {
-        Some(JsonValue::Bool(value)) => Ok(*value),
-        Some(other) => Err(eyre!("{context} must be a boolean (got {other:?})")),
         None => Err(eyre!("{context} is missing")),
     }
 }
@@ -17772,54 +17635,102 @@ impl Client {
         )?;
         decode_account_aliases_by_account(&response, request)
     }
-    /// Account-signed GET `/v1/accounts/{account_id}/permissions` retaining the exact response.
+    /// Query effective account permissions with the shared collection language, retaining headers.
     ///
-    /// The route returns effective permissions (direct grants plus assigned-role grants) for one
-    /// exact account. Callers that use the result for policy convergence should additionally
-    /// require the `x-iroha-account-permission-semantics: effective-v1` response header.
-    ///
-    /// # Errors
-    /// Returns an error if request signing, construction, or the HTTP call fails.
-    pub fn get_account_permissions_response(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<Response<Vec<u8>>> {
-        self.get_account_permissions_page_response(account_id, 500, 0)
-    }
-    /// Account-signed page of effective permissions for one exact account.
-    ///
-    /// Pagination and `count_mode=exact` are included before canonical request signing. Exact
-    /// counts apply per route; the routed response's `total` is the deduplicated union of the
-    /// current route pages, not a global permission count. Mandatory `has_more` is the OR of
-    /// every successful route's continuation evidence; `false` establishes exhaustion only with
-    /// complete successful fanout. Callers must keep `offset + limit` within the server's
-    /// configured fetch budget and fail closed if the full set exceeds that budget.
+    /// This signed raw response is intended for policy convergence callers that must require
+    /// the `x-iroha-account-permission-semantics: effective-v1` header before accepting a
+    /// `collections::Page<Permission>`. Follow `next_cursor` until it is absent.
     ///
     /// # Errors
-    /// Returns an error if request signing, construction, or the HTTP call fails.
-    pub fn get_account_permissions_page_response(
+    /// Returns an error when the query is invalid, signing fails, or the HTTP call fails.
+    pub fn query_account_permissions_response(
         &self,
         account_id: &AccountId,
-        limit: u64,
-        offset: u64,
+        query: &crate::collections::ListQuery,
     ) -> Result<Response<Vec<u8>>> {
-        let account_address = AccountAddress::from_account_id(account_id)?
-            .to_i105_for_discriminant(self.account_chain_discriminant)?;
-        let mut url = join_torii_url_with_path_segments(
-            &self.torii_url,
-            "v1/accounts",
-            &[&account_address, "permissions"],
-        );
-        let limit = limit.to_string();
-        let offset = offset.to_string();
-        url.query_pairs_mut()
-            .append_pair("limit", &limit)
-            .append_pair("offset", &offset)
-            .append_pair("count_mode", "exact");
+        let collection = crate::collections::Collection::AccountPermissions(account_id.clone());
+        collection.validate_query(query)?;
+        let url = collection.query_url(&self.torii_url, self.account_chain_discriminant)?;
+        let body = norito::json::to_vec(&query.to_json_value())?;
         self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Accept", APPLICATION_JSON)
+                .header("Content-Type", APPLICATION_JSON)
+                .max_response_bytes(4 * 1024 * 1024),
         )
+    }
+    /// Read the complete effective permission set for an authorization decision.
+    ///
+    /// Every page must advertise `effective-v1` semantics. Traversal is bounded to
+    /// 32 pages and 16,000 tokens, and follows only the server's opaque cursor.
+    ///
+    /// # Errors
+    /// Rejects failed or malformed pages, ambiguous semantics, stalled cursor traversal,
+    /// or a permission set exceeding the fixed authorization-read bounds.
+    pub fn read_effective_permissions(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<std::collections::BTreeSet<iroha_data_model::permission::Permission>> {
+        use crate::collections::{ListQuery, Page};
+        use iroha_data_model::permission::Permission;
+        use std::collections::BTreeSet;
+        let mut query = ListQuery::new().limit(500);
+        let mut permissions = BTreeSet::new();
+        let mut cursors = BTreeSet::new();
+        for _ in 0..32 {
+            let response = self.query_account_permissions_response(account_id, &query)?;
+            if response.status() != StatusCode::OK {
+                return Err(eyre!(
+                    "effective permission read failed with HTTP {}",
+                    response.status()
+                ));
+            }
+            let header = |name: &str| -> Result<&str> {
+                let mut values = response.headers().get_all(name).iter();
+                let value = values
+                    .next()
+                    .ok_or_else(|| eyre!("effective permission response has no {name}"))?;
+                if values.next().is_some() {
+                    return Err(eyre!("effective permission response has duplicate {name}"));
+                }
+                value.to_str().map_err(Into::into)
+            };
+            if !header("content-type")?
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case(APPLICATION_JSON)
+                || header("x-iroha-account-permission-semantics")? != "effective-v1"
+            {
+                return Err(eyre!(
+                    "effective permission response must advertise JSON effective-v1 semantics"
+                ));
+            }
+            if response.body().len() > 4 * 1024 * 1024 {
+                return Err(eyre!(
+                    "effective permission page exceeds fixed response bound"
+                ));
+            }
+            let page: Page<Permission> = norito::json::from_slice(response.body())?;
+            if page.items.len() > 500 || (page.has_more() && page.items.is_empty()) {
+                return Err(eyre!(
+                    "effective permission page exceeds its requested bound or makes no progress"
+                ));
+            }
+            permissions.extend(page.items);
+            if permissions.len() > 16_000 {
+                return Err(eyre!("effective permissions exceed fixed collection bound"));
+            }
+            match page.next_cursor {
+                None => return Ok(permissions),
+                Some(cursor) if cursors.insert(cursor.clone()) => query.cursor = Some(cursor),
+                Some(_) => return Err(eyre!("effective permission cursor did not advance")),
+            }
+        }
+        Err(eyre!(
+            "effective permissions did not reach exhaustion within the fixed traversal bound"
+        ))
     }
     /// Account-signed POST `/v1/fee-sponsor-programs/by-id` retaining the exact response.
     ///
@@ -21401,30 +21312,6 @@ impl Client {
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid bindings request")?;
         UaidBindingsResponse::from_value(payload, &canonical)
-    }
-    /// GET `/v1/space-directory/uaids/{uaid}/manifests` — capability manifests bound to a UAID.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_uaid_manifests(
-        &self,
-        uaid: &str,
-        query: Option<UaidManifestQuery>,
-    ) -> Result<UaidManifestsResponse> {
-        let canonical = canonicalize_uaid_literal(uaid, "get_uaid_manifests.uaid")?;
-        let path = format!("v1/space-directory/uaids/{canonical}/manifests");
-        let url = join_torii_url(&self.torii_url, &path);
-        let builder = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON);
-        let builder = if let Some(options) = query {
-            options.apply(builder)
-        } else {
-            builder
-        };
-        let resp = self.send_builder(builder)?;
-        let payload = Self::parse_json_ok_response(&resp, "uaid manifests request")?;
-        UaidManifestsResponse::from_value(payload, &canonical)
     }
     /// GET `/v1/explorer/accounts/{account_id}/qr` — share-ready QR metadata.
     ///
@@ -27478,32 +27365,29 @@ mod tests {
                 .with_test_http_transport(mock_transport.clone());
 
             client
-                .get_account_permissions_response(&client.account)
+                .query_account_permissions_response(
+                    &client.account,
+                    &crate::collections::ListQuery::new().limit(500),
+                )
                 .expect("signed exact account-permissions read");
         });
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.method, HttpMethod::POST);
         let account_id = client.account.to_string();
         let expected_url = join_torii_url_with_path_segments(
             &base_url(),
             "v1/accounts",
-            &[account_id.as_str(), "permissions"],
+            &[account_id.as_str(), "permissions", "query"],
         );
         assert_eq!(snapshot.url.path(), expected_url.path());
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                .collect::<HashMap<_, _>>(),
-            HashMap::from([
-                ("limit".to_owned(), "500".to_owned()),
-                ("offset".to_owned(), "0".to_owned()),
-                ("count_mode".to_owned(), "exact".to_owned()),
-            ])
-        );
-        assert!(snapshot.body.is_empty());
+        assert!(snapshot.url.query().is_none());
+        let query = crate::collections::ListQuery::from_json_value(
+            norito::json::from_slice(&snapshot.body).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(query.limit, Some(500));
+        assert_eq!(query.cursor.as_deref(), None);
         assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
@@ -27547,12 +27431,17 @@ mod tests {
                 .with_test_http_transport(mock_transport.clone());
 
             client
-                .get_account_permissions_page_response(&client.account, 17, 34)
+                .query_account_permissions_response(
+                    &client.account,
+                    &crate::collections::ListQuery::new()
+                        .limit(17)
+                        .cursor("next-permission-page"),
+                )
                 .expect("signed exact account-permissions page read");
         });
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.method, HttpMethod::POST);
         let account_id = AccountAddress::from_account_id(&client.account)
             .expect("account address")
             .to_i105_for_discriminant(client.account_chain_discriminant)
@@ -27560,22 +27449,16 @@ mod tests {
         let expected_url = join_torii_url_with_path_segments(
             &base_url(),
             "v1/accounts",
-            &[account_id.as_str(), "permissions"],
+            &[account_id.as_str(), "permissions", "query"],
         );
         assert_eq!(snapshot.url.path(), expected_url.path());
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                .collect::<HashMap<_, _>>(),
-            HashMap::from([
-                ("limit".to_owned(), "17".to_owned()),
-                ("offset".to_owned(), "34".to_owned()),
-                ("count_mode".to_owned(), "exact".to_owned()),
-            ])
-        );
-        assert!(snapshot.body.is_empty());
+        assert!(snapshot.url.query().is_none());
+        let query = crate::collections::ListQuery::from_json_value(
+            norito::json::from_slice(&snapshot.body).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(query.limit, Some(17));
+        assert_eq!(query.cursor.as_deref(), Some("next-permission-page"));
         assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
@@ -30215,8 +30098,7 @@ mod tests {
         );
     }
     #[test]
-    fn get_uaid_manifests_supports_query_and_parsing() {
-        let client = client_with_base_url(base_url());
+    fn uaid_manifest_collection_rows_preserve_typed_validation() {
         let uaid_hex = "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
         let manifest_hash = "b1".repeat(32);
         let manifest_json = include_str!(
@@ -30224,12 +30106,7 @@ mod tests {
         );
         let payload = format!(
             r#"{{
-  "uaid":"uaid:{uaid}",
-  "total":1,
-  "has_more":false,
-  "count_mode":"exact",
-  "manifests":[
-    {{
+
       "dataspace_id":11,
       "dataspace_alias":"cbdc",
       "manifest_hash":"{hash}",
@@ -30237,46 +30114,19 @@ mod tests {
       "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
       "accounts":["sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"],
       "manifest":{manifest}
-    }}
-  ]
 }}"#,
             manifest = manifest_json.trim(),
-            uaid = uaid_hex,
             hash = manifest_hash.as_str()
         );
-        let query = UaidManifestQuery {
-            dataspace_id: Some(11),
-            status: Some(UaidManifestStatusFilter::Inactive),
-            limit: Some(5),
-            offset: Some(2),
-            count_mode: Some(UaidManifestCountMode::Exact),
-        };
-        let (result, snapshot) =
-            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
-            });
-        let result = result.expect("manifests call succeeds");
-        assert_eq!(result.total, 1);
-        assert!(!result.has_more);
-        assert_eq!(result.count_mode, UaidManifestCountMode::Exact);
-        assert_eq!(result.manifests.len(), 1);
-        let record = &result.manifests[0];
+        let record = UaidManifestRecord::from_json_value(
+            norito::json::from_str(&payload).unwrap(),
+            &format!("uaid:{uaid_hex}").parse().unwrap(),
+        )
+        .expect("complete collection row");
         assert_eq!(record.status, UaidManifestStatus::Active);
         assert_eq!(record.manifest.entries.len(), 2);
         assert_eq!(record.lifecycle.activated_epoch, Some(4097));
         assert_eq!(record.manifest_hash, manifest_hash);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/space-directory/uaids/uaid:{uaid_hex}/manifests")
-        );
-        assert_eq!(
-            snapshot.url.query(),
-            Some("dataspace=11&status=inactive&limit=5&offset=2&count_mode=exact")
-        );
     }
     #[test]
     fn uaid_portfolio_response_rejects_noncanonical_or_inconsistent_payloads() {
@@ -30339,7 +30189,7 @@ mod tests {
         }
     }
     #[test]
-    fn uaid_manifests_response_rejects_noncanonical_page_and_record_metadata() {
+    fn uaid_manifest_collection_rows_reject_noncanonical_or_inconsistent_metadata() {
         let expected = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
         let manifest_hash = "b1".repeat(32);
         let manifest_json = include_str!(
@@ -30347,11 +30197,7 @@ mod tests {
         );
         let valid = format!(
             r#"{{
-  "uaid":"{expected}",
-  "total":1,
-  "has_more":false,
-  "count_mode":"exact",
-  "manifests":[{{
+
     "dataspace_id":11,
     "dataspace_alias":"cbdc",
     "manifest_hash":"{manifest_hash}",
@@ -30359,14 +30205,10 @@ mod tests {
     "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
     "accounts":["sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"],
     "manifest":{manifest}
-  }}]
 }}"#,
             manifest = manifest_json.trim(),
         );
         let invalid_payloads = [
-            valid.replace("  \"has_more\":false,\n", ""),
-            valid.replace("\"total\":1", "\"total\":\"1\""),
-            valid.replace("\"total\":1", "\"total\":0"),
             valid.replace(&manifest_hash, &manifest_hash.to_uppercase()),
             valid.replace("\"status\":\"Active\"", "\"status\":\"Pending\""),
             valid.replace(
@@ -30379,7 +30221,7 @@ mod tests {
             let value: JsonValue =
                 norito::json::from_str(&payload).expect("test payload must be valid JSON");
             assert!(
-                UaidManifestsResponse::from_value(value, expected).is_err(),
+                UaidManifestRecord::from_json_value(value, &expected.parse().unwrap()).is_err(),
                 "noncanonical manifests payload must fail"
             );
         }

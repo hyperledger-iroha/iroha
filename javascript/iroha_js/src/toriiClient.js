@@ -187,9 +187,6 @@ const EXPECTED_FINALIZED_HASH_FIELD = "expectedFinalizedBlockHashHex";
 const EXPECTED_FINALIZED_HEIGHT_FIELD = "expectedFinalizedHeight";
 const GOVERNANCE_MANIFEST_ADMISSION_CONTEXT = "governance.manifest_admission";
 const DEFAULT_PAGE_SIZE = 100;
-const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
-const EXPLORER_CURSOR_MAX_LIMIT = 100;
-const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
 const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const SORAFS_POR_PAGE_DEFAULT_LIMIT = 100;
@@ -871,35 +868,11 @@ const SORAFS_PIN_LIST_MAX_ITEMS = 256;
 const SORAFS_PIN_LIST_MIN_PAGE_BYTES = 1024;
 const SORAFS_PIN_LIST_MAX_PAGE_BYTES = 256 * 1024;
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
-const UAID_MANIFEST_FILTER_VALUES = new Set(["active", "inactive", "all"]);
-const UAID_MANIFEST_COUNT_MODE_VALUES = new Set(["bounded", "exact"]);
 const UAID_MANIFEST_ROLE_VALUES = new Set(["Initiator", "Participant"]);
 const UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES = new Set([
   "PerSlot",
   "PerMinute",
   "PerDay",
-]);
-const SUBSCRIPTION_STATUS_VALUES = new Set([
-  "active",
-  "paused",
-  "past_due",
-  "canceled",
-  "suspended",
-]);
-const SUBSCRIPTION_PLAN_LIST_OPTION_KEYS = new Set([
-  "provider",
-  "limit",
-  "offset",
-  "signal",
-]);
-const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
-  "owned_by",
-  "ownedBy",
-  "provider",
-  "status",
-  "limit",
-  "offset",
-  "signal",
 ]);
 function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
   const native = resolveNativeBinding(nativeRuntime);
@@ -985,36 +958,6 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "count_mode",
   "signal",
   CANONICAL_AUTH_FIELD,
-]);
-const ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "offset",
-  "signal",
-  CANONICAL_AUTH_FIELD,
-]);
-const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
-  ...ITERABLE_LIST_OPTION_KEYS,
-  "authority",
-  "contractAddress",
-  "contractAlias",
-  "contractEntrypoint",
-  "sinceTimestampMs",
-  "untilTimestampMs",
-  "resultOk",
-]);
-const CONTRACT_EVENT_LIST_OPTION_KEYS = new Set([
-  ...ITERABLE_LIST_OPTION_KEYS,
-  "authority",
-  "contractAddress",
-  "contractAlias",
-  "module",
-  "eventKind",
-  "participant",
-  "assetId",
-  "provenance",
-  "sinceTimestampMs",
-  "untilTimestampMs",
-  "resultOk",
 ]);
 const ITERABLE_OPTION_KEYS = new Set([
   "limit",
@@ -1197,28 +1140,6 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "select",
   "signal",
   CANONICAL_AUTH_FIELD,
-]);
-const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "cursor",
-  "ownedBy",
-  "domainId",
-  "signal",
-]);
-const EXPLORER_NFT_ITERATOR_OPTION_KEYS = new Set([
-  ...EXPLORER_NFT_LIST_OPTION_KEYS,
-  "maxItems",
-]);
-const EXPLORER_RWA_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "cursor",
-  "ownedBy",
-  "domainId",
-  "signal",
-]);
-const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
-  ...EXPLORER_RWA_LIST_OPTION_KEYS,
-  "maxItems",
 ]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type", "signal", CANONICAL_AUTH_FIELD]);
 export class TransactionStatusError extends Error {
@@ -1607,6 +1528,17 @@ export class ToriiClient {
     }
     this.#collections = createToriiCollections((path, query, requestOptions) =>
       this.#queryCollection(path, query, requestOptions),
+      {
+        accountPermission: (row) => normalizeAccountPermissionItem(row, "account permission row"),
+        uaidManifest: (row, uaid) => normalizeUaidManifestRecord(row, uaid, "uaid manifest row"),
+        contractActivity: (row) => normalizeContractActivityListItem(row, "contract activity row"),
+        contractEvents: (row) => normalizeContractEventListItem(row, "contract event row"),
+        explorerRwas: (row) => {
+          normalizeExplorerRwaRecord(row, "explorer rwa row");
+          return row;
+        },
+
+      },
     );
   }
 
@@ -1633,6 +1565,74 @@ export class ToriiClient {
   /** RWA lots (`POST /v1/rwas/query`). */
   get rwas() {
     return this.#collections.rwas;
+  }
+
+  /** Committed contract calls, newest first, with history cursors. */
+  /** Bounded Explorer accounts collection with shared query controls. */
+  get explorerAccounts() { return this.#collections.explorerAccounts; }
+
+  /** Bounded Explorer domains collection with shared query controls. */
+  get explorerDomains() { return this.#collections.explorerDomains; }
+
+  /** Bounded Explorer asset-definitions collection with shared query controls. */
+  get explorerAssetDefinitions() { return this.#collections.explorerAssetDefinitions; }
+
+  /** Bounded Explorer assets collection with shared query controls. */
+  get explorerAssets() { return this.#collections.explorerAssets; }
+
+  /** Bounded Explorer nfts collection with shared query controls. */
+  get explorerNfts() { return this.#collections.explorerNfts; }
+
+  /** Bounded Explorer rwas collection with shared query controls. */
+  get explorerRwas() { return this.#collections.explorerRwas; }
+
+  /** Bounded Explorer blocks collection with shared query controls. */
+  get explorerBlocks() { return this.#collections.explorerBlocks; }
+
+  /** Bounded Explorer transactions collection with shared query controls. */
+  get explorerTransactions() { return this.#collections.explorerTransactions; }
+
+  /** Bounded Explorer transactions/latest collection with shared query controls. */
+  get explorerLatestTransactions() { return this.#collections.explorerLatestTransactions; }
+
+  /** Bounded Explorer instructions collection with shared query controls. */
+  get explorerInstructions() { return this.#collections.explorerInstructions; }
+
+  /** Bounded Explorer instructions/latest collection with shared query controls. */
+  get explorerLatestInstructions() { return this.#collections.explorerLatestInstructions; }
+
+  get contractActivity() {
+    return this.#collections.contractActivity;
+  }
+
+  /** Committed contract events, newest first, with history cursors. */
+  get contractEvents() {
+    return this.#collections.contractEvents;
+  }
+
+  /** Subscription plans (`POST /v1/subscriptions/plans/query`). */
+  get subscriptionPlans() {
+    return this.#collections.subscriptionPlans;
+  }
+
+  /** Subscriptions (`POST /v1/subscriptions/query`). */
+  get subscriptions() {
+    return this.#collections.subscriptions;
+  }
+
+  /** Effective direct and role-inherited permissions for one account. */
+  /** Indexed account movements, newest first by block and movement position. */
+  accountHistory(accountId) {
+    return this.#collections.accountHistory(accountId);
+  }
+
+  accountPermissions(accountId) {
+    return this.#collections.accountPermissions(normalizeAccountPathLiteral(accountId, "accountId"));
+  }
+
+  /** Space Directory manifest rows for one UAID. */
+  uaidManifests(uaid) {
+    return this.#collections.uaidManifests(normalizeUaidLiteral(uaid, "uaidManifests.uaid"));
   }
 
   /** Repo agreements (`POST /v1/repo/agreements/query`). */
@@ -1876,148 +1876,10 @@ export class ToriiClient {
     return status;
   }
 
-  /**
-   * List explorer NFTs with optional owner/domain filters (`GET /v1/explorer/nfts`).
-   * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
-   */
-  async listExplorerNfts(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerNftListOptions(
-      options,
-      "listExplorerNfts options",
-    );
-    const params = {
-      limit: normalized.limit,
-    };
-    if (normalized.cursor !== undefined) {
-      params.cursor = normalized.cursor;
-    }
-    if (normalized.ownedBy !== undefined) {
-      params.owned_by = normalized.ownedBy;
-    }
-    if (normalized.domain !== undefined) {
-      params.domain = normalized.domain;
-    }
-    const response = await this._request("GET", "/v1/explorer/nfts", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalized.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer nfts endpoint returned no payload");
-    }
-    return normalizeExplorerNftPage(payload);
-  }
 
-  /**
-   * Iterate explorer NFTs with optional owner/domain filters.
-   * @param {ExplorerNftIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string, ownedBy: string, metadata: unknown}, void, unknown>}
-   */
-  iterateExplorerNfts(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerNftIteratorOptions(
-      options,
-      "iterateExplorerNfts options",
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const self = this;
-    return (async function* iterator() {
-      let cursor = normalized.cursor;
-      let remaining = maxItems;
-      const seenCursors = new Set();
-      if (cursor !== undefined) seenCursors.add(cursor);
-      while (true) {
-        const limit = remaining === null
-          ? normalized.limit
-          : Math.min(normalized.limit, remaining);
-        const pageResult = await self.listExplorerNfts({
-          ...listOptions,
-          cursor,
-          limit,
-        });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        for (const item of items) {
-          yield item;
-          if (remaining !== null) {
-            remaining -= 1;
-            if (remaining <= 0) {
-              return;
-            }
-          }
-        }
-        const { pagination } = pageResult;
-        if (!pagination.hasMore) {
-          return;
-        }
-        cursor = pagination.nextCursor;
-        if (seenCursors.has(cursor)) {
-          rejectError("explorer nfts endpoint repeated a cursor");
-        }
-        seenCursors.add(cursor);
-      }
-    })();
-  }
 
-  /**
-   * List NFTs owned by an account (`GET /v1/explorer/nfts?owned_by=...`).
-   * @param {string} accountId
-   * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
-   */
-  async listAccountNfts(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.listExplorerNfts({ ...options, ownedBy: normalizedId });
-  }
 
-  /**
-   * Iterate NFTs owned by an account.
-   * @param {string} accountId
-   * @param {ExplorerNftIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string, ownedBy: string, metadata: unknown}, void, unknown>}
-   */
-  iterateAccountNfts(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.iterateExplorerNfts({ ...options, ownedBy: normalizedId });
-  }
 
-  /**
-   * List explorer RWAs with optional owner/domain filters (`GET /v1/explorer/rwas`).
-   * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
-   */
-  async listExplorerRwas(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerRwaListOptions(
-      options,
-      "listExplorerRwas options",
-    );
-    const params = {
-      limit: normalized.limit,
-    };
-    if (normalized.cursor !== undefined) {
-      params.cursor = normalized.cursor;
-    }
-    if (normalized.ownedBy !== undefined) {
-      params.owned_by = normalized.ownedBy;
-    }
-    if (normalized.domain !== undefined) {
-      params.domain = normalized.domain;
-    }
-    const response = await this._request("GET", "/v1/explorer/rwas", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalized.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer rwas endpoint returned no payload");
-    }
-    return normalizeExplorerRwaPage(payload);
-  }
 
   /**
    * Get explorer detail for a single RWA (`GET /v1/explorer/rwas/{rwaId}`).
@@ -2045,227 +1907,8 @@ export class ToriiClient {
     return normalizeExplorerRwaRecord(payload, "explorer rwa detail response");
   }
 
-  /**
-   * Iterate explorer RWAs with optional owner/domain filters.
-   * @param {ExplorerRwaIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateExplorerRwas(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerRwaIteratorOptions(
-      options,
-      "iterateExplorerRwas options",
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const self = this;
-    return (async function* iterator() {
-      let cursor = normalized.cursor;
-      let remaining = maxItems;
-      const seenCursors = new Set();
-      if (cursor !== undefined) seenCursors.add(cursor);
-      while (true) {
-        const limit = remaining === null
-          ? normalized.limit
-          : Math.min(normalized.limit, remaining);
-        const pageResult = await self.listExplorerRwas({
-          ...listOptions,
-          cursor,
-          limit,
-        });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        for (const item of items) {
-          yield item;
-          if (remaining !== null) {
-            remaining -= 1;
-            if (remaining <= 0) {
-              return;
-            }
-          }
-        }
-        const { pagination } = pageResult;
-        if (!pagination.hasMore) {
-          return;
-        }
-        cursor = pagination.nextCursor;
-        if (seenCursors.has(cursor)) {
-          rejectError("explorer rwas endpoint repeated a cursor");
-        }
-        seenCursors.add(cursor);
-      }
-    })();
-  }
 
-  /**
-   * List explorer RWAs owned by an account (`GET /v1/explorer/rwas?owned_by=...`).
-   * @param {string} accountId
-   * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
-   */
-  async listAccountRwas(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.listExplorerRwas({ ...options, ownedBy: normalizedId });
-  }
 
-  /**
-   * Iterate explorer RWAs owned by an account.
-   * @param {string} accountId
-   * @param {ExplorerRwaIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAccountRwas(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.iterateExplorerRwas({ ...options, ownedBy: normalizedId });
-  }
-
-  /**
-   * List committed contract-call activity (`GET /v1/contracts/activity`).
-   * @param {ContractActivityListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listContractActivity(options = {}) {
-    return this._listIterable(
-      "/v1/contracts/activity",
-      options,
-      normalizeContractActivityListResponse,
-      CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
-      this.#canonicalRequestAuth,
-    );
-  }
-
-  /**
-   * List generic contract events (`GET /v1/contracts/events`).
-   * @param {ContractEventListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listContractEvents(options = {}) {
-    const optionContext = "options for /v1/contracts/events";
-    const normalizedOptions = normalizeIterableListOptions(
-      options,
-      optionContext,
-      CONTRACT_EVENT_LIST_OPTION_KEYS,
-    );
-    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this.#canonicalRequestAuth
-      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
-    const params = {};
-    if (rest.limit !== undefined && rest.limit !== null) {
-      params.limit = ToriiClient._normalizeUnsignedInteger(rest.limit, "limit", {
-        allowZero: true,
-      });
-    }
-    if (rest.offset !== undefined && rest.offset !== null) {
-      params.offset = ToriiClient._normalizeOffset(rest.offset);
-    }
-    const filterParam = ToriiClient._normalizeFilterParam(rest.filter);
-    if (filterParam !== undefined) {
-      params.filter = filterParam;
-    }
-    const sortParam = ToriiClient._encodeSortQueryParam(rest.sort);
-    if (sortParam !== undefined) {
-      params.sort = sortParam;
-    }
-    if (rest.authority !== undefined && rest.authority !== null) {
-      params.authority = ToriiClient._normalizeAccountId(rest.authority, "authority");
-    }
-    if (rest.contractAddress !== undefined && rest.contractAddress !== null) {
-      params.contract_address = requireExactNonEmptyString(rest.contractAddress, "contractAddress");
-    }
-    if (rest.contractAlias !== undefined && rest.contractAlias !== null) {
-      params.contract_alias = requireExactNonEmptyString(rest.contractAlias, "contractAlias");
-    }
-    if (rest.module !== undefined && rest.module !== null) {
-      params.module = requireNonEmptyString(rest.module, "module");
-    }
-    if (rest.eventKind !== undefined && rest.eventKind !== null) {
-      params.event_kind = requireNonEmptyString(rest.eventKind, "eventKind");
-    }
-    if (rest.participant !== undefined && rest.participant !== null) {
-      params.participant = requireExactNonEmptyString(rest.participant, "participant");
-    }
-    if (rest.assetId !== undefined && rest.assetId !== null) {
-      params.asset_id = requireExactNonEmptyString(rest.assetId, "assetId");
-    }
-    if (rest.provenance !== undefined && rest.provenance !== null) {
-      params.provenance = requireNonEmptyString(rest.provenance, "provenance");
-    }
-    if (rest.sinceTimestampMs !== undefined && rest.sinceTimestampMs !== null) {
-      params.since_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
-        rest.sinceTimestampMs,
-        "sinceTimestampMs",
-        { allowZero: true },
-      );
-    }
-    if (rest.untilTimestampMs !== undefined && rest.untilTimestampMs !== null) {
-      params.until_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
-        rest.untilTimestampMs,
-        "untilTimestampMs",
-        { allowZero: true },
-      );
-    }
-    if (rest.resultOk !== undefined && rest.resultOk !== null) {
-      params.result_ok = requireBooleanLike(rest.resultOk, "resultOk");
-    }
-    const response = await this._request("GET", "/v1/contracts/events", {
-      params: Object.keys(params).length > 0 ? params : undefined,
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return normalizeContractEventListResponse(base);
-  }
-
-  /**
-   * List effective permission tokens for an account, including grants inherited from assigned roles
-   * (`GET /v1/accounts/{accountId}/permissions`).
-   * @param {string} accountId
-   * @param {{limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth | null}} [options]
-   * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
-   */
-  async listAccountPermissions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    const normalizedOptions = normalizeIterableListOptions(
-      options,
-      "listAccountPermissions",
-      ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS,
-    );
-    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this.#canonicalRequestAuth
-      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
-    const params = ToriiClient._encodePaginationParams(rest);
-    const response = await this._request(
-      "GET",
-      `/v1/accounts/${encodedId}/permissions`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        params: params ?? undefined,
-        signal,
-        canonicalAuth,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return normalizeAccountPermissionListResponse(base);
-  }
-
-  /**
-   * Iterate effective permission tokens, including grants inherited from assigned roles.
-   * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{name: string, payload: unknown}, void, unknown>}
-   */
-  iterateAccountPermissions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    return this._iterateIterable(
-      this.listAccountPermissions.bind(this, normalizedId),
-      options,
-    );
-  }
 
   /**
    * Upload an attachment to Torii.
@@ -5121,76 +4764,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`).
-   * @param {string} uaid
-   * @param {{dataspaceId?: number, status?: "active" | "inactive" | "all", limit?: number, offset?: number, countMode?: "bounded" | "exact", signal?: AbortSignal}} [options]
-   * @returns {Promise<UaidManifestsResponse>}
-   */
-  async getUaidManifests(uaid, options = {}) {
-    const canonicalUaid = normalizeUaidLiteral(uaid, "getUaidManifests.uaid");
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getUaidManifests",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      new Set(["dataspaceId", "status", "limit", "offset", "countMode"]),
-      "getUaidManifests options",
-    );
-    const params = {};
-    if (rest.dataspaceId !== undefined) {
-      params.dataspace = requireExactJsonUnsignedInteger(
-        rest.dataspaceId,
-        "getUaidManifests.dataspaceId",
-        { allowZero: true },
-      );
-    }
-    if (rest.status !== undefined) {
-      params.status = requireExactEnumString(
-        rest.status,
-        UAID_MANIFEST_FILTER_VALUES,
-        "getUaidManifests.status",
-      );
-    }
-    if (rest.limit !== undefined) {
-      params.limit = requireExactJsonUnsignedInteger(
-        rest.limit,
-        "getUaidManifests.limit",
-        { allowZero: false },
-      );
-    }
-    if (rest.offset !== undefined) {
-      params.offset = requireExactJsonUnsignedInteger(
-        rest.offset,
-        "getUaidManifests.offset",
-        { allowZero: true },
-      );
-    }
-    if (rest.countMode !== undefined) {
-      params.count_mode = requireExactEnumString(
-        rest.countMode,
-        UAID_MANIFEST_COUNT_MODE_VALUES,
-        "getUaidManifests.countMode",
-      );
-    }
-    const response = await this._request(
-      "GET",
-      `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}/manifests`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        params,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("uaid manifests endpoint returned no payload");
-    }
-    return normalizeUaidManifestsResponse(payload, canonicalUaid);
-  }
-
-  /**
    * Publish (or rotate) a Space Directory manifest (`POST /v1/space-directory/manifests`).
    * @param {PublishSpaceDirectoryManifestRequest} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
@@ -7667,28 +7240,6 @@ export class ToriiClient {
     return normalizeExplorerBlockRecord(payload, "explorer block response");
   }
 
-  /**
-   * List Explorer blocks with optional pagination (`GET /v1/explorer/blocks`).
-   * @param {BlockListOptions} [options]
-   * @returns {Promise<any>}
-   */
-  async listBlocks(options) {
-    const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
-    const params = { limit: normalizedOptions.limit };
-    if (normalizedOptions.cursor !== undefined) params.cursor = normalizedOptions.cursor;
-    const response = await this._request("GET", "/v1/explorer/blocks", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalizedOptions.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer blocks endpoint returned no payload");
-    }
-    return normalizeExplorerBlocksPage(payload);
-  }
 
   /**
    * Stream JSON events from `/v1/events/sse`. `options.filter` uses the
@@ -8992,32 +8543,6 @@ export class ToriiClient {
   }
 
   /**
-   * List subscription plans (`GET /v1/subscriptions/plans`).
-   * @param {SubscriptionPlanListOptions} [options]
-   * @returns {Promise<SubscriptionPlanListResponse>}
-   */
-  async listSubscriptionPlans(options = {}) {
-    const { signal, params } = buildSubscriptionPlanListQuery(options);
-    const response = await this._request("GET", "/v1/subscriptions/plans", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSubscriptionPlanListResponse(payload);
-  }
-
-  /**
-   * Iterate subscription plans using the list endpoint.
-   * @param {SubscriptionPlanIteratorOptions} [options]
-   * @returns {AsyncGenerator<SubscriptionPlanListItem, void, unknown>}
-   */
-  iterateSubscriptionPlans(options = {}) {
-    return this._iterateIterable(this.listSubscriptionPlans, options);
-  }
-
-  /**
    * Create a subscription plan (`POST /v1/subscriptions/plans`).
    * @param {SubscriptionPlanCreateRequest} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
@@ -9029,32 +8554,6 @@ export class ToriiClient {
       "/v1/subscriptions/plans", payload, options, "createSubscriptionPlan", [200],
     );
     return normalizeSubscriptionPlanCreateResponse(body, payload.plan_id);
-  }
-
-  /**
-   * List subscriptions (`GET /v1/subscriptions`).
-   * @param {SubscriptionListOptions} [options]
-   * @returns {Promise<SubscriptionListResponse>}
-   */
-  async listSubscriptions(options = {}) {
-    const { signal, params } = buildSubscriptionListQuery(options);
-    const response = await this._request("GET", "/v1/subscriptions", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSubscriptionListResponse(payload);
-  }
-
-  /**
-   * Iterate subscriptions using the list endpoint.
-   * @param {SubscriptionIteratorOptions} [options]
-   * @returns {AsyncGenerator<SubscriptionListItem, void, unknown>}
-   */
-  iterateSubscriptions(options = {}) {
-    return this._iterateIterable(this.listSubscriptions, options);
   }
 
   /**
@@ -11417,138 +10916,10 @@ export class ToriiClient {
     return { signal, rest };
   }
 
-  static _normalizeBlockListOptions(options) {
-    if (options === undefined || options === null) {
-      return { limit: EXPLORER_CURSOR_DEFAULT_LIMIT, signal: undefined };
-    }
-    const record = requirePlainObjectOption(options, "block list options");
-    assertSupportedOptionKeys(
-      record,
-      new Set(["cursor", "limit", "signal"]),
-      "block list options",
-    );
-    const { signal } = normalizeSignalOption(record, "listBlocks");
-    const normalized = {
-      limit: ToriiClient._normalizeUnsignedInteger(
-        record.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-        "limit",
-        { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-      ),
-      signal,
-    };
-    if (record.cursor !== undefined && record.cursor !== null) {
-      normalized.cursor = normalizeExplorerCursorValue(record.cursor, "cursor");
-    }
-    return normalized;
-  }
 
-  static _normalizeExplorerNftListOptions(options = {}, context = "explorer nft options") {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_NFT_LIST_OPTION_KEYS,
-    );
-    const { signal } = normalizeSignalOption(normalized, context);
-    const limit = ToriiClient._normalizeUnsignedInteger(
-      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-      `${context}.limit`,
-      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-    );
-    const ownedByRaw = normalized.ownedBy;
-    const domainRaw = normalized.domainId;
-    const base = {
-      limit,
-      signal,
-    };
-    if (normalized.cursor !== undefined && normalized.cursor !== null) {
-      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
-    }
-    if (ownedByRaw !== undefined && ownedByRaw !== null) {
-      base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
-    }
-    if (domainRaw !== undefined && domainRaw !== null) {
-      base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
-    }
-    return base;
-  }
 
-  static _normalizeExplorerNftIteratorOptions(
-    options = {},
-    context = "explorer nft iterator options",
-  ) {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_NFT_ITERATOR_OPTION_KEYS,
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const base = ToriiClient._normalizeExplorerNftListOptions(listOptions, context);
-    const iterator = { ...base };
-    if (maxItems !== undefined && maxItems !== null) {
-      iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
-        maxItems,
-        `${context}.maxItems`,
-        { allowZero: false },
-      );
-    } else {
-      iterator.maxItems = null;
-    }
-    return iterator;
-  }
 
-  static _normalizeExplorerRwaListOptions(options = {}, context = "explorer rwa options") {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_RWA_LIST_OPTION_KEYS,
-    );
-    const { signal } = normalizeSignalOption(normalized, context);
-    const limit = ToriiClient._normalizeUnsignedInteger(
-      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-      `${context}.limit`,
-      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-    );
-    const ownedByRaw = normalized.ownedBy;
-    const domainRaw = normalized.domainId;
-    const base = {
-      limit,
-      signal,
-    };
-    if (normalized.cursor !== undefined && normalized.cursor !== null) {
-      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
-    }
-    if (ownedByRaw !== undefined && ownedByRaw !== null) {
-      base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
-    }
-    if (domainRaw !== undefined && domainRaw !== null) {
-      base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
-    }
-    return base;
-  }
 
-  static _normalizeExplorerRwaIteratorOptions(
-    options = {},
-    context = "explorer rwa iterator options",
-  ) {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_RWA_ITERATOR_OPTION_KEYS,
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const base = ToriiClient._normalizeExplorerRwaListOptions(listOptions, context);
-    const iterator = { ...base };
-    if (maxItems !== undefined && maxItems !== null) {
-      iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
-        maxItems,
-        `${context}.maxItems`,
-        { allowZero: false },
-      );
-    } else {
-      iterator.maxItems = null;
-    }
-    return iterator;
-  }
 
   static _normalizeTransactionStatusPollOptions(options, context = "transaction status options") {
     if (options === undefined || options === null) {
@@ -15544,46 +14915,6 @@ function normalizeSnsNameStatus(payload, context) {
   return { status };
 }
 
-function normalizeExplorerNftRecord(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
-  const ownedBy = requireNonEmptyString(
-    record.owned_by ?? "",
-    `${context}.owned_by`,
-  );
-  const metadata =
-    record.metadata === undefined || record.metadata === null
-      ? {}
-      : cloneJsonValue(record.metadata, `${context}.metadata`);
-  return { id, ownedBy, metadata };
-}
-
-function normalizeExplorerNftPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer nfts response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer nfts response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer nfts response.items must be an array");
-  }
-  const pagination = normalizeExplorerCursorMeta(
-    record.pagination,
-    "explorer nfts response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer nfts response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerNftRecord(item, `explorer nfts response.items[${index}]`),
-    ),
-  };
-}
-
 function normalizeExplorerRwaRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
@@ -15618,58 +14949,6 @@ function normalizeExplorerRwaRecord(payload, context) {
     isFrozen: record.is_frozen,
     metadata,
     raw: cloneJsonValue(record, `${context}.raw`),
-  };
-}
-
-function normalizeExplorerRwaPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer rwas response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer rwas response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer rwas response.items must be an array");
-  }
-  const pagination = normalizeExplorerCursorMeta(
-    record.pagination,
-    "explorer rwas response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer rwas response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerRwaRecord(item, `explorer rwas response.items[${index}]`),
-    ),
-  };
-}
-
-function normalizeExplorerBlocksPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer blocks response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer blocks response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer blocks response.items must be an array");
-  }
-  const pagination = normalizeExplorerHistoryCursorMeta(
-    record.pagination,
-    "explorer blocks response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer blocks response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerBlockRecord(item, `explorer blocks response.items[${index}]`),
-    ),
   };
 }
 
@@ -15708,122 +14987,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     modules,
     qrVersion,
     svg,
-  };
-}
-
-function normalizeExplorerCursorValue(value, context, { nullable = false } = {}) {
-  if (value === null && nullable) return null;
-  if (typeof value !== JS_TYPE_STRING || value.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a non-empty base64url string`,
-      context,
-    );
-  }
-  const remainder = value.length % 4;
-  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
-  const hasNonCanonicalTrailingBits =
-    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
-    (remainder === 3 && (trailingSextet & 0x03) !== 0);
-  if (
-    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
-    remainder === 1 ||
-    !EXPLORER_CURSOR_PATTERN.test(value) ||
-    hasNonCanonicalTrailingBits
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
-      context,
-    );
-  }
-  return value;
-}
-
-function requireExactExplorerCursorFields(record, expectedFields, context) {
-  const expected = new Set(expectedFields);
-  const unknown = Object.keys(record).find((field) => !expected.has(field));
-  if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
-  }
-  const missing = expectedFields.find(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
-  );
-  if (missing !== undefined) {
-    rejectType(`${context} is missing required field ${missing}`);
-  }
-  return record;
-}
-
-function normalizeExplorerCursorMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  requireExactExplorerCursorFields(record, ["limit", "next_cursor", "has_more"], context);
-  const limit = ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-    max: EXPLORER_CURSOR_MAX_LIMIT,
-  });
-  if (typeof record.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
-  }
-  if (record.next_cursor === undefined) {
-    rejectType(`${context}.next_cursor must be a string or null`);
-  }
-  const nextCursor = normalizeExplorerCursorValue(
-    record.next_cursor,
-    `${context}.next_cursor`,
-    { nullable: true },
-  );
-  if (record.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
-  }
-  return {
-    limit,
-    nextCursor,
-    hasMore: record.has_more,
-  };
-}
-
-function normalizeExplorerHistoryCursorMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  requireExactExplorerCursorFields(
-    record,
-    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
-    context,
-  );
-  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-  });
-  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
-  }
-  const snapshotHeight = requireExactJsonUnsignedInteger(
-    record.snapshot_height,
-    `${context}.snapshot_height`,
-  );
-  const snapshotHash = requireOptionalExactLowerHex32String(
-    record.snapshot_hash,
-    `${context}.snapshot_hash`,
-  );
-  if ((snapshotHeight === 0) !== (snapshotHash === null)) {
-    rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
-  }
-  if (typeof record.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
-  }
-  const nextCursor = normalizeExplorerCursorValue(
-    record.next_cursor,
-    `${context}.next_cursor`,
-    { nullable: true },
-  );
-  if (record.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
-  }
-  return {
-    limit,
-    snapshotHeight,
-    snapshotHash,
-    nextCursor,
-    hasMore: record.has_more,
   };
 }
 
@@ -16508,53 +15671,6 @@ function normalizeUaidBindingsDataspace(value, context) {
       `${context}.dataspace_alias`,
     ),
     accounts,
-  };
-}
-
-function normalizeUaidManifestsResponse(payload, expectedUaid) {
-  const record = requireExactUaidRecord(
-    payload,
-    ["uaid", "total", "has_more", "count_mode", "manifests"],
-    [],
-    "uaid manifests response",
-  );
-  const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
-  if (expectedUaid !== undefined && uaid !== expectedUaid) {
-    rejectType("uaid manifests response.uaid does not match the requested UAID");
-  }
-  const total = requireExactJsonUnsignedInteger(
-    record.total,
-    "uaid manifests response.total",
-    { allowZero: true },
-  );
-  if (typeof record.has_more !== "boolean") {
-    rejectType("uaid manifests response.has_more must be a boolean");
-  }
-  const countMode = requireExactEnumString(
-    record.count_mode,
-    UAID_MANIFEST_COUNT_MODE_VALUES,
-    "uaid manifests response.count_mode",
-  );
-  const manifestsValue = requireDenseArray(
-    record.manifests,
-    "uaid manifests response.manifests",
-  );
-  const manifests = manifestsValue.map((entry, index) =>
-    normalizeUaidManifestRecord(
-      entry,
-      uaid,
-      `uaid manifests response.manifests[${index}]`,
-    ),
-  );
-  if (total < manifests.length) {
-    rejectType("uaid manifests response.total cannot be smaller than the page");
-  }
-  return {
-    uaid,
-    total,
-    has_more: record.has_more,
-    count_mode: countMode,
-    manifests,
   };
 }
 
@@ -27547,103 +26663,6 @@ function buildTriggerListQuery(options = {}) {
   return { signal, params: Object.keys(params).length === 0 ? undefined : params };
 }
 
-function buildSubscriptionPlanListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined || options === null
-      ? undefined
-      : ensureRecord(options, "subscription plan list options");
-  if (normalizedOptions) {
-    assertSupportedOptionKeys(
-      normalizedOptions,
-      SUBSCRIPTION_PLAN_LIST_OPTION_KEYS,
-      "subscription plan list options",
-    );
-  }
-  const { signal } = normalizeSignalOption(
-    normalizedOptions ?? undefined,
-    "subscription plans",
-  );
-  const params = {};
-  const source = normalizedOptions ?? {};
-  if (source.provider !== undefined && source.provider !== null) {
-    params.provider = normalizeAccountId(
-      source.provider,
-      "subscriptionPlans.provider",
-    );
-  }
-  if (source.limit !== undefined && source.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      source.limit,
-      "subscriptionPlans.limit",
-      { allowZero: false },
-    );
-  }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "subscriptionPlans.offset",
-      { allowZero: true },
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeSubscriptionStatusFilter(value, context) {
-  const normalized = requireNonEmptyString(value, context).toLowerCase();
-  if (!SUBSCRIPTION_STATUS_VALUES.has(normalized)) {
-    rejectType(`${context} must be one of ${Array.from(SUBSCRIPTION_STATUS_VALUES).join(", ")}`);
-  }
-  return normalized;
-}
-
-function buildSubscriptionListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined || options === null
-      ? undefined
-      : ensureRecord(options, "subscription list options");
-  if (normalizedOptions) {
-    assertSupportedOptionKeys(
-      normalizedOptions,
-      SUBSCRIPTION_LIST_OPTION_KEYS,
-      "subscription list options",
-    );
-  }
-  const { signal } = normalizeSignalOption(
-    normalizedOptions ?? undefined,
-    "subscriptions",
-  );
-  const params = {};
-  const source = normalizedOptions ?? {};
-  const ownedBy = pickOverride(source, "owned_by", "ownedBy");
-  if (ownedBy !== undefined && ownedBy !== null) {
-    params.owned_by = normalizeAccountId(ownedBy, "subscriptions.ownedBy");
-  }
-  if (source.provider !== undefined && source.provider !== null) {
-    params.provider = normalizeAccountId(source.provider, "subscriptions.provider");
-  }
-  if (source.status !== undefined && source.status !== null) {
-    params.status = normalizeSubscriptionStatusFilter(
-      source.status,
-      "subscriptions.status",
-    );
-  }
-  if (source.limit !== undefined && source.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      source.limit,
-      "subscriptions.limit",
-      { allowZero: false },
-    );
-  }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "subscriptions.offset",
-      { allowZero: true },
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
 function normalizeSignalOption(options, context) {
   if (options === undefined) {
     return { signal: undefined };
@@ -27887,30 +26906,6 @@ function isAbortSignalLike(value) {
   } catch {
     return false;
   }
-}
-
-function normalizeContractActivityListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "contract activity list response",
-    normalizeContractActivityListItem,
-  );
-}
-
-function normalizeContractEventListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "contract event list response",
-    normalizeContractEventListItem,
-  );
-}
-
-function normalizeAccountPermissionListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "account permission list response",
-    normalizeAccountPermissionItem,
-  );
 }
 
 function normalizeAttachmentMetadataList(payload, context = "attachment list response") {
@@ -28356,16 +27351,6 @@ function normalizeSumeragiEvidenceRecord(value, context) {
       record.penalty_status,
       `${context}.penalty_status`,
     ),
-  };
-}
-
-function normalizeIterableItems(payload, context, normalizeItem) {
-  const normalizedItems = payload.items.map((entry, index) =>
-    normalizeItem(entry, `${context}.items[${index}]`),
-  );
-  return {
-    ...payload,
-    items: normalizedItems,
   };
 }
 
@@ -28827,70 +27812,7 @@ const {
   requireNonEmptyString,
 });
 
-function normalizeSubscriptionPlanListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "subscription plan list response");
-  const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
-    rejectType("subscription plan list response.items must be an array");
-  }
-  const items = rawItems.map((entry, index) => {
-    const item = ensureRecord(entry, `subscription plan list response.items[${index}]`);
-    const planValue = item.plan;
-    if (planValue === undefined || planValue === null) {
-      rejectType(`subscription plan list response.items[${index}].plan is required`);
-    }
-    if (!isPlainObject(planValue)) {
-      rejectType(`subscription plan list response.items[${index}].plan must be an object`);
-    }
-    return {
-      plan_id: requireNonEmptyString(
-        item.plan_id,
-        `subscription plan list response.items[${index}].plan_id`,
-      ),
-      plan: cloneJsonValue(
-        planValue,
-        `subscription plan list response.items[${index}].plan`,
-      ),
-    };
-  });
-  const totalValue =
-    record.total === undefined || record.total === null
-      ? items.length
-      : ToriiClient._normalizeUnsignedInteger(
-          record.total,
-          "subscription plan list response.total",
-          { allowZero: true },
-        );
-  return {
-    items,
-    total: totalValue,
-  };
-}
-
-function normalizeSubscriptionListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "subscription list response");
-  const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
-    rejectType("subscription list response.items must be an array");
-  }
-  const items = rawItems.map((entry, index) =>
-    normalizeSubscriptionListItem(entry, `subscription list response.items[${index}]`),
-  );
-  const totalValue =
-    record.total === undefined || record.total === null
-      ? items.length
-      : ToriiClient._normalizeUnsignedInteger(
-          record.total,
-          "subscription list response.total",
-          { allowZero: true },
-        );
-  return {
-    items,
-    total: totalValue,
-  };
-}
-
-function normalizeSubscriptionListItem(value, context) {
+function normalizeSubscriptionRecord(value, context) {
   const record = ensureRecord(value, context);
   const subscriptionValue = record.subscription;
   if (subscriptionValue === undefined || subscriptionValue === null) {
@@ -28927,7 +27849,7 @@ function normalizeSubscriptionListItem(value, context) {
 
 function normalizeSubscriptionGetResponse(payload) {
   const record = ensureRecord(payload, "subscription get response");
-  return normalizeSubscriptionListItem(record, "subscription get response");
+  return normalizeSubscriptionRecord(record, "subscription get response");
 }
 
 function normalizeConnectSessionResponse(payload, context) {

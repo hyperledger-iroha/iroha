@@ -3407,21 +3407,11 @@ mod tests {
     #[test]
     #[ignore = "explicit maintenance command prints current reputation event-id projection frames"]
     fn print_reputation_event_id_identity_fixture() {
-        let profile = [
-            cfg!(feature = "governance"),
-            cfg!(feature = "http"),
-            cfg!(feature = "ids_projection"),
-        ];
-        assert!(profile[0], "capture requires governance");
-        assert!(profile[1], "capture requires HTTP");
-        assert!(
-            !profile[2],
-            "capture requires the concrete identity profile"
-        );
+        assert!(cfg!(feature = "governance"), "capture requires governance");
+        assert!(cfg!(feature = "http"), "capture requires HTTP");
         let fixture = norito::json!({
             "governance": (cfg!(feature = "governance")),
             "http": (cfg!(feature = "http")),
-            "ids_projection": (cfg!(feature = "ids_projection")),
             "values": (reputation_event_id_identity_fixture_values()),
         });
         println!(

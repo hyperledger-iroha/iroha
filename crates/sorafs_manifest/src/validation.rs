@@ -31,7 +31,7 @@ const MAX_MANIFEST_DECODE_ALLOCATED_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES * 
 const MAX_MANIFEST_DECODE_DEPTH: usize = 64;
 const MAX_MANIFEST_BASE64_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES.div_ceil(3) * 4;
 /// Errors emitted while decoding an attacker-controlled manifest payload.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum ManifestDecodeError {
     /// The base64 text exceeds the largest canonical spelling of a V1 manifest.
     #[error("manifest base64 payload has {found} bytes; maximum is {maximum}")]
@@ -46,8 +46,12 @@ pub enum ManifestDecodeError {
     #[error("manifest payload has {found} bytes; maximum is {maximum}")]
     PayloadTooLarge { found: usize, maximum: usize },
     /// Norito rejected the payload under the manifest resource budget.
-    #[error("failed to decode bounded ManifestV1 payload: {reason}")]
-    Decode { reason: String },
+    #[error("failed to decode bounded ManifestV1 payload: {source}")]
+    Decode {
+        /// Original codec refusal, including its local allocation or scope identity.
+        #[source]
+        source: norito::Error,
+    },
     /// The manifest could not be encoded canonically.
     #[error("failed to encode canonical ManifestV1 payload: {reason}")]
     CanonicalEncoding { reason: String },
@@ -77,9 +81,7 @@ pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, Manifest
     );
     norito::decode_canonical_with_limits(bytes, limits).map_err(|error| match error {
         norito::Error::NonCanonicalEncoding => ManifestDecodeError::NonCanonicalEncoding,
-        error => ManifestDecodeError::Decode {
-            reason: error.to_string(),
-        },
+        source => ManifestDecodeError::Decode { source },
     })
 }
 /// Decode one exact canonical padded-base64 V1 manifest under resource limits.
@@ -826,12 +828,33 @@ mod tests {
     #[test]
     fn bounded_manifest_decoder_rejects_oversized_input_before_decode() {
         let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
-        assert_eq!(
+        assert!(matches!(
             decode_manifest_v1_canonical(&oversized),
             Err(ManifestDecodeError::PayloadTooLarge {
-                found: MAX_MANIFEST_ENCODED_BYTES + 1,
+                found,
                 maximum: MAX_MANIFEST_ENCODED_BYTES,
-            })
+            }) if found == MAX_MANIFEST_ENCODED_BYTES + 1
+        ));
+    }
+    #[test]
+    fn bounded_manifest_decoder_preserves_original_local_capacity_cause() {
+        use std::error::Error as _;
+
+        let manifest = manifest_with_defaults();
+        let canonical = manifest.encode().expect("canonical manifest");
+        let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        norito::with_decode_limits_scope(zero, || {
+            let error = decode_manifest_v1_canonical(&canonical)
+                .expect_err("inherited local allocation ceiling must refuse decode");
+            let source = error
+                .source()
+                .and_then(|source| source.downcast_ref::<norito::Error>())
+                .expect("original typed codec cause");
+            assert!(norito::core::decode_error_matches_active_limits(source));
+        });
+        assert_eq!(
+            decode_manifest_v1_canonical(&canonical).expect("same bytes retry after scope release"),
+            manifest
         );
     }
     #[test]
@@ -868,10 +891,10 @@ mod tests {
             norito::to_bytes(&manifest).expect("alternate manifest")
         };
         assert_ne!(alternate, canonical);
-        assert_eq!(
+        assert!(matches!(
             decode_manifest_v1_base64_canonical(&BASE64_STANDARD.encode(alternate)),
             Err(ManifestDecodeError::NonCanonicalEncoding)
-        );
+        ));
     }
     #[test]
     fn canonical_base64_manifest_encoder_ignores_ambient_norito_layout() {
@@ -889,26 +912,26 @@ mod tests {
     #[test]
     fn canonical_base64_manifest_decoder_rejects_oversized_text_before_decode() {
         let oversized = "A".repeat(MAX_MANIFEST_BASE64_BYTES + 1);
-        assert_eq!(
+        assert!(matches!(
             decode_manifest_v1_base64_canonical(&oversized),
             Err(ManifestDecodeError::Base64PayloadTooLarge {
-                found: MAX_MANIFEST_BASE64_BYTES + 1,
+                found,
                 maximum: MAX_MANIFEST_BASE64_BYTES,
-            })
-        );
+            }) if found == MAX_MANIFEST_BASE64_BYTES + 1
+        ));
     }
     #[test]
     fn canonical_base64_manifest_decoder_checks_decoded_size_at_equal_text_bound() {
         let oversized_bytes = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
         let encoded = BASE64_STANDARD.encode(oversized_bytes);
         assert_eq!(encoded.len(), MAX_MANIFEST_BASE64_BYTES);
-        assert_eq!(
+        assert!(matches!(
             decode_manifest_v1_base64_canonical(&encoded),
             Err(ManifestDecodeError::PayloadTooLarge {
-                found: MAX_MANIFEST_ENCODED_BYTES + 1,
+                found,
                 maximum: MAX_MANIFEST_ENCODED_BYTES,
-            })
-        );
+            }) if found == MAX_MANIFEST_ENCODED_BYTES + 1
+        ));
     }
     #[test]
     fn canonical_base64_manifest_encoder_enforces_wire_size_bound() {

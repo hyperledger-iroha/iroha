@@ -1041,14 +1041,14 @@ mod tests {
         )
         .unwrap();
         let name = record_name(&binding).unwrap();
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            directory.path().join(&name),
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            0,
-        )
-        .unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .args(["-m", "600"])
+                .arg(directory.path().join(&name))
+                .status()
+                .unwrap()
+                .success()
+        );
         assert!(matches!(
             backend.read_record(&name),
             Err(MusubiSeedStagingErrorV1::Invalid)

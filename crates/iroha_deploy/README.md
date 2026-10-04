@@ -11,6 +11,15 @@ The design, file formats and phase plan are in
 
 What exists so far:
 
+- `bootstrap::publication`: offline native release production from independently pinned complete
+  manifest bytes, signed-genesis key/network and a bounded contiguous current finality-proof prefix. Kagami exposes
+  `advanced network-bootstrap prepare`; it derives consensus coordinates, signs the canonical
+  `SignedNetworkCheckpoint`, and atomically prepares `checkpoint.nrt` and `network-profiles.nrt`
+  for an explicitly selected release authority and HTTPS publication location. The schema in its
+  public receipt binds the compiled candidate; preparation does not qualify a live network,
+  publish the endpoint, or authenticate a bundle installation. Release packaging consumes the
+  profile through `cargo xtask kagami-bundle --network-profiles` for the two-program CLI
+  package, or `cargo xtask mochi-bundle --network-profiles` for the desktop application.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
@@ -56,8 +65,10 @@ What exists so far:
 - `provisioning`: retains the exact child registration, imports its owner into a
   separate public parent wallet, and coordinates the canonical faucet and paid SNS
   operations under signed release allowances. Fresh parent quorum precedes funding.
-  Recovery preserves signed journals and the original namespace request; an unsigned
-  quote may refresh only before journal creation, within the same spending allowance.
+  One request leases the private dataspace and its owner's default `admin@ALIAS`
+  account alias together, with both rents under the original combined allowance.
+  Recovery preserves signed journals and the exact original namespace quote,
+  expiry, owner label and spending allowance, including failure before journal creation.
   Its state lives outside local reset, so a replacement child cannot silently inherit
   an existing parent attachment. After namespace completion, a fresh certified parent
   World projection authenticates the exact active owner and lease generation.

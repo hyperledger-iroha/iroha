@@ -157,7 +157,7 @@ fn wait_for_sorted_asset_definitions(
     while Instant::now() < deadline {
         match client
             .client()
-            .query(FindAssetsDefinitions::new())
+            .query(FindAssetDefinitions::new())
             .with_sorting(sorting.clone())
             .execute_all()
         {
@@ -482,7 +482,7 @@ fn metadata_sorting_descending() {
     submit_chunked(&test_client, &instructions).expect("Valid");
     let res = test_client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .with_sorting(Sorting::new(
             Some(sort_by_metadata_key),
             Some(SortOrder::Desc),

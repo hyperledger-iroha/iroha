@@ -98,6 +98,7 @@ fn bind_installed_profile(
 struct Binding {
     profile: ProfileBinding,
     spec: PrivateRootSpec,
+    account_alias: String,
     context: Option<ManagedContext>,
 }
 #[derive(JsonSerialize, JsonDeserialize)]
@@ -127,6 +128,11 @@ fn read_binding(directory: &PrivateDirectory) -> Result<Binding> {
         .spec
         .validate()
         .map_err(|_| Error::Invalid("invalid retained private identity".into()))?;
+    iroha_wallet::namespace::resolve_private_owner_alias(
+        &binding.spec.dataspace_alias,
+        &binding.account_alias,
+    )
+    .map_err(|_| Error::Invalid("invalid retained private owner alias".into()))?;
     Ok(binding)
 }
 fn remaining(deadline: Instant) -> Result<Duration> {
@@ -384,6 +390,7 @@ pub(super) fn build_registry_context(
         &directory.path().join("provisioning"),
         &bootstrap,
         &prepared,
+        &binding.account_alias,
     )
     .map_err(|error| Error::Invalid(error.to_string()))?;
     if !registry
@@ -456,6 +463,11 @@ impl ManagedStore {
                 "dataspace startup budget must be positive and at most sixty seconds".into(),
             ));
         }
+        iroha_wallet::namespace::resolve_private_owner_alias(
+            &request.alias,
+            &request.account_alias,
+        )
+        .map_err(|_| Error::Invalid("invalid private owner alias".into()))?;
         let deadline = Instant::now() + request.timeout;
         let profiles = runtime.network_profiles()?;
         let profile = profiles
@@ -488,6 +500,7 @@ impl ManagedStore {
                 let binding = Binding {
                     profile: ProfileBinding::from_profile(profile),
                     spec,
+                    account_alias: request.account_alias.clone(),
                     context: None,
                 };
                 let parent = OwnerDirectory::open_or_create(self.root().join("attachments"))?;
@@ -501,12 +514,14 @@ impl ManagedStore {
         gate.try_lock()
             .map_err(|_| Error::Busy(request.name.clone()))?;
         let mut binding = read_binding(&directory)?;
-        advance_profile(&directory, &mut binding, profile)?;
-        if binding.spec.dataspace_alias != request.alias {
+        if binding.spec.dataspace_alias != request.alias
+            || binding.account_alias != request.account_alias
+        {
             return Err(Error::Invalid(
-                "context already selects a different dataspace alias".into(),
+                "context already selects a different dataspace or owner alias".into(),
             ));
         }
+        advance_profile(&directory, &mut binding, profile)?;
         // A completed binding permanently remembers the child even if its local generation
         // is reset. Do not generate replacement keys before detecting that mismatch.
         if binding.context.is_some() {
@@ -771,7 +786,10 @@ fn relay_turn(
         .map_err(ManagedAttachmentFailure::from)?;
     let deadline = attachment_turn_deadline(directory)?;
     let retained = bind_installed_profile(directory, profile, deadline)?;
-    if retained.spec != binding.spec || retained.context != binding.context {
+    if retained.spec != binding.spec
+        || retained.account_alias != binding.account_alias
+        || retained.context != binding.context
+    {
         return Err(ManagedAttachmentFailure::ContextRejected);
     }
     let bootstrap = authenticate_parent(release_path, profile, deadline, refresh)
@@ -781,8 +799,13 @@ fn relay_turn(
     }
     if service.is_none() {
         *service = Some(
-            RemoteProvisioning::open(&directory.path().join("provisioning"), &bootstrap, prepared)
-                .map_err(ManagedAttachmentFailure::from)?,
+            RemoteProvisioning::open(
+                &directory.path().join("provisioning"),
+                &bootstrap,
+                prepared,
+                &binding.account_alias,
+            )
+            .map_err(ManagedAttachmentFailure::from)?,
         );
     }
     let service = service

@@ -227,7 +227,13 @@ internal object QueryJson {
                         location.add(index)
                         decode(nested, depth + 1).also { location.removeAt(location.size - 1) }
                     }
-                    if (op == "and") Filter.And(operands) else Filter.Or(operands)
+                    // A one-operand `and`/`or` is its operand: the text form cannot spell it, and
+                    // both forms must decode to the same tree.
+                    when {
+                        operands.size == 1 -> operands[0]
+                        op == "and" -> Filter.And(operands)
+                        else -> Filter.Or(operands)
+                    }
                 }
                 "not" -> {
                     if (args !is JsonArray || args.size != 1) {

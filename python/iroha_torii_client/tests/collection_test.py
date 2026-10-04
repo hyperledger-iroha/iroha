@@ -117,7 +117,7 @@ def _body(call: dict) -> Any:
 
 
 def test_every_collection_posts_its_query_route() -> None:
-    client, session = _client(*[_response() for _ in range(10)])
+    client, session = _client(*[_response() for _ in range(17)])
 
     client.domains.list()
     client.accounts.list()
@@ -129,6 +129,13 @@ def test_every_collection_posts_its_query_route() -> None:
     client.accounts.transactions(CANONICAL_OWNER).list()
     client.asset_definitions.holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").list()
     client.transactions.list()
+    client.accounts.permissions(CANONICAL_OWNER).list()
+    client.accounts.history(CANONICAL_OWNER).list()
+    client.subscription_plans.list()
+    client.subscriptions.list()
+    client.contract_activity.list()
+    client.contract_events.list()
+    client.uaid_manifests("uaid:" + "01" * 32).list()
 
     owner = quote(CANONICAL_OWNER, safe="")
     assert [(call["method"], call["path"]) for call in session.calls] == [
@@ -142,6 +149,13 @@ def test_every_collection_posts_its_query_route() -> None:
         ("POST", f"/v1/accounts/{owner}/transactions/query"),
         ("POST", "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders/query"),
         ("POST", "/v1/transactions/query"),
+        ("POST", f"/v1/accounts/{owner}/permissions/query"),
+        ("POST", f"/v1/accounts/{owner}/history/query"),
+        ("POST", "/v1/subscriptions/plans/query"),
+        ("POST", "/v1/subscriptions/query"),
+        ("POST", "/v1/contracts/activity/query"),
+        ("POST", "/v1/contracts/events/query"),
+        ("POST", "/v1/space-directory/uaids/uaid%3A" + "01" * 32 + "/manifests/query"),
     ]
     for call in session.calls:
         assert _body(call) == {}
@@ -485,7 +499,7 @@ def test_transaction_rows_require_only_their_identity_fields() -> None:
         (
             {"sort": "-block_height"},
             "sort",
-            "rows are returned newest first and cannot be re-sorted",
+            "rows use a fixed server order and cannot be re-sorted",
         ),
         ({"include_total": True}, "include_total", "counting would scan the whole history"),
         (
@@ -502,6 +516,9 @@ def test_history_collections_reject_sort_totals_and_aggregates_before_any_reques
     for collection, collection_id in (
         (client.transactions, "transactions"),
         (client.accounts.transactions(CANONICAL_OWNER), "account_transactions"),
+        (client.accounts.history(CANONICAL_OWNER), "account_history"),
+        (client.contract_activity, "contract_activity"),
+        (client.contract_events, "contract_events"),
     ):
         assert isinstance(collection, HistoryCollection)
         calls = [
@@ -556,9 +573,9 @@ def test_history_count_pages_through_matching_rows() -> None:
 
     assert client.accounts.transactions(CANONICAL_OWNER).count(F.asset_definition_ids == "d") == 3
     assert [_body(call) for call in session.calls] == [
-        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}, "select": ["entrypoint_hash"]},
-        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}, "select": ["entrypoint_hash"], "cursor": "h1"},
-        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}, "select": ["entrypoint_hash"], "cursor": "h2"},
+        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}},
+        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}, "cursor": "h1"},
+        {"filter": {"op": "eq", "args": ["asset_definition_ids", "d"]}, "cursor": "h2"},
     ]
 
 
@@ -597,3 +614,44 @@ def test_iteration_resumes_from_a_cursor() -> None:
 
     assert [domain.id for domain in client.domains.iter(sort="id", cursor="c2")] == ["c"]
     assert _body(session.calls[0]) == {"sort": ["id"], "cursor": "c2"}
+
+
+@pytest.mark.parametrize(("name", "path"), [
+    ("explorer_accounts", "accounts"),
+    ("explorer_domains", "domains"),
+    ("explorer_asset_definitions", "asset-definitions"),
+    ("explorer_assets", "assets"),
+    ("explorer_nfts", "nfts"),
+    ("explorer_rwas", "rwas"),
+    ("explorer_blocks", "blocks"),
+    ("explorer_transactions", "transactions"),
+    ("explorer_latest_transactions", "transactions/latest"),
+    ("explorer_instructions", "instructions"),
+    ("explorer_latest_instructions", "instructions/latest"),
+])
+def test_explorer_collections_share_bounded_queries_and_pages(name: str, path: str) -> None:
+    client, session = _client(
+        _response(payload={"items": [], "next_cursor": "older"}),
+        _response(payload={"items": [{"id": "one"}], "next_cursor": None}),
+    )
+    collection = getattr(client, name)
+    assert list(collection.iter_rows(filter='status = "active"', limit=5)) == [{"id": "one"}]
+    assert [call["path"] for call in session.calls] == [f"/v1/explorer/{path}/query"] * 2
+    assert _body(session.calls[0]) == {"filter": 'status = "active"', "limit": 5}
+    assert _body(session.calls[1])["cursor"] == "older"
+    for controls in [{"sort": "id"}, {"include_total": True}, {"aggregate": AggregateSpec(metrics=[AggregateMetric("n", "count")])}]:
+        with pytest.raises(ListQueryError):
+            collection.rows(**controls)
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize("payload", [
+    {"items": [], "pagination": {"next_cursor": None, "has_more": False}},
+    {"items": [], "next_cursor": None, "sampled_at": "today"},
+    {"items": [], "next_cursor": None, "total": 0},
+    {"items": [{}, {}], "next_cursor": None},
+])
+def test_explorer_collection_rejects_retired_or_oversized_pages(payload: dict) -> None:
+    client, _ = _client(_response(payload=payload))
+    with pytest.raises(ValueError, match="malformed page"):
+        client.explorer_accounts.list(limit=1)

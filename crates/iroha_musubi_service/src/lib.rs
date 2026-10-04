@@ -1612,6 +1612,15 @@ pub enum MusubiPublicationServiceBackendErrorV1 {
     /// Deployment configuration or immutable backend state must change.
     Permanent,
 }
+impl fmt::Display for MusubiPublicationServiceBackendErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Retryable => "Musubi publication backend is temporarily unavailable",
+            Self::Permanent => "Musubi publication backend requires configuration or state changes",
+        })
+    }
+}
+impl std::error::Error for MusubiPublicationServiceBackendErrorV1 {}
 /// Admitted backend that durably stages an already verified exact CAR.
 pub trait MusubiSeedIngressBackendV1: Send {
     /// Return the exact admitted provider served by this backend instance.

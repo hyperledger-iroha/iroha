@@ -38,10 +38,10 @@ use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
-    BenchRateLimiter, ContractActivityGetParamsForBench, MaybeTelemetry, NoritoJson, NoritoQuery,
-    QueryOptions, ResponseFormat, SignedQueryAdmission, accept_transaction_for_ingress_for_bench,
-    collection_query_for_bench, handle_queries_with_opts,
-    handle_transaction_with_metrics_for_bench, handle_v1_contracts_activity_get_for_bench,
+    BenchRateLimiter, MaybeTelemetry, NoritoJson, NoritoQuery, QueryOptions, ResponseFormat,
+    SignedQueryAdmission, accept_transaction_for_ingress_for_bench, collection_query_for_bench,
+    handle_queries_with_opts, handle_transaction_with_metrics_for_bench,
+    handle_v1_contracts_activity_get_for_bench,
     profile_stats::print_profile,
     query_load_profiles::{QueryLoadProfile, QueryLoadWorkload, standard_query_load_profiles},
     verify_signed_query_request_for_bench,
@@ -635,26 +635,27 @@ fn contracts_activity_router(fixture: &QueryLoadFixture) -> Router {
     let telemetry = direct_metrics_telemetry();
     Router::new().route(
         "/v1/contracts/activity",
-        get(
-            move |NoritoQuery(params): NoritoQuery<ContractActivityGetParamsForBench>| {
-                let state = Arc::clone(&state);
-                let telemetry = telemetry.clone();
-                async move {
-                    match handle_v1_contracts_activity_get_for_bench(
-                        state,
-                        NoritoQuery(params),
-                        telemetry,
-                    )
-                    .await
-                    {
-                        Ok(response) => response.into_response(),
-                        Err(error) => {
-                            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-                        }
+        get(move |uri: axum::http::Uri| {
+            let state = Arc::clone(&state);
+            let telemetry = telemetry.clone();
+            async move {
+                let params = match iroha_torii_shared::list_query::ListQuery::from_query_pairs(
+                    url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+                        .into_owned(),
+                ) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+                    }
+                };
+                match handle_v1_contracts_activity_get_for_bench(state, params, telemetry).await {
+                    Ok(response) => response.into_response(),
+                    Err(error) => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
                     }
                 }
-            },
-        ),
+            }
+        }),
     )
 }
 fn account_alias_projection_envelope(profile: QueryLoadProfile) -> norito::json::Value {
@@ -680,23 +681,21 @@ fn account_assets_predicate_envelope(profile: QueryLoadProfile) -> norito::json:
     })
 }
 fn contracts_activity_uri(fixture: &QueryLoadFixture, profile: QueryLoadProfile) -> String {
+    use iroha_torii_shared::list_query::{ListQuery, field};
+    let query = ListQuery::new().limit(profile.page_limit as u32).filter(
+        field("authority").eq(fixture.contract_activity_authority.to_string())
+            & field("contract_alias").eq(CONTRACT_ACTIVITY_MATCH_ALIAS)
+            & field("contract_entrypoint").eq(CONTRACT_ACTIVITY_MATCH_ENTRYPOINT)
+            & field("result_ok").eq(true)
+            & field("timestamp_ms").gte(
+                CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS + profile.committed_transactions as u64 / 2,
+            ),
+    );
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("limit", &profile.page_limit.to_string());
-    serializer.append_pair("count_mode", "bounded");
-    serializer.append_pair(
-        "authority",
-        &fixture.contract_activity_authority.to_string(),
-    );
-    serializer.append_pair("contract_alias", CONTRACT_ACTIVITY_MATCH_ALIAS);
-    serializer.append_pair("contract_entrypoint", CONTRACT_ACTIVITY_MATCH_ENTRYPOINT);
-    serializer.append_pair("result_ok", "true");
-    serializer.append_pair(
-        "since_timestamp_ms",
-        &(CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS + (profile.committed_transactions as u64 / 2))
-            .to_string(),
-    );
+    serializer.extend_pairs(query.to_query_pairs().expect("benchmark query"));
     format!("/v1/contracts/activity?{}", serializer.finish())
 }
+
 fn generic_aggregate_envelope(profile: QueryLoadProfile) -> norito::json::Value {
     norito::json!({
         "filter": "label is not null",

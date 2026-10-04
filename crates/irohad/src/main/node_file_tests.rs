@@ -296,8 +296,9 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
     // Offline validation and the compatibility probe never open the secret.
     validate_config_and_genesis_for_check(&config, genesis.as_ref(), None)
         .map_or_else(|report| panic!("{report:?}"), drop);
-    let compatibility = compatibility_probe::config_compatibility_v1(&config, None)
-        .unwrap_or_else(|report| panic!("{report:?}"));
+    let compatibility =
+        compatibility_probe::config_compatibility_v1(&config, None, crate::test_build_metadata())
+            .unwrap_or_else(|report| panic!("{report:?}"));
     assert_eq!(compatibility.status, "pending");
 }
 

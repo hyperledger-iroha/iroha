@@ -491,7 +491,7 @@ impl WalletRecord {
 fn render_config(record: &WalletRecord, key: Option<&str>) -> Result<String> {
     let quote = |value: &str| toml::Value::String(value.to_owned()).to_string();
     let mut config = format!(
-        "chain = {}\nnetwork_id = {}\ntorii_url = {}\n\n[account]\ndomain = \"universal\"\nchain_discriminant = {}\npublic_key = {}\n",
+        "chain = {}\nnetwork_id = {}\ntorii_url = {}\n\n[account]\nchain_discriminant = {}\npublic_key = {}\n",
         quote(&record.network.chain_id),
         quote(&record.network.network_id.to_string()),
         quote(&record.network.torii_url),

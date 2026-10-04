@@ -41,7 +41,7 @@ mod model {
         /// {0}
         #[error(transparent)]
         CanonicalHistory(CanonicalHistoryError),
-        /// Query found wrong type of asset: {0}
+        /// Query rejected: {0}
         Conversion(
             #[skip_from]
             #[skip_try_from]

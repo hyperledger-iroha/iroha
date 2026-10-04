@@ -283,12 +283,29 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                          r'#\[path = "beacon_bootstrap_tests\.rs"\]\s*mod tests;')
         declared = tuple(re.findall(r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(",
                                     source.read_text()))
-        self.assertEqual(len(declared), 14)
+        self.assertEqual(len(declared), 12)
+        required = ["beacon_bootstrap::tests::" + leaf for leaf in declared]
+        seat_root = root / "crates/irohad/src/beacon_bootstrap"
+        self.assertIn("mod seat_attempt;", module.read_text())
+        for child, leaves in {
+            "finality": (
+                "current_phase_pipe_accepts_real_work_and_rejects_replay",
+                "rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs",
+            ),
+            "input": ("bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame",),
+            "claim": ("one_shot_attempt_directory_cannot_reroll_after_restart",),
+        }.items():
+            self.assertIn("mod " + child + ";", (seat_root / "seat_attempt.rs").read_text())
+            parent = seat_root / "seat_attempt" / (child + ".rs")
+            self.assertRegex(parent.read_text(), r"#\[cfg\(test\)\]\s*mod tests;")
+            body = (seat_root / "seat_attempt" / child / "tests.rs").read_text()
+            for leaf in leaves:
+                self.assertEqual(len(re.findall(r"#\[test\]\s*fn\s+" + re.escape(leaf) + r"\s*\(", body)), 1)
+                required.append("beacon_bootstrap::seat_attempt::" + child + "::tests::" + leaf)
         for scope in gate.QUALIFICATION_SCOPES:
             selected = tuple(name for _, tests in gate.qualification_stages(scope)["daemon"]
                              for name in tests)
-            for leaf in declared:
-                name = "beacon_bootstrap::tests::" + leaf
+            for name in required:
                 with self.subTest(scope=scope, test=name):
                     self.assertEqual(selected.count(name), 1)
                     without_case = "\n".join(case + ": test" for case in selected if case != name)

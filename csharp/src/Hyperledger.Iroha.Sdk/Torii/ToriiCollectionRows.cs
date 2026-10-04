@@ -461,6 +461,62 @@ public sealed class RepoAgreementRow
 }
 
 /// <summary>Lenient row field readers: unknown fields are ignored, known fields are type-checked.</summary>
+/// <summary>A subscription plan collection row.</summary>
+public sealed class SubscriptionPlanRow
+{
+    public required string Id { get; init; }
+    public string? Provider { get; init; }
+    public JsonNode? Billing { get; init; }
+    public JsonNode? Pricing { get; init; }
+    internal static SubscriptionPlanRow Read(JsonElement row, string context) => new()
+    {
+        Id = RowJson.RequiredString(row, "id", context),
+        Provider = RowJson.OptionalString(row, "provider", context),
+        Billing = RowJson.OptionalNode(row, "billing"),
+        Pricing = RowJson.OptionalNode(row, "pricing"),
+    };
+}
+
+/// <summary>A flattened subscription collection row.</summary>
+public sealed class SubscriptionRow
+{
+    public required string Id { get; init; }
+    public string? OwnedBy { get; init; }
+    public string? PlanId { get; init; }
+    public string? Provider { get; init; }
+    public string? Subscriber { get; init; }
+    public string? Status { get; init; }
+    public ulong? CurrentPeriodStartMs { get; init; }
+    public ulong? CurrentPeriodEndMs { get; init; }
+    public ulong? NextChargeMs { get; init; }
+    public bool? CancelAtPeriodEnd { get; init; }
+    public ulong? CancelAtMs { get; init; }
+    public ulong? FailureCount { get; init; }
+    public JsonNode? UsageAccumulated { get; init; }
+    public string? BillingTriggerId { get; init; }
+    public JsonObject? Invoice { get; init; }
+    public JsonObject? Plan { get; init; }
+    internal static SubscriptionRow Read(JsonElement row, string context) => new()
+    {
+        Id = RowJson.RequiredString(row, "id", context),
+        OwnedBy = RowJson.OptionalString(row, "owned_by", context),
+        PlanId = RowJson.OptionalString(row, "plan_id", context),
+        Provider = RowJson.OptionalString(row, "provider", context),
+        Subscriber = RowJson.OptionalString(row, "subscriber", context),
+        Status = RowJson.OptionalString(row, "status", context),
+        CurrentPeriodStartMs = RowJson.OptionalUInt64(row, "current_period_start_ms", context),
+        CurrentPeriodEndMs = RowJson.OptionalUInt64(row, "current_period_end_ms", context),
+        NextChargeMs = RowJson.OptionalUInt64(row, "next_charge_ms", context),
+        CancelAtPeriodEnd = RowJson.OptionalBoolean(row, "cancel_at_period_end", context),
+        CancelAtMs = RowJson.OptionalUInt64(row, "cancel_at_ms", context),
+        FailureCount = RowJson.OptionalUInt64(row, "failure_count", context),
+        UsageAccumulated = RowJson.OptionalNode(row, "usage_accumulated"),
+        BillingTriggerId = RowJson.OptionalString(row, "billing_trigger_id", context),
+        Invoice = RowJson.OptionalObject(row, "invoice", context),
+        Plan = RowJson.OptionalObject(row, "plan", context),
+    };
+}
+
 internal static class RowJson
 {
     internal static string RequiredString(JsonElement row, string name, string context)

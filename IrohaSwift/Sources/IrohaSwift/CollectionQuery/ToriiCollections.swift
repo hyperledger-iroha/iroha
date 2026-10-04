@@ -7,6 +7,8 @@ public typealias ToriiJSONObject = [String: ToriiJSONValue]
 enum ToriiCollectionRoute: Sendable, Equatable {
     /// A top-level collection such as `/v1/domains`.
     case fixed(String)
+    /// `/v1/space-directory/uaids/{uaid}/manifests`.
+    case uaid(String)
     /// `/v1/accounts/{account_id}/<suffix>`.
     case account(String, suffix: String)
     /// `/v1/assets/{definition_id}/<suffix>`.
@@ -201,6 +203,96 @@ extension ToriiClient {
     /// Repo agreements (`/v1/repo/agreements`).
     public var repoAgreements: ToriiCollection<ToriiRepoAgreement> {
         ToriiCollection(client: self, route: .fixed("/v1/repo/agreements"))
+    }
+
+    /// Explorer accounts in bounded server order.
+    public var explorerAccounts: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/accounts"), isHistory: true)
+    }
+
+    /// Explorer domains in bounded server order.
+    public var explorerDomains: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/domains"), isHistory: true)
+    }
+
+    /// Explorer asset definitions in bounded server order.
+    public var explorerAssetDefinitions: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/asset-definitions"), isHistory: true)
+    }
+
+    /// Explorer assets in bounded server order.
+    public var explorerAssets: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/assets"), isHistory: true)
+    }
+
+    /// Explorer nfts in bounded server order.
+    public var explorerNfts: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/nfts"), isHistory: true)
+    }
+
+    /// Explorer rwas in bounded server order.
+    public var explorerRwas: ToriiCollection<ToriiExplorerRwaRecord> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/rwas"), isHistory: true)
+    }
+
+    /// Explorer blocks in bounded server order.
+    public var explorerBlocks: ToriiCollection<ToriiJSONObject> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/blocks"), isHistory: true)
+    }
+
+    /// Explorer transactions in bounded server order.
+    public var explorerTransactions: ToriiCollection<ToriiExplorerTransactionItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/transactions"), isHistory: true)
+    }
+
+    /// Explorer transactions/latest in bounded server order.
+    public var explorerLatestTransactions: ToriiCollection<ToriiExplorerTransactionItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/transactions/latest"), isHistory: true)
+    }
+
+    /// Explorer instructions in bounded server order.
+    public var explorerInstructions: ToriiCollection<ToriiExplorerInstructionItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/instructions"), isHistory: true)
+    }
+
+    /// Explorer instructions/latest in bounded server order.
+    public var explorerLatestInstructions: ToriiCollection<ToriiExplorerInstructionItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/explorer/instructions/latest"), isHistory: true)
+    }
+
+    /// Effective direct and role permissions, keyed by name and payload.
+    public func accountPermissions(of accountId: String) -> ToriiCollection<ToriiAccountPermission> {
+        ToriiCollection(client: self, route: .account(accountId, suffix: "permissions"))
+    }
+
+    /// Subscription plans, in canonical identifier order.
+    public var subscriptionPlans: ToriiCollection<ToriiSubscriptionPlanRow> {
+        ToriiCollection(client: self, route: .fixed("/v1/subscriptions/plans"))
+    }
+
+    /// Subscriptions with their flat current state.
+    public var subscriptions: ToriiCollection<ToriiSubscriptionRow> {
+        ToriiCollection(client: self, route: .fixed("/v1/subscriptions"))
+    }
+
+    /// Manifest inventory scoped to a canonical UAID.
+    public func uaidManifests(of uaid: String) -> ToriiCollection<ToriiUaidManifestRecord> {
+        ToriiCollection(client: self, route: .uaid(uaid))
+    }
+
+    /// Contract calls, newest first; supports filter, select, limit and cursor.
+    public var contractActivity: ToriiCollection<ToriiContractActivityItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/contracts/activity"), isHistory: true)
+    }
+
+    /// Contract events, newest first; supports filter, select, limit and cursor.
+    public var contractEvents: ToriiCollection<ToriiContractEventItem> {
+        ToriiCollection(client: self, route: .fixed("/v1/contracts/events"), isHistory: true)
+    }
+
+    /// Account movements, newest first; supports filter, select, limit and cursor.
+    public func accountHistory(of accountId: String) -> ToriiCollection<ToriiAccountHistoryRow> {
+        ToriiCollection(client: self, route: .account(accountId, suffix: "history"), isHistory: true)
     }
 
     /// Balances held by one account (`/v1/accounts/{account_id}/assets`).
@@ -749,4 +841,75 @@ public enum ToriiEventFields {
     public static let proofBackend = ToriiField("proof_backend")
     public static let proofCallHash = ToriiField("proof_call_hash")
     public static let proofEnvelopeHash = ToriiField("proof_envelope_hash")
+}
+
+/// An effective permission, including any inherited role grant.
+public struct ToriiAccountPermission: Decodable, Sendable, Equatable {
+    public let name: String
+    public let payload: ToriiJSONValue
+}
+
+/// A subscription plan collection row.
+public struct ToriiSubscriptionPlanRow: ToriiIdentifiedRow, Equatable {
+    public let id: String
+    public let provider: String?
+    public let billing: ToriiJSONValue?
+    public let pricing: ToriiJSONValue?
+}
+
+/// A subscription collection row with state fields directly on the row.
+public struct ToriiSubscriptionRow: ToriiIdentifiedRow, Equatable {
+    public let id: String
+    public let ownedBy: String?
+    public let planId: String?
+    public let provider: String?
+    public let subscriber: String?
+    public let status: ToriiSubscriptionStatus?
+    public let currentPeriodStartMs: UInt64?
+    public let currentPeriodEndMs: UInt64?
+    public let nextChargeMs: UInt64?
+    public let cancelAtPeriodEnd: Bool?
+    public let cancelAtMs: UInt64?
+    public let failureCount: UInt32?
+    public let usageAccumulated: ToriiJSONObject?
+    public let billingTriggerId: String?
+    public let invoice: ToriiSubscriptionInvoice?
+    public let plan: ToriiSubscriptionPlan?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, provider, subscriber, status, invoice, plan
+        case ownedBy = "owned_by", planId = "plan_id"
+        case currentPeriodStartMs = "current_period_start_ms", currentPeriodEndMs = "current_period_end_ms"
+        case nextChargeMs = "next_charge_ms", cancelAtPeriodEnd = "cancel_at_period_end"
+        case cancelAtMs = "cancel_at_ms", failureCount = "failure_count"
+        case usageAccumulated = "usage_accumulated", billingTriggerId = "billing_trigger_id"
+    }
+}
+
+/// One account movement and its committed ledger position.
+public struct ToriiAccountHistoryRow: ToriiIdentifiedRow, Equatable {
+    public let id: String
+    public let blockHeight: UInt64
+    public let blockIndex: UInt64
+    public let movementIndex: UInt64
+    public let source: String?
+    public let type: String?
+    public let status: String?
+    public let direction: String?
+    public let accountId: String?
+    public let counterpartyAccountId: String?
+    public let assetId: String?
+    public let assetDefinitionId: String?
+    public let amount: String?
+    public let txHash: String?
+    public let timestampMs: UInt64?
+    public let resultOk: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, source, type, status, direction, amount
+        case blockHeight = "block_height", blockIndex = "block_index", movementIndex = "movement_index"
+        case accountId = "account_id", counterpartyAccountId = "counterparty_account_id"
+        case assetId = "asset_id", assetDefinitionId = "asset_definition_id"
+        case txHash = "tx_hash", timestampMs = "timestamp_ms", resultOk = "result_ok"
+    }
 }

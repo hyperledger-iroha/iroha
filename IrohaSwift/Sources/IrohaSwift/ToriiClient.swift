@@ -642,7 +642,7 @@ fileprivate func rejectUnknownJSONFields(
     }
 }
 
-fileprivate func requireExactJSONFields(
+func requireExactJSONFields(
     from decoder: Decoder,
     required: Set<String>,
     optional: Set<String> = [],
@@ -4039,188 +4039,6 @@ public struct ToriiExplorerAccountQr: Decodable, Sendable {
     }
 }
 
-private let toriiExplorerCursorMaxLength = 1_424
-
-private func normalizeToriiExplorerCursor(_ raw: String?, field: String) throws -> String? {
-    guard let raw else {
-        return nil
-    }
-    guard !raw.isEmpty,
-          raw.utf8.count <= toriiExplorerCursorMaxLength,
-          raw.utf8.allSatisfy({ byte in
-              (48...57).contains(byte)
-                  || (65...90).contains(byte)
-                  || (97...122).contains(byte)
-                  || byte == 45
-                  || byte == 95
-          }) else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be canonical base64url without padding"
-        )
-    }
-    let remainder = raw.utf8.count % 4
-    guard remainder != 1 else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be canonical base64url without padding"
-        )
-    }
-    var standard = raw.replacingOccurrences(of: "-", with: "+")
-        .replacingOccurrences(of: "_", with: "/")
-    if remainder != 0 {
-        standard.append(String(repeating: "=", count: 4 - remainder))
-    }
-    guard let decoded = Data(base64Encoded: standard) else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be canonical base64url without padding"
-        )
-    }
-    let canonical = decoded.base64EncodedString()
-        .replacingOccurrences(of: "+", with: "-")
-        .replacingOccurrences(of: "/", with: "_")
-        .replacingOccurrences(of: "=", with: "")
-    guard canonical == raw else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be canonical base64url without padding"
-        )
-    }
-    return raw
-}
-
-/// Strict seek-cursor metadata returned by world-backed Explorer lists.
-public struct ToriiExplorerCursorMeta: Decodable, Sendable, Equatable {
-    public let limit: UInt32
-    public let nextCursor: String?
-    public let hasMore: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case limit
-        case nextCursor = "next_cursor"
-        case hasMore = "has_more"
-    }
-
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownJSONFields(
-            from: decoder,
-            allowed: ["limit", "next_cursor", "has_more"],
-            debugName: "Explorer cursor pagination"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        limit = try container.decode(UInt32.self, forKey: .limit)
-        guard (1...100).contains(limit) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .limit,
-                in: container,
-                debugDescription: "Explorer cursor pagination limit must be between 1 and 100"
-            )
-        }
-        guard container.contains(.nextCursor) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.nextCursor,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "Explorer cursor pagination requires next_cursor"
-                )
-            )
-        }
-        nextCursor = try normalizeToriiExplorerCursor(
-            container.decodeIfPresent(String.self, forKey: .nextCursor),
-            field: "Explorer cursor pagination next_cursor"
-        )
-        hasMore = try container.decode(Bool.self, forKey: .hasMore)
-        guard hasMore == (nextCursor != nil) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .hasMore,
-                in: container,
-                debugDescription: "Explorer cursor pagination has_more must match next_cursor presence"
-            )
-        }
-    }
-}
-
-/// Strict snapshot-bound seek metadata returned by Explorer history lists.
-public struct ToriiExplorerHistoryCursorMeta: Decodable, Sendable, Equatable {
-    public let limit: UInt32
-    public let snapshotHeight: UInt64
-    public let snapshotHash: String?
-    public let nextCursor: String?
-    public let hasMore: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case limit
-        case snapshotHeight = "snapshot_height"
-        case snapshotHash = "snapshot_hash"
-        case nextCursor = "next_cursor"
-        case hasMore = "has_more"
-    }
-
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownJSONFields(
-            from: decoder,
-            allowed: ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
-            debugName: "Explorer history cursor pagination"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        limit = try container.decode(UInt32.self, forKey: .limit)
-        guard (1...100).contains(limit) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .limit,
-                in: container,
-                debugDescription: "Explorer history cursor pagination limit must be between 1 and 100"
-            )
-        }
-        snapshotHeight = try container.decode(UInt64.self, forKey: .snapshotHeight)
-        guard container.contains(.snapshotHash) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.snapshotHash,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "Explorer history cursor pagination requires snapshot_hash"
-                )
-            )
-        }
-        snapshotHash = try container.decodeIfPresent(String.self, forKey: .snapshotHash)
-        if let snapshotHash {
-            let bytes = Array(snapshotHash.utf8)
-            guard bytes.count == 64,
-                  bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .snapshotHash,
-                    in: container,
-                    debugDescription: "Explorer history snapshot_hash must be 64 lowercase hexadecimal characters"
-                )
-            }
-        }
-        guard (snapshotHeight == 0) == (snapshotHash == nil) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .snapshotHash,
-                in: container,
-                debugDescription: "Explorer history snapshot_hash must be null exactly for an empty snapshot"
-            )
-        }
-        guard container.contains(.nextCursor) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.nextCursor,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "Explorer history cursor pagination requires next_cursor"
-                )
-            )
-        }
-        nextCursor = try normalizeToriiExplorerCursor(
-            container.decodeIfPresent(String.self, forKey: .nextCursor),
-            field: "Explorer history cursor pagination next_cursor"
-        )
-        hasMore = try container.decode(Bool.self, forKey: .hasMore)
-        guard hasMore == (nextCursor != nil) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .hasMore,
-                in: container,
-                debugDescription: "Explorer history cursor pagination has_more must match next_cursor presence"
-            )
-        }
-    }
-}
-
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
     public let encoded: String?
@@ -4280,35 +4098,6 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
     }
 }
 
-/// Paginated instruction list returned by `/v1/explorer/instructions`.
-public struct ToriiExplorerInstructionsPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerHistoryCursorMeta
-    public let items: [ToriiExplorerInstructionItem]
-
-    private enum CodingKeys: String, CodingKey {
-        case pagination
-        case items
-    }
-
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownJSONFields(
-            from: decoder,
-            allowed: ["pagination", "items"],
-            debugName: "Explorer instructions page"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        pagination = try container.decode(ToriiExplorerHistoryCursorMeta.self, forKey: .pagination)
-        items = try container.decode([ToriiExplorerInstructionItem].self, forKey: .items)
-        guard items.count <= Int(pagination.limit) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .items,
-                in: container,
-                debugDescription: "Explorer instructions page contains more items than its limit"
-            )
-        }
-    }
-}
-
 /// Transaction summary returned by `/v1/explorer/transactions`.
 public struct ToriiExplorerTransactionItem: Decodable, Sendable, Equatable {
     public let authority: String
@@ -4325,35 +4114,6 @@ public struct ToriiExplorerTransactionItem: Decodable, Sendable, Equatable {
         case createdAt = "created_at"
         case executable
         case status
-    }
-}
-
-/// Paginated transaction list returned by `/v1/explorer/transactions`.
-public struct ToriiExplorerTransactionsPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerHistoryCursorMeta
-    public let items: [ToriiExplorerTransactionItem]
-
-    private enum CodingKeys: String, CodingKey {
-        case pagination
-        case items
-    }
-
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownJSONFields(
-            from: decoder,
-            allowed: ["pagination", "items"],
-            debugName: "Explorer transactions page"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        pagination = try container.decode(ToriiExplorerHistoryCursorMeta.self, forKey: .pagination)
-        items = try container.decode([ToriiExplorerTransactionItem].self, forKey: .items)
-        guard items.count <= Int(pagination.limit) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .items,
-                in: container,
-                debugDescription: "Explorer transactions page contains more items than its limit"
-            )
-        }
     }
 }
 
@@ -4434,37 +4194,10 @@ public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
     }
 }
 
-/// Bounded cursor page returned by `/v1/explorer/rwas`.
-public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerCursorMeta
-    public let items: [ToriiExplorerRwaRecord]
-
-    private enum CodingKeys: String, CodingKey {
-        case pagination
-        case items
-    }
-
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownJSONFields(
-            from: decoder,
-            allowed: ["pagination", "items"],
-            debugName: "Explorer RWA page"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        pagination = try container.decode(ToriiExplorerCursorMeta.self, forKey: .pagination)
-        items = try container.decode([ToriiExplorerRwaRecord].self, forKey: .items)
-        guard items.count <= Int(pagination.limit) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .items,
-                in: container,
-                debugDescription: "Explorer RWA page contains more items than its limit"
-            )
-        }
-    }
-}
-
 /// Contract-call activity item returned by `/v1/contracts/activity`.
 public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
+    public let blockHeight: UInt64
+    public let blockIndex: UInt64
     public let authority: String?
     public let timestampMs: UInt64?
     public let entrypointHash: String
@@ -4476,6 +4209,8 @@ public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
     public let feePayment: FeePaymentIntent?
 
     private enum CodingKeys: String, CodingKey {
+        case blockHeight = "block_height"
+        case blockIndex = "block_index"
         case authority
         case timestampMs = "timestamp_ms"
         case entrypointHash = "entrypoint_hash"
@@ -4488,12 +4223,6 @@ public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
     }
 }
 
-/// Contract-call activity envelope returned by `/v1/contracts/activity`.
-public struct ToriiContractActivityList: Decodable, Sendable, Equatable {
-    public let items: [ToriiContractActivityItem]
-    public let total: UInt64
-}
-
 /// Generic contract event item returned by `/v1/contracts/events`.
 public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
     public let eventId: String
@@ -4502,6 +4231,7 @@ public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
     public let authority: String?
     public let timestampMs: UInt64?
     public let txHashHex: String
+    public let blockIndex: UInt64?
     public let blockHeight: UInt64
     public let blockHashHex: String
     public let resultOk: Bool
@@ -4522,6 +4252,7 @@ public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
         case authority
         case timestampMs = "timestamp_ms"
         case txHashHex = "tx_hash_hex"
+        case blockIndex = "block_index"
         case blockHeight = "block_height"
         case blockHashHex = "block_hash_hex"
         case resultOk = "result_ok"
@@ -4535,12 +4266,6 @@ public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
         case payload
         case feePayment = "fee_payment"
     }
-}
-
-/// Generic contract event envelope returned by `/v1/contracts/events`.
-public struct ToriiContractEventList: Decodable, Sendable, Equatable {
-    public let items: [ToriiContractEventItem]
-    public let total: UInt64
 }
 
 /// Explorer duration wrapper (milliseconds).
@@ -4926,7 +4651,7 @@ public extension ToriiExplorerTransferRecord {
     }
 }
 
-public extension ToriiExplorerInstructionsPage {
+public extension ToriiPage where Item == ToriiExplorerInstructionItem {
     /// Extract flattened transfer summaries from this page, optionally filtering by account or asset definition.
     func transferSummaries(matchingAccount accountId: String? = nil,
                            assetDefinitionId: String? = nil,
@@ -4938,7 +4663,7 @@ public extension ToriiExplorerInstructionsPage {
     }
 }
 
-public extension ToriiExplorerInstructionsPage {
+public extension ToriiPage where Item == ToriiExplorerInstructionItem {
     /// Extract transfer records from this page, optionally filtering by account or asset definition.
     func transferRecords(matchingAccount accountId: String? = nil,
                          assetDefinitionId: String? = nil) -> [ToriiExplorerTransferRecord] {
@@ -4959,397 +4684,6 @@ public extension ToriiExplorerInstructionsPage {
             records.append(ToriiExplorerTransferRecord(instruction: item, details: details))
         }
         return records
-    }
-}
-
-/// Query parameters accepted by `/v1/explorer/instructions`.
-public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
-    public var cursor: String?
-    public var limit: UInt32?
-    /// Filter transfer instructions by participant account (source or destination).
-    public var account: String?
-    public var authority: String?
-    public var transactionHash: String?
-    public var transactionStatus: String?
-    public var block: UInt64?
-    public var kind: String?
-    public var assetDefinitionId: String?
-
-    public init(cursor: String? = nil,
-                limit: UInt32? = nil,
-                account: String? = nil,
-                authority: String? = nil,
-                transactionHash: String? = nil,
-                transactionStatus: String? = nil,
-                block: UInt64? = nil,
-                kind: String? = nil,
-                assetDefinitionId: String? = nil) {
-        self.cursor = cursor
-        self.limit = limit
-        self.account = account
-        self.authority = authority
-        self.transactionHash = transactionHash
-        self.transactionStatus = transactionStatus
-        self.block = block
-        self.kind = kind
-        self.assetDefinitionId = assetDefinitionId
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let cursor = try normalizeToriiExplorerCursor(
-            cursor,
-            field: "Explorer instructions cursor"
-        ) {
-            items.append(URLQueryItem(name: "cursor", value: cursor))
-        }
-        if let limit {
-            guard (1...100).contains(limit) else {
-                throw ToriiClientError.invalidPayload(
-                    "Explorer instructions limit must be between 1 and 100."
-                )
-            }
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let account {
-            let exactAccount = try requireToriiExactNonEmptyQueryValue(account, field: "account")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactAccount, field: "account")
-            items.append(URLQueryItem(name: "account", value: normalized))
-        }
-        if let authority {
-            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
-            items.append(URLQueryItem(name: "authority", value: normalized))
-        }
-        if let transactionHash = transactionHash?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !transactionHash.isEmpty {
-            items.append(URLQueryItem(name: "transaction_hash", value: transactionHash))
-        }
-        if let transactionStatus = transactionStatus?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !transactionStatus.isEmpty {
-            items.append(URLQueryItem(name: "transaction_status", value: transactionStatus))
-        }
-        if let block {
-            guard block > 0 else {
-                throw ToriiClientError.invalidPayload("block must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "block", value: String(block)))
-        }
-        if let kind = kind?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !kind.isEmpty {
-            items.append(URLQueryItem(name: "kind", value: kind))
-        }
-        if let assetDefinitionId {
-            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
-                assetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            let normalized = try normalizeToriiAssetSelectorQueryValue(
-                exactAssetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-/// Query parameters accepted by `/v1/explorer/transactions`.
-public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
-    public var cursor: String?
-    public var limit: UInt32?
-    public var authority: String?
-    public var block: UInt64?
-    public var status: String?
-    public var assetDefinitionId: String?
-
-    public init(cursor: String? = nil,
-                limit: UInt32? = nil,
-                authority: String? = nil,
-                block: UInt64? = nil,
-                status: String? = nil,
-                assetDefinitionId: String? = nil) {
-        self.cursor = cursor
-        self.limit = limit
-        self.authority = authority
-        self.block = block
-        self.status = status
-        self.assetDefinitionId = assetDefinitionId
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let cursor = try normalizeToriiExplorerCursor(
-            cursor,
-            field: "Explorer transactions cursor"
-        ) {
-            items.append(URLQueryItem(name: "cursor", value: cursor))
-        }
-        if let limit {
-            guard (1...100).contains(limit) else {
-                throw ToriiClientError.invalidPayload(
-                    "Explorer transactions limit must be between 1 and 100."
-                )
-            }
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let authority {
-            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
-            items.append(URLQueryItem(name: "authority", value: normalized))
-        }
-        if let block {
-            guard block > 0 else {
-                throw ToriiClientError.invalidPayload("block must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "block", value: String(block)))
-        }
-        if let status = status?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !status.isEmpty {
-            items.append(URLQueryItem(name: "status", value: status))
-        }
-        if let assetDefinitionId {
-            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
-                assetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            let normalized = try normalizeToriiAssetSelectorQueryValue(
-                exactAssetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-/// Query parameters accepted by `/v1/explorer/rwas`.
-public struct ToriiExplorerRwasParams: Sendable, Equatable {
-    public var cursor: String?
-    public var limit: UInt32?
-    public var ownedBy: String?
-    public var domain: String?
-
-    public init(cursor: String? = nil,
-                limit: UInt32? = nil,
-                ownedBy: String? = nil,
-                domain: String? = nil) {
-        self.cursor = cursor
-        self.limit = limit
-        self.ownedBy = ownedBy
-        self.domain = domain
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let cursor = try normalizeToriiExplorerCursor(
-            cursor,
-            field: "Explorer RWA cursor"
-        ) {
-            items.append(URLQueryItem(name: "cursor", value: cursor))
-        }
-        if let limit {
-            guard (1...100).contains(limit) else {
-                throw ToriiClientError.invalidPayload(
-                    "Explorer RWA limit must be between 1 and 100."
-                )
-            }
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let ownedBy {
-            let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactOwnedBy, field: "ownedBy")
-            items.append(URLQueryItem(name: "owned_by", value: normalized))
-        }
-        if let domain = try ToriiRequestValidation.normalizedOptionalNonEmpty(domain, field: "domain") {
-            items.append(URLQueryItem(name: "domain", value: domain))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-/// Query parameters accepted by `/v1/contracts/activity`.
-public struct ToriiContractActivityParams: Sendable, Equatable {
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var authority: String?
-    public var contractAddress: String?
-    public var contractAlias: String?
-    public var contractEntrypoint: String?
-    public var sinceTimestampMs: UInt64?
-    public var untilTimestampMs: UInt64?
-    public var resultOk: Bool?
-
-    public init(limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                authority: String? = nil,
-                contractAddress: String? = nil,
-                contractAlias: String? = nil,
-                contractEntrypoint: String? = nil,
-                sinceTimestampMs: UInt64? = nil,
-                untilTimestampMs: UInt64? = nil,
-                resultOk: Bool? = nil) {
-        self.limit = limit
-        self.offset = offset
-        self.authority = authority
-        self.contractAddress = contractAddress
-        self.contractAlias = contractAlias
-        self.contractEntrypoint = contractEntrypoint
-        self.sinceTimestampMs = sinceTimestampMs
-        self.untilTimestampMs = untilTimestampMs
-        self.resultOk = resultOk
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let limit {
-            guard limit > 0 else {
-                throw ToriiClientError.invalidPayload("limit must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let authority {
-            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
-            items.append(URLQueryItem(name: "authority", value: normalized))
-        }
-        if let contractAddress {
-            let exactContractAddress = try requireToriiExactNonEmptyQueryValue(
-                contractAddress,
-                field: "contractAddress"
-            )
-            let normalized = try normalizeToriiContractAddressLiteral(exactContractAddress, field: "contractAddress")
-            items.append(URLQueryItem(name: "contract_address", value: normalized))
-        }
-        if let contractAlias {
-            let exactContractAlias = try requireToriiExactNonEmptyQueryValue(contractAlias, field: "contractAlias")
-            let normalized = try normalizeToriiContractAliasLiteral(exactContractAlias, field: "contractAlias")
-            items.append(URLQueryItem(name: "contract_alias", value: normalized))
-        }
-        if let contractEntrypoint = try ToriiRequestValidation.normalizedOptionalNonEmpty(
-            contractEntrypoint,
-            field: "contractEntrypoint"
-        ) {
-            items.append(URLQueryItem(name: "contract_entrypoint", value: contractEntrypoint))
-        }
-        if let sinceTimestampMs {
-            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
-        }
-        if let untilTimestampMs {
-            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
-        }
-        if let resultOk {
-            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-/// Query parameters accepted by `/v1/contracts/events`.
-public struct ToriiContractEventParams: Sendable, Equatable {
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var authority: String?
-    public var contractAddress: String?
-    public var contractAlias: String?
-    public var module: String?
-    public var eventKind: String?
-    public var participant: String?
-    public var assetId: String?
-    public var provenance: String?
-    public var sinceTimestampMs: UInt64?
-    public var untilTimestampMs: UInt64?
-    public var resultOk: Bool?
-
-    public init(limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                authority: String? = nil,
-                contractAddress: String? = nil,
-                contractAlias: String? = nil,
-                module: String? = nil,
-                eventKind: String? = nil,
-                participant: String? = nil,
-                assetId: String? = nil,
-                provenance: String? = nil,
-                sinceTimestampMs: UInt64? = nil,
-                untilTimestampMs: UInt64? = nil,
-                resultOk: Bool? = nil) {
-        self.limit = limit
-        self.offset = offset
-        self.authority = authority
-        self.contractAddress = contractAddress
-        self.contractAlias = contractAlias
-        self.module = module
-        self.eventKind = eventKind
-        self.participant = participant
-        self.assetId = assetId
-        self.provenance = provenance
-        self.sinceTimestampMs = sinceTimestampMs
-        self.untilTimestampMs = untilTimestampMs
-        self.resultOk = resultOk
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let limit {
-            guard limit > 0 else {
-                throw ToriiClientError.invalidPayload("limit must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let authority {
-            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
-            items.append(URLQueryItem(name: "authority", value: normalized))
-        }
-        if let contractAddress {
-            let exactContractAddress = try requireToriiExactNonEmptyQueryValue(
-                contractAddress,
-                field: "contractAddress"
-            )
-            let normalized = try normalizeToriiContractAddressLiteral(exactContractAddress, field: "contractAddress")
-            items.append(URLQueryItem(name: "contract_address", value: normalized))
-        }
-        if let contractAlias {
-            let exactContractAlias = try requireToriiExactNonEmptyQueryValue(contractAlias, field: "contractAlias")
-            let normalized = try normalizeToriiContractAliasLiteral(exactContractAlias, field: "contractAlias")
-            items.append(URLQueryItem(name: "contract_alias", value: normalized))
-        }
-        if let module = try ToriiRequestValidation.normalizedOptionalNonEmpty(module, field: "module") {
-            items.append(URLQueryItem(name: "module", value: module))
-        }
-        if let eventKind = try ToriiRequestValidation.normalizedOptionalNonEmpty(eventKind, field: "eventKind") {
-            items.append(URLQueryItem(name: "event_kind", value: eventKind))
-        }
-        if let participant {
-            let exactParticipant = try requireToriiExactNonEmptyQueryValue(participant, field: "participant")
-            let normalized = try normalizeToriiParticipantQueryValue(exactParticipant, field: "participant")
-            items.append(URLQueryItem(name: "participant", value: normalized))
-        }
-        if let assetId {
-            let exactAssetId = try requireToriiExactNonEmptyQueryValue(assetId, field: "assetId")
-            let normalized = try normalizeToriiAssetSelectorQueryValue(exactAssetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        if let provenance = try ToriiRequestValidation.normalizedOptionalNonEmpty(provenance, field: "provenance") {
-            items.append(URLQueryItem(name: "provenance", value: provenance))
-        }
-        if let sinceTimestampMs {
-            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
-        }
-        if let untilTimestampMs {
-            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
-        }
-        if let resultOk {
-            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
-        }
-        return items.isEmpty ? nil : items
     }
 }
 
@@ -6187,93 +5521,6 @@ public enum ToriiSubscriptionStatus: String, Codable, Sendable, CaseIterable {
     case suspended
 }
 
-public struct ToriiSubscriptionPlanListParams: Sendable, Equatable {
-    public var provider: String?
-    public var limit: UInt64?
-    public var offset: UInt64?
-
-    public init(provider: String? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil) {
-        self.provider = provider
-        self.limit = limit
-        self.offset = offset
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !provider.isEmpty {
-            items.append(URLQueryItem(name: "provider", value: provider))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-public struct ToriiSubscriptionPlanListItem: Decodable, Sendable {
-    public let planId: String
-    public let plan: ToriiSubscriptionPlan
-
-    private enum CodingKeys: String, CodingKey {
-        case planId = "plan_id"
-        case plan
-    }
-}
-
-public struct ToriiSubscriptionPlanListResponse: Decodable, Sendable {
-    public let items: [ToriiSubscriptionPlanListItem]
-    public let total: UInt64
-}
-
-public struct ToriiSubscriptionListParams: Sendable, Equatable {
-    public var ownedBy: String?
-    public var provider: String?
-    public var status: ToriiSubscriptionStatus?
-    public var limit: UInt64?
-    public var offset: UInt64?
-
-    public init(ownedBy: String? = nil,
-                provider: String? = nil,
-                status: ToriiSubscriptionStatus? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil) {
-        self.ownedBy = ownedBy
-        self.provider = provider
-        self.status = status
-        self.limit = limit
-        self.offset = offset
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let ownedBy {
-            let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
-            let normalized = try normalizeToriiAccountIdQueryValue(exactOwnedBy, field: "ownedBy")
-            items.append(URLQueryItem(name: "owned_by", value: normalized))
-        }
-        if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !provider.isEmpty {
-            items.append(URLQueryItem(name: "provider", value: provider))
-        }
-        if let status {
-            items.append(URLQueryItem(name: "status", value: status.rawValue))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
 public struct ToriiSubscriptionRecord: Decodable, Sendable {
     public let subscriptionId: String
     public let subscription: ToriiSubscriptionState
@@ -6286,11 +5533,6 @@ public struct ToriiSubscriptionRecord: Decodable, Sendable {
         case invoice
         case plan
     }
-}
-
-public struct ToriiSubscriptionListResponse: Decodable, Sendable {
-    public let items: [ToriiSubscriptionRecord]
-    public let total: UInt64
 }
 
 public struct ToriiAttachmentMeta: Decodable, Sendable {
@@ -8292,104 +7534,6 @@ public struct ToriiUaidManifestRecord: Decodable, Sendable {
                 debugDescription: "UAID manifest record.manifest.dataspace must match dataspace_id."
             )
         }
-    }
-}
-
-public enum ToriiUaidManifestCountMode: String, Decodable, Sendable {
-    case exact
-    case bounded
-}
-
-public struct ToriiUaidManifestsResponse: Decodable, Sendable {
-    public let uaid: String
-    public let total: UInt64
-    public let hasMore: Bool
-    public let countMode: ToriiUaidManifestCountMode
-    public let manifests: [ToriiUaidManifestRecord]
-
-    private enum CodingKeys: String, CodingKey {
-        case uaid
-        case total
-        case hasMore = "has_more"
-        case countMode = "count_mode"
-        case manifests
-    }
-
-    public init(from decoder: Decoder) throws {
-        try requireExactJSONFields(
-            from: decoder,
-            required: ["uaid", "total", "has_more", "count_mode", "manifests"],
-            debugName: "UAID manifests response"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
-            from: container,
-            forKey: .uaid
-        )
-        total = try container.decode(UInt64.self, forKey: .total)
-        hasMore = try container.decode(Bool.self, forKey: .hasMore)
-        countMode = try container.decode(ToriiUaidManifestCountMode.self, forKey: .countMode)
-        manifests = try container.decode([ToriiUaidManifestRecord].self, forKey: .manifests)
-        guard total >= UInt64(manifests.count) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .total,
-                in: container,
-                debugDescription: "UAID manifests response.total cannot be smaller than the page."
-            )
-        }
-        if let mismatch = manifests.first(where: { $0.manifest.uaid != uaid }) {
-            throw DecodingError.dataCorruptedError(
-                forKey: .manifests,
-                in: container,
-                debugDescription: "UAID manifest record for dataspace \(mismatch.dataspaceId) must match response.uaid."
-            )
-        }
-    }
-}
-
-public enum ToriiSpaceDirectoryManifestStatusFilter: String, Sendable {
-    case active = "active"
-    case inactive = "inactive"
-    case all = "all"
-}
-
-public struct ToriiUaidManifestQuery: Sendable, Equatable {
-    public var dataspaceId: UInt64?
-    public var status: ToriiSpaceDirectoryManifestStatusFilter?
-    public var limit: UInt32?
-    public var offset: UInt32?
-    public var countMode: ToriiUaidManifestCountMode?
-
-    public init(dataspaceId: UInt64? = nil,
-                status: ToriiSpaceDirectoryManifestStatusFilter? = nil,
-                limit: UInt32? = nil,
-                offset: UInt32? = nil,
-                countMode: ToriiUaidManifestCountMode? = nil) {
-        self.dataspaceId = dataspaceId
-        self.status = status
-        self.limit = limit
-        self.offset = offset
-        self.countMode = countMode
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let dataspaceId {
-            items.append(URLQueryItem(name: "dataspace", value: String(dataspaceId)))
-        }
-        if let status {
-            items.append(URLQueryItem(name: "status", value: status.rawValue))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let countMode {
-            items.append(URLQueryItem(name: "count_mode", value: countMode.rawValue))
-        }
-        return items.isEmpty ? nil : items
     }
 }
 
@@ -19170,41 +18314,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
-    public func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil,
-                                         completion: @escaping (Result<ToriiExplorerInstructionsPage, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getExplorerInstructions(params: params) }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func getExplorerTransactions(params: ToriiExplorerTransactionsParams? = nil,
-                                         completion: @escaping (Result<ToriiExplorerTransactionsPage, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getExplorerTransactions(params: params) }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil,
-                                completion: @escaping (Result<ToriiExplorerRwasPage, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getExplorerRwas(params: params) }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func getContractActivity(params: ToriiContractActivityParams? = nil,
-                                    completion: @escaping (Result<ToriiContractActivityList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getContractActivity(params: params) }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func getContractEvents(params: ToriiContractEventParams? = nil,
-                                  completion: @escaping (Result<ToriiContractEventList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getContractEvents(params: params) }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
     public func getExplorerRwaDetail(rwaId: String,
                                      completion: @escaping (Result<ToriiExplorerRwaRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getExplorerRwaDetail(rwaId: rwaId) }
@@ -19232,12 +18341,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
-    public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
+    public func getExplorerTransfers(query: ToriiListQuery = ToriiListQuery(),
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
                                      completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getExplorerTransfers(params: params,
+            try await self.getExplorerTransfers(query: query,
                                                 matchingAccount: accountId,
                                                 assetDefinitionId: assetDefinitionId)
         }
@@ -19245,13 +18354,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
-    public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
+    public func getExplorerTransferSummaries(query: ToriiListQuery = ToriiListQuery(),
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
                                              completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getExplorerTransferSummaries(params: params,
+            try await self.getExplorerTransferSummaries(query: query,
                                                         matchingAccount: accountId,
                                                         assetDefinitionId: assetDefinitionId,
                                                         relativeTo: relativeAccountId)
@@ -19332,53 +18441,25 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 do {
                     let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId,
                                                                                            field: "accountId")
-                    var currentCursor = cursor
-                    var currentLimit = limit
-                    var seenCursors = Set<String>()
-                    if let currentCursor {
-                        seenCursors.insert(currentCursor)
+                    if maxItems == 0 {
+                        continuation.finish()
+                        return
                     }
-                    var remaining = maxItems
-                    while true {
+                    let query = try explorerTransferQuery(
+                        ToriiListQuery(limit: limit.map(Int.init), cursor: cursor),
+                        accountId: normalizedAccount, assetDefinitionId: assetDefinitionId
+                    )
+                    var emitted: UInt64 = 0
+                    pageLoop: for try await response in explorerInstructions.pages(query) {
                         try Task.checkCancellation()
-                        let params = ToriiExplorerInstructionsParams(cursor: currentCursor,
-                                                                     limit: currentLimit,
-                                                                     kind: "Transfer",
-                                                                     assetDefinitionId: assetDefinitionId)
-                        let response = try await getExplorerInstructions(params: params)
-                        if currentLimit == nil {
-                            currentLimit = response.pagination.limit
-                        }
                         let summaries = response.transferSummaries(matchingAccount: normalizedAccount,
                                                                    assetDefinitionId: assetDefinitionId,
                                                                    relativeTo: normalizedAccount)
                         for summary in summaries {
                             continuation.yield(summary)
-                            if let remainingValue = remaining {
-                                if remainingValue <= 1 {
-                                    remaining = 0
-                                    break
-                                }
-                                remaining = remainingValue - 1
-                            }
+                            emitted += 1
+                            if let maxItems, emitted >= maxItems { break pageLoop }
                         }
-                        if remaining == 0 {
-                            break
-                        }
-                        guard response.pagination.hasMore else {
-                            break
-                        }
-                        guard let nextCursor = response.pagination.nextCursor else {
-                            throw ToriiClientError.invalidPayload(
-                                "Explorer instructions response omitted next_cursor while has_more was true"
-                            )
-                        }
-                        guard seenCursors.insert(nextCursor).inserted else {
-                            throw ToriiClientError.invalidPayload(
-                                "Explorer instructions response repeated a cursor"
-                            )
-                        }
-                        currentCursor = nextCursor
                     }
                     continuation.finish()
                 } catch {
@@ -19390,28 +18471,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listSubscriptionPlans(params: ToriiSubscriptionPlanListParams? = nil,
-                                      completion: @escaping (Result<ToriiSubscriptionPlanListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listSubscriptionPlans(params: params) }
-    }
-
-    @discardableResult
-    public func listSubscriptions(params: ToriiSubscriptionListParams? = nil,
-                                  completion: @escaping (Result<ToriiSubscriptionListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listSubscriptions(params: params) }
-    }
-
-    @discardableResult
     public func getSubscription(subscriptionId: String,
                                 completion: @escaping (Result<ToriiSubscriptionRecord?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getSubscription(subscriptionId: subscriptionId) }
-    }
-
-    @discardableResult
-    public func getUaidManifests(uaid: String,
-                                 query: ToriiUaidManifestQuery? = nil,
-                                 completion: @escaping (Result<ToriiUaidManifestsResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getUaidManifests(uaid: uaid, query: query) }
     }
 
     @discardableResult
@@ -20880,51 +19942,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiExplorerAccountQr.self, from: data)
     }
 
-    public func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil) async throws -> ToriiExplorerInstructionsPage {
-        let request = try makeDataspaceVisibleRequest(
-            path: "/v1/explorer/instructions",
-            queryItems: try params?.queryItems()
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiExplorerInstructionsPage.self, from: data)
-    }
-
-    public func getExplorerTransactions(params: ToriiExplorerTransactionsParams? = nil) async throws -> ToriiExplorerTransactionsPage {
-        let request = try makeDataspaceVisibleRequest(
-            path: "/v1/explorer/transactions",
-            queryItems: try params?.queryItems()
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiExplorerTransactionsPage.self, from: data)
-    }
-
-    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil) async throws -> ToriiExplorerRwasPage {
-        let request = try makeDataspaceVisibleRequest(
-            path: "/v1/explorer/rwas",
-            queryItems: try params?.queryItems()
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiExplorerRwasPage.self, from: data)
-    }
-
-    public func getContractActivity(params: ToriiContractActivityParams? = nil) async throws -> ToriiContractActivityList {
-        let request = try makeDataspaceVisibleRequest(
-            path: "/v1/contracts/activity",
-            queryItems: try params?.queryItems()
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiContractActivityList.self, from: data)
-    }
-
-    public func getContractEvents(params: ToriiContractEventParams? = nil) async throws -> ToriiContractEventList {
-        let request = try makeDataspaceVisibleRequest(
-            path: "/v1/contracts/events",
-            queryItems: try params?.queryItems()
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiContractEventList.self, from: data)
-    }
-
     public func getExplorerRwaDetail(rwaId: String) async throws -> ToriiExplorerRwaRecord {
         let normalizedRwaId = try ToriiRequestValidation.normalizedNonEmpty(rwaId, field: "rwaId")
         let encodedRwaId = encodePathComponent(normalizedRwaId)
@@ -20956,51 +19973,47 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiExplorerInstructionItem.self, from: data)
     }
 
-    public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
-                                     matchingAccount accountId: String? = nil,
-                                     assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
-        var effectiveParams = params ?? ToriiExplorerInstructionsParams()
-        let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
-            effectiveParams.kind = "Transfer"
+    private func explorerTransferQuery(_ query: ToriiListQuery,
+                                       accountId: String? = nil,
+                                       assetDefinitionId: String? = nil) throws -> ToriiListQuery {
+        var required = ToriiField("kind") == "Transfer"
+        if let accountId {
+            let account = try canonicalAccountIdLiteral(accountId, field: "accountId")
+            required = required.and(ToriiField("account") == account)
         }
         if let assetDefinitionId {
-            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
-                assetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetDefinitionId = exactAssetDefinitionId
-            }
+            let exact = try requireToriiExactNonEmptyQueryValue(assetDefinitionId, field: "assetDefinitionId")
+            let asset = try normalizeToriiAssetSelectorQueryValue(exact, field: "assetDefinitionId")
+            required = required.and(ToriiField("asset_id") == asset)
         }
-        let page = try await getExplorerInstructions(params: effectiveParams)
+        var query = query
+        switch query.filter {
+        case let .expression(existing): query.filter = .expression(existing.and(required))
+        case let .text(existing): query.filter = .text("(\(existing)) and (\(required.description))")
+        case nil: query.filter = .expression(required)
+        }
+        return query
+    }
+
+    public func getExplorerTransfers(query: ToriiListQuery = ToriiListQuery(),
+                                     matchingAccount accountId: String? = nil,
+                                     assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
+        let effectiveQuery = try explorerTransferQuery(query, accountId: accountId,
+                                                       assetDefinitionId: assetDefinitionId)
+        let page = try await explorerInstructions.page(effectiveQuery)
         return page.transferRecords(
             matchingAccount: accountId,
             assetDefinitionId: assetDefinitionId
         )
     }
 
-    public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
+    public func getExplorerTransferSummaries(query: ToriiListQuery = ToriiListQuery(),
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
-        var effectiveParams = params ?? ToriiExplorerInstructionsParams()
-        let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
-            effectiveParams.kind = "Transfer"
-        }
-        if let assetDefinitionId {
-            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
-                assetDefinitionId,
-                field: "assetDefinitionId"
-            )
-            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetDefinitionId = exactAssetDefinitionId
-            }
-        }
-        let page = try await getExplorerInstructions(params: effectiveParams)
+        let effectiveQuery = try explorerTransferQuery(query, accountId: accountId,
+                                                       assetDefinitionId: assetDefinitionId)
+        let page = try await explorerInstructions.page(effectiveQuery)
         return page.transferSummaries(
             matchingAccount: accountId,
             assetDefinitionId: assetDefinitionId,
@@ -21016,52 +20029,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             return []
         }
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
-        var currentCursor: String?
-        var currentLimit: UInt32?
-        var seenCursors = Set<String>()
-        var remaining = maxItems
+        let query = try explorerTransferQuery(
+            ToriiListQuery(filter: ToriiField("transaction_hash") == normalizedHash),
+            accountId: accountId, assetDefinitionId: assetDefinitionId
+        )
         var records: [ToriiExplorerTransferRecord] = []
-        while true {
-            let params = ToriiExplorerInstructionsParams(cursor: currentCursor,
-                                                         limit: currentLimit,
-                                                         transactionHash: normalizedHash,
-                                                         kind: "Transfer",
-                                                         assetDefinitionId: assetDefinitionId)
-            let response = try await getExplorerInstructions(params: params)
-            if currentLimit == nil {
-                currentLimit = response.pagination.limit
-            }
-            let pageRecords = response.transferRecords(
-                matchingAccount: accountId,
-                assetDefinitionId: assetDefinitionId
-            )
-            for record in pageRecords {
+        for try await page in explorerInstructions.pages(query) {
+            for record in page.transferRecords(matchingAccount: accountId, assetDefinitionId: assetDefinitionId) {
                 records.append(record)
-                if let remainingValue = remaining {
-                    if remainingValue <= 1 {
-                        remaining = 0
-                        break
-                    }
-                    remaining = remainingValue - 1
-                }
+                if let maxItems, UInt64(records.count) >= maxItems { return records }
             }
-            if remaining == 0 {
-                break
-            }
-            guard response.pagination.hasMore else {
-                break
-            }
-            guard let nextCursor = response.pagination.nextCursor else {
-                throw ToriiClientError.invalidPayload(
-                    "Explorer instructions response omitted next_cursor while has_more was true"
-                )
-            }
-            guard seenCursors.insert(nextCursor).inserted else {
-                throw ToriiClientError.invalidPayload(
-                    "Explorer instructions response repeated a cursor"
-                )
-            }
-            currentCursor = nextCursor
         }
         return records
     }
@@ -21171,11 +20148,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                           limit: UInt32? = nil,
                                           assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
-        let params = ToriiExplorerInstructionsParams(cursor: cursor,
-                                                     limit: limit,
-                                                     kind: "Transfer",
-                                                     assetDefinitionId: assetDefinitionId)
-        return try await getExplorerTransferSummaries(params: params,
+        let query = ToriiListQuery(limit: limit.map(Int.init), cursor: cursor)
+        return try await getExplorerTransferSummaries(query: query,
                                                       matchingAccount: normalizedAccount,
                                                       assetDefinitionId: assetDefinitionId,
                                                       relativeTo: normalizedAccount)
@@ -21190,84 +20164,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                             cursor: cursor,
                                             limit: limit,
                                             assetDefinitionId: assetDefinitionId)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func iterateExplorerRwas(params: ToriiExplorerRwasParams = ToriiExplorerRwasParams(),
-                                    maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerRwaRecord, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    if let maxItems, maxItems == 0 {
-                        continuation.finish()
-                        return
-                    }
-                    var currentCursor = params.cursor
-                    var currentLimit = params.limit
-                    var seenCursors = Set<String>()
-                    if let currentCursor {
-                        seenCursors.insert(currentCursor)
-                    }
-                    var remaining = maxItems
-                    while true {
-                        try Task.checkCancellation()
-                        let pageParams = ToriiExplorerRwasParams(cursor: currentCursor,
-                                                                 limit: currentLimit,
-                                                                 ownedBy: params.ownedBy,
-                                                                 domain: params.domain)
-                        let response = try await getExplorerRwas(params: pageParams)
-                        if currentLimit == nil {
-                            currentLimit = response.pagination.limit
-                        }
-                        for item in response.items {
-                            continuation.yield(item)
-                            if let remainingValue = remaining {
-                                if remainingValue <= 1 {
-                                    remaining = 0
-                                    break
-                                }
-                                remaining = remainingValue - 1
-                            }
-                        }
-                        if remaining == 0 {
-                            break
-                        }
-                        if !response.pagination.hasMore {
-                            break
-                        }
-                        guard let nextCursor = response.pagination.nextCursor else {
-                            throw ToriiClientError.invalidPayload(
-                                "Explorer RWA response declared more results without a next cursor."
-                            )
-                        }
-                        guard seenCursors.insert(nextCursor).inserted else {
-                            throw ToriiClientError.invalidPayload(
-                                "Explorer RWA response repeated a cursor."
-                            )
-                        }
-                        currentCursor = nextCursor
-                    }
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    public func listSubscriptionPlans(params: ToriiSubscriptionPlanListParams? = nil) async throws -> ToriiSubscriptionPlanListResponse {
-        let request = try makeRequest(path: "/v1/subscriptions/plans", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSubscriptionPlanListResponse.self, from: data)
-    }
-
-    public func listSubscriptions(params: ToriiSubscriptionListParams? = nil) async throws -> ToriiSubscriptionListResponse {
-        let request = try makeRequest(path: "/v1/subscriptions", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSubscriptionListResponse.self, from: data)
     }
 
     public func getSubscription(subscriptionId: String) async throws -> ToriiSubscriptionRecord? {
@@ -21315,23 +20211,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard response.uaid == canonical else {
             throw ToriiClientError.invalidPayload(
                 "UAID bindings response.uaid must match the requested UAID."
-            )
-        }
-        return response
-    }
-
-    public func getUaidManifests(uaid: String,
-                                 query: ToriiUaidManifestQuery? = nil) async throws -> ToriiUaidManifestsResponse {
-        let canonical = try canonicalizeUaidLiteral(uaid)
-        let encoded = encodePathComponent(canonical)
-        let request = try makeRequest(path: "/v1/space-directory/uaids/\(encoded)/manifests",
-                                      queryItems: try query?.queryItems())
-        let data = try await data(for: request)
-        try rejectDuplicateJSONKeys(data, context: "UAID manifests response")
-        let response = try decodeJSON(ToriiUaidManifestsResponse.self, from: data)
-        guard response.uaid == canonical else {
-            throw ToriiClientError.invalidPayload(
-                "UAID manifests response.uaid must match the requested UAID."
             )
         }
         return response
@@ -26655,7 +25534,15 @@ extension ToriiClient {
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
-        return try decodeJSON(ToriiPage<Item>.self, from: data)
+        try rejectDuplicateJSONKeys(data, context: "collection page")
+        let page = try decodeJSON(ToriiPage<Item>.self, from: data)
+        if case let .uaid(uaid) = route, let rows = page.items as? [ToriiUaidManifestRecord] {
+            let canonical = try canonicalizeUaidLiteral(uaid)
+            guard rows.allSatisfy({ $0.manifest.uaid == canonical }) else {
+                throw ToriiClientError.invalidPayload("Manifest rows must match the requested UAID.")
+            }
+        }
+        return page
     }
 
     /// The URL path of a collection.
@@ -26665,6 +25552,8 @@ extension ToriiClient {
             return path
         case let .account(accountId, suffix):
             return "/v1/accounts/\(try encodeAccountIdPath(accountId))/\(suffix)"
+        case let .uaid(uaid):
+            return "/v1/space-directory/uaids/\(encodePathComponent(try canonicalizeUaidLiteral(uaid)))/manifests"
         case let .assetDefinition(definitionId, suffix):
             let exact = try requireToriiExactNonEmptyQueryValue(definitionId, field: "assetDefinitionId")
             return "/v1/assets/\(encodePathComponent(exact))/\(suffix)"

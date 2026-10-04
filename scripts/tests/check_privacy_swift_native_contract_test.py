@@ -303,17 +303,17 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 self.assertNotIn("Traceback", result.stderr)
 
     def test_all_shipped_apple_callers_forward_their_explicit_lock(self) -> None:
-        ordinary = (
-            ".github/workflows/mobile_sdk_artifacts.yml",
-            ".github/workflows/sorafs-orchestrator-sdk.yml",
-            ".github/workflows/numeric_v1_sdk.yml",
-        )
-        for path in ordinary:
+        ordinary = {
+            ".github/workflows/mobile_sdk_artifacts.yml": "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH",
+            ".github/workflows/sorafs-orchestrator-sdk.yml": "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH",
+            ".github/workflows/numeric_v1_sdk.yml": "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH",
+        }
+        for path, selected_lock in ordinary.items():
             for line in read(path).splitlines():
                 if ("run: scripts/build_norito_xcframework.sh" in line or
                     "scripts/check_mobile_sdk_artifacts.sh --apple-only" in line or
                     "run: bash scripts/package_mobile_sdk_artifacts.sh --apple " in line):
-                    self.assertIn('--lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"', line, path)
+                    self.assertIn(f'--lockfile-path "{selected_lock}"', line, path)
         self.assertIn('--lockfile-path "$(CURDIR)/Cargo.lock"', read("Makefile"))
         self.assertIn('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"', read("ci/check_privacy_swift_sdk.sh"))
         android = read("kotlin/client-android/build.gradle.kts")

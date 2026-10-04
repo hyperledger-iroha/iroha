@@ -31,8 +31,10 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     use iroha_crypto::Algorithm;
     let _kura = Kura::blank_kura_for_testing();
     let _query = LiveQueryStore::start_test();
+    let (authority, keypair) = account_with_key();
+    let world = World::with([], [dm::Account::new(authority.clone()).build(&authority)], []);
     let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
-        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1),
     )
     .expect("original native query fixture genesis");
     let state = Arc::clone(native_chain.state());
@@ -55,7 +57,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     st_block0
         .commit_world_overlay_for_testing()
         .expect("seed query fixture World");
-    let (authority, keypair) = account_with_key();
     let network_id = *state.network_id_ref();
     let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
@@ -109,17 +110,18 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     )]);
     let _committed = crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx]);
     let resp = handle_v1_contracts_activity_get(
-        state,
+        Arc::clone(&state),
         DataspaceReadVisibility::all_for_tests(),
-        crate::NoritoQuery(ContractActivityGetParams {
-            limit: Some(10),
-            offset: 0,
-            authority: Some(authority.to_string()),
-            contract_alias: Some("dlmm_router".into()),
-            contract_entrypoint: Some("route_swap".into()),
-            result_ok: Some(true),
-            ..Default::default()
-        }),
+        iroha_torii_shared::list_query::ListQuery::new()
+            .limit(10)
+            .filter(
+                iroha_torii_shared::list_query::field("authority").eq(authority.to_string())
+                    & iroha_torii_shared::list_query::field("contract_alias").eq("dlmm_router")
+                    & iroha_torii_shared::list_query::field("contract_entrypoint").eq("route_swap")
+                    // The fixture names an unregistered sponsor program, so native
+                    // execution records a rejection; committed history retains it.
+                    & iroha_torii_shared::list_query::field("result_ok").eq(false),
+            ),
         crate::routing::MaybeTelemetry::for_tests(),
     )
     .await
@@ -129,7 +131,10 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
     let items = parsed["items"].as_array().unwrap();
-    assert_eq!(parsed["total"].as_u64(), Some(1));
+    assert!(parsed.get("total").is_none());
+    assert!(parsed["next_cursor"].is_null());
+    assert_eq!(items.len(), 1, "the committed rejected call remains queryable");
+    assert_eq!(items[0]["result_ok"].as_bool(), Some(false));
     assert_eq!(
         items[0]["entrypoint_hash"].as_str(),
         Some(entry_hash.as_str())
@@ -151,6 +156,25 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
             .expect("projected fee asset"),
         gas_asset_id.to_string()
     );
+    let response = handle_v1_contracts_events_get(
+        state,
+        DataspaceReadVisibility::all_for_tests(),
+        iroha_torii_shared::list_query::ListQuery::new()
+            .filter(iroha_torii_shared::list_query::field("contract_alias").eq("dlmm_router")),
+        crate::routing::MaybeTelemetry::for_tests(),
+    )
+    .await
+    .expect("event collection")
+    .into_response();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let events: norito::json::Value = norito::json::from_slice(&body).unwrap();
+    assert_eq!(events["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        events["items"][0]["tx_hash_hex"].as_str(),
+        Some(entry_hash.as_str())
+    );
+    assert!(events["items"][0]["block_index"].as_u64().is_some());
+    assert!(events["next_cursor"].is_null());
 }
 // The production app path always uses the typed server-side predicate and
 // then applies the authoritative endpoint filter to returned candidates.

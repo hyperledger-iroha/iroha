@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 import os
 import re
+import unittest
 from pathlib import Path
 
 import pytest
 
 from scripts import check_sorafs_release_automation as automation
+from scripts.tests import check_runtime_provider_broker_install_test as broker_contract_tests
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Use the child's actual unittest discovery so additions remain mandatory in
+# both modes and each deliberate failure/lock mutation adds exactly one case.
+BROKER_CASE_COUNT = unittest.defaultTestLoader.loadTestsFromModule(
+    broker_contract_tests
+).countTestCases()
+assert BROKER_CASE_COUNT > 0
 
 
 def _copy_workflows(target: Path) -> None:
@@ -3019,7 +3027,7 @@ def _run_broker_release_gate_fixture(
         child.write_text(original.replace(boundary, refusal + boundary, 1))
     (workspace / "Cargo.lock").write_text('# Local lock-reader fixture\nversion = 4\n')
     # These children are controlled callgraph fixtures, not release validation.
-    # The broker's original 37 test bodies and the bounded lock reader are real.
+    # The complete original broker suite and the bounded lock reader are real.
     for relative in (
         "scripts/release_sorafs_cli.sh", "scripts/package_iroha_cli_release.sh",
         "scripts/build_canonical_binaries.sh", "scripts/build_release_bundle.sh",
@@ -3080,7 +3088,7 @@ def test_broker_deployment_contract_executes_original_unittests_in_both_modes(tm
     """Both modes really execute all broker cases exactly once before returning."""
     result, commands = _run_broker_release_gate_fixture(tmp_path, mode, False)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Ran 37 tests" in result.stderr
+    assert f"Ran {BROKER_CASE_COUNT} tests" in result.stderr
     assert result.stderr.rstrip().endswith("OK")
     child = ["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"]
     assert commands.count(child) == 1
@@ -3104,7 +3112,7 @@ def test_broker_deployment_contract_child_assertion_failure_propagates_in_both_m
     """A genuine failing unittest aborts before the lock/diagnostic children."""
     result, commands = _run_broker_release_gate_fixture(tmp_path, mode, True)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "Ran 38 tests" in result.stderr
+    assert f"Ran {BROKER_CASE_COUNT + 1} tests" in result.stderr
     assert "genuine broker child assertion failure" in result.stderr
     assert "FAILED (failures=1)" in result.stderr
     assert commands == [
@@ -3122,7 +3130,7 @@ def test_broker_deployment_contract_lock_change_refuses_both_modes(tmp_path, mod
     """A successful child cannot authorize a changed original lockfile."""
     result, commands = _run_broker_release_gate_fixture(tmp_path, mode, False, mutate_lock=True)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "Ran 38 tests" in result.stderr
+    assert f"Ran {BROKER_CASE_COUNT + 1} tests" in result.stderr
     assert "OK" in result.stderr
     assert "workspace Cargo.lock changed during the release gate" in result.stderr
     assert commands == [
@@ -3142,7 +3150,7 @@ def test_broker_deployment_contract_diagnostics_final_lock_change_refuses(tmp_pa
         tmp_path, ("--diagnostics",), False, mutate_diagnostics_lock=True,
     )
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "Ran 37 tests" in result.stderr
+    assert f"Ran {BROKER_CASE_COUNT} tests" in result.stderr
     assert "OK" in result.stderr
     assert "workspace Cargo.lock changed during the release gate" in result.stderr
     assert commands.count(["python3", "scripts/tests/check_runtime_provider_broker_install_test.py"]) == 1

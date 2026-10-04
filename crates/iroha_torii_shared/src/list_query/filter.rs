@@ -101,6 +101,13 @@ impl JsonSerialize for FieldPath {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.json_serialize_to(out)
+    }
 }
 
 impl JsonDeserialize for FieldPath {
@@ -701,7 +708,50 @@ fn filter_expr_to_value(expr: &FilterExpr) -> Value {
 // `JsonSerialize` comes from norito's blanket impl over `FastJsonWrite`.
 impl FastJsonWrite for FilterExpr {
     fn write_json(&self, out: &mut String) {
-        filter_expr_to_value(self).json_serialize(out);
+        json::write_json_unbounded(self, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"args\":")?;
+        out.begin_container()?;
+        out.push('[')?;
+        match self {
+            Self::And(list) | Self::Or(list) => {
+                for (index, nested) in list.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',')?;
+                    }
+                    nested.json_serialize_to(out)?;
+                }
+            }
+            Self::Not(inner) => inner.json_serialize_to(out)?,
+            Self::Eq(field, operand)
+            | Self::Ne(field, operand)
+            | Self::Lt(field, operand)
+            | Self::Lte(field, operand)
+            | Self::Gt(field, operand)
+            | Self::Gte(field, operand) => {
+                field.json_serialize_to(out)?;
+                out.push(',')?;
+                operand.json_serialize_to(out)?;
+            }
+            Self::In(field, values) | Self::Nin(field, values) => {
+                field.json_serialize_to(out)?;
+                out.push(',')?;
+                values.json_serialize_to(out)?;
+            }
+            Self::Exists(field) | Self::IsNull(field) => field.json_serialize_to(out)?,
+        }
+        out.push_str("],\"op\":")?;
+        out.end_container();
+        self.op_name().json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 

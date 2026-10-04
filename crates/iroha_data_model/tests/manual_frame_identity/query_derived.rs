@@ -378,16 +378,8 @@ fn current_identity_capture() -> Value {
 #[test]
 fn public_derived_query_frames_match_capture() {
     let evidence = current_identity_capture();
-    // SelectorTuple carries an additional mode field under ids_projection.
-    // Retain exact generated captures for each existing wire shape.
-    #[cfg(not(feature = "ids_projection"))]
     let captured: Value = norito::json::from_json(include_str!(
         "../fixtures/query_derived_identity_frames.json"
-    ))
-    .expect("decode immutable pre-declaration capture");
-    #[cfg(feature = "ids_projection")]
-    let captured: Value = norito::json::from_json(include_str!(
-        "../fixtures/query_derived_ids_identity_frames.json"
     ))
     .expect("decode immutable pre-declaration capture");
     assert_eq!(evidence, captured);

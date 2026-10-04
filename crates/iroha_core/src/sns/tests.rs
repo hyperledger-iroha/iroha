@@ -204,7 +204,6 @@ fn active_account_alias_selector_resolves_dynamic_only_dataspace() {
 }
 #[test]
 fn account_alias_selector_rejects_malformed_reserved_separator_literals() {
-    let catalog = dataspace_catalog();
     for literal in [
         "treasury#banka.banking",
         "treas$ury@banka.banking",
@@ -213,7 +212,7 @@ fn account_alias_selector_rejects_malformed_reserved_separator_literals() {
         "treasury@banka.banking.extra",
     ] {
         assert!(
-            selector_for_account_alias_literal(literal, &catalog).is_err(),
+            selector_for_account_alias_literal(literal).is_err(),
             "malformed account-alias selector must be rejected: {literal}",
         );
     }
@@ -1118,12 +1117,8 @@ fn seed_default_namespace_policies_populates_fixed_suffixes() {
 #[test]
 fn sns_decoders_reject_trailing_bytes_and_embedded_identity_mismatches() {
     let owner = owner();
-    let selector = selector_for_namespace_literal(
-        SnsNamespace::Domain,
-        "strict.universal",
-        &dataspace_catalog(),
-    )
-    .expect("selector");
+    let selector =
+        selector_for_namespace_literal(SnsNamespace::Domain, "strict.universal").expect("selector");
     let record = NameRecordV1::new(
         selector.clone(),
         owner.clone(),
@@ -1152,12 +1147,8 @@ fn sns_decoders_reject_trailing_bytes_and_embedded_identity_mismatches() {
     let err = record_or_not_found(&world.view(), &selector)
         .expect_err("trailing record bytes must fail closed");
     assert!(matches!(err, SnsError::Internal(_)), "{err}");
-    let other_selector = selector_for_namespace_literal(
-        SnsNamespace::Domain,
-        "other.universal",
-        &dataspace_catalog(),
-    )
-    .expect("other selector");
+    let other_selector = selector_for_namespace_literal(SnsNamespace::Domain, "other.universal")
+        .expect("other selector");
     let mut mismatched_record = record.clone();
     mismatched_record.selector = other_selector.clone();
     mismatched_record.name_hash = other_selector.name_hash();
@@ -1862,36 +1853,70 @@ fn register_domain_name_allows_released_reserved_label() {
 }
 #[test]
 fn selector_for_namespace_literal_canonicalizes_domain_literal() {
-    let selector = selector_for_namespace_literal(
-        SnsNamespace::Domain,
-        "TreAsury.Universal",
-        &dataspace_catalog(),
-    )
-    .expect("domain selector");
+    let selector = selector_for_namespace_literal(SnsNamespace::Domain, "TreAsury.Universal")
+        .expect("domain selector");
     assert_eq!(selector.normalized_label(), "treasury.universal");
 }
 #[test]
 fn selector_for_namespace_literal_canonicalizes_account_alias_literal() {
-    let selector = selector_for_namespace_literal(
-        SnsNamespace::AccountAlias,
-        "Treasury@Banking",
-        &dataspace_catalog(),
-    )
-    .expect("account alias selector");
+    let selector = selector_for_namespace_literal(SnsNamespace::AccountAlias, "Treasury@Banking")
+        .expect("account alias selector");
     assert_eq!(selector.normalized_label(), "treasury@banking");
 }
 #[test]
+fn account_alias_registration_lookup_supports_private_dataspace_without_catalog() {
+    assert!(DataSpaceCatalog::default().by_alias("dpn").is_none());
+    let selector = selector_for_namespace_literal(SnsNamespace::AccountAlias, "Admin@Dpn")
+        .expect("canonical private alias selector");
+    assert_eq!(selector.label, "admin@dpn");
+    let owner = owner();
+    let record = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![controller(&owner)],
+        0,
+        0,
+        100,
+        200,
+        300,
+        Metadata::default(),
+    );
+    let mut world = World::default();
+    assert_eq!(
+        get_name_record(&world.view(), SnsNamespace::AccountAlias, "admin@dpn", 50),
+        Err(SnsError::RegistrationNotFound {
+            suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+            label: "admin@dpn".to_owned(),
+        }),
+    );
+    world
+        .smart_contract_state_mut_for_testing()
+        .insert(record_storage_key(&selector), record.encode());
+    assert_eq!(
+        get_name_record(&world.view(), SnsNamespace::AccountAlias, "Admin@Dpn", 50)
+            .expect("private SNS account registration"),
+        record,
+    );
+    let mut malformed = record.encode();
+    malformed.push(0);
+    world
+        .smart_contract_state_mut_for_testing()
+        .insert(record_storage_key(&selector), malformed);
+    assert!(matches!(
+        get_name_record(&world.view(), SnsNamespace::AccountAlias, "admin@dpn", 50),
+        Err(SnsError::Internal(_)),
+    ));
+}
+#[test]
 fn selector_for_namespace_literal_canonicalizes_dataspace_literal() {
-    let selector =
-        selector_for_namespace_literal(SnsNamespace::Dataspace, "Banking", &dataspace_catalog())
-            .expect("dataspace selector");
+    let selector = selector_for_namespace_literal(SnsNamespace::Dataspace, "Banking")
+        .expect("dataspace selector");
     assert_eq!(selector.normalized_label(), "banking");
 }
 #[test]
 fn selector_for_namespace_literal_rejects_bare_domain_literal() {
-    let err =
-        selector_for_namespace_literal(SnsNamespace::Domain, "treasury", &dataspace_catalog())
-            .expect_err("bare domain literal must fail");
+    let err = selector_for_namespace_literal(SnsNamespace::Domain, "treasury")
+        .expect_err("bare domain literal must fail");
     assert!(
         err.to_string().contains("domain.dataspace"),
         "unexpected error: {err}"
@@ -2071,14 +2096,8 @@ fn get_name_record_refreshes_expired_lifecycle() {
         .smart_contract_state_mut_for_testing()
         .insert(record_storage_key(&selector), record.encode());
     let view = world.view();
-    let fetched = get_name_record(
-        &view,
-        &DataSpaceCatalog::default(),
-        SnsNamespace::Domain,
-        "trade.universal",
-        11,
-    )
-    .expect("fetch record");
+    let fetched =
+        get_name_record(&view, SnsNamespace::Domain, "trade.universal", 11).expect("fetch record");
     assert!(matches!(fetched.status, NameStatus::Redemption));
 }
 

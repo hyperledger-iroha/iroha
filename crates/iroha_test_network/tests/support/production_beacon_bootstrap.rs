@@ -1321,7 +1321,8 @@ fn verify_pulse(
     iroha_genesis::init_instruction_registry();
     let record: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
         json::from_value(field(bundle, "record")?.clone())?;
-    record.validate()?;
+    let session_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    record.validate(&session_budget)?;
     let genesis = field(bundle, "genesis")?;
     let manifest: iroha_genesis::RawGenesisTransaction =
         json::from_value(field(genesis, "manifest")?.clone())?;
@@ -1353,7 +1354,7 @@ fn verify_pulse(
             roster_hash: record.session.roster_hash,
             transcript_hash: record.session.transcript_hash,
         },
-        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+        &session_budget,
     )?;
     let mut common = None;
     for config_path in peer_configs {

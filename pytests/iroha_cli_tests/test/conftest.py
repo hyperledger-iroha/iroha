@@ -22,6 +22,7 @@ from ..common.helpers import (
     random,
     string,
 )
+from ..common.consts import DEFAULT_ACCOUNT_DOMAIN
 from ..common.settings import PEER_CONFIGS_PATH
 from ..models import Account, Asset, AssetDefinition, Nft, Domain
 from ..src.iroha_cli import iroha_cli, config
@@ -100,7 +101,7 @@ def GIVEN_currently_authorized_account() -> Account:
     """Fixture to get the currently authorized account."""
     account = Account(
         signatory=config.account_signatory,
-        domain=config.account_domain,
+        domain=DEFAULT_ACCOUNT_DOMAIN,
     )
     with allure.step(
         f'GIVEN the currently authorized account "{account.signatory}" '

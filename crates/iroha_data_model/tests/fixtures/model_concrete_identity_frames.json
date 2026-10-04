@@ -1,7 +1,6 @@
 {
   "governance": true,
   "http": true,
-  "ids_projection": false,
   "values": {
     "families": [
       {

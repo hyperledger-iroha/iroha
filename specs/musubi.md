@@ -660,14 +660,17 @@ replace its local source during workspace development. Registry dependencies ret
 exact finalized resolution and immutable archive authentication. Packaging and
 publication explicitly require registry context, even for dependency-free packages.
 
-Local compilation uses the canonical account-address profile, or the explicitly
-selected client's public account profile. `--chain-discriminant` selects a local
-compiler input and must agree with an explicitly supplied client configuration
-or the authenticated registry profile. Purely local commands never construct a
-signer. `--locked` forbids graph changes; for registry dependencies, `--offline`
-uses only cached index and archives. `--frozen` combines both constraints.
-Workspace selection follows default members, `--workspace`, `--exclude`, and
-`-p`.
+Local compilation uses the selected network's account-address profile: the
+explicitly selected client's public account profile, the built-in profile of a
+named network (Taira when no network is selected), or `--chain-discriminant`.
+`--chain-discriminant` selects a local compiler input and must agree with an
+explicitly supplied client configuration or the authenticated registry profile.
+A local graph resolved without any of these, as by `fetch` or `update` without a
+client configuration, carries no address profile; no default network is assumed.
+Purely local commands never construct a signer. `--locked` forbids graph changes;
+for registry dependencies, `--offline` uses only cached index and archives.
+`--frozen` combines both constraints. Workspace selection follows default members,
+`--workspace`, `--exclude`, and `-p`.
 
 Offline resolver snapshots are canonical, bounded, and committed under a
 domain-separated digest after all captured pages agree on one exact `NetworkId`,

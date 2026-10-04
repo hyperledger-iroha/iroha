@@ -207,6 +207,32 @@ jobs:
         working-directory: IrohaSwift
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Materialize the authenticated external Apple Cargo lock
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          umask 077
+          source ci/privacy_sdk_cargo_lockfile.sh
+          lock_dir="$RUNNER_TEMP/iroha-mobile-apple-lock"
+          mkdir -m 0700 "$lock_dir"
+          lock_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$lock_dir")"
+          release_lock="$lock_dir/Cargo.lock"
+          workspace_lock_state="present:$(privacy_sdk_file_seal "$GITHUB_WORKSPACE/Cargo.lock" "$MOBILE_SDK_PYTHON_BINARY")"
+          privacy_sdk_materialize_canonical_cargo_lock \
+            "$GITHUB_WORKSPACE" "$release_lock" "$workspace_lock_state" \
+            "$MOBILE_SDK_PYTHON_BINARY"
+          release_lock="$(IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$release_lock" \
+            privacy_sdk_resolve_cargo_lockfile "$GITHUB_WORKSPACE" "$MOBILE_SDK_PYTHON_BINARY")"
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Authenticate the externally provisioned ABI-25 Swift bridge
         working-directory: ${{ github.workspace }}
         run: |
@@ -224,7 +250,7 @@ jobs:
               exit 1
               ;;
           esac
-          scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
+          scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Verify Swift Numeric V1, quantity builders, and manifest policies
         run: |
           swift test --filter NumericV1Tests

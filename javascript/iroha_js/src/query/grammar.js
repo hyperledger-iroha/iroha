@@ -149,8 +149,8 @@ function compareCodePoints(left, right) {
 
 /**
  * The problem with a field path's syntax, or `null` when it is valid
- * (non-empty segments, bounded length, no whitespace or control characters).
- * Whether a collection exposes the field is decided by Torii.
+ * (non-empty segments, bounded length, no whitespace, control characters or
+ * backticks). Whether a collection exposes the field is decided by Torii.
  */
 export function fieldPathProblem(path) {
   if (typeof path !== "string") return "field paths must be strings";
@@ -166,6 +166,10 @@ export function fieldPathProblem(path) {
   }
   if (path.split(".").some((segment) => segment.length === 0)) {
     return "field path segments must not be empty";
+  }
+  // The text form quotes segments with backticks and has no escape.
+  if (path.includes("`")) {
+    return "field paths must not contain backticks";
   }
   return null;
 }
@@ -689,7 +693,9 @@ function filterFromJson(value, depth, budget, location) {
       const operands = args.map((nested, index) =>
         filterFromJson(nested, depth + 1, budget, [...here, index]),
       );
-      return makeFilter(op, operands);
+      // A one-operand `and`/`or` is its operand: the text form cannot spell
+      // it, and both forms must decode to the same tree.
+      return operands.length === 1 ? operands[0] : makeFilter(op, operands);
     }
     case "not": {
       if (!Array.isArray(args) || args.length !== 1) {
@@ -1014,8 +1020,13 @@ function isWordChar(code) {
   return isAlpha(code) || isDigit(code) || code === 0x5f;
 }
 
-function isControlCodePoint(codePoint) {
-  return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+/**
+ * Whether a raw code point must be escaped inside a string literal. As in
+ * JSON, only U+0000..U+001F must; DEL and C1 characters stay literal, so every
+ * rendered literal parses.
+ */
+function mustEscapeCodePoint(codePoint) {
+  return codePoint < 0x20;
 }
 
 function hexValue(code) {
@@ -1211,7 +1222,7 @@ class Lexer {
         index += consumed;
         continue;
       }
-      if (isControlCodePoint(codePoint)) {
+      if (mustEscapeCodePoint(codePoint)) {
         throw this.error(index, "control characters must be escaped inside string literals");
       }
       out += String.fromCodePoint(codePoint);

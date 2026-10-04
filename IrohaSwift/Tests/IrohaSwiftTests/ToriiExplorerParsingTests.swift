@@ -3,188 +3,32 @@ import XCTest
 @testable import IrohaSwift
 
 final class ToriiExplorerParsingTests: XCTestCase {
-    func testExplorerHistoryParamsRejectInvalidCursorAndLimit() {
-        let invalidCursors = [
-            "",
-            "padded=",
-            "a",
-            "contains space",
-            String(repeating: "A", count: 1_425),
-        ]
-        for cursor in invalidCursors {
-            XCTAssertThrowsError(
-                try ToriiExplorerInstructionsParams(cursor: cursor).queryItems(),
-                "instructions cursor \(cursor.prefix(16)) should be rejected"
-            )
-            XCTAssertThrowsError(
-                try ToriiExplorerTransactionsParams(cursor: cursor).queryItems(),
-                "transactions cursor \(cursor.prefix(16)) should be rejected"
-            )
+    func testExplorerSharedQueryRejectsMalformedCursorAndLimit() {
+        for cursor in ["", "padded=", "contains space", String(repeating: "A", count: 4097)] {
+            XCTAssertThrowsError(try ToriiListQuery(cursor: cursor).validate())
         }
-        for limit: UInt32 in [0, 101] {
-            XCTAssertThrowsError(try ToriiExplorerInstructionsParams(limit: limit).queryItems())
-            XCTAssertThrowsError(try ToriiExplorerTransactionsParams(limit: limit).queryItems())
-        }
+        XCTAssertThrowsError(try ToriiListQuery(limit: 0).validate())
     }
 
-    func testExplorerHistoryCursorMetaDecodesSnapshotContract() throws {
-        let populated = """
-        {
-          "limit":25,
-          "snapshot_height":5,
-          "snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "next_cursor":"Y3Vyc29y",
-          "has_more":true
+    func testExplorerSharedPageRequiresCursorAndRejectsRetiredEnvelope() throws {
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self,
+            from: Data(#"{"items":[],"next_cursor":"opaque"}"#.utf8))
+        XCTAssertEqual(page.nextCursor, "opaque")
+        for payload in [
+            #"{"items":[]}"#,
+            #"{"items":[],"pagination":{"next_cursor":null,"has_more":false}}"#,
+            #"{"items":[],"next_cursor":null,"sampled_at_ms":0}"#,
+            #"{"items":[],"next_cursor":""}"#,
+            #"{"items":[],"next_cursor":null,"total_items":0}"#,
+        ] {
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self,
+                from: Data(payload.utf8)), payload)
         }
-        """
-        let page = try JSONDecoder().decode(
-            ToriiExplorerHistoryCursorMeta.self,
-            from: Data(populated.utf8)
-        )
-        XCTAssertEqual(page.limit, 25)
-        XCTAssertEqual(page.snapshotHeight, 5)
-        XCTAssertEqual(page.snapshotHash, String(repeating: "a", count: 64))
-        XCTAssertEqual(page.nextCursor, "Y3Vyc29y")
-        XCTAssertTrue(page.hasMore)
-
-        let empty = """
-        {"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false}
-        """
-        let emptyPage = try JSONDecoder().decode(
-            ToriiExplorerHistoryCursorMeta.self,
-            from: Data(empty.utf8)
-        )
-        XCTAssertEqual(emptyPage.snapshotHeight, 0)
-        XCTAssertNil(emptyPage.snapshotHash)
-        XCTAssertNil(emptyPage.nextCursor)
-        XCTAssertFalse(emptyPage.hasMore)
-    }
-
-    func testExplorerHistoryCursorMetaRejectsRetiredUnknownAndInconsistentFields() {
-        let invalidPayloads = [
-            #"{"page":1,"per_page":25,"total_pages":1,"total_items":0}"#,
-            #"{"limit":25,"snapshot_height":5,"next_cursor":null,"has_more":false}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":null,"next_cursor":null,"has_more":false}"#,
-            #"{"limit":25,"snapshot_height":0,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","next_cursor":null,"has_more":false}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","has_more":false}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"padded=","has_more":true}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":true}"#,
-            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false,"total_items":0}"#,
-        ]
-        for payload in invalidPayloads {
-            XCTAssertThrowsError(
-                try JSONDecoder().decode(
-                    ToriiExplorerHistoryCursorMeta.self,
-                    from: Data(payload.utf8)
-                ),
-                "history pagination should reject \(payload)"
-            )
-        }
-    }
-
-    func testExplorerHistoryPagesRejectUnknownFieldsAndOversizedItems() {
-        let unknownOuter = """
-        {
-          "pagination":{"limit":1,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},
-          "items":[],
-          "total_items":0
-        }
-        """
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiExplorerInstructionsPage.self,
-                from: Data(unknownOuter.utf8)
-            )
-        )
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiExplorerTransactionsPage.self,
-                from: Data(unknownOuter.utf8)
-            )
-        )
-
-        let oversized = """
-        {
-          "pagination":{"limit":1,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
-          "items":[
-            {"authority":"alice","hash":"one","block":5,"created_at":"2025-01-01T00:00:00Z","executable":"Instructions","status":"Committed"},
-            {"authority":"alice","hash":"two","block":5,"created_at":"2025-01-01T00:00:01Z","executable":"Instructions","status":"Committed"}
-          ]
-        }
-        """
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiExplorerTransactionsPage.self,
-                from: Data(oversized.utf8)
-            )
-        )
     }
 
     func testCanonicalQuerySelectorsRejectSurroundingWhitespace() {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let cases: [(String, () throws -> Void)] = [
-            (
-                "explorer instructions account",
-                { _ = try ToriiExplorerInstructionsParams(account: " \(accountId)").queryItems() }
-            ),
-            (
-                "explorer instructions authority",
-                { _ = try ToriiExplorerInstructionsParams(authority: "\(accountId) ").queryItems() }
-            ),
-            (
-                "explorer instructions asset",
-                { _ = try ToriiExplorerInstructionsParams(assetDefinitionId: " \(assetId)").queryItems() }
-            ),
-            (
-                "explorer transactions authority",
-                { _ = try ToriiExplorerTransactionsParams(authority: "\(accountId) ").queryItems() }
-            ),
-            (
-                "explorer transactions asset",
-                { _ = try ToriiExplorerTransactionsParams(assetDefinitionId: "\(assetId) ").queryItems() }
-            ),
-            (
-                "explorer rwas owner",
-                { _ = try ToriiExplorerRwasParams(ownedBy: " \(accountId)").queryItems() }
-            ),
-            (
-                "contract activity authority",
-                { _ = try ToriiContractActivityParams(authority: "\(accountId) ").queryItems() }
-            ),
-            (
-                "contract activity address",
-                { _ = try ToriiContractActivityParams(contractAddress: " cntr:deadbeef").queryItems() }
-            ),
-            (
-                "contract activity alias",
-                { _ = try ToriiContractActivityParams(contractAlias: "benefits::paynet ").queryItems() }
-            ),
-            (
-                "contract event authority",
-                { _ = try ToriiContractEventParams(authority: " \(accountId)").queryItems() }
-            ),
-            (
-                "contract event address",
-                { _ = try ToriiContractEventParams(contractAddress: "cntr:deadbeef ").queryItems() }
-            ),
-            (
-                "contract event alias",
-                { _ = try ToriiContractEventParams(contractAlias: " benefits::paynet").queryItems() }
-            ),
-            (
-                "contract event participant",
-                { _ = try ToriiContractEventParams(participant: "merchant@paynet ").queryItems() }
-            ),
-            (
-                "contract event asset",
-                { _ = try ToriiContractEventParams(assetId: " \(assetId)").queryItems() }
-            ),
-            (
-                "subscription owner",
-                { _ = try ToriiSubscriptionListParams(ownedBy: "\(accountId) ").queryItems() }
-            ),
             (
                 "uaid portfolio asset",
                 { _ = try ToriiUaidPortfolioQuery(assetId: " \(assetId)").queryItems() }
@@ -321,7 +165,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
     func testExplorerTransferRecordsFiltersByAccountAndAssetDefinition() throws {
         let json = """
         {
-            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -381,7 +225,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
             ]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         XCTAssertEqual(page.transferRecords().count, 2)
         XCTAssertEqual(page.transferRecords(matchingAccount: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D").count, 1)
         XCTAssertEqual(page.transferRecords(matchingAccount: "sorauﾛ1Pﾀﾚｿ1ﾍｶsFｲAfｾeB3ｽヱヱｳcyﾊyｹ1ﾂﾈヰヰ6ﾛヰEAﾃｱｳﾖLPN4XM").count, 1)
@@ -394,7 +238,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
     func testExplorerTransferSummariesDeriveDirection() throws {
         let json = """
         {
-            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -424,7 +268,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
             ]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         let summaries = page.transferSummaries(matchingAccount: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
         XCTAssertEqual(summaries.count, 1)
         let summary = summaries[0]
@@ -450,7 +294,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
     func testExplorerTransferSummariesDeriveSelfTransfer() throws {
         let json = """
         {
-            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -480,7 +324,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
             ]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         let summaries = page.transferSummaries(matchingAccount: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         XCTAssertEqual(summaries.count, 1)
         let summary = summaries[0]
@@ -532,7 +376,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
     func testExplorerTransferSummariesAssignBatchIndices() throws {
         let json = """
         {
-            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -573,7 +417,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
             ]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         let summaries = page.transferSummaries()
         XCTAssertEqual(summaries.count, 2)
         XCTAssertEqual(summaries[0].transferIndex, 0)
@@ -588,7 +432,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
         // Real Mint response from Iroha explorer API
         let json = """
         {
-            "pagination":{"limit":20,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items":[{
                 "authority":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "created_at":"2026-03-17T14:07:35.576Z",
@@ -614,7 +458,7 @@ final class ToriiExplorerParsingTests: XCTestCase {
             }]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         XCTAssertEqual(page.items.count, 1)
 
         let item = page.items[0]

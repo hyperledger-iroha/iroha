@@ -17,13 +17,6 @@ internal static class ToriiAccountQueryJson
         RequireExactNonEmptyText(response.Name, $"{context}.name");
     }
 
-    internal static void ValidateAccountPermissionsPage(ToriiAccountPermissionsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateItems(response.Items, $"{context}.items", ValidateAccountPermission);
-        ValidateNonNegativeInt64(response.Total, $"{context}.total");
-    }
-
     internal static ToriiAccountPermission ReadAccountPermission(ref Utf8JsonReader reader, string context)
     {
         if (reader.TokenType == JsonTokenType.Null)
@@ -89,66 +82,6 @@ internal static class ToriiAccountQueryJson
         throw new JsonException($"{context} JSON object is incomplete.");
     }
 
-    internal static ToriiAccountPermissionsPage ReadAccountPermissionsPage(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        List<ToriiAccountPermission>? items = null;
-        long? total = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                var response = new ToriiAccountPermissionsPage
-                {
-                    Items = RequireItems(items, context),
-                    Total = RequirePageTotal(total, context),
-                };
-                ValidateAccountPermissionsPage(response, context);
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "items":
-                    items = ReadItems(ref reader, $"{context}.items", ReadAccountPermission);
-                    break;
-                case "total":
-                    total = ReadInt64(ref reader, $"{context}.total");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
     internal static void WriteAccountPermission(
         Utf8JsonWriter writer,
         ToriiAccountPermission response,
@@ -168,15 +101,6 @@ internal static class ToriiAccountQueryJson
             response.Payload.WriteTo(writer);
         }
         writer.WriteEndObject();
-    }
-
-    internal static void WriteAccountPermissionsPage(
-        Utf8JsonWriter writer,
-        ToriiAccountPermissionsPage response,
-        string context)
-    {
-        ValidateAccountPermissionsPage(response, context);
-        WritePage(writer, "items", response.Items, context, WriteAccountPermission, response.Total);
     }
 
     internal static JsonException DirectMetadataErrorToJsonException(ArgumentException error, string context)
@@ -480,23 +404,5 @@ internal sealed class ToriiAccountPermissionJsonConverter : JsonConverter<ToriiA
     public override void Write(Utf8JsonWriter writer, ToriiAccountPermission value, JsonSerializerOptions options)
     {
         ToriiAccountQueryJson.WriteAccountPermission(writer, value, "account permission");
-    }
-}
-
-internal sealed class ToriiAccountPermissionsPageJsonConverter : JsonConverter<ToriiAccountPermissionsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiAccountPermissionsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiAccountQueryJson.ReadAccountPermissionsPage(ref reader, "account permissions response");
-    }
-
-    public override void Write(Utf8JsonWriter writer, ToriiAccountPermissionsPage value, JsonSerializerOptions options)
-    {
-        ToriiAccountQueryJson.WriteAccountPermissionsPage(writer, value, "account permissions response");
     }
 }

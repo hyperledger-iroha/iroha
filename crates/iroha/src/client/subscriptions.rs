@@ -5,9 +5,7 @@ mod validation;
 use iroha_data_model::{asset::AssetDefinitionId, nft::NftId, subscription::SubscriptionPlan};
 use iroha_torii_shared::subscriptions::{
     SubscriptionActionRequest, SubscriptionCancelMode, SubscriptionCreateRequest,
-    SubscriptionGetResponse, SubscriptionListParams, SubscriptionListResponse,
-    SubscriptionPlanCreateRequest, SubscriptionPlanListParams, SubscriptionPlanListResponse,
-    SubscriptionUsageRequest,
+    SubscriptionGetResponse, SubscriptionPlanCreateRequest, SubscriptionUsageRequest,
 };
 use norito::json::{JsonDeserialize, JsonSerialize};
 
@@ -120,65 +118,6 @@ fn subscription_url(
 }
 
 impl Subscriptions<'_> {
-    /// List subscription plans, preserving every supplied filter and count mode.
-    ///
-    /// # Errors
-    /// Returns structured request, transport, timeout, HTTP or decoding failures.
-    pub async fn list_plans(
-        &self,
-        params: &SubscriptionPlanListParams,
-    ) -> Result<SubscriptionPlanListResponse> {
-        const OP: &str = "subscriptions.list_plans";
-        let url = join_torii_url(&self.client.torii_url, "v1/subscriptions/plans");
-        let mut request = self
-            .client
-            .request_without_canonical_account_auth(HttpMethod::GET, url);
-        if let Some(provider) = &params.provider {
-            request = request.param("provider", provider);
-        }
-        if let Some(limit) = params.limit {
-            request = request.param("limit", &limit);
-        }
-        if params.offset != 0 {
-            request = request.param("offset", &params.offset);
-        }
-        if let Some(mode) = &params.count_mode {
-            request = request.param("count_mode", mode);
-        }
-        dispatch(self.client, OP, request).await
-    }
-
-    /// List subscriptions, preserving every supplied filter and count mode.
-    ///
-    /// # Errors
-    /// Returns structured request, transport, timeout, HTTP or decoding failures.
-    pub async fn list(&self, params: &SubscriptionListParams) -> Result<SubscriptionListResponse> {
-        const OP: &str = "subscriptions.list";
-        let url = join_torii_url(&self.client.torii_url, "v1/subscriptions");
-        let mut request = self
-            .client
-            .request_without_canonical_account_auth(HttpMethod::GET, url);
-        if let Some(owner) = &params.owned_by {
-            request = request.param("owned_by", owner);
-        }
-        if let Some(provider) = &params.provider {
-            request = request.param("provider", provider);
-        }
-        if let Some(status) = &params.status {
-            request = request.param("status", status);
-        }
-        if let Some(limit) = params.limit {
-            request = request.param("limit", &limit);
-        }
-        if params.offset != 0 {
-            request = request.param("offset", &params.offset);
-        }
-        if let Some(mode) = &params.count_mode {
-            request = request.param("count_mode", mode);
-        }
-        dispatch(self.client, OP, request).await
-    }
-
     /// Read exactly one subscription NFT.
     ///
     /// # Errors

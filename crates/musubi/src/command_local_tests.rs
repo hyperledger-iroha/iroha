@@ -192,6 +192,45 @@ fn compiler_profile_selection_requires_an_exact_configured_match() {
 }
 
 #[test]
+fn local_graph_without_network_context_has_no_default_address_profile() {
+    let temp = TempDir::new().expect("local graph directory");
+    let (root, _) = create_test_package(&temp);
+    let workspace = load_workspace(&root).expect("local workspace");
+    let packages = workspace
+        .members()
+        .values()
+        .map(|member| member.package.selector.clone())
+        .collect::<Vec<_>>();
+    let options = |requested_chain_discriminant| WorkspaceResolutionOptionsV1 {
+        mode: GraphModeArgs::default(),
+        config: None,
+        config_image: None,
+        expected_network_id: None,
+        fresh_only: false,
+        purpose: GraphPurposeV1::Workspace,
+        requested_chain_discriminant,
+    };
+    let unbound = resolve_and_persist_graph(&workspace, &packages, None, None, options(None))
+        .expect("a local graph resolves without network context");
+    assert_eq!(
+        unbound
+            .account_chain_discriminant()
+            .expect_err("no default network profile is substituted")
+            .code(),
+        ErrorCode::Usage
+    );
+    let requested =
+        resolve_and_persist_graph(&workspace, &packages, None, None, options(Some(369)))
+            .expect("a requested profile needs no client configuration");
+    assert_eq!(
+        requested
+            .account_chain_discriminant()
+            .expect("requested profile"),
+        369
+    );
+}
+
+#[test]
 fn source_inventory_is_read_only_without_any_lock_or_registry_configuration() {
     let temporary = TempDir::new().expect("inventory project");
     let (root, manifest) = create_test_package(&temporary);

@@ -141,38 +141,6 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
     .expect_err("unbounded domain rows must be rejected before query execution");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(feature = "ids_projection")]
-#[test]
-fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution() {
-    let world = World::with_assets_and_roles(
-        [],
-        [alice_account()],
-        [],
-        [],
-        [],
-        [
-            Role::new("canonical-role".parse().expect("role id"), ALICE_ID.clone())
-                .build(&ALICE_ID),
-        ],
-    );
-    let store = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_with_chain(
-        canonical_reader_world(world),
-        Kura::blank_kura_for_testing(),
-        store.clone(),
-        ChainId::from("canonical-selector-rejection"),
-    ));
-    let error = run_on_snapshot_ephemeral_with_budget_arc(
-        &state,
-        &store,
-        &ALICE_ID,
-        find_role_ids_start(QueryParams::default(), SelectorTuple::ids_only()),
-        canonical_test_limits(1),
-        QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
-    )
-    .expect_err("selector must be rejected before source execution");
-    assert_opaque_canonical_start_rejected(error);
-}
 #[test]
 fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};

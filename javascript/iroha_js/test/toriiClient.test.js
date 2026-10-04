@@ -4350,7 +4350,9 @@ function canonicalUaidBindingsFixture() {
 function canonicalUaidManifestsFixture() {
   const fixture = cloneFixture(toriiFixtures.uaid.manifests);
   fixture.manifests[0].accounts = [FIXTURE_ALICE_ID];
-  return fixture;
+  const page = { items: fixture.manifests, next_cursor: null, total: fixture.total };
+  Object.defineProperty(page, "uaid", { value: fixture.uaid });
+  return page;
 }
 
 test("getUaidPortfolio preserves exact UAID literals and parses dataspace payloads", async () => {
@@ -4512,44 +4514,26 @@ test("getUaidBindings enforces UAID formats and normalizes entries", async () =>
   );
 });
 
-test("getUaidManifests validates lifecycle metadata and filters by dataspace", async () => {
-  let capturedUrl;
+test("uaidManifests validates full rows and posts collection filters", async () => {
+  let captured;
   const fixture = canonicalUaidManifestsFixture();
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: fixture,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidManifests(fixture.uaid, {
-    dataspaceId: 11,
-    status: "active",
-    limit: 1,
-    offset: 0,
-    countMode: "exact",
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, init) => {
+    captured = { url, init };
+    return createResponse({ status: 200, jsonData: fixture, headers: { "content-type": "application/json" } });
+  }});
+  const result = await client.uaidManifests(fixture.uaid).list({
+    filter: 'dataspace_id = 11 and status = "Active"', limit: 1, includeTotal: true,
   });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.searchParams.get("dataspace"), "11");
-  assert.equal(parsed.searchParams.get("status"), "active");
-  assert.equal(parsed.searchParams.get("limit"), "1");
-  assert.equal(parsed.searchParams.get("offset"), "0");
-  assert.equal(parsed.searchParams.get("count_mode"), "exact");
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
+  assert.equal(new URL(captured.url).pathname, `/v1/space-directory/uaids/${encodeURIComponent(fixture.uaid)}/manifests/query`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(JSON.parse(captured.init.body).include_total, true);
   assert.equal(result.total, 1);
-  assert.equal(result.has_more, false);
-  assert.equal(result.count_mode, "exact");
-  assert.equal(result.manifests.length, 1);
-  const record = result.manifests[0];
-  assert.equal(record.status, "Active");
-  assert.equal(record.lifecycle.activated_epoch, 4097);
-  assert.equal(record.manifest.entries[0].effect.Allow.max_amount, "500000000");
-  await assert.rejects(
-    () => client.getUaidManifests(fixture.uaid, { dataspaceId: 11, format: "i105" }),
-    /getUaidManifests options contains unsupported fields: format/,
-  );
+  assert.equal(result.nextCursor, null);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].status, "Active");
+  assert.equal(result.items[0].lifecycle.activated_epoch, 4097);
+  assert.equal(result.items[0].manifest.entries[0].effect.Allow.max_amount, "500000000");
+  await assert.rejects(() => client.uaidManifests(fixture.uaid).list({ dataspaceId: 11 }), /dataspaceId/);
 });
 
 test("UAID read responses require exact current server fields", async () => {
@@ -4572,34 +4556,34 @@ test("UAID read responses require exact current server fields", async () => {
   cases.push(["getUaidBindings", bindingsDefaultedAccounts, /exact server fields/]);
 
   const manifestsMissingPageMetadata = canonicalUaidManifestsFixture();
-  delete manifestsMissingPageMetadata.count_mode;
-  cases.push(["getUaidManifests", manifestsMissingPageMetadata, /exact server fields/]);
+  delete manifestsMissingPageMetadata.next_cursor;
+  cases.push(["uaidManifests", manifestsMissingPageMetadata, /next_cursor/]);
 
   const manifestsLegacyVersion = canonicalUaidManifestsFixture();
-  manifestsLegacyVersion.manifests[0].manifest.version = "V1";
-  cases.push(["getUaidManifests", manifestsLegacyVersion, /unsigned integer 1/]);
+  manifestsLegacyVersion.items[0].manifest.version = "V1";
+  cases.push(["uaidManifests", manifestsLegacyVersion, /unsigned integer 1/]);
 
   const manifestsPrefixedHash = canonicalUaidManifestsFixture();
-  manifestsPrefixedHash.manifests[0].manifest_hash =
-    `0x${manifestsPrefixedHash.manifests[0].manifest_hash}`;
-  cases.push(["getUaidManifests", manifestsPrefixedHash, /exact lowercase 32-byte hex/]);
+  manifestsPrefixedHash.items[0].manifest_hash =
+    `0x${manifestsPrefixedHash.items[0].manifest_hash}`;
+  cases.push(["uaidManifests", manifestsPrefixedHash, /exact lowercase 32-byte hex/]);
 
   const manifestsMissingLifecycleField = canonicalUaidManifestsFixture();
-  delete manifestsMissingLifecycleField.manifests[0].lifecycle.expired_epoch;
-  cases.push(["getUaidManifests", manifestsMissingLifecycleField, /exact server fields/]);
+  delete manifestsMissingLifecycleField.items[0].lifecycle.expired_epoch;
+  cases.push(["uaidManifests", manifestsMissingLifecycleField, /exact server fields/]);
 
   const manifestsUnknownRecordField = canonicalUaidManifestsFixture();
-  manifestsUnknownRecordField.manifests[0].legacy_status = "active";
-  cases.push(["getUaidManifests", manifestsUnknownRecordField, /exact server fields/]);
+  manifestsUnknownRecordField.items[0].legacy_status = "active";
+  cases.push(["uaidManifests", manifestsUnknownRecordField, /exact server fields/]);
 
   const manifestsPaddedAccount = canonicalUaidManifestsFixture();
-  manifestsPaddedAccount.manifests[0].accounts[0] =
-    `${manifestsPaddedAccount.manifests[0].accounts[0]} `;
-  cases.push(["getUaidManifests", manifestsPaddedAccount, /surrounding whitespace/]);
+  manifestsPaddedAccount.items[0].accounts[0] =
+    `${manifestsPaddedAccount.items[0].accounts[0]} `;
+  cases.push(["uaidManifests", manifestsPaddedAccount, /surrounding whitespace/]);
 
   const manifestsNullOptional = canonicalUaidManifestsFixture();
-  manifestsNullOptional.manifests[0].manifest.entries[1].notes = null;
-  cases.push(["getUaidManifests", manifestsNullOptional, /omitted instead of null/]);
+  manifestsNullOptional.items[0].manifest.entries[1].notes = null;
+  cases.push(["uaidManifests", manifestsNullOptional, /omitted instead of null/]);
 
   for (const [method, payload, pattern] of cases) {
     const client = new ToriiClient(BASE_URL, {
@@ -4609,11 +4593,11 @@ test("UAID read responses require exact current server fields", async () => {
         headers: { "content-type": "application/json" },
       }),
     });
-    await assert.rejects(() => client[method](payload.uaid), pattern, method);
+    await assert.rejects(() => method === "uaidManifests" ? client.uaidManifests(payload.uaid).list() : client[method](payload.uaid), pattern, method);
   }
 });
 
-test("getUaidManifests rejects compatibility coercions before dispatch", async () => {
+test("uaidManifests rejects compatibility coercions before dispatch", async () => {
   let fetchCalled = false;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -4633,8 +4617,8 @@ test("getUaidManifests rejects compatibility coercions before dispatch", async (
     { countMode: null },
   ]) {
     await assert.rejects(
-      () => client.getUaidManifests(uaid, options),
-      /JSON safe integer|must be one of|must be a string|positive|surrounding whitespace/u,
+      () => client.uaidManifests(uaid).list(options),
+      /unknown|unsupported|positive|limit|status|dataspaceId|offset|countMode/u,
     );
   }
   assert.equal(fetchCalled, false);
@@ -6965,8 +6949,8 @@ test("DA and UAID helpers reject non-object options", async () => {
     /getUaidBindings options must be an object/,
   );
   await assert.rejects(
-    () => client.getUaidManifests(uaid, "invalid"),
-    /getUaidManifests options must be an object/,
+    () => client.uaidManifests(uaid).list("invalid"),
+    /query must be an object|JSON object|plain object/,
   );
 });
 
@@ -12002,60 +11986,6 @@ test("getBlock returns null when Torii replies 404", async () => {
   assert.equal(block, null);
 });
 
-test("listBlocks encodes snapshot cursor pagination", async () => {
-  const cursor = "Y3Vyc29y";
-  const nextCursor = "bmV4dA";
-  const snapshotHash = "ab".repeat(32);
-  const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?limit=5&cursor=${cursor}`);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit: 5,
-          snapshot_height: 8,
-          snapshot_hash: snapshotHash,
-          next_cursor: nextCursor,
-          has_more: true,
-        },
-        items: [
-          {
-            hash: "CAFE",
-            height: 8,
-            created_at: "2026-01-01T00:00:00Z",
-            prev_block_hash: "BEEF",
-            transactions_hash: null,
-            transactions_rejected: 0,
-            transactions_total: 4,
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ cursor, limit: 5 });
-  assert.deepEqual(result, {
-    pagination: {
-      limit: 5,
-      snapshotHeight: 8,
-      snapshotHash,
-      nextCursor,
-      hasMore: true,
-    },
-    items: [
-      {
-        hash: "CAFE",
-        height: 8,
-        createdAt: "2026-01-01T00:00:00Z",
-        prevBlockHash: "BEEF",
-        transactionsHash: null,
-        transactionsRejected: 0,
-        transactionsTotal: 4,
-      },
-    ],
-  });
-});
 
 test("getBlock rejects empty identifiers", async () => {
   const fetchImpl = async () => {
@@ -12079,147 +12009,10 @@ test("getBlock rejects unsupported option keys", async () => {
   );
 });
 
-test("listBlocks validates pagination bounds", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks({ limit: 0 }),
-    /positive integer/,
-  );
-  await assert.rejects(
-    () => client.listBlocks({ cursor: "padded==" }),
-    /canonical base64url without padding/,
-  );
-  await assert.rejects(() => client.listBlocks({ limit: 101 }), /at most 100/);
-});
 
-test("listBlocks rejects non-object options", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks("oops"),
-    /block list options must be a plain object/,
-  );
-});
 
-test("listBlocks rejects unsupported option keys", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks({ page: 2 }),
-    /block list options contains unsupported fields: page/,
-  );
-});
 
-test("listBlocks rejects retired totals and inconsistent snapshot metadata", async () => {
-  const responses = [
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 8,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: false,
-        total_items: 8,
-      },
-      items: [],
-    },
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 0,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: false,
-      },
-      items: [],
-    },
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 8,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: true,
-      },
-      items: [],
-    },
-  ];
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: responses.shift(),
-      headers: { "content-type": "application/json" },
-    }),
-  });
 
-  await assert.rejects(() => client.listBlocks(), /unknown field total_items/);
-  await assert.rejects(
-    () => client.listBlocks(),
-    /snapshot_hash must be null exactly when snapshot_height is zero/,
-  );
-  await assert.rejects(
-    () => client.listBlocks(),
-    /has_more must match next_cursor availability/,
-  );
-});
-
-test("listExplorerNfts validates cursor pagination and encodes filters", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    calls.push({ parsed, init });
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 5, next_cursor: "bmV4dC1uZnQ", has_more: true },
-        items: [
-          { id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1", owned_by: SAMPLE_ACCOUNT_ID, metadata: { role: "demo" } },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listExplorerNfts({
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    domainId: "wonderland",
-    cursor: "c3RhcnQtbmZ0",
-    limit: 5,
-  });
-  assert.equal(calls.length, 1);
-  const { parsed, init } = calls[0];
-  assert.equal(init.redirect, "error");
-  assert.equal(
-    init.headers["X-Iroha-Account"],
-    AccountAddress.parseEncoded(APPLICATION_CANONICAL_AUTH.accountId).address.canonicalHex(),
-  );
-  assert.ok(init.headers["X-Iroha-Signature"]);
-  assert.equal(parsed.pathname, "/v1/explorer/nfts");
-  assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
-  assert.equal(parsed.searchParams.get("domain"), "wonderland");
-  assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtbmZ0");
-  assert.equal(parsed.searchParams.get("page"), null);
-  assert.equal(parsed.searchParams.get("per_page"), null);
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  assert.deepEqual(page.pagination, {
-    limit: 5,
-    nextCursor: "bmV4dC1uZnQ",
-    hasMore: true,
-  });
-  assert.deepEqual(page.items[0], {
-    id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1",
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    metadata: { role: "demo" },
-  });
-});
 
 test("dataspace-visible Explorer reads stay anonymous without a default signer", async () => {
   let capturedInit;
@@ -12230,7 +12023,7 @@ test("dataspace-visible Explorer reads stay anonymous without a default signer",
       return createResponse({
         status: 200,
         jsonData: {
-          pagination: { limit: 25, next_cursor: null, has_more: false },
+          next_cursor: null,
           items: [],
         },
         headers: { "content-type": "application/json" },
@@ -12238,124 +12031,15 @@ test("dataspace-visible Explorer reads stay anonymous without a default signer",
     },
   });
 
-  const page = await client.listExplorerNfts();
+  const page = await client.explorerNfts.list();
   assert.deepEqual(page.items, []);
   assert.equal(capturedInit.headers["X-Iroha-Account"], undefined);
   assert.equal(capturedInit.headers["X-Iroha-Signature"], undefined);
 });
 
-test("world Explorer lists reject offset pagination and malformed cursor metadata", async () => {
-  let fetchCalls = 0;
-  const localClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalls += 1;
-      throw new Error("must not fetch");
-    },
-  });
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ page: 2 }),
-    /unsupported fields: page/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerRwas({ cursor: "padded==" }),
-    /canonical base64url without padding/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ cursor: "AB" }),
-    /canonical base64url without padding/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ limit: 101 }),
-    /must be at most 100/u,
-  );
-  assert.equal(fetchCalls, 0);
 
-  const malformedClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 25, next_cursor: null, has_more: true },
-        items: [],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => malformedClient.listExplorerNfts(),
-    /has_more must match next_cursor availability/u,
-  );
 
-  const unknownFieldClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 25, next_cursor: null, has_more: false, page: 1 },
-        items: [],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => unknownFieldClient.listExplorerNfts(),
-    /contains unknown field page/u,
-  );
-
-  const oversizedPageClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 1, next_cursor: null, has_more: false },
-        items: [{}, {}],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => oversizedPageClient.listExplorerRwas(),
-    /items must not exceed pagination\.limit/u,
-  );
-});
-
-test("iterateAccountNfts walks explorer pagination and honours maxItems", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    const cursor = parsed.searchParams.get("cursor");
-    const limit = Number(parsed.searchParams.get("limit") ?? 25);
-    const totalItems = 5;
-    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
-    const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
-      id: `6HptcdrgYMsS3ARWDMaabCQJtqQd#${start + index + 1}`,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      metadata: { cursor, limit },
-    }));
-    const nextOffset = start + items.length;
-    const hasMore = nextOffset < totalItems;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit,
-          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
-          has_more: hasMore,
-        },
-        items,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const nft of client.iterateAccountNfts(SAMPLE_ACCOUNT_ID, {
-    limit: 2,
-    maxItems: 3,
-  })) {
-    seen.push(nft.id);
-  }
-  assert.deepEqual(seen, ["6HptcdrgYMsS3ARWDMaabCQJtqQd#1", "6HptcdrgYMsS3ARWDMaabCQJtqQd#2", "6HptcdrgYMsS3ARWDMaabCQJtqQd#3"]);
-});
-
-test("listExplorerNfts surfaces permission errors", async () => {
+test("explorerNfts surfaces permission errors", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 403,
@@ -12364,78 +12048,11 @@ test("listExplorerNfts surfaces permission errors", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listExplorerNfts(),
+    () => client.explorerNfts.list(),
     (error) => error instanceof ToriiHttpError && error.status === 403,
   );
 });
 
-test("listExplorerRwas encodes owner/domain filters and cursor pagination", async () => {
-  const calls = [];
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    calls.push(parsed);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 5, next_cursor: "bmV4dC1yd2E", has_more: true },
-        items: [
-          {
-            id: SAMPLE_RWA_ID,
-            owned_by: SAMPLE_ACCOUNT_ID,
-            quantity: "10.5",
-            held_quantity: "1",
-            primary_reference: "vault-cert-001",
-            status: "active",
-            is_frozen: false,
-            metadata: { origin: "AE" },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listExplorerRwas({
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    domainId: "commodities",
-    cursor: "c3RhcnQtcndh",
-    limit: 5,
-  });
-  assert.equal(calls.length, 1);
-  const parsed = calls[0];
-  assert.equal(parsed.pathname, "/v1/explorer/rwas");
-  assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
-  assert.equal(parsed.searchParams.get("domain"), "commodities");
-  assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtcndh");
-  assert.equal(parsed.searchParams.get("page"), null);
-  assert.equal(parsed.searchParams.get("per_page"), null);
-  assert.deepEqual(page.pagination, {
-    limit: 5,
-    nextCursor: "bmV4dC1yd2E",
-    hasMore: true,
-  });
-  assert.deepEqual(page.items[0], {
-    id: SAMPLE_RWA_ID,
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    quantity: "10.5",
-    heldQuantity: "1",
-    primaryReference: "vault-cert-001",
-    status: "active",
-    isFrozen: false,
-    metadata: { origin: "AE" },
-    raw: {
-      id: SAMPLE_RWA_ID,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      quantity: "10.5",
-      held_quantity: "1",
-      primary_reference: "vault-cert-001",
-      status: "active",
-      is_frozen: false,
-      metadata: { origin: "AE" },
-    },
-  });
-});
 
 test("getExplorerRwaDetail encodes path and decodes response", async () => {
   const fetchImpl = async (url) => {
@@ -12510,503 +12127,67 @@ test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
       fetchImpl: async () => createResponse({
         status: 200,
         jsonData: {
-          pagination: { limit: 25, next_cursor: null, has_more: false },
+          next_cursor: null,
           items: [record],
         },
         headers: { "content-type": "application/json" },
       }),
     });
     await assert.rejects(
-      () => client.listExplorerRwas(),
+      () => client.explorerRwas.list(),
       /canonical non-negative Kotodama V1 quantity/u,
     );
   }
 });
 
-test("iterateAccountRwas walks explorer pagination and honours maxItems", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    const cursor = parsed.searchParams.get("cursor");
-    const limit = Number(parsed.searchParams.get("limit") ?? 25);
-    const totalItems = 5;
-    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
-    const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
-      id: `${SAMPLE_RWA_ID}:${start + index + 1}`,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      quantity: "1",
-      held_quantity: "0",
-      primary_reference: `vault-cert-${start + index + 1}`,
-      status: null,
-      is_frozen: false,
-      metadata: { cursor, limit },
-    }));
-    const nextOffset = start + items.length;
-    const hasMore = nextOffset < totalItems;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit,
-          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
-          has_more: hasMore,
-        },
-        items,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const rwa of client.iterateAccountRwas(SAMPLE_ACCOUNT_ID, {
-    limit: 2,
-    maxItems: 3,
-  })) {
-    seen.push(rwa.id);
-  }
-  assert.deepEqual(seen, [
-    `${SAMPLE_RWA_ID}:1`,
-    `${SAMPLE_RWA_ID}:2`,
-    `${SAMPLE_RWA_ID}:3`,
-  ]);
+
+test("accountPermissions uses collection pagination and retains complete permission validation", async () => {
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, init) => {
+    calls.push({ url, init });
+    return createResponse({ status: 200, headers: { "content-type": "application/json" },
+      jsonData: { items: [{ name: "CanMintAssetToAccount", payload: { account: FIXTURE_ALICE_ID } }], next_cursor: null, total: 1 } });
+  }});
+  const page = await client.accountPermissions(FIXTURE_ALICE_ID).list({ limit: 5, cursor: "prior", includeTotal: true });
+  assert.equal(new URL(calls[0].url).pathname, accountPath(FIXTURE_ALICE_ID, "/permissions/query"));
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { limit: 5, cursor: "prior", include_total: true });
+  assert.equal(page.items[0].name, "CanMintAssetToAccount");
+  assert.deepEqual(page.items[0].payload, { account: FIXTURE_ALICE_ID });
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.total, 1);
+  assert.throws(() => client.accountPermissions(""), /accountId/);
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list({ offset: 0 }), /offset/);
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list({}, { signal: 1 }), /signal/);
+  assert.equal(calls.length, 1);
 });
 
-test("listAccountPermissions encodes pagination and parses response", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
-    assert.equal(parsed.searchParams.get("limit"), "5");
-    assert.equal(parsed.searchParams.get("offset"), "2");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            name: "CanMintAssetToAccount",
-            payload: {
-              asset_definition: "xor#wonderland",
-              account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            },
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAccountPermissions(FIXTURE_ALICE_ID, {
-    limit: 5,
-    offset: 2,
-  });
-  assert.deepEqual(result, {
-    items: [
-      {
-        name: "CanMintAssetToAccount",
-        payload: {
-          asset_definition: "xor#wonderland",
-          account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        },
-      },
-    ],
-    total: 1,
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(""),
-    /accountId must not be empty/,
-  );
+test("accountPermissions validates full rows while explicit projections preserve selected fields", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({
+    status: 200, headers: { "content-type": "application/json" },
+    jsonData: { items: [{ payload: { account: FIXTURE_ALICE_ID } }], next_cursor: null },
+  }) });
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list(), /name/);
+  const page = await client.accountPermissions(FIXTURE_ALICE_ID).list({ select: ["payload"] });
+  assert.deepEqual(page.items, [{ payload: { account: FIXTURE_ALICE_ID } }]);
 });
 
-test("listAccountPermissions rejects non-object options", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(FIXTURE_ALICE_ID, 1),
-    /listAccountPermissions must be a plain object/,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listAccountPermissions rejects invalid signals", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listAccountPermissions(FIXTURE_ALICE_ID, {
-        // @ts-expect-error intentional invalid signal for runtime guard
-        signal: {},
-      }),
-    /listAccountPermissions options.signal must be an AbortSignal/,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listAccountPermissions forwards AbortSignal instances", async () => {
-  const controller = new AbortController();
-  let capturedInit = null;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      capturedInit = init;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.listAccountPermissions(FIXTURE_ALICE_ID, {
-    limit: 1,
-    signal: controller.signal,
-  });
-  assert.ok(capturedInit);
-  assertRequestSignal(capturedInit.signal, controller.signal);
-});
-
-test("iterateAccountPermissions paginates account-scoped permissions", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
-    const limit = Number(parsed.searchParams.get("limit"));
-    const offset = Number(parsed.searchParams.get("offset") ?? "0");
-    callCount += 1;
-    let items = [];
-    if (offset === 0) {
-      items = Array.from({ length: limit }, (_, idx) => ({
-        name: `Permission${idx}`,
-        payload: {},
-      }));
-    } else if (offset === 2) {
-      items = [{ name: "Permission2", payload: {} }];
+test("contract history collections reject retired row fields and preserve block coordinates", async () => {
+  const activity = { entrypoint_hash: "tx1", result_ok: true, contract_address: "irohac1router", block_height: 4, block_index: 2 };
+  const event = { event_id: "tx1:0", schema_version: 1, provenance: "derived", tx_hash_hex: "aa".repeat(32), block_height: 4, block_index: 2,
+    block_hash_hex: "deadbeef", result_ok: true, contract_address: "irohac1router", module: "router", event_kind: "route_swap" };
+  for (const [property, base] of [["contractActivity", activity], ["contractEvents", event]]) {
+    for (const [field, value] of [["gas_asset_id", "xor#universal"], ["fee_sponsor", FIXTURE_ALICE_ID], ["gas_limit", 100000]]) {
+      const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200,
+        jsonData: { items: [{ ...base, [field]: value }], next_cursor: null }, headers: { "content-type": "application/json" } }) });
+      await assert.rejects(() => client[property].list(), new RegExp(`${field} is retired`, "u"));
     }
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 4 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const item of client.iterateAccountPermissions(FIXTURE_ALICE_ID, {
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    collected.push(item.name);
-  }
-  assert.deepEqual(collected, ["Permission0", "Permission1", "Permission2"]);
-  assert.equal(callCount, 2);
-});
-
-test("listAccountPermissions validates entry names", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [{ payload: {} }], total: 1 },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(FIXTURE_ALICE_ID),
-    /account permission list response\.items\[0]\.name/,
-  );
-});
-
-test("listAccountPermissions normalizes I105 and i105 (`sora`) account ids", async () => {
-  const forms = sampleAccountForms();
-  for (const literal of [forms.i105, forms.i105]) {
-    let requestedPath = null;
-    const fetchImpl = async (url) => {
-      requestedPath = new URL(url).pathname;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    };
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    await client.listAccountPermissions(literal);
-    assert.equal(requestedPath, accountPath(literal, "/permissions"));
-  }
-});
-
-test("listContractActivity encodes contract activity filters", async () => {
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            authority: FIXTURE_ALICE_ID,
-            entrypoint_hash: "abc",
-            result_ok: true,
-            timestamp_ms: 123,
-            contract_address: "irohac1router",
-            contract_alias: "dlmm_router",
-            contract_entrypoint: "route_swap",
-            contract_payload: { amount_in: 100, min_out: 95 },
-            fee_payment: authorityFeePayment(100000),
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listContractActivity({
-    authority: FIXTURE_ALICE_ID,
-    contractAlias: "dlmm_router",
-    contractEntrypoint: "route_swap",
-    resultOk: true,
-    sinceTimestampMs: 100,
-    untilTimestampMs: 200,
-    limit: 5,
-    offset: 1,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/contracts/activity");
-  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("contract_entrypoint"), "route_swap");
-  assert.equal(parsed.searchParams.get("result_ok"), "true");
-  assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
-  assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
-  assert.equal(payload.items[0].contract_payload.amount_in, 100);
-  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
-});
-
-test("listContractActivity rejects camelCase payload aliases", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              entrypoint_hash: "tx1",
-              result_ok: true,
-              contract_address: "irohac1router",
-              contractPayload: {},
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listContractActivity(),
-    /contract activity list response\.items\[0]\.contractPayload is not supported/,
-  );
-});
-
-test("listContractEvents encodes generic contract event filters", async () => {
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            event_id: "abc:0",
-            schema_version: 1,
-            provenance: "derived",
-            authority: FIXTURE_ALICE_ID,
-            timestamp_ms: 123,
-            tx_hash_hex: "ab".repeat(32),
-            block_height: 9,
-            block_hash_hex: "deadbeef",
-            result_ok: true,
-            contract_address: "irohac1router",
-            contract_alias: "dlmm_router",
-            module: "dlmm_router",
-            event_kind: "route_swap",
-            participants: [FIXTURE_ALICE_ID],
-            asset_ids: ["xor#universal"],
-            numeric_fields: { amount_in: 100 },
-            payload: { amount_in: 100, min_out: 95 },
-            fee_payment: authorityFeePayment(100000),
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listContractEvents({
-    authority: FIXTURE_ALICE_ID,
-    contractAlias: "dlmm_router",
-    module: "dlmm_router",
-    eventKind: "route_swap",
-    participant: FIXTURE_ALICE_ID,
-    assetId: "xor#universal",
-    provenance: "derived",
-    resultOk: true,
-    sinceTimestampMs: 100,
-    untilTimestampMs: 200,
-    limit: 5,
-    offset: 1,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/contracts/events");
-  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("module"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
-  assert.equal(parsed.searchParams.get("participant"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
-  assert.equal(parsed.searchParams.get("provenance"), "derived");
-  assert.equal(parsed.searchParams.get("result_ok"), "true");
-  assert.equal(payload.items[0].payload.amount_in, 100);
-  assert.equal(payload.items[0].block_height, 9);
-  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
-});
-
-test("contract query helpers reject padded selector filters before dispatch", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error("fetch must not run for padded selector filters");
-    },
-  });
-
-  const asyncCases = [
-    [
-      "activity contractAddress",
-      () => client.listContractActivity({ contractAddress: " irohac1router" }),
-      /contractAddress must not contain surrounding whitespace/u,
-    ],
-    [
-      "activity contractAlias",
-      () => client.listContractActivity({ contractAlias: "dlmm_router " }),
-      /contractAlias must not contain surrounding whitespace/u,
-    ],
-    [
-      "event contractAddress",
-      () => client.listContractEvents({ contractAddress: "irohac1router " }),
-      /contractAddress must not contain surrounding whitespace/u,
-    ],
-    [
-      "event contractAlias",
-      () => client.listContractEvents({ contractAlias: " dlmm_router" }),
-      /contractAlias must not contain surrounding whitespace/u,
-    ],
-    [
-      "event participant",
-      () => client.listContractEvents({ participant: `${FIXTURE_ALICE_ID} ` }),
-      /participant must not contain surrounding whitespace/u,
-    ],
-    [
-      "event assetId",
-      () => client.listContractEvents({ assetId: " xor#universal" }),
-      /assetId must not contain surrounding whitespace/u,
-    ],
-  ];
-
-  for (const [label, action, pattern] of asyncCases) {
-    await assert.rejects(action, pattern, label);
-  }
-
-  assert.throws(
-    () => client.streamContractEvents({ participant: ` ${FIXTURE_ALICE_ID}` }),
-    /participant must not contain surrounding whitespace/u,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listContractEvents rejects camelCase payload aliases", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              event_id: "tx1:0",
-              schema_version: 1,
-              provenance: "derived",
-              tx_hash_hex: "tx1",
-              block_height: 1,
-              block_hash_hex: "deadbeef",
-              result_ok: true,
-              contract_address: "irohac1router",
-              module: "router",
-              event_kind: "route_swap",
-              numericFields: {},
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listContractEvents(),
-    /contract event list response\.items\[0]\.numericFields is not supported/,
-  );
-});
-
-test("contract activity and event projections reject retired fee selectors", async () => {
-  const activity = {
-    entrypoint_hash: "tx1",
-    result_ok: true,
-    contract_address: "irohac1router",
-  };
-  const event = {
-    event_id: "tx1:0",
-    schema_version: 1,
-    provenance: "derived",
-    tx_hash_hex: "tx1",
-    block_height: 1,
-    block_hash_hex: "deadbeef",
-    result_ok: true,
-    contract_address: "irohac1router",
-    module: "router",
-    event_kind: "route_swap",
-  };
-  for (const [method, base] of [
-    ["listContractActivity", activity],
-    ["listContractEvents", event],
-  ]) {
-    for (const [field, value] of [
-      ["gas_asset_id", "xor#universal"],
-      ["fee_sponsor", FIXTURE_ALICE_ID],
-      ["gas_limit", 100000],
-    ]) {
-      const client = new ToriiClient(BASE_URL, {
-        fetchImpl: async () =>
-          createResponse({
-            status: 200,
-            jsonData: { items: [{ ...base, [field]: value }], total: 1 },
-            headers: { "content-type": "application/json" },
-          }),
-      });
-      await assert.rejects(() => client[method](), new RegExp(`${field} is retired`, "u"));
-    }
+    const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200,
+      jsonData: { items: [base], next_cursor: "older" }, headers: { "content-type": "application/json" } }) });
+    const page = await client[property].list();
+    assert.equal(page.items[0].block_height, 4);
+    assert.equal(page.items[0].block_index, 2);
+    assert.equal(page.nextCursor, "older");
   }
 });
 

@@ -12,7 +12,7 @@ use iroha_data_model::{
 
 use crate::{
     execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error},
-    kura::Kura,
+    kura::{Kura, history_checkpoints::HistoryCheckpoint},
 };
 
 fn canonical_source_error(
@@ -84,6 +84,26 @@ pub struct CanonicalHistorySource<'a> {
     block_hashes: &'a dyn super::BlockHashRead,
     tip: Option<super::NativeExecutionTip>,
     budget: AllocationBudget,
+}
+
+/// Where a descending walk starts: the original tip or a verified checkpoint.
+#[derive(Clone, Copy)]
+struct WalkStart {
+    height: u64,
+    iroha: HashOf<BlockHeader>,
+    core: iroha_sumeragi::types::Hash32,
+    result: iroha_sumeragi::types::Hash32,
+}
+
+impl WalkStart {
+    fn tip(tip: super::NativeExecutionTip) -> Self {
+        Self {
+            height: tip.height(),
+            iroha: tip.iroha_hash(),
+            core: tip.core_hash(),
+            result: tip.result(),
+        }
+    }
 }
 
 impl<'a> CanonicalHistorySource<'a> {
@@ -284,14 +304,51 @@ impl<'a> CanonicalHistorySource<'a> {
         &self,
         first: NonZeroUsize,
         last: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
-        mut visit: impl FnMut(
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
         ) -> Result<
             core::ops::ControlFlow<()>,
             ExecutionAttemptError<QueryExecutionFail>,
         >,
     ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
+        let tip = self.walk_tip(first, last)?;
+        self.walk_backwards(WalkStart::tip(tip), first, last, before_read, visit)
+    }
+
+    /// [`Self::visit_executed_backwards_until`] for off-chain readers: the walk
+    /// starts at the nearest verified checkpoint at or above `last` instead of
+    /// the tip, so it reads at most
+    /// [`HISTORY_CHECKPOINT_INTERVAL`](crate::kura::history_checkpoints::HISTORY_CHECKPOINT_INTERVAL)
+    /// blocks above the interval. Source work then depends on node-local
+    /// checkpoints, so this must never feed on-chain metering.
+    pub(crate) fn visit_executed_backwards_from_checkpoints(
+        &self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<
+            core::ops::ControlFlow<()>,
+            ExecutionAttemptError<QueryExecutionFail>,
+        >,
+    ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
+        let tip = self.walk_tip(first, last)?;
+        let selected_last =
+            u64::try_from(last.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        let start = self
+            .checkpoint_start(selected_last, tip.height())
+            .unwrap_or_else(|| WalkStart::tip(tip));
+        self.walk_backwards(start, first, last, before_read, visit)
+    }
+
+    /// The authenticated tip of this captured history, after checking the interval.
+    fn walk_tip(
+        &self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+    ) -> Result<super::NativeExecutionTip, ExecutionAttemptError<QueryExecutionFail>> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
                 "native execution interval is reversed".into(),
@@ -301,30 +358,77 @@ impl<'a> CanonicalHistorySource<'a> {
         self.expected_hash(first)
             .and_then(|_| self.expected_hash(last))
             .map_err(QueryExecutionFail::CanonicalHistory)?;
-        let invalid = |message: String| {
-            ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message))
+        let invalid = |message: &str| {
+            ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message.into()))
         };
         let tip = self
             .tip
-            .ok_or_else(|| invalid("State has no authenticated native execution tip".into()))?;
+            .ok_or_else(|| invalid("State has no authenticated native execution tip"))?;
         if usize::try_from(tip.height()).ok() != Some(self.height()) {
             return Err(invalid(
-                "native execution tip differs from the captured State history cut".into(),
+                "native execution tip differs from the captured State history cut",
             ));
         }
-        let mut expected_iroha = tip.iroha_hash();
-        let mut expected_core = tip.core_hash();
-        let mut expected_result = tip.result();
+        Ok(tip)
+    }
+
+    /// The nearest checkpoint at or above `target` that this history's hash
+    /// journal confirms; contradicted checkpoints are dropped.
+    fn checkpoint_start(&self, target: u64, ceiling: u64) -> Option<WalkStart> {
+        let checkpoints = self.kura.history_checkpoints();
+        for (height, checkpoint) in checkpoints.candidates(target, ceiling) {
+            let journal = usize::try_from(height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .and_then(|index| self.expected_hash(index).ok());
+            if journal == Some(checkpoint.iroha_hash) {
+                return Some(WalkStart {
+                    height,
+                    iroha: checkpoint.iroha_hash,
+                    core: checkpoint.core_hash,
+                    result: checkpoint.result,
+                });
+            }
+            checkpoints.forget(height, &checkpoint);
+        }
+        None
+    }
+
+    fn walk_backwards(
+        &self,
+        start: WalkStart,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        mut visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<
+            core::ops::ControlFlow<()>,
+            ExecutionAttemptError<QueryExecutionFail>,
+        >,
+    ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
+        let invalid = |message: String| {
+            ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message))
+        };
+        let mut expected_iroha = start.iroha;
+        let mut expected_core = start.core;
+        let mut expected_result = start.result;
         let target =
             u64::try_from(first.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
         let selected_last =
             u64::try_from(last.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        if start.height < selected_last {
+            return Err(invalid(
+                "requested execution lies beyond the walk's starting height".into(),
+            ));
+        }
+        let checkpoints = self.kura.history_checkpoints();
         // This scope retains at most two fully validated exact context values.
         // It owns no source, certificate, freshness or ancestry verdict and dies
         // with this walk. Every durable frame and parent binding is still read
         // and checked below, including on a warmed or subsequent State view.
         let mut validation = iroha_data_model::sumeragi_finality::EpochValidationScope::new();
-        for source_height in (target..=tip.height()).rev() {
+        for source_height in (target..=start.height).rev() {
             let index = usize::try_from(source_height)
                 .ok()
                 .and_then(NonZeroUsize::new)
@@ -351,6 +455,14 @@ impl<'a> CanonicalHistorySource<'a> {
                     "native header or R differs from authenticated execution ancestry at {source_height}"
                 )));
             }
+            checkpoints.record(
+                source_height,
+                HistoryCheckpoint {
+                    iroha_hash: journal_hash,
+                    core_hash: expected_core,
+                    result: expected_result,
+                },
+            );
             if source_height > target {
                 let header = receipt
                     .header()

@@ -463,12 +463,11 @@ fn parse_base(bytes: &[u8], staging: Option<&StagedRuntimeLayout>) -> Result<tom
             return Err(eyre!("generated base transaction policy differs"));
         }
         let account = toml_table(&table, &["account"])?;
-        if account.len() != 4
+        if account.len() != 3
             || account
                 .get("chain_discriminant")
                 .and_then(toml::Value::as_integer)
                 != Some(i64::from(CHAIN_DISCRIMINANT))
-            || toml_text(account, "domain")? != "wonderland.universal"
         {
             return Err(eyre!("generated base account context differs"));
         }
@@ -516,10 +515,6 @@ fn render_client(
     }
     root.insert("transaction".into(), toml::Value::Table(transaction));
     let mut account = toml::Table::new();
-    account.insert(
-        "domain".into(),
-        toml::Value::String("wonderland.universal".into()),
-    );
     account.insert(
         "chain_discriminant".into(),
         toml::Value::Integer(i64::from(CHAIN_DISCRIMINANT)),
@@ -1072,7 +1067,7 @@ mod tests {
             Hash::new(b"runtime-client-test"),
         ));
         let base = format!(
-            "chain = {CHAIN_ID:?}\nnetwork_id_file = \"genesis.expected_hash\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[transaction]\ntime_to_live_ms = 30000\nstatus_timeout_ms = 30000\nnonce = false\n[account]\ndomain = \"wonderland.universal\"\nchain_discriminant = 369\npublic_key = {:?}\nprivate_key = \"fixture-secret-invalid\"\n[basic_auth]\nweb_login = \"fixture-user\"\npassword = \"fixture-password\"\n",
+            "chain = {CHAIN_ID:?}\nnetwork_id_file = \"genesis.expected_hash\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[transaction]\ntime_to_live_ms = 30000\nstatus_timeout_ms = 30000\nnonce = false\n[account]\nchain_discriminant = 369\npublic_key = {:?}\nprivate_key = \"fixture-secret-invalid\"\n[basic_auth]\nweb_login = \"fixture-user\"\npassword = \"fixture-password\"\n",
             kp.public_key().to_string(),
         );
         let error = parse_base(base.as_bytes(), None).unwrap_err();
