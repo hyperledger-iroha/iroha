@@ -85,6 +85,7 @@ from .streaming import (
     EncryptionSuite,
     ErrorCode,
     FecScheme,
+    FeedbackHintFrame,
     HpkeSuite,
     HpkeSuiteMask,
     KeyUpdate,

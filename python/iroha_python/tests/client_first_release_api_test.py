@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import iroha_python
+import iroha_python.client as python_client
 import pytest
-
 from iroha_python import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
@@ -13,6 +14,7 @@ from iroha_python import (
     NetworkTimeStatus,
     ToriiClient,
 )
+from iroha_torii_client import governance_proposals
 
 from .helpers import RecordingSession, StubResponse
 
@@ -96,3 +98,26 @@ def test_first_release_surface_has_no_duplicate_typed_names(retired_name: str) -
 def test_distribution_declares_inline_types() -> None:
     package_root = Path(__file__).resolve().parents[1] / "src" / "iroha_python"
     assert (package_root / "py.typed").is_file()
+
+
+def test_validation_fee_public_types_use_the_current_torii_owner() -> None:
+    for name in (
+        "GovernanceValidationFeePayoutBinding",
+        "GovernanceProposalValidationFeePayoutLifecycle",
+        "GovernanceValidationFeePolicy",
+    ):
+        owner = getattr(governance_proposals, name)
+        assert getattr(iroha_python, name) is owner
+        assert getattr(python_client, name) is owner
+        assert name in iroha_python.__all__
+        assert name in python_client.__all__
+
+    lifecycle = governance_proposals.GovernanceProposalValidationFeePayoutLifecycle
+    assert set(lifecycle.__dataclass_fields__) == {"proposal_operator", "payout_binding"}
+    binding = governance_proposals.GovernanceValidationFeePayoutBinding
+    assert "reference_provider_accounts" in binding.__dataclass_fields__
+    assert "reward_pool_account_id" in binding.__dataclass_fields__
+    assert "recipients" not in binding.__dataclass_fields__
+    for module in (iroha_python, python_client, governance_proposals):
+        assert not hasattr(module, "GovernanceValidationFeePayoutRecipient")
+        assert "GovernanceValidationFeePayoutRecipient" not in module.__all__
