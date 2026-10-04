@@ -12,11 +12,6 @@ struct ProgressIntentDirectorySyncFault {
     target_index: usize,
 }
 #[cfg(test)]
-struct NativeAmxPrunePreUnlinkHook {
-    calls_before_run: usize,
-    hook: Option<Box<dyn FnOnce(&Path)>>,
-}
-#[cfg(test)]
 std::thread_local! {
     static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -42,88 +37,7 @@ std::thread_local! {
     static FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_AUTONOMOUS_MERGE_BUNDLE_PAIR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    static NATIVE_AMX_PRUNE_PRE_UNLINK_HOOK: std::cell::RefCell<Option<NativeAmxPrunePreUnlinkHook>> = const { std::cell::RefCell::new(None) };
     static NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn run_latest_certified_frontier_post_validation_hook_for_tests() {
-    let hook = LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-#[cfg(test)]
-fn run_native_amx_prune_pre_unlink_hook_for_tests(path: &Path) {
-    NATIVE_AMX_PRUNE_PRE_UNLINK_HOOK.with(|slot| {
-        let mut state = slot.borrow_mut();
-        let Some(hook) = state.as_mut() else {
-            return;
-        };
-        if hook.calls_before_run > 0 {
-            hook.calls_before_run -= 1;
-            return;
-        }
-        let callback = hook.hook.take();
-        *state = None;
-        drop(state);
-        if let Some(callback) = callback {
-            callback(path);
-        }
-    });
-}
-#[cfg(test)]
-fn set_native_amx_prune_pre_unlink_hook_for_tests(
-    calls_before_run: usize,
-    hook: impl FnOnce(&Path) + 'static,
-) {
-    NATIVE_AMX_PRUNE_PRE_UNLINK_HOOK.with(|slot| {
-        let previous = slot.borrow_mut().replace(NativeAmxPrunePreUnlinkHook {
-            calls_before_run,
-            hook: Some(Box::new(hook)),
-        });
-        assert!(
-            previous.is_none(),
-            "Native AMX prune hook already installed"
-        );
-    });
-}
-#[cfg(test)]
-fn run_native_amx_latest_index_pre_mutation_hook_for_tests(path: &Path) {
-    let hook = NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook(path);
-    }
-}
-#[cfg(test)]
-fn set_native_amx_latest_index_pre_mutation_hook_for_tests(hook: impl FnOnce(&Path) + 'static) {
-    NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK.with(|slot| {
-        let previous = slot.borrow_mut().replace(Box::new(hook));
-        assert!(
-            previous.is_none(),
-            "Native AMX latest-index mutation hook already installed"
-        );
-    });
-}
-#[cfg(test)]
-fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnce() + 'static) {
-    LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| {
-        let previous = slot.borrow_mut().replace(Box::new(hook));
-        assert!(previous.is_none(), "frontier test hook already installed");
-    });
-}
-#[cfg(test)]
-pub(crate) fn fail_next_certified_lane_block_artifact_validation_for_tests() {
-    FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
-}
-#[cfg(test)]
-fn fail_after_next_certified_frontier_build_for_tests() {
-    FAIL_AFTER_NEXT_CERTIFIED_FRONTIER_BUILD.with(|flag| flag.set(true));
-}
-#[cfg(test)]
-fn fail_after_bound_progress_append_build_for_tests(calls_before_failure: usize) {
-    FAIL_AFTER_BOUND_PROGRESS_APPEND_BUILD_CALLS.with(|slot| {
-        assert!(slot.replace(Some(calls_before_failure)).is_none());
-    });
 }
 #[cfg(test)]
 fn should_fail_after_bound_progress_append_build_for_tests() -> bool {
@@ -139,45 +53,6 @@ fn should_fail_after_bound_progress_append_build_for_tests() -> bool {
         None => false,
     })
 }
-#[cfg(test)]
-fn fail_after_next_autonomous_certified_frontier_for_tests() {
-    FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER.with(|flag| flag.set(true));
-}
-#[cfg(test)]
-fn fail_next_autonomous_merge_bundle_persistence_for_tests() {
-    FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE.with(|flag| flag.set(true));
-}
-#[cfg(test)]
-fn fail_next_autonomous_merge_bundle_append_data_sync_for_tests() {
-    FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC.with(|flag| flag.set(true));
-}
-#[cfg(test)]
-fn fail_after_next_autonomous_merge_bundle_pair_for_tests() {
-    FAIL_AFTER_NEXT_AUTONOMOUS_MERGE_BUNDLE_PAIR.with(|flag| flag.set(true));
-}
 const CANONICAL_HASH_READER_OBSERVED: usize = 1 << 0;
 const CANONICAL_BLOCK_READER_OBSERVED: usize = 1 << 1;
 
-#[cfg(test)]
-pub(crate) fn count_certified_artifact_validations_for_tests<T>(
-    run: impl FnOnce() -> T,
-) -> (T, usize) {
-    struct RestoreValidationCount;
-    impl Drop for RestoreValidationCount {
-        fn drop(&mut self) {
-            CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| count.set(None));
-        }
-    }
-    CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| {
-        assert!(
-            count.get().is_none(),
-            "certificate validation probe already active"
-        );
-        count.set(Some(0));
-    });
-    let _restore = RestoreValidationCount;
-    let value = run();
-    let count = CERTIFIED_ARTIFACT_VALIDATION_COUNT
-        .with(|count| count.get().expect("certificate validation probe active"));
-    (value, count)
-}

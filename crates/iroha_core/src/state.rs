@@ -430,6 +430,11 @@ mod checked_keypair_tests {
     }
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::beacon::{
+    GlobalThresholdBeaconError, ValidatedGlobalThresholdBeaconSessionV1,
+    verify_finalized_global_threshold_beacon_pulse_v1,
+};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::query::{
     projection_checkpoint::{
         QueryProjectionCheckpointPlanError, QueryProjectionCheckpointPublishPlan,
@@ -447,10 +452,7 @@ use crate::{
     Peers,
     beacon::{
         FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
-        GlobalThresholdBeaconError, GlobalThresholdBeaconPulseLinkV1,
-        ValidatedGlobalThresholdBeaconSessionV1,
-        validate_persisted_global_threshold_beacon_pulse_v1,
-        verify_finalized_global_threshold_beacon_pulse_v1,
+        GlobalThresholdBeaconPulseLinkV1, validate_persisted_global_threshold_beacon_pulse_v1,
     },
     block::CommittedBlock,
     compliance::LaneComplianceEngine,
@@ -11377,14 +11379,6 @@ impl PipelineParallelism {
     }
     pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
-    }
-    #[cfg(test)]
-    fn shares_pool_with(&self, other: &Self) -> bool {
-        match (&self.pool, &other.pool) {
-            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
-            (None, None) => true,
-            _ => false,
-        }
     }
 }
 #[cfg(test)]
@@ -22699,7 +22693,25 @@ fn parliament_timed_ovn_reservation_reducer_error_v1(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'block> WorldTransaction<'block, '_> {
+    /// Provides mutable provider-owner bindings for finalized-publication tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_owners_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ProviderId, AccountId> {
+        &mut self.provider_owners
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
+    }
+}
+
+impl WorldTransaction<'_, '_> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
@@ -23484,20 +23496,6 @@ impl<'block> WorldTransaction<'block, '_> {
     /// This bypasses registry lifecycle invariants and is unavailable in production builds.
     pub fn remove_provider_owner_for_testing(&mut self, provider: ProviderId) -> Option<AccountId> {
         self.provider_owners.remove(provider)
-    }
-    /// Provides mutable provider-owner bindings for finalized-publication tests.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn provider_owners_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ProviderId, AccountId> {
-        &mut self.provider_owners
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to provider-ingest completion authorities for tests.
-    pub fn provider_ingest_completion_authorities_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
-        &mut self.provider_ingest_completion_authorities
     }
     /// Replace one referendum's lock set while keeping the expiry index exact.
     pub(crate) fn put_governance_locks(

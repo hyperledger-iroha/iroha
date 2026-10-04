@@ -80,16 +80,6 @@ fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     .expect("publish configured lane catalog baseline");
 }
 
-fn assert_catalog_paths_absent(store_root: &Path, _catalog: &LaneCatalog) {
-    assert!(
-        !store_root.join("blocks/instances").exists(),
-        "rejected startup must create no lane instance"
-    );
-    assert!(
-        !store_root.join("merge_ledger/instances").exists(),
-        "rejected startup must create no lane merge instance"
-    );
-}
 
 #[cfg(unix)]
 #[test]

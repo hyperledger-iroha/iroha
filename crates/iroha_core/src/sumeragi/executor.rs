@@ -1255,6 +1255,9 @@ impl<'s> Worker<'s> {
                 self.routing_refusal = None;
                 expansion
             }
+            Err(error @ lanes::merge::MergeError::SourceChanged { .. }) => {
+                return Err(PublicationError::Retryable(error.to_string()));
+            }
             Err(lanes::merge::MergeError::StateView(error)) => return Err(error.into()),
             Err(lanes::merge::MergeError::RoutingDeferred(reason)) => {
                 self.routing_refusal = Some(reason.clone());

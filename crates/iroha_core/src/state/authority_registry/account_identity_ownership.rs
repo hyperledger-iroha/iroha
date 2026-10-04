@@ -9,10 +9,9 @@ use iroha_data_model::{
     account::{AccountId, AccountValue, OpaqueAccountId},
     nexus::UniversalAccountId,
 };
-use mv::{
-    PublicationPreparationError,
-    storage::{CommittedStorageView, StorageReadOnly},
-};
+#[cfg(test)]
+use mv::storage::StorageReadOnly;
+use mv::{PublicationPreparationError, storage::CommittedStorageView};
 use std::convert::Infallible;
 
 /// The original logical image containing an inconsistent identity relation.

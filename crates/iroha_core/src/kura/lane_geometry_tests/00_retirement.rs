@@ -91,16 +91,6 @@ fn assert_lane_paths_absent(root: &Path, _lane_config: &RuntimeLaneConfig) {
         "rejected pre-State startup must not create any instance merge path"
     );
 }
-fn assert_kura_io_error(error: &Error, kind: std::io::ErrorKind, message: &str) {
-    let Error::IO(source, _) = error else {
-        panic!("expected Kura IO error containing {message:?}, got {error:?}");
-    };
-    assert_eq!(source.kind(), kind, "unexpected Kura IO error: {error:?}");
-    assert!(
-        source.to_string().contains(message),
-        "Kura IO source did not contain {message:?}: {error:?}"
-    );
-}
 fn initial_and_extended_configs() -> (RuntimeLaneConfig, RuntimeLaneConfig) {
     let lane0 = ModelLaneConfig::default();
     let lane1 = ModelLaneConfig {

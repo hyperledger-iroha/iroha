@@ -1946,7 +1946,8 @@ mod tests {
                 crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                     stx,
                     &permission
-                ),
+                )
+                .unwrap(),
                 Some(revised.pool_vault_account_id.clone()),
                 "permission ownership switches atomically at enactment; historical order cannot restore an old pool",
             );

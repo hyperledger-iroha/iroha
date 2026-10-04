@@ -26,16 +26,20 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-The proxied pipeline-status JSON accounting mismatch is repaired. The preceding
-integrated candidate passed repeated paid settlements, sixteen-peer settlement with
-restart, and disjoint lane isolation with restart. The latest paid 4→7→4 run certified
-the return boundary at height 72 after all-peer restart, but the next paid transaction
-remained queued and height 73 never applied. The transition, signed RS16
-loss/withholding and release qualification remain open. Combined Core component
-checks pass; the repaired Rust SDK passes all 954 unit controls and strict lint.
-Core strict lint and fresh qualification of the merged source remain open. Exact
-finalized-carrier retries retain original execution without requeueing or charging
-again; changed source requires fresh evidence.
+The proxied pipeline-status JSON accounting mismatch is repaired. Scoped node runs
+have passed repeated paid settlements, sixteen-peer settlement with restart and
+disjoint lane isolation with restart. The latest paid 4→7→4 attempt halted after
+restart at height 66 when an ordinary State publication change was classified as
+terminal recovery. Its source-authentication retry repair passes component controls;
+fresh daemon qualification remains open. The earlier queued paid transaction after
+the certified return boundary at height 72 remains a required liveness regression.
+The runtime and trigger permission guards now reject malformed recognized payloads
+before delegation; decoder refusals preserve local deferral. Core strict lint still
+fails on unused production/resource graphs. The repaired Rust SDK client source
+passes its unit suite and strict lint; qualification of the final combined source,
+signed RS16 loss/withholding and release remains open. Exact finalized-carrier retries
+retain original execution without requeueing or charging again; changed source
+requires fresh evidence.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding

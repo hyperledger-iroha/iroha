@@ -15,7 +15,7 @@ use super::ordinary_mint_submission::{
 };
 use super::*;
 use crate::{
-    state::{StateReadOnly, StateView, WorldReadOnly as _},
+    state::{StateReadOnly, StateView},
     sumeragi::certified_chain::committed_block,
 };
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaVerifiedOrdinaryMintAuthorizationV1;
@@ -25,7 +25,6 @@ use iroha_data_model::{
     kagemusha::*,
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
-use mv::storage::StorageReadOnly as _;
 use std::{any::Any, num::NonZeroUsize};
 
 /// Closed proof-publication source owned by the authentic native State/Kura snapshot.

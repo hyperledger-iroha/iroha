@@ -126,7 +126,7 @@ impl Client {
         };
         use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
         expected_binding.validate()?;
-        block.verify_global_scope(self.network_id, &self.chain.to_string())?;
+        block.verify_global_scope(self.network_id, self.chain.as_ref())?;
         if provider.as_bytes() == &[0; 32]
             || block.height() < 2
             || block.commitment().schedule.current.network_id != self.network_id

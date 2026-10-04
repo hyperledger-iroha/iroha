@@ -83,10 +83,11 @@ impl ValidBlock {
             &block.header(),
             &expected_context,
         );
-        if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
-        {
-            return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                reason: "native source State cut advanced during context authentication".into(),
+        let observed_generation = state.state_view_generation();
+        if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
+            return Err(BlockValidationError::NativeSourceChanged {
+                authenticated_generation: generation,
+                observed_generation,
             });
         }
         authenticated.map_err(BlockValidationError::from)?;

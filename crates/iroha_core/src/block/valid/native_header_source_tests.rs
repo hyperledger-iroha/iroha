@@ -121,13 +121,117 @@ fn native_rejection_after_original_source_publication_is_a_local_refusal() {
         .err()
         .unwrap();
     assert!(matches!(
-        *error,
-        BlockValidationError::LocalStorageRecoveryRequired { .. }
+        error.as_ref(),
+        BlockValidationError::NativeSourceChanged {
+            authenticated_generation,
+            observed_generation,
+        } if *authenticated_generation == source.generation()
+            && *observed_generation == state.state_view_generation()
     ));
     assert!(
         events.is_empty(),
         "a local stale cut cannot reject a peer's proposal"
     );
     assert_eq!(retained.encode_wire().unwrap(), payload);
+    assert_eq!(receiver.height(), 2);
+}
+
+#[test]
+fn native_local_refusal_after_source_publication_retains_original_capacity() {
+    let mut producer =
+        CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
+    producer.commit_at(2_000, Vec::new());
+    let committed = producer.committed(2);
+    let proposal = committed
+        .block()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
+    let payload = proposal.encode_wire().unwrap();
+    let mut receiver =
+        CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
+    let state = Arc::clone(receiver.state());
+    let source =
+        ValidBlock::native_header_source(&proposal, &state, committed.header().unwrap(), &payload)
+            .unwrap();
+    receiver.commit_at(2_000, Vec::new());
+    assert_ne!(source.generation(), state.state_view_generation());
+
+    let budget = iroha_allocation::AllocationBudget::new(8);
+    let occupied = budget
+        .try_reserve_bytes(8)
+        .expect("occupy exact original pool");
+    let refusal = budget
+        .try_reserve_bytes(1)
+        .expect_err("original pool refusal");
+    let local = crate::execution_attempt::ExecutionDeferred::from(refusal.clone());
+    let rejected: WithEvents<Result<(ValidBlock, Box<StateBlock<'_>>), Error>> =
+        WithEvents::new(Err((
+            Box::new(proposal),
+            Box::new(BlockValidationError::ExecutionDeferred(local.clone())),
+        )));
+    let mut events = Vec::new();
+    let (retained, error) = rejected
+        .with_authenticated_rejection(source.header(), source.state(), source.generation())
+        .unpack(|event| events.push(event))
+        .err()
+        .unwrap();
+    let BlockValidationError::ExecutionDeferred(original) = error.as_ref() else {
+        panic!("source-cut observation must preserve an already unfinished original: {error}");
+    };
+    assert_eq!(original, &local);
+    assert_eq!(original.allocation_refusal(), Some(&refusal));
+    assert!(events.is_empty());
+    assert_eq!(retained.encode_wire().unwrap(), payload);
+    assert_eq!(receiver.height(), 2);
+    drop(occupied);
+    assert!(budget.try_reserve_bytes(1).is_ok());
+}
+
+#[test]
+fn native_terminal_failure_after_source_publication_keeps_original_custody() {
+    let mut producer =
+        CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
+    producer.commit_at(2_000, Vec::new());
+    let committed = producer.committed(2);
+    let proposal = committed.block().canonical_resultless_proposal().unwrap();
+    let payload = proposal.encode_wire().unwrap();
+    let mut receiver =
+        CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
+    let state = Arc::clone(receiver.state());
+    let source =
+        ValidBlock::native_header_source(&proposal, &state, committed.header().unwrap(), &payload)
+            .unwrap();
+    receiver.commit_at(2_000, Vec::new());
+    assert_ne!(source.generation(), state.state_view_generation());
+    for original in [
+        BlockValidationError::StateView(crate::state::StateViewError::Changed),
+        BlockValidationError::StateView(crate::state::StateViewError::Poisoned),
+        BlockValidationError::LaneStorage(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "original lane corruption",
+        )),
+        BlockValidationError::DaIndexHydration("original index recovery".into()),
+        BlockValidationError::LocalStorageRecoveryRequired {
+            reason: "original custody consumed".into(),
+        },
+    ] {
+        let original = Box::new(original);
+        let identity = std::ptr::from_ref(original.as_ref());
+        let rejected: WithEvents<Result<(ValidBlock, Box<StateBlock<'_>>), Error>> =
+            WithEvents::new(Err((Box::new(proposal.clone()), original)));
+        let mut events = Vec::new();
+        let (retained, error) = rejected
+            .with_authenticated_rejection(source.header(), source.state(), source.generation())
+            .unpack(|event| events.push(event))
+            .err()
+            .unwrap();
+        assert_eq!(
+            std::ptr::from_ref(error.as_ref()),
+            identity,
+            "retain the original terminal owner"
+        );
+        assert!(events.is_empty());
+        assert_eq!(retained.encode_wire().unwrap(), payload);
+    }
     assert_eq!(receiver.height(), 2);
 }

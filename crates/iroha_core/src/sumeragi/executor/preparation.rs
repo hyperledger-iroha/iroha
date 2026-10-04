@@ -95,6 +95,13 @@ pub(super) fn validation_failure(error: &BlockValidationError) -> Option<Publica
     };
     use mv::storage::AdmittedStorageError;
     let source = match error {
+        BlockValidationError::NativeSourceChanged { .. } => {
+            return Some(if cfg!(all(test, sumeragi_core_mutation = "HC88")) {
+                PublicationError::RecoveryRequired(error.to_string())
+            } else {
+                PublicationError::Retryable(error.to_string())
+            });
+        }
         BlockValidationError::StateView(original) => match original {
             StateViewError::Busy(wait) => PublicationDeferral::StateViewBusy(wait.clone()),
             StateViewError::Runtime(crate::state::LaneLifecycleError::NposPolicy(

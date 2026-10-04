@@ -198,7 +198,7 @@ fn valid_state_page_shape<N: FlatTypeNodeV1>(nodes: &[N], start: usize) -> Optio
 
 /// Validate every reserved nominal shape in an already structurally validated type forest.
 ///
-/// This checks the exact core view, QueryPage, and StatePage field/type identities. The caller
+/// This checks the exact core view, `QueryPage`, and `StatePage` field/type identities. The caller
 /// retains its own node/depth limits and leaf privacy/resource policy; no allocation occurs.
 #[must_use]
 pub fn validate_reserved_nominal_shapes_v1<N: FlatTypeNodeV1>(nodes: &[N]) -> bool {

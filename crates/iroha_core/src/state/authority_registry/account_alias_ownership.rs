@@ -6,10 +6,9 @@
 
 use crate::state::{World, account_label_is_pii};
 use iroha_data_model::account::{AccountAlias, AccountId, AccountValue};
-use mv::{
-    PublicationPreparationError,
-    storage::{CommittedStorageView, StorageReadOnly},
-};
+#[cfg(test)]
+use mv::storage::StorageReadOnly;
+use mv::{PublicationPreparationError, storage::CommittedStorageView};
 use std::{collections::BTreeSet, convert::Infallible};
 
 /// Which exact logical native image failed validation.

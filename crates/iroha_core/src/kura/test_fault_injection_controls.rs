@@ -35,10 +35,6 @@ pub(crate) fn fail_next_bound_progress_append_data_sync_for_tests() {
 fn fail_next_bound_progress_append_index_sync_for_tests() {
     FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.set(true));
 }
-#[cfg(test)]
-fn fail_next_native_amx_latest_index_recovery_temp_sync_for_tests() {
-    FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.set(true));
-}
 /// Fail a selected retained intent directory sync in focused publication tests.
 #[cfg(test)]
 pub(crate) fn fail_bound_progress_intent_directory_sync_for_tests(
@@ -71,57 +67,6 @@ fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures
     });
 }
 
-#[cfg(test)]
-fn fail_after_next_native_amx_evidence_temp_prefix_for_tests(bytes: usize) {
-    FAIL_AFTER_NEXT_BOUND_EVIDENCE_TEMP_PREFIX.with(|flag| flag.set(Some(bytes)));
-}
 
-#[cfg(test)]
-fn fail_after_next_native_amx_evidence_temp_sync_for_tests() {
-    FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.set(true));
-}
 
-#[cfg(test)]
-fn fail_after_next_native_amx_publication_temp_prefix_at_path_for_tests(
-    path: PathBuf,
-    bytes: usize,
-) {
-    FAIL_AFTER_NEXT_NATIVE_AMX_PUBLICATION_TEMP_PREFIX_AT_PATH.with(|flag| {
-        *flag.borrow_mut() = Some((path, bytes));
-    });
-}
 
-#[cfg(test)]
-impl Kura {
-    fn fail_native_amx_publication_temp_prefix_at_path_for_tests(
-        &self,
-        temporary: &mut std::fs::File,
-        temp_path: &Path,
-        bytes: &[u8],
-    ) -> Result<()> {
-        let cut = FAIL_AFTER_NEXT_NATIVE_AMX_PUBLICATION_TEMP_PREFIX_AT_PATH.with(|flag| {
-            let mut flag = flag.borrow_mut();
-            if flag.as_ref().is_some_and(|(path, _)| path == temp_path) {
-                flag.take().map(|(_, len)| len)
-            } else {
-                None
-            }
-        });
-        if let Some(len) = cut {
-            assert!(
-                len < bytes.len(),
-                "crash cut must precede the complete artifact"
-            );
-            temporary
-                .write_all(&bytes[..len])
-                .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
-            return Err(Error::IO(
-                std::io::Error::other(
-                    "injected Native evidence interruption during temporary write",
-                ),
-                temp_path.to_path_buf(),
-            ));
-        }
-        Ok(())
-    }
-}

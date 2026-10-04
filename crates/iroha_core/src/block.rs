@@ -1655,6 +1655,13 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
+    /// Native source publication changed; reacquire and authenticate before retrying ({authenticated_generation} -> {observed_generation})
+    NativeSourceChanged {
+        /// State generation authenticated by the original acquisition.
+        authenticated_generation: u64,
+        /// State generation observed before the unfinished attempt returned.
+        observed_generation: u64,
+    },
     /// Local State view could not be captured before candidate validation: {0}
     StateView(#[source] crate::state::StateViewError),
     /// Local World storage admission failed before State execution: {0}
@@ -1906,6 +1913,13 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
     fn from(error: crate::sumeragi::lanes::merge::MergeError) -> Self {
         use crate::sumeragi::lanes::merge::MergeError;
         match error {
+            MergeError::SourceChanged {
+                authenticated_generation,
+                observed_generation,
+            } => Self::NativeSourceChanged {
+                authenticated_generation,
+                observed_generation,
+            },
             MergeError::StateView(error) => Self::StateView(error),
             MergeError::RoutingDeferred(reason) => Self::ExecutionDeferred(reason),
             MergeError::Storage(crate::execution_attempt::ExecutionAttemptError::Deferred(
@@ -4566,9 +4580,7 @@ pub(crate) mod valid {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
                     Box::new(block),
-                    Box::new(BlockValidationError::LocalStorageRecoveryRequired {
-                        reason: error.to_string(),
-                    }),
+                    Box::new(BlockValidationError::from(error)),
                 )));
             }
             let source =
@@ -8564,13 +8576,18 @@ mod event {
             generation: u64,
         ) -> Self {
             if let Err((_, error)) = &mut self.0 {
-                if !crate::state::is_stable_state_view_generation(
-                    generation,
-                    state.state_view_generation(),
-                ) {
-                    *error = Box::new(BlockValidationError::LocalStorageRecoveryRequired {
-                        reason: "native rejection State cut advanced after source authentication"
-                            .into(),
+                // A pre-existing local failure owns its exact refusal or terminal custody.
+                // A concurrent publication cannot replace that owner or authorize rejection.
+                if !cfg!(all(test, sumeragi_core_mutation = "HC90"))
+                    && map_block_err_to_reason(error).is_none()
+                {
+                    return self;
+                }
+                let observed_generation = state.state_view_generation();
+                if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
+                    *error = Box::new(BlockValidationError::NativeSourceChanged {
+                        authenticated_generation: generation,
+                        observed_generation,
                     });
                 } else {
                     emit_block_rejection(header, error, |event| self.1 = Some(event));
@@ -8730,7 +8747,9 @@ mod event {
     ) -> Option<iroha_data_model::block::error::BlockRejectionReason> {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
-            BlockValidationError::LocalStorageRecoveryRequired { .. }
+            BlockValidationError::NativeSourceChanged { .. }
+            | BlockValidationError::DaIndexHydration(_)
+            | BlockValidationError::LocalStorageRecoveryRequired { .. }
             | BlockValidationError::StateView(_)
             | BlockValidationError::LaneStorage(_)
             | BlockValidationError::StateStorageAdmission(_)
@@ -8789,7 +8808,6 @@ mod event {
             ) => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::DaIndexHydration(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaReceiptCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {

@@ -2654,7 +2654,6 @@ pub(crate) mod tests {
         CanResolveSorafsCapacityDispute,
     };
     use iroha_model_base::metadata::Metadata;
-    use std::sync::Arc;
     const TEST_NOW_MS: u64 = 1_700_000_000_000;
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])

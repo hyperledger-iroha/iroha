@@ -11,10 +11,9 @@ use iroha_data_model::{
     rwa::{RwaId, RwaValue},
 };
 use iroha_model_base::{domain::DomainId, name::Name};
-use mv::{
-    PublicationPreparationError,
-    storage::{CommittedStorageView, StorageReadOnly},
-};
+#[cfg(test)]
+use mv::storage::StorageReadOnly;
+use mv::{PublicationPreparationError, storage::CommittedStorageView};
 use std::{collections::BTreeSet, convert::Infallible};
 
 mod escrows;

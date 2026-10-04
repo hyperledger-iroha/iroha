@@ -18298,20 +18298,21 @@ pub mod isi {
                         .into(),
                 ));
             }
-            if role.permissions().any(|permission| {
-                crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
+            for permission in role.permissions() {
+                if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                     state_transaction,
                     permission,
-                ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                )? || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                     state_transaction,
                     permission,
-                )
+                )?
                 .is_some()
-            }) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
-                        .into(),
-                ));
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
+                            .into(),
+                    ));
+                }
             }
             if state_transaction.world.roles.get(role.id()).is_some() {
                 return Err(RepetitionError {
@@ -18388,10 +18389,10 @@ pub mod isi {
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
                 &permission,
-            ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+            )? || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                 state_transaction,
                 &permission,
-            )
+            )?
             .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -19058,7 +19059,6 @@ pub mod isi {
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
-            sync::Arc,
         };
         const TEST_HALO2_CIRCUIT_ID: &str =
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;

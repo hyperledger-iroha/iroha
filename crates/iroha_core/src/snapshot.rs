@@ -128,7 +128,10 @@ impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
             SnapshotCaptureError::Runtime(error) => {
                 Self::StateView(crate::state::StateViewError::Runtime(*error))
             }
-            error => Self::ExecutionStatePublication(error.to_string()),
+            #[cfg(test)]
+            error @ SnapshotCaptureError::Encoding(_) => {
+                Self::ExecutionStatePublication(error.to_string())
+            }
         }
     }
 }
@@ -5126,6 +5129,24 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadEr
 #[cfg(test)]
 mod tests {
     use iroha_model_base::topology::LaneId;
+
+    /// Exhaustive conversion preserves the original read classification and encoding text.
+    #[test]
+    fn snapshot_capture_merge_conversion_preserves_original_errors() {
+        use super::{SnapshotCaptureError, TryReadError};
+        use crate::state::{MergeLedgerCommitError, StateViewError};
+
+        assert!(matches!(
+            MergeLedgerCommitError::from(SnapshotCaptureError::Read(StateViewError::Changed)),
+            MergeLedgerCommitError::StateView(StateViewError::Changed)
+        ));
+        let encoding = SnapshotCaptureError::Encoding(Box::new(TryReadError::NotFound));
+        let original_message = encoding.to_string();
+        let MergeLedgerCommitError::ExecutionStatePublication(message) = encoding.into() else {
+            panic!("the original encoding failure must retain its publication classification");
+        };
+        assert_eq!(message, original_message);
+    }
 
     fn election_corpus_snapshot(field: &str, value: &str, previous: bool) -> Vec<u8> {
         let mut input = String::from(r#"{"world":{"elections":{"#);

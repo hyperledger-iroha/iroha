@@ -654,6 +654,14 @@ CORE_MUTATIONS = [
       ["sumeragi::driver::exec::producer_retry_tests::cancelling_and_dropping_scheduler_unlinks_all_waiters_before_original_refunds"]),
     m("HC84", "startup committed history: collapse original cold-read refusal into invalid configuration",
       ["kura::tests::startup_history_retains_original_cold_kura_refusal_and_exact_retry"]),
+    m("HC89", "validation-fee permission guard: treat a failed protected registry read as unrestricted delegation",
+      ["validation_fee::tests::permission_guard_tests::malformed_protected_registry_rejects_account_grant_before_permission_mutation"]),
+    m("HC91", "validation-fee trigger permission guard: discard a recognized trigger payload decode error and permit delegation",
+      ["validation_fee::tests::permission_guard_tests::trigger_permission_guard_tests::malformed_trigger_permission_rejects_account_grant_before_mutation"]),
+    m("HC88", "native source publication: halt instead of reacquiring ordinary State publication",
+      ["sumeragi::executor::preparation::tests::native_source_publication_change_retries_without_recovery_or_quarantine"]),
+    m("HC90", "native source publication: replace the original local capacity refusal",
+      ["block::valid::native_header_source_tests::native_local_refusal_after_source_publication_retains_original_capacity"]),
 ]
 
 

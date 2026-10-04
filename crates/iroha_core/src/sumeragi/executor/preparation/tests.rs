@@ -782,3 +782,41 @@ fn validation_wrappers_keep_real_capacity_and_terminal_custody_distinct() {
     }
     assert!(validation_failure(&BlockValidationError::HasCommittedTransactions).is_none());
 }
+
+#[test]
+fn native_source_publication_change_retries_without_recovery_or_quarantine() {
+    for error in [
+        BlockValidationError::NativeSourceChanged {
+            authenticated_generation: 2,
+            observed_generation: 4,
+        },
+        BlockValidationError::from(crate::sumeragi::lanes::merge::MergeError::SourceChanged {
+            authenticated_generation: 2,
+            observed_generation: 4,
+        }),
+    ] {
+        assert!(!super::super::control::transaction_rejection(&error));
+        assert!(matches!(
+            validation_failure(&error),
+            Some(PublicationError::Retryable(_))
+        ));
+        assert!(matches!(
+            super::super::classify(2, &error),
+            Err(PublicationError::Retryable(_))
+        ));
+    }
+    for terminal in [
+        BlockValidationError::StateView(crate::state::StateViewError::Changed),
+        BlockValidationError::StateView(crate::state::StateViewError::Poisoned),
+        BlockValidationError::DaIndexHydration("original index corrupt".into()),
+        BlockValidationError::LocalStorageRecoveryRequired {
+            reason: "original custody lost".into(),
+        },
+    ] {
+        assert!(matches!(
+            validation_failure(&terminal),
+            Some(PublicationError::RecoveryRequired(_))
+        ));
+        assert!(!super::super::control::transaction_rejection(&terminal));
+    }
+}

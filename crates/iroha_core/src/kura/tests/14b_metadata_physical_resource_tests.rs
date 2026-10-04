@@ -1,13 +1,5 @@
 // Exact physical accounting at metadata suffix deletion and recovery boundaries.
 
-fn metadata_physical_fixture() -> (TempDir, Arc<Kura>) {
-    let directory = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .unwrap();
-    (directory, kura)
-}
 
 fn metadata_physical_register(kura: &Kura) -> IndexResourceCounts {
     let actual = kura

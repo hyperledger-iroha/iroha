@@ -90,12 +90,15 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::{name::Name, state_path::StatePath};
+use iroha_model_base::name::Name;
+#[cfg(test)]
+use iroha_model_base::state_path::StatePath;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
+use std::str::FromStr;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    str::FromStr,
     sync::Arc,
 };
 use thiserror::Error;

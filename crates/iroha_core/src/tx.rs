@@ -818,10 +818,8 @@ impl<'tx> CheckedTransaction<'tx> {
         }
         Ok(Self(tx))
     }
-    /// Construct a checked transaction after the caller performed committed-hash validation.
-    ///
-    /// This is intended for hot requeue paths that already validated
-    /// `InBlockchain` membership via a narrow state accessor.
+    /// Construct a checked transaction fixture whose committed-hash validation is owned by the test.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new_unchecked(tx: AcceptedTransaction<'tx>) -> Self {
         Self(tx)

@@ -2930,7 +2930,7 @@ fn beacon_startup_retains_original_capacity_through_worker_channel_and_node() {
         let budget = worker.state.ivm_execution_budget();
         let mut registration = crate::unit_test_support::release_registration(&budget);
         let key = crate::sumeragi::crypto::core_key(chain.validators()[0].0.public_key()).unwrap();
-        let mut executor = StateExecutor::spawn(worker.context.clone()).unwrap();
+        let executor = StateExecutor::spawn(worker.context.clone()).unwrap();
         let _epoch = crossbeam_epoch::pin();
         let pressure = budget
             .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())

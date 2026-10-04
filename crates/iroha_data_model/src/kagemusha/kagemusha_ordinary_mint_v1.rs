@@ -750,7 +750,7 @@ impl KagemushaOrdinaryTopUpRequestV1 {
     }
     /// Check the complete neutral finalized credit against this exact ordinary request and the
     /// independently admitted original receipt time. This validates data only: both Mint113 and
-    /// MintAuthority proofs, the actual receipt finality, current FI and one-use incoming State
+    /// `MintAuthority` proofs, the actual receipt finality, current FI and one-use incoming State
     /// consumption remain separate mandatory admissions. It never reconstructs an OEM request.
     /// # Errors
     /// Refuses a changed complete authorization, ciphertext, receipt time, recipient, amount,

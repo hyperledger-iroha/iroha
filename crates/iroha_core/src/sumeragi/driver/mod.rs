@@ -1073,6 +1073,8 @@ struct Shared {
     status: Mutex<Option<CoreStatus>>,
     backlog: Mutex<Backlog>,
     wake: iroha_allocation::ChargedShared<ThreadWake>,
+    /// One transaction notification remains pending through the completion drain.
+    transactions_pending: AtomicBool,
     /// The event loop runs.
     alive: AtomicBool,
     /// The thread whose end stopped the instance, if one did.
@@ -1308,7 +1310,13 @@ impl DriverHandle {
         if self.shared.node_gate.is_closed() {
             return;
         }
-        let _ = self.inputs.send(Input::Transactions);
+        if !self
+            .shared
+            .transactions_pending
+            .swap(true, Ordering::AcqRel)
+        {
+            let _ = self.inputs.send(Input::Transactions);
+        }
     }
 
     /// The core's latest diagnostics (`None` before the core started).
@@ -1471,6 +1479,7 @@ where
             status: Mutex::new(None),
             backlog: Mutex::new(Backlog::default()),
             wake: wake.clone(),
+            transactions_pending: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             stopped: Mutex::new(None),
             metrics: metrics.as_ref().map(|metrics| metrics.series().clone()),
@@ -1895,13 +1904,19 @@ fn run_loop(
     clock: &dyn Clock,
     workers: &Workers,
 ) -> Result<(), Worker> {
-    let absorb = |kernel: &mut Kernel, input: Input| -> Result<bool, Worker> {
+    let absorb = |kernel: &mut Kernel,
+                  input: Input,
+                  received_transactions: &mut bool|
+     -> Result<bool, Worker> {
         let Some(_operation) = shared.node_gate.enter() else {
             return Err(Worker::Loop);
         };
         match input {
             Input::Done(completion) => kernel.complete(clock.now(), completion),
-            Input::Transactions => kernel.transactions_available(),
+            Input::Transactions => {
+                kernel.transactions_available();
+                *received_transactions = true;
+            }
             Input::Exited(worker) => return Err(worker),
             Input::Stop => return Ok(false),
         }
@@ -1910,16 +1925,21 @@ fn run_loop(
     loop {
         // Consume the previous edge before draining inputs and polling release sources.
         shared.wake.take_pending();
+        let mut received_transactions = false;
         loop {
             match rx.try_recv() {
                 Ok(input) => {
-                    if !absorb(&mut kernel, input)? {
+                    if !absorb(&mut kernel, input, &mut received_transactions)? {
                         return Ok(());
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
+        }
+        if received_transactions {
+            // Reopen before dispatch: an arrival during Build must survive its EMPTY result.
+            shared.transactions_pending.store(false, Ordering::Release);
         }
         let operations = {
             let Some(_operation) = shared.node_gate.enter() else {

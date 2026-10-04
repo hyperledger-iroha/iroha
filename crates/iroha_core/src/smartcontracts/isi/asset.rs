@@ -7432,6 +7432,10 @@ pub mod isi {
     impl<'a> QuantityRetirementOwner<'a> {
         /// Observe the already authorized native instruction. Failure affects only
         /// capture; it never changes the original business operation or error order.
+        #[expect(
+            single_use_lifetimes,
+            reason = "Rust 1.93 requires a named lifetime for reference items in impl ExactSizeIterator bounds"
+        )]
         pub(in crate::smartcontracts::isi) fn retain<'ids>(
             state: &StateTransaction<'_, '_>,
             authority: &'a AccountId,
