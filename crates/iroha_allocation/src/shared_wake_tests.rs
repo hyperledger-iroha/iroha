@@ -58,7 +58,7 @@ fn charged_waker_conversion_clones_callbacks_and_final_drop_allocate_nothing() {
     let layout = ChargedShared::<WakeTarget>::allocation_layout();
     let budget = AllocationBudget::new(layout.size());
     let value = target(&budget, false);
-    let wakes = Arc::clone(&value.wakes);
+    let wake_count = Arc::clone(&value.wakes);
     let drops = Arc::clone(&value.drops);
     let owner =
         ChargedShared::from_reservation(value, &mut budget.try_reserve(layout).unwrap()).unwrap();
@@ -70,7 +70,7 @@ fn charged_waker_conversion_clones_callbacks_and_final_drop_allocate_nothing() {
     assert!(waker.will_wake(&clone));
     without_allocations(|| waker.wake_by_ref());
     without_allocations(|| clone.wake());
-    assert_eq!(wakes.load(SeqCst), 2);
+    assert_eq!(wake_count.load(SeqCst), 2);
     assert_eq!(drops.load(SeqCst), 0);
     assert_eq!(budget.reserved_bytes(), layout.size());
     without_allocations(|| drop(waker));
@@ -84,7 +84,7 @@ fn consumed_and_borrowed_wake_panics_preserve_exact_reference_custody() {
         let layout = ChargedShared::<WakeTarget>::allocation_layout();
         let budget = AllocationBudget::new(layout.size());
         let value = target(&budget, true);
-        let wakes = Arc::clone(&value.wakes);
+        let wake_count = Arc::clone(&value.wakes);
         let drops = Arc::clone(&value.drops);
         let owner =
             ChargedShared::from_reservation(value, &mut budget.try_reserve(layout).unwrap())
@@ -101,7 +101,7 @@ fn consumed_and_borrowed_wake_panics_preserve_exact_reference_custody() {
             assert_eq!(drops.load(SeqCst), 0);
             drop(waker);
         }
-        assert_eq!(wakes.load(SeqCst), 1);
+        assert_eq!(wake_count.load(SeqCst), 1);
         assert_eq!(drops.load(SeqCst), 1);
         assert_eq!(budget.reserved_bytes(), 0);
     }

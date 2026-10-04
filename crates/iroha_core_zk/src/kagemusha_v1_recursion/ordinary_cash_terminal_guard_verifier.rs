@@ -26,23 +26,8 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryTerminalGuardV1 {
     original: Vec<u8>,
 }
 impl KagemushaAuthenticatedOrdinaryTerminalGuardV1 {
-    pub(crate) fn operation_id(&self) -> DigestV1 {
-        self.operation_id
-    }
-    pub(crate) fn nonce(&self) -> DigestV1 {
-        self.nonce
-    }
-    pub(crate) fn admission_clock_context(&self) -> &KagemushaOrdinaryCashClockContextV1 {
-        &self.admission_clock
-    }
     pub(crate) fn original_digests(&self) -> [DigestV1; 5] {
         self.digests
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        &self.eq_history
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        &self.ep_history
     }
     pub(crate) fn original(&self) -> &[u8] {
         &self.original

@@ -17,7 +17,7 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve its proving-time and
-   RSS observer failures;
+   hardware-specific address-space failures;
    produce current q77 maximum proofs without widening resource limits.
 
 The [first-release goals](specs/first_release_completion_goals.md),

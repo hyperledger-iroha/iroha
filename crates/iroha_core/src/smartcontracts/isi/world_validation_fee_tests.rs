@@ -519,13 +519,36 @@ fn verified_fee_sponsor_registration_fixture(
     };
     let limits = PublicTransferLimits::default();
     let public = public_claims_from_transcripts(&transcripts, limits).expect("exact funding claim");
-    let materialized = materialize_quantity_public_transfers(
-        &public,
-        batch.public_inputs,
-        fastpq_prover::ProofSemantics::AxtTransferClaim,
-        limits,
-        TransferSmtBuildLimits::for_update_limit(2).expect("two exact account updates"),
-    )
+    let materialized = {
+        // This test fixture owns its finite tree pool; production supplies its original owner.
+        let tree_claims = &public;
+        let tree_limits =
+            TransferSmtBuildLimits::for_update_limit(2).expect("two exact account updates");
+        let tree_updates = tree_claims
+            .iter()
+            .try_fold(0_usize, |count, claim| {
+                count.checked_add(claim.deltas.len())
+            })
+            .expect("fixture effect count fits")
+            .checked_mul(2)
+            .expect("fixture row count fits");
+        let tree_bytes = tree_limits
+            .allocation_bytes(tree_updates, tree_updates)
+            .expect("fixture tree allocation demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        materialize_quantity_public_transfers(
+            tree_claims,
+            batch.public_inputs,
+            fastpq_prover::ProofSemantics::AxtTransferClaim,
+            limits,
+            tree_limits,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
     .expect("canonical funding SMT roots and quantity rows");
     let (rows, inputs, _, private) = materialized.into_parts();
     let witnesses = private.pairs();
@@ -876,9 +899,10 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
     // Signed-genesis validation already captured the execution witness and
     // drained its staging map. Inspect that retained source-owned evidence.
-    let witness = original
+    let captured = original
         .take_exec_witness()
         .expect("authenticated genesis retains its captured funding witness");
+    let witness = captured.wire();
     let original_transfer_count = witness
         .fastpq_transcripts
         .iter()
@@ -901,7 +925,10 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     let mut authority_preimage = b"iroha:fastpq:v1:authority|".to_vec();
     authority_preimage.extend_from_slice(&norito::codec::Encode::encode(&*BOB_ID));
     assert_eq!(transcript.authority_digest, Hash::new(authority_preimage));
-    assert_ne!(transcript.authority_digest, crate::fastpq::authority_digest(&ALICE_ID));
+    assert_ne!(
+        transcript.authority_digest,
+        crate::fastpq::authority_digest(&ALICE_ID)
+    );
     assert_eq!(transcript.deltas.len(), 1);
     let delta = &transcript.deltas[0];
     assert_eq!(delta.from_account, *ALICE_ID);

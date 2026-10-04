@@ -400,7 +400,7 @@ fn final_concurrent_clone_frees_payload_before_original_pool_reentrant_wake() {
     assert_eq!(dropped.load(SeqCst), 1);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert_eq!(observer.wakes.load(SeqCst), 1);
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));

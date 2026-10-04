@@ -68,31 +68,6 @@ impl KagemushaAuthenticatedOrdinaryIncomingCandidateV1 {
     pub(crate) fn private_checkpoint_original(&self) -> &[u8] {
         &self.private_checkpoint_original
     }
-    pub(crate) fn with_retained_checkpoint(
-        &self,
-        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
-        consume: &mut dyn for<'a> FnMut(
-            &'a super::KagemushaGeneratedRecursiveStateProofV1,
-        ) -> core::result::Result<(), KagemushaStateErrorV1>,
-    ) -> Result<()> {
-        let restored = super::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
-            &self.private_checkpoint_original,
-            verifier,
-        )
-        .map_err(material)?
-        .restore(verifier, &self.public_inputs)
-        .map_err(material)?;
-        if restored.proof != self.proof {
-            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-        }
-        consume(&restored)
-    }
-    pub(crate) fn proof(&self) -> &KagemushaPairedProofV1 {
-        &self.proof
-    }
-    pub(crate) fn preparation(&self) -> &KagemushaOrdinaryIncomingPreparationV1 {
-        &self.preparation
-    }
     pub(crate) fn guard_original_sha256(&self) -> DigestV1 {
         self.guard_original_sha256
     }

@@ -3,7 +3,8 @@
 use super::*;
 use iroha_model_base::state_path::{MAX_STATE_PATH_BYTES, StatePath};
 
-pub(super) fn long_path_census() {
+/// Check long canonical paths against the existing scratch admission bound.
+pub fn long_path_census() {
     let mut cases = vec![
         "ascii/path".repeat(1024),
         "q\u{301}".repeat(1024),

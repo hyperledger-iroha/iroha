@@ -25,27 +25,30 @@ fn borrowed_siblings_preserve_empty_single_ragged_and_full_tree_geometry() {
             .map(|index: usize| Hash::new(index.to_le_bytes()).into())
             .collect();
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.iter().copied());
-        for index in 0..=count {
-            let expected = parent_chain_reference(&tree, index as u32);
-            let actual = tree
-                .proof_siblings(index as u32)
-                .map(|path| path.collect::<Vec<_>>());
+        for (index, leaf) in leaves
+            .iter()
+            .map(Some)
+            .chain(core::iter::once(None))
+            .enumerate()
+        {
+            let index = u32::try_from(index).expect("test leaf count fits u32");
+            let expected = parent_chain_reference(&tree, index);
+            let actual = tree.proof_siblings(index).map(Iterator::collect::<Vec<_>>);
             assert_eq!(actual, expected, "count={count} index={index}");
-            let owned = tree.get_proof(index as u32);
+            let owned = tree.get_proof(index);
             assert_eq!(
-                owned.as_ref().map(|proof| proof.audit_path()),
+                owned.as_ref().map(MerkleProof::audit_path),
                 actual.as_deref()
             );
-            if index < count {
-                let reference = MerkleProof::from_audit_path(index as u32, expected.unwrap());
+            if let Some(leaf) = leaf {
+                let reference = MerkleProof::from_audit_path(index, expected.unwrap());
                 let proof = owned.unwrap();
                 assert_eq!(
                     norito::encode_canonical(&proof).unwrap(),
                     norito::encode_canonical(&reference).unwrap(),
                     "owned canonical proof bytes count={count} index={index}"
                 );
-                let leaf =
-                    HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaves[index]));
+                let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(*leaf));
                 assert!(proof.verify_sha256(&leaf, &tree.commitment().unwrap()));
             }
         }

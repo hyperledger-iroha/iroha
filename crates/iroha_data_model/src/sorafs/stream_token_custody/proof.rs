@@ -61,8 +61,8 @@ pub struct StreamTokenCustodyRecordProofV1 {
 // Preserve the syntactic Vec segment used by the packed sequence derive while
 // forwarding each exact original. No second response schema or decoder exists.
 pub(crate) mod borrowed {
-    pub(crate) struct Value<'a, T>(pub(crate) &'a T);
-    pub(crate) struct Vec<'a, T>(pub(crate) &'a std::vec::Vec<T>);
+    pub struct Value<'a, T>(pub(crate) &'a T);
+    pub struct Vec<'a, T>(pub(crate) &'a std::vec::Vec<T>);
     macro_rules! forward {
         ($name:ident, $target:ty) => {
             impl<T> norito::core::SerializePayload for $name<'_, T>
@@ -366,10 +366,6 @@ impl StreamTokenCustodyProofV1 {
     /// # Errors
     /// Wrong independent scope, owner or schema, changed World/preimages, concealed native
     /// custody, malformed or noncurrent records, or exceeded finite bounds.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each independent trust input remains explicit"
-    )]
     pub fn verify(
         &self,
         expected_network: NetworkId,
@@ -400,27 +396,24 @@ impl StreamTokenCustodyProofV1 {
         }
         let world = self.world.authenticate(block)?;
         world.verify_table_value("world.provider_owners", &expected_provider, expected_owner)?;
-        let current = match &self.current {
-            Some(proof) => {
-                let current = proof.verify_current(
-                    &world,
-                    &expected_binding.chain_id,
-                    expected_network,
-                    expected_provider,
-                    block,
-                )?;
-                if current.control.policy.binding != *expected_binding {
-                    return Err(invalid(
-                        "Custody proof differs from the independent complete signer binding",
-                    ));
-                }
-                Some(current)
+        let current = if let Some(proof) = &self.current {
+            let current = proof.verify_current(
+                &world,
+                &expected_binding.chain_id,
+                expected_network,
+                expected_provider,
+                block,
+            )?;
+            if current.control.policy.binding != *expected_binding {
+                return Err(invalid(
+                    "Custody proof differs from the independent complete signer binding",
+                ));
             }
-            None => {
-                world.verify_smart_contract_state_absent(&head_key(expected_provider))?;
-                world.verify_smart_contract_state_absent(&record_key(expected_provider, 1))?;
-                None
-            }
+            Some(current)
+        } else {
+            world.verify_smart_contract_state_absent(&head_key(expected_provider))?;
+            world.verify_smart_contract_state_absent(&record_key(expected_provider, 1))?;
+            None
         };
         Ok(VerifiedStreamTokenCustodyStateV1 {
             network_id: expected_network,

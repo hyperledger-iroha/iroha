@@ -15,8 +15,12 @@
 // it is not an invocation or allocation qualification.
 
 use super::super::{frame_descriptor, packet, permutation, private_history};
-use super::{F, OriginalPackets, Program, Role, wide};
+use super::{F, OriginalPackets, Program};
+#[cfg(test)]
+use super::{Role, wide};
 use packet::{AFTER, BEFORE, CLOCK};
+
+mod scalar_arguments;
 
 /// Original dispatch and descriptor producers; the lifecycle active tuple is shared.
 pub(super) const PORTS: usize = super::PORTS + frame_descriptor::PORTS + 5;
@@ -38,15 +42,21 @@ const VALIDATION_SOURCES: [usize; 4] = [0, 2, 1, 3];
 #[derive(Clone, Copy)]
 pub(super) struct Schedule {
     vm: u8,
-    first_clock: u32,
+    clocks: [u32; PORTS],
 }
 impl Schedule {
     pub(super) fn new(vm: u8, first_clock: u32) -> Option<Self> {
         first_clock.checked_add(PORTS as u32 - 1)?;
-        Some(Self { vm, first_clock })
+        Self::with_clocks(vm, core::array::from_fn(|slot| first_clock + slot as u32))
+    }
+    fn with_clocks(vm: u8, clocks: [u32; PORTS]) -> Option<Self> {
+        clocks
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+            .then_some(Self { vm, clocks })
     }
     fn clock(self, slot: usize) -> u32 {
-        self.first_clock + slot as u32
+        self.clocks[slot]
     }
     fn dispatch(self) -> super::Schedule {
         super::Schedule::new(
@@ -92,6 +102,7 @@ impl Row<'_> {
 
 /// Resolve a public instruction slot through the original prepared interface.
 /// IVM targets are absolute; callable and descriptor entry PCs are code-relative.
+#[cfg(test)]
 fn callable(program: &Program, slot: usize) -> Option<&ivm::call::EmbeddedCallableV1> {
     let instruction = *program.words.get(slot)?;
     if super::role(instruction) != Some(Role::Child) {
@@ -116,6 +127,7 @@ fn callable(program: &Program, slot: usize) -> Option<&ivm::call::EmbeddedCallab
 /// initialization byte per result word. This is derived from the authenticated
 /// artifact, never from an unbounded prover-provided tariff. Prepared callable
 /// validation bounds it by 532480; each selected 16-bit limb remains bounded.
+#[cfg(test)]
 fn frame_work(callable: &ivm::call::EmbeddedCallableV1) -> u64 {
     u64::from(callable.frame_bytes).div_ceil(8)
         + callable
@@ -208,10 +220,10 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
     let mut frame_cost = [F::ZERO; 4];
     for slot in 0..program.words.len() {
         let fetch = row.dispatch[super::FETCH + slot];
-        if let Some(callable) = callable(program, slot) {
+        if let Some(cost) = program.callables().child_frame_work(slot) {
             for limb in 0..4 {
-                frame_cost[limb] = frame_cost[limb]
-                    .add(fetch.mul(super::constant_limb(frame_work(callable), limb)));
+                frame_cost[limb] =
+                    frame_cost[limb].add(fetch.mul(super::constant_limb(cost, limb)));
             }
         }
     }

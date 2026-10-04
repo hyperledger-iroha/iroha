@@ -1885,8 +1885,9 @@ fn seed_proof_record_after_native_genesis_for_test(
 ) -> String {
     assert_eq!(app.state.view().height(), 1);
     let genesis = app
-        .kura
-        .get_block(NonZeroUsize::new(1).unwrap())
+        .state
+        .block_by_height(NonZeroUsize::new(1).unwrap())
+        .expect("read original signed genesis through canonical State custody")
         .expect("retain original signed genesis");
     let genesis_hash = genesis.hash();
     let original_route = super::torii_all_dataspace_routes(app.as_ref())[0];
@@ -1932,8 +1933,9 @@ fn seed_proof_record_after_native_genesis_for_test(
         .expect("retain exact proof index header and membership");
     assert_eq!(app.state.view().height(), 2);
     assert_eq!(
-        app.kura
-            .get_block(NonZeroUsize::new(1).unwrap())
+        app.state
+            .block_by_height(NonZeroUsize::new(1).unwrap())
+            .expect("reread original signed genesis through canonical State custody")
             .unwrap()
             .hash(),
         genesis_hash

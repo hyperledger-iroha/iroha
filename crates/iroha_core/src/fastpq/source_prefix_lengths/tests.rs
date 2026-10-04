@@ -4,7 +4,7 @@ use super::*;
 use crate::fastpq::{
     poseidon_preimage_digest,
     quantity_statement::quantity_statement_frame_len_from_finalized_transcripts,
-    quantity_statement_from_finalized_transcripts,
+    quantity_statement_from_finalized_transcripts_for_testing,
 };
 use fastpq_prover::gadgets::public_transfer_statement::{
     PublicTransferLimits, TransferSmtBuildLimits,
@@ -124,7 +124,7 @@ fn final_frame_matches_the_complete_strict_materializer_with_real_roots() {
         perm_root: [255; 32],
         tx_set_hash: [127; 32],
     };
-    let actual = quantity_statement_from_finalized_transcripts(
+    let actual = quantity_statement_from_finalized_transcripts_for_testing(
         inputs,
         &[prefix],
         PublicTransferLimits::default(),

@@ -46,7 +46,7 @@ fn every_initial_publication_supports_a_cold_allocation_free_observation() {
 #[test]
 fn original_publication_contention_retains_its_real_release_source() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

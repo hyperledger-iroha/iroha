@@ -23,9 +23,17 @@ const VALUE_DOMAIN: &[u8] = b"fastpq:quantity:v1:smt:value|";
     name = "fastpq_prover::gadgets::public_transfer_statement::quantity::QuantityValueV1",
     frame = "fastpq_prover::public_transfer::QuantityValueV1"
 )]
-struct QuantityValueV1 {
+pub(super) struct QuantityValueV1 {
     scale: u32,
     limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],
+}
+
+/// Borrow-free fixed-size canonical value used by both buffered and funded writers.
+pub(super) fn quantity_value_frame(value: &FastpqQuantityUnits) -> QuantityValueV1 {
+    QuantityValueV1 {
+        scale: value.scale(),
+        limbs: *value.limbs(),
+    }
 }
 
 /// Encode the exact normalized quantity in its canonical nominal V1 frame.
@@ -34,10 +42,7 @@ struct QuantityValueV1 {
 /// # Errors
 /// Returns an error if canonical bounded Norito encoding fails.
 pub fn encode_quantity_units_v1(value: &FastpqQuantityUnits) -> Result<Vec<u8>> {
-    let frame = QuantityValueV1 {
-        scale: value.scale(),
-        limbs: *value.limbs(),
-    };
+    let frame = quantity_value_frame(value);
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     norito::core::to_bytes_bounded(&frame, QUANTITY_VALUE_MAX_BYTES_V1)
         .map_err(|error| invariant(&format!("quantity value encoding failed: {error}")))

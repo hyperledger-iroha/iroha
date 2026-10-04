@@ -1,9 +1,8 @@
 //! Unrelated state execution cannot replace a finalized owner's witness records.
 
 use super::{
-    tests::{
-        apply_source, cache_canonical_test_transaction_set, delta, header, recorded_block, state,
-    },
+    native_capture_fixture::{seal_native_source, with_native_capture_source},
+    tests::{cache_canonical_test_transaction_set, delta, header, state},
     *,
 };
 use crate::exec_witness;
@@ -62,59 +61,60 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
 }
 
 fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
-    let state = state();
-    let (mut block, _recording) = recorded_block(&state, header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"owned recorder isolation source");
-    apply_source(&mut block, source, false, None);
-    let transfer = delta();
-    let asset = AssetId::of(transfer.asset_definition, transfer.from_account);
-    exec_witness::record_read_asset(&asset, Some(&transfer.from_balance_before));
-    exec_witness::record_write_asset(&asset, &transfer.from_balance_after);
-    block
-        .finalize_fastpq_source_inventory(&[], &[], &[])
-        .unwrap();
-    let inventory = block
-        .verified_fastpq_source_inventory_for_capture()
-        .unwrap();
-    let archive = block.drain_transfer_transcripts_with_pending(None);
-    assert!(block.fastpq_transcripts.is_empty());
-    assert_eq!(archive.len(), 1);
-    assert!(archive[&source][0].poseidon_preimage_digest.is_some());
+    with_native_capture_source(
+        true,
+        |_state, mut block, _recording, mut native_source, source| {
+            let transfer = delta();
+            let asset = AssetId::of(transfer.asset_definition, transfer.from_account);
+            exec_witness::record_read_asset(&asset, Some(&transfer.from_balance_before));
+            exec_witness::record_write_asset(&asset, &transfer.from_balance_after);
+            seal_native_source(&mut block, &mut native_source).unwrap();
+            let inventory = block
+                .verified_fastpq_source_inventory_for_capture()
+                .unwrap();
+            let archive = native_source.fastpq_transcripts().clone();
+            let original_recorder = exec_witness::snapshot_exec_witness();
+            assert!(block.fastpq_transcripts.is_empty());
+            assert_eq!(archive.len(), 1);
+            assert!(archive[&source][0].poseidon_preimage_digest.is_some());
 
-    if let Some((with_transfer, in_overlay)) = unrelated {
-        // Force the complete unrelated operation into the exact gap between the
-        // owner's finalized transcript synchronization and checked capture.
-        std::thread::spawn(move || run_unrelated_block(with_transfer, in_overlay))
-            .join()
-            .expect("unrelated state execution must finish before owner capture");
-    }
+            if let Some((with_transfer, in_overlay)) = unrelated {
+                // Force the complete unrelated operation into the exact gap between the
+                // owner's finalized transcript synchronization and checked capture.
+                std::thread::spawn(move || run_unrelated_block(with_transfer, in_overlay))
+                    .join()
+                    .expect("unrelated state execution must finish before owner capture");
+            }
 
-    block
-        .capture_exec_witness()
-        .expect("unrelated state execution must preserve finalized source ownership");
-    assert_eq!(
-        block.fastpq_source_inventory().unwrap(),
-        Some(inventory.as_ref())
-    );
-    let context = block.take_fastpq_witness_context().unwrap();
-    assert!(Arc::ptr_eq(
-        context._source_inventory.as_ref().unwrap(),
-        &inventory
-    ));
-    let captured = block.take_exec_witness().unwrap();
-    assert_eq!(captured.fastpq_transcripts.len(), 1);
-    assert_eq!(captured.fastpq_transcripts[0].entry_hash, source);
-    assert_eq!(captured.fastpq_transcripts[0].transcripts, archive[&source]);
-    assert_eq!(captured.reads.len(), 1);
-    assert!(
-        captured
-            .writes
-            .iter()
-            .any(|entry| entry.key == captured.reads[0].key)
-    );
-    assert!(captured.fastpq_batches.is_empty());
-    captured
+            block
+                .capture_exec_witness()
+                .expect("unrelated state execution must preserve finalized source ownership");
+            assert_eq!(
+                block.fastpq_source_inventory().unwrap(),
+                Some(inventory.as_ref())
+            );
+            let context = block.take_fastpq_witness_context().unwrap();
+            assert!(Arc::ptr_eq(
+                context._source_inventory.as_ref().unwrap(),
+                &inventory
+            ));
+            let captured = block.take_exec_witness().unwrap();
+            assert_eq!(captured.fastpq_transcripts.len(), 1);
+            assert_eq!(captured.fastpq_transcripts[0].entry_hash, source);
+            assert_eq!(captured.fastpq_transcripts[0].transcripts, archive[&source]);
+            assert_eq!(captured.reads, original_recorder.reads);
+            assert!(!captured.reads.is_empty());
+            assert!(
+                captured
+                    .writes
+                    .iter()
+                    .any(|entry| entry.key == captured.reads[0].key)
+            );
+            assert!(captured.fastpq_batches.is_empty());
+            // Clone only the immutable wire for a byte-comparison oracle; original custody never escapes.
+            captured.wire().clone()
+        },
+    )
 }
 
 fn assert_unrelated_block_isolated(with_transfer: bool, in_overlay: bool) {

@@ -198,7 +198,7 @@ pub(crate) fn generate_ordinary_guard_pair_v1(
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
     let ep_history = initial_kagemusha_ep_accumulator_v1(&ep_parameters)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    Ok(GeneratedOrdinaryGuardPairV1 {
+    let generated = GeneratedOrdinaryGuardPairV1 {
         eq: GeneratedOrdinaryGuardEqV1 {
             parameters: eq_parameter_bytes,
             proving_key: eq_pk_bytes,
@@ -221,7 +221,9 @@ pub(crate) fn generate_ordinary_guard_pair_v1(
             proof: ep_proof,
             history: ep_history,
         },
-    })
+    };
+    generated.verify_originals(provider_policy_root, issuer_table)?;
+    Ok(generated)
 }
 
 fn require_width<F>(instances: &[F]) -> Result<(), KagemushaArtifactGenerationErrorV1> {
@@ -231,4 +233,104 @@ fn require_width<F>(instances: &[F]) -> Result<(), KagemushaArtifactGenerationEr
         ));
     }
     Ok(())
+}
+
+impl GeneratedOrdinaryGuardPairV1 {
+    /// Replay the retained original artifacts and proof, with the independently selected
+    /// issuer table/provider root needed to reconstruct the full Guard circuit parameters.
+    /// This checks fixture data; it does not confer release or financial authority.
+    pub(crate) fn verify_originals(
+        &self,
+        provider_policy_root: DigestV1,
+        issuer_table: &OrdinaryIssuerTableV1,
+    ) -> Result<(), KagemushaArtifactGenerationErrorV1> {
+        use super::super::ordinary_guard_circuit::{
+            KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1,
+            KagemushaOrdinaryGuardCircuitParamsV1,
+        };
+        use super::ordinary_qualification_artifacts::{Originals, roundtrip};
+        macro_rules! replay {
+            ($part:ident, $curve:ty, $circuit:ty, $canonical:ident, $parity:expr,
+             $pk:ident, $vk:ident, $verify:ident, $acc:ty, $decide:ident) => {{
+                let original = &self.$part;
+                require_width(&original.instances)?;
+                let history = original.history.as_bytes();
+                let offset = ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1 - history.len() / 16;
+                if !original.instances[offset..]
+                    .iter()
+                    .zip(history.chunks_exact(16))
+                    .all(|(value, chunk)| {
+                        *value
+                            == crate::kagemusha_v1_poseidon::from_u128(u128::from_le_bytes(
+                                chunk.try_into().expect("whole Guard history limb"),
+                            ))
+                    })
+                {
+                    return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                        "retained ordinary Guard history differs from its proof column".into(),
+                    ));
+                }
+                let (params, protocol) = roundtrip::<$curve, $circuit>(
+                    Originals {
+                        parameters: &original.parameters,
+                        proving_key: &original.proving_key,
+                        verifying_key: &original.verifying_key,
+                        proving_role: KagemushaArtifactRoleV1::$pk,
+                        verifying_role: KagemushaArtifactRoleV1::$vk,
+                        protocol: &original.protocol,
+                    },
+                    &$canonical(),
+                    KagemushaOrdinaryGuardCircuitParamsV1 {
+                        base: original.base_params.clone(),
+                        provider_policy_root,
+                        issuer_table: issuer_table.clone(),
+                    },
+                    ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1,
+                )?;
+                if native_parent_protocol_digest_v1(&protocol, $parity)
+                    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?
+                    != original.protocol_digest
+                {
+                    return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                        "retained ordinary Guard protocol digest differs".into(),
+                    ));
+                }
+                let current = <$acc>::from_native(
+                    &$verify(&params, &protocol, &original.proof, &original.instances)
+                        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?,
+                )
+                .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
+                $decide(&params, &current)
+                    .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
+                $decide(&params, &original.history)
+                    .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
+            }};
+        }
+        replay!(
+            eq,
+            EqAffine,
+            KagemushaOrdinaryAppGuardEqCircuitV1,
+            canonical_kagemusha_eq_parameters_v1,
+            KagemushaPastaParityV1::Eq,
+            OrdinaryAppGuardPkEq,
+            OrdinaryAppGuardVkEq,
+            verify_eq_succinct_protocol,
+            KagemushaEqAccumulatorV1,
+            decide_kagemusha_eq_accumulator_v1
+        );
+        halo2_proofs::release_allocator_slack();
+        replay!(
+            ep,
+            EpAffine,
+            KagemushaOrdinaryAppGuardEpCircuitV1,
+            canonical_kagemusha_ep_parameters_v1,
+            KagemushaPastaParityV1::Ep,
+            OrdinaryAppGuardPkEp,
+            OrdinaryAppGuardVkEp,
+            verify_ep_succinct_protocol,
+            KagemushaEpAccumulatorV1,
+            decide_kagemusha_ep_accumulator_v1
+        );
+        Ok(())
+    }
 }

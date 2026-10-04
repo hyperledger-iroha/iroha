@@ -40,8 +40,28 @@ pub(super) struct OrdinaryCashProofForTestingV1 {
 /// This emits no PK/current proof/history grant. The final full-cycle caller must compare its
 /// final actually proved Wrapper descriptor to this exact candidate before accepting the graph.
 pub(super) fn discover_ordinary_wrapper_layout_for_testing_v1(
-    mut witness: OrdinaryCashCommitWrapperWitnessV1<'_>,
+    source: &OrdinaryCashCommitWrapperWitnessV1<'_>,
 ) -> (PlonkProtocol<EqAffine>, PlonkProtocol<EpAffine>) {
+    use super::super::ordinary_cash_commit_wrapper::OrdinaryCashCommitWrapperHalfWitnessV1;
+    let mut witness = OrdinaryCashCommitWrapperWitnessV1 {
+        public: source.public.clone(),
+        eq: OrdinaryCashCommitWrapperHalfWitnessV1 {
+            protocol: source.eq.protocol,
+            instances: source.eq.instances,
+            proof: source.eq.proof,
+            history: source.eq.history,
+            history_fold_proof: source.eq.history_fold_proof,
+            successor_history: source.eq.successor_history,
+        },
+        ep: OrdinaryCashCommitWrapperHalfWitnessV1 {
+            protocol: source.ep.protocol,
+            instances: source.ep.instances,
+            proof: source.ep.proof,
+            history: source.ep.history,
+            history_fold_proof: source.ep.history_fold_proof,
+            successor_history: source.ep.successor_history,
+        },
+    };
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
     let audits = collect_ordinary_cash_commit_wrapper_audits_v1(&eq, &ep, &witness).unwrap();
@@ -251,7 +271,7 @@ pub(super) fn generate_ordinary_terminal_for_testing_v1(
         None,
     )
     .unwrap();
-    OrdinaryCashProofForTestingV1 {
+    let result = OrdinaryCashProofForTestingV1 {
         keys: OrdinaryCashRoleKeysForTestingV1 {
             eq_parameters,
             eq_proving_key,
@@ -263,7 +283,21 @@ pub(super) fn generate_ordinary_terminal_for_testing_v1(
             ep_base,
         },
         generated,
-    }
+    };
+    verify_retained_pair::<
+        super::super::ordinary_cash_terminal_circuit::OrdinaryCashTerminalEqCircuitV1,
+        super::super::ordinary_cash_terminal_circuit::OrdinaryCashTerminalEpCircuitV1,
+    >(
+        &result,
+        [
+            KagemushaArtifactRoleV1::TerminalAuthorizationPkEq,
+            KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+            KagemushaArtifactRoleV1::TerminalAuthorizationPkEp,
+            KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+        ],
+        manifest,
+    );
+    result
 }
 
 /// Generate/prove the genuine compact Wrapper after the actual Terminal has been frozen.
@@ -274,6 +308,7 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
     manifest: DigestV1,
     seed: &KagemushaRecoverySeedV1,
 ) -> OrdinaryCashProofForTestingV1 {
+    let discovered = discover_ordinary_wrapper_layout_for_testing_v1(&witness);
     let folds = [
         witness
             .eq
@@ -440,7 +475,7 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
         Some(folds),
     )
     .unwrap();
-    OrdinaryCashProofForTestingV1 {
+    let result = OrdinaryCashProofForTestingV1 {
         keys: OrdinaryCashRoleKeysForTestingV1 {
             eq_parameters,
             eq_proving_key,
@@ -452,5 +487,192 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
             ep_base,
         },
         generated,
+    };
+    verify_retained_pair::<
+        super::super::ordinary_cash_commit_wrapper::OrdinaryCashCommitWrapperEqCircuitV1,
+        super::super::ordinary_cash_commit_wrapper::OrdinaryCashCommitWrapperEpCircuitV1,
+    >(
+        &result,
+        [
+            KagemushaArtifactRoleV1::CommitWrapperPkEq,
+            KagemushaArtifactRoleV1::CommitWrapperVkEq,
+            KagemushaArtifactRoleV1::CommitWrapperPkEp,
+            KagemushaArtifactRoleV1::CommitWrapperVkEp,
+        ],
+        manifest,
+    );
+    for (actual, found) in [
+        (
+            native_parent_protocol_digest_v1(
+                &result.generated.eq_protocol,
+                KagemushaPastaParityV1::Eq,
+            )
+            .unwrap(),
+            native_parent_protocol_digest_v1(&discovered.0, KagemushaPastaParityV1::Eq).unwrap(),
+        ),
+        (
+            native_parent_protocol_digest_v1(
+                &result.generated.ep_protocol,
+                KagemushaPastaParityV1::Ep,
+            )
+            .unwrap(),
+            native_parent_protocol_digest_v1(&discovered.1, KagemushaPastaParityV1::Ep).unwrap(),
+        ),
+    ] {
+        assert_eq!(
+            actual, found,
+            "proved Wrapper must use the discovered descriptor and exact key"
+        );
     }
+    result
+}
+
+/// Decode both actual role artifacts and verify the exact framed proof with the decoded
+/// standalone keys. The existing full-cycle test drives Terminal and Wrapper through this.
+fn verify_retained_pair<EqCircuit, EpCircuit>(
+    value: &OrdinaryCashProofForTestingV1,
+    roles: [KagemushaArtifactRoleV1; 4],
+    manifest: DigestV1,
+) where
+    EqCircuit: halo2_proofs::plonk::Circuit<Fp, Params = BaseCircuitParams>,
+    EpCircuit: halo2_proofs::plonk::Circuit<Fq, Params = BaseCircuitParams>,
+{
+    use super::super::ordinary_cash_terminal_verifier::OrdinaryCashProofPairWireV1;
+    use super::ordinary_qualification_artifacts::{Originals, roundtrip};
+    let relation = match roles[0] {
+        KagemushaArtifactRoleV1::TerminalAuthorizationPkEq => 1,
+        KagemushaArtifactRoleV1::CommitWrapperPkEq => 2,
+        _ => panic!("qualification pair requires an exact Terminal or Wrapper role"),
+    };
+    let original: OrdinaryCashProofPairWireV1 =
+        super::super::ordinary_cash_terminal_verifier::decode_profile_exact(
+            &value.generated.original,
+            relation,
+            value.generated.public.release_id,
+            // The factory supplies this separate original release-manifest context.
+            manifest,
+            [
+                native_parent_protocol_digest_v1(
+                    &value.generated.eq_protocol,
+                    KagemushaPastaParityV1::Eq,
+                )
+                .unwrap(),
+                native_parent_protocol_digest_v1(
+                    &value.generated.ep_protocol,
+                    KagemushaPastaParityV1::Ep,
+                )
+                .unwrap(),
+            ],
+            [
+                ordinary_ipa_proof_profile_v1(&value.generated.eq_protocol)
+                    .unwrap()
+                    .byte_len,
+                ordinary_ipa_proof_profile_v1(&value.generated.ep_protocol)
+                    .unwrap()
+                    .byte_len,
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        norito::encode_canonical(&original).unwrap(),
+        value.generated.original
+    );
+    assert_eq!(original.eq_history, *value.generated.eq_history.as_bytes());
+    assert_eq!(original.ep_history, *value.generated.ep_history.as_bytes());
+    assert_eq!(
+        original.eq_deferred_audit,
+        value.generated.public.eq_deferred_audit
+    );
+    assert_eq!(
+        original.ep_deferred_audit,
+        value.generated.public.ep_deferred_audit
+    );
+    assert_eq!(
+        original.eq_protocol_digest,
+        value.generated.public.eq_protocol_digest
+    );
+    assert_eq!(
+        original.ep_protocol_digest,
+        value.generated.public.ep_protocol_digest
+    );
+    let (eq, protocol) = roundtrip::<EqAffine, EqCircuit>(
+        Originals {
+            parameters: &value.keys.eq_parameters,
+            proving_key: &value.keys.eq_proving_key,
+            verifying_key: &value.keys.eq_verifying_key,
+            proving_role: roles[0],
+            verifying_role: roles[1],
+            protocol: &value.generated.eq_protocol,
+        },
+        &canonical_kagemusha_eq_parameters_v1(),
+        value.keys.eq_base.clone(),
+        ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1,
+    )
+    .unwrap();
+    assert_eq!(
+        native_parent_protocol_digest_v1(&protocol, KagemushaPastaParityV1::Eq).unwrap(),
+        original.eq_protocol_digest
+    );
+    assert_eq!(
+        value
+            .generated
+            .public
+            .public_column::<Fp>(&original.eq_history)
+            .unwrap(),
+        value.generated.eq_instances
+    );
+    let current = KagemushaEqAccumulatorV1::from_native(
+        &verify_eq_succinct_protocol(
+            &eq,
+            &protocol,
+            &original.eq_proof,
+            &value.generated.eq_instances,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current.as_bytes(), value.generated.eq_current.as_bytes());
+    decide_kagemusha_eq_accumulator_v1(&eq, &current).unwrap();
+    decide_kagemusha_eq_accumulator_v1(&eq, &value.generated.eq_history).unwrap();
+    drop((eq, protocol));
+    halo2_proofs::release_allocator_slack();
+    let (ep, protocol) = roundtrip::<EpAffine, EpCircuit>(
+        Originals {
+            parameters: &value.keys.ep_parameters,
+            proving_key: &value.keys.ep_proving_key,
+            verifying_key: &value.keys.ep_verifying_key,
+            proving_role: roles[2],
+            verifying_role: roles[3],
+            protocol: &value.generated.ep_protocol,
+        },
+        &canonical_kagemusha_ep_parameters_v1(),
+        value.keys.ep_base.clone(),
+        ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1,
+    )
+    .unwrap();
+    assert_eq!(
+        native_parent_protocol_digest_v1(&protocol, KagemushaPastaParityV1::Ep).unwrap(),
+        original.ep_protocol_digest
+    );
+    assert_eq!(
+        value
+            .generated
+            .public
+            .public_column::<Fq>(&original.ep_history)
+            .unwrap(),
+        value.generated.ep_instances
+    );
+    let current = KagemushaEpAccumulatorV1::from_native(
+        &verify_ep_succinct_protocol(
+            &ep,
+            &protocol,
+            &original.ep_proof,
+            &value.generated.ep_instances,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current.as_bytes(), value.generated.ep_current.as_bytes());
+    decide_kagemusha_ep_accumulator_v1(&ep, &current).unwrap();
+    decide_kagemusha_ep_accumulator_v1(&ep, &value.generated.ep_history).unwrap();
 }

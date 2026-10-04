@@ -51,7 +51,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
         let original = worker.live.as_ref().unwrap();
         let original_commitment = std::ptr::from_ref(original.commitment.get());
         let original_overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
-        let original_witness = iroha_crypto::HashOf::new(&original.witness);
+        let original_witness = iroha_crypto::HashOf::new(original.witness.as_ref().unwrap().wire());
         let PublicationPhase::Executed { preimage, .. } = &original.phase else {
             panic!("the same original execution must await publication");
         };
@@ -89,7 +89,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
             original_overlay
         );
         assert_eq!(
-            iroha_crypto::HashOf::new(&retained.witness),
+            iroha_crypto::HashOf::new(retained.witness.as_ref().unwrap().wire()),
             original_witness
         );
         let PublicationPhase::Executed { preimage, .. } = &retained.phase else {
@@ -119,7 +119,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
             original_overlay
         );
         assert_eq!(
-            iroha_crypto::HashOf::new(&retained.witness),
+            iroha_crypto::HashOf::new(retained.witness.as_ref().unwrap().wire()),
             original_witness
         );
         assert!(matches!(retained.phase, PublicationPhase::Prepared { .. }));
@@ -237,7 +237,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
         let original = worker.live.as_ref().unwrap();
         let original_commitment = std::ptr::from_ref(original.commitment.get());
         let original_overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
-        let original_witness = iroha_crypto::HashOf::new(&original.witness);
+        let original_witness = iroha_crypto::HashOf::new(original.witness.as_ref().unwrap().wire());
         let PublicationPhase::Executed { preimage, .. } = &original.phase else {
             panic!("the original execution must await publication");
         };
@@ -288,7 +288,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
             original_overlay
         );
         assert_eq!(
-            iroha_crypto::HashOf::new(&retained.witness),
+            iroha_crypto::HashOf::new(retained.witness.as_ref().unwrap().wire()),
             original_witness
         );
         let PublicationPhase::Executed { preimage, .. } = &retained.phase else {
@@ -316,7 +316,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
             original_overlay
         );
         assert_eq!(
-            iroha_crypto::HashOf::new(&retained.witness),
+            iroha_crypto::HashOf::new(retained.witness.as_ref().unwrap().wire()),
             original_witness
         );
         assert!(matches!(retained.phase, PublicationPhase::Prepared { .. }));

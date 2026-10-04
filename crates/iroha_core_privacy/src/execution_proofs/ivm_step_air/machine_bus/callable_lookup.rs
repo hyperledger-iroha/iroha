@@ -1,6 +1,6 @@
 //! Artifact-owned callable selection and original CALL/RETURN column joins.
 //!
-//! Counts are derived once from the original admitted flat schemas. Child
+//! Counts are derived once from the original admitted recursive schemas. Child
 //! selection reuses canonical fetch columns; return selection reads the active
 //! generation's original protected entry word. Executable-relative entries and
 //! loaded-image instruction addresses are deliberately separate quantities.
@@ -74,6 +74,23 @@ impl Callables {
             len: interface.callables.len(),
             children,
         })
+    }
+
+    /// Original immutable instruction-to-callable mapping, never a supplied descriptor.
+    pub(super) fn child_index(&self, slot: usize) -> Option<usize> {
+        self.children.get(slot).copied().flatten()
+    }
+    /// Once-derived argument width of the original admitted callable.
+    pub(super) fn argument_word_count(&self, index: usize) -> Option<usize> {
+        (index < self.len).then(|| self.entries[index].arguments)
+    }
+
+    /// Native bitmap tariff from the original cached frame and result dimensions.
+    pub(super) fn child_frame_work(&self, slot: usize) -> Option<u64> {
+        let entry = self.entries.get(self.child_index(slot)?)?;
+        u64::from(entry.frame)
+            .div_ceil(8)
+            .checked_add(u64::try_from(entry.results).ok()?)
     }
 
     /// Derive child fields and absolute targets from the same original fetch columns.

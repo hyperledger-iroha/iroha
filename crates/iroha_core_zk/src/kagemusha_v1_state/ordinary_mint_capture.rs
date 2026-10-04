@@ -1143,12 +1143,6 @@ impl KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1<'_> {
         self.recheck()?;
         admitted_release(&self.owner.verifier)
     }
-    pub(crate) fn verifier(
-        &self,
-    ) -> Result<&KagemushaAuthenticatedRecursiveVerifierV1, KagemushaStateErrorV1> {
-        self.recheck()?;
-        Ok(&self.owner.verifier)
-    }
     pub(crate) fn request_capacity(&self) -> Result<usize, KagemushaStateErrorV1> {
         self.recheck()?;
         usize::try_from(self.pending()?.originals.request_capacity).map_err(material)

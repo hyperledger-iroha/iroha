@@ -317,7 +317,7 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
                 .expect("original completed execution");
             let overlay = std::ptr::from_ref(pending.overlay.as_ref());
             let writes = pending.witness.writes.as_ptr();
-            let witness = iroha_crypto::HashOf::new(&pending.witness);
+            let witness = iroha_crypto::HashOf::new(pending.witness.wire());
             let count = pending.events.len();
             let original_events = pending.events.clone();
             let committed_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
@@ -393,7 +393,7 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
             assert!(scheduler.next(0).is_none());
             assert_eq!(std::ptr::from_ref(pending.overlay.as_ref()), overlay);
             assert_eq!(pending.witness.writes.as_ptr(), writes);
-            assert_eq!(iroha_crypto::HashOf::new(&pending.witness), witness);
+            assert_eq!(iroha_crypto::HashOf::new(pending.witness.wire()), witness);
             assert_eq!(pending.events.len(), count);
             assert_eq!(pending.events, original_events);
             assert_eq!(budget.reserved_bytes(), retained);
@@ -426,8 +426,11 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
                 std::ptr::from_ref(live.overlay.as_deref().unwrap()),
                 overlay
             );
-            assert_eq!(live.witness.writes.as_ptr(), writes);
-            assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+            assert_eq!(live.witness.as_ref().unwrap().writes.as_ptr(), writes);
+            assert_eq!(
+                iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+                witness
+            );
             // Successful preparation consumes ValidBlock into CommittedBlock once.
             // That transition appends its exact committed event to the unchanged
             // original validation events; retry must not execute or append again.

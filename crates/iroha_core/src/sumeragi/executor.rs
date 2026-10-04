@@ -235,6 +235,33 @@ impl PendingCommit {
     }
 }
 
+/// Read-only original witness inspection with an explicit reconstructed-tamper seam.
+/// The testing control cannot extract or mutate charged original wire allocations.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub struct WitnessInspection<'borrow>(&'borrow mut crate::state::CapturedExecWitness);
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl WitnessInspection<'_> {
+    /// Borrow the wire currently offered to the same native production checks.
+    pub fn wire(&self) -> &iroha_data_model::block::consensus::ExecWitness {
+        self.0.wire()
+    }
+    /// Reconstruct and alter an offered wire, retaining the funded original separately.
+    /// This test injection never lends mutable original buffers or creates authority.
+    pub fn offer_reconstructed_tamper(
+        &mut self,
+        alter: impl FnOnce(&mut iroha_data_model::block::consensus::ExecWitness),
+    ) {
+        self.0.offer_reconstructed_tamper_for_test(alter);
+    }
+}
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl std::ops::Deref for WitnessInspection<'_> {
+    type Target = iroha_data_model::block::consensus::ExecWitness;
+    fn deref(&self) -> &Self::Target {
+        self.wire()
+    }
+}
+
 /// Borrowed original Worker execution for component assertions and refusal controls.
 ///
 /// This view grants no certificate or publication capability. Mutating any sealed source
@@ -246,7 +273,7 @@ pub struct PendingExecutionView<'borrow, 'state> {
     /// The original overlay retained by the Worker.
     pub state: &'borrow mut StateBlock<'state>,
     /// The exact witness retained with the original R.
-    pub witness: &'borrow mut iroha_data_model::block::consensus::ExecWitness,
+    pub witness: WitnessInspection<'borrow>,
 }
 
 /// Immutable observation of the actual certificate-authorized publication overlay.
@@ -272,6 +299,10 @@ type PendingInspection = Box<
 >;
 
 enum Request {
+    TakeFinalizedFastpqSource(
+        super::certified_chain::AuthenticatedExecutionBlock,
+        mpsc::SyncSender<Result<crate::fastpq::finalized_source::FinalizedFastpqSource, String>>,
+    ),
     #[cfg(test)]
     PreparePublicationForInspection(AvailableBody, Qc, mpsc::SyncSender<Result<(), String>>),
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -375,6 +406,17 @@ pub struct StateExecutor {
 }
 
 impl StateExecutor {
+    /// Move the one already-published original witness to complete-effect work.
+    /// The caller must retain actual native execution authority; this performs no
+    /// proof dispatch and accepts no advertised roots or replacement witness.
+    pub(crate) fn take_finalized_fastpq_source(
+        &self,
+        native: super::certified_chain::AuthenticatedExecutionBlock,
+    ) -> Result<crate::fastpq::finalized_source::FinalizedFastpqSource, String> {
+        self.call(|reply| Request::TakeFinalizedFastpqSource(native, reply))
+            .unwrap_or_else(|| Err("original execution Worker stopped".into()))
+    }
+
     /// Finalize the durable original metadata while a real history writer refuses visibility.
     /// The same prepared owner remains available for immutable inspection and ordinary retry.
     #[cfg(test)]
@@ -694,7 +736,7 @@ struct Finishing<'s> {
     source: iroha_sumeragi::availability::AvailabilitySource,
     valid: ValidBlock,
     overlay: Box<StateBlock<'s>>,
-    witness: iroha_data_model::block::consensus::ExecWitness,
+    witness: crate::state::CapturedExecWitness,
     phase: FinishingPhase,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
@@ -718,7 +760,7 @@ struct Live<'s> {
     source: iroha_sumeragi::availability::AvailabilitySource,
     phase: PublicationPhase,
     overlay: Option<Box<StateBlock<'s>>>,
-    witness: iroha_data_model::block::consensus::ExecWitness,
+    witness: Option<crate::state::CapturedExecWitness>,
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
     commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
@@ -862,6 +904,9 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
 impl<'s> Worker<'s> {
     fn serve(&mut self, request: Request) {
         match request {
+            Request::TakeFinalizedFastpqSource(native, reply) => {
+                let _ = reply.send(self.take_finalized_fastpq_source(native));
+            }
             #[cfg(test)]
             Request::PreparePublicationForInspection(block, qc, reply) => {
                 let state = self.state;
@@ -911,7 +956,11 @@ impl<'s> Worker<'s> {
                             Ok(PendingExecutionView {
                                 block: valid,
                                 state,
-                                witness: &mut live.witness,
+                                witness: WitnessInspection(
+                                    live.witness
+                                        .as_mut()
+                                        .ok_or("original witness already handed off")?,
+                                ),
                             })
                         });
                 inspect(original);
@@ -943,7 +992,11 @@ impl<'s> Worker<'s> {
                         Ok(PreparedExecutionView {
                             block: committed,
                             state,
-                            witness: &live.witness,
+                            witness: live
+                                .witness
+                                .as_ref()
+                                .ok_or("original witness already handed off")?
+                                .wire(),
                         })
                     });
                 inspect(original);
@@ -993,6 +1046,43 @@ impl<'s> Worker<'s> {
             Request::AttachQueue(queue) => self.queue = Some(queue),
             Request::AttachFinalizedArchives(archives, reply) => {
                 let _ = reply.send(self.bind_finalized_archives(archives));
+            }
+        }
+    }
+
+    /// Handoff occurs only after durable publication and all original archive work.
+    /// A refusal retains the exact witness in Live; repeated successful transfer is refused.
+    fn take_finalized_fastpq_source(
+        &mut self,
+        native: super::certified_chain::AuthenticatedExecutionBlock,
+    ) -> Result<crate::fastpq::finalized_source::FinalizedFastpqSource, String> {
+        use crate::fastpq::finalized_source::FinalizedFastpqSource;
+        if self.pending_commit.is_some() || self.recovery.is_some() {
+            return Err("original execution publication has not completed".into());
+        }
+        let live = self
+            .live
+            .as_mut()
+            .ok_or("original execution is no longer retained")?;
+        if !matches!(live.phase, PublicationPhase::Published { .. })
+            || self.applied != (live.height, live.block_hash)
+            || native.committed().height() != live.height
+            || native.committed().core_hash() != live.block_hash
+            || native.committed().result() != live.result
+        {
+            return Err(
+                "FASTPQ handoff requires the exact already-published native execution".into(),
+            );
+        }
+        let original = live
+            .witness
+            .take()
+            .ok_or("original source was already handed off")?;
+        match FinalizedFastpqSource::bind(original, native) {
+            Ok(source) => Ok(source),
+            Err((original, _, error)) => {
+                live.witness = Some(original);
+                Err(error.to_string())
             }
         }
     }
@@ -1469,7 +1559,7 @@ impl<'s> Worker<'s> {
             unreachable!("original proof inputs")
         };
         let commitment = execution_result(
-            &original.witness,
+            &mut original.witness,
             original.valid.as_ref(),
             &transition,
             inputs,
@@ -1589,7 +1679,7 @@ impl<'s> Worker<'s> {
                 preimage,
             },
             overlay: Some(original.overlay),
-            witness: original.witness,
+            witness: Some(original.witness),
             result,
             commitment,
             attestation: local_attestation::Progress::WaitingBacking(None),
@@ -1898,7 +1988,17 @@ impl<'s> Worker<'s> {
                 .ok_or_else(|| {
                     PublicationError::Retryable("original pending overlay was consumed".into())
                 })?
-                .verify_sumeragi_execution_witness(valid.as_ref(), &live.witness)
+                .verify_sumeragi_execution_witness(
+                    valid.as_ref(),
+                    live.witness
+                        .as_ref()
+                        .ok_or_else(|| {
+                            PublicationError::RecoveryRequired(
+                                "original witness disappeared before publication".into(),
+                            )
+                        })?
+                        .wire(),
+                )
                 .map_err(PublicationError::Retryable)?;
         }
         live.telemetry_origin = Some(origin);
@@ -2151,7 +2251,14 @@ impl<'s> Worker<'s> {
             };
             overlay.authorize_sumeragi_output_publication(
                 committed,
-                &live.witness,
+                live.witness
+                    .as_ref()
+                    .ok_or_else(|| {
+                        PublicationError::RecoveryRequired(
+                            "original witness disappeared before publication".into(),
+                        )
+                    })?
+                    .wire(),
                 certificate,
                 native_execution,
             )?;

@@ -91,6 +91,10 @@ pub(super) mod production_prover;
 pub(crate) mod ordinary_guard_generation;
 
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[path = "ordinary_qualification_artifacts.rs"]
+mod ordinary_qualification_artifacts;
+
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 #[path = "ordinary_mint_generation.rs"]
 pub(crate) mod ordinary_mint_generation;
 

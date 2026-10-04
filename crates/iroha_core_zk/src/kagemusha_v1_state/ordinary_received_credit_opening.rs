@@ -424,20 +424,6 @@ impl KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1<'_, '_, '_> {
         )?;
         self.request_custody.recheck_current_custody()
     }
-
-    /// Temporarily lend only the sole typed model opening inside Native witness construction.
-    /// A higher-ranked secret borrow cannot escape this call as a borrowed return value.
-    pub(crate) fn with_borrowed_credit_opening(
-        &self,
-        consume: &mut dyn for<'secret> FnMut(
-            &'secret KagemushaCreditOpeningV1,
-        ) -> Result<(), KagemushaStateErrorV1>,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck_current_custody()?;
-        let result = consume(&self.opening.0);
-        self.recheck_current_custody()?;
-        result
-    }
 }
 
 // Private data check used only after closed receipt/proof admission. Test specimens call this

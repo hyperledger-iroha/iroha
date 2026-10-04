@@ -416,9 +416,8 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
             &BTreeMap::from([(hash, bundle.clone())])
         );
 
-        // This private test-only preparation seam is not production D7 capture.
-        // TODO: include ordered supply-changing effects in the authenticated
-        // whole-entry relation before activating D7 for ordinary execution.
+        // The live transfer-only diagnostic must still reject a supply gap.
+        // The mandatory source below instead commits the complete ordered tape.
         let limits = crate::fastpq::FastpqSourceStatementBuildLimits {
             max_executed_entries: 1,
             max_transcripts: 2,
@@ -428,7 +427,7 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
             max_total_statement_bytes: statement_bytes,
         };
         let error = block
-            .prepare_owned_fastpq_d7_capture(source.fastpq_transcripts(), limits)
+            .prepare_owned_transfer_diagnostic(source.fastpq_transcripts(), limits)
             .unwrap_err();
         assert!(
             error.contains("public repeated-key balances do not chain"),
@@ -457,5 +456,40 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
             .unwrap();
         assert!(captured.writes.iter().all(|write| write.key.first()
             != Some(&(ExecutionWitnessKeyTagV1::FastpqOrdinarySourceStatements as u8))));
+        let retained = block.retain_quantity_source_witness(captured).unwrap();
+        assert_eq!(retained.manifest().executed_entry_count, 1);
+        assert_eq!(retained.manifest().statement_count, 1);
+        let entry = retained.quantity_entry(0).unwrap();
+        assert_eq!(entry.leaf().effect_count, 3);
+        let effects = &entry.effects().effects;
+        assert_eq!(effects.len(), 3);
+        assert!(matches!(
+            effects[0].kind,
+            iroha_data_model::fastpq::FastpqExecutionEffectKindV1::Transfer(_)
+        ));
+        assert!(matches!(
+            effects[1].kind,
+            iroha_data_model::fastpq::FastpqExecutionEffectKindV1::Mint(_)
+        ));
+        assert!(matches!(
+            effects[2].kind,
+            iroha_data_model::fastpq::FastpqExecutionEffectKindV1::Transfer(_)
+        ));
+        assert_eq!(
+            <[u8; 32]>::from(
+                iroha_data_model::fastpq::execution_effects_digest_v1(entry.effects()).unwrap()
+            ),
+            entry.leaf().effects_digest
+        );
+        assert_eq!(
+            retained
+                .writes
+                .iter()
+                .filter(|write| write.key.first()
+                    == Some(&(ExecutionWitnessKeyTagV1::FastpqOrdinarySourceStatements as u8)))
+                .count(),
+            1
+        );
+        assert!(retained.verify_current(&block).is_ok());
     }
 }

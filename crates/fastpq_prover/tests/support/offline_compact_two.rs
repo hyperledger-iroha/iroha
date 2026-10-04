@@ -12,7 +12,9 @@ use std::{
 
 use sha2::{Digest as _, Sha256};
 
+use super::effect_fixture::EffectFixture;
 use super::*;
+use fastpq_prover::offline_compact::execution_effect_profile_id;
 
 const CHILDREN: usize = 2;
 
@@ -23,7 +25,7 @@ const CHILDREN: usize = 2;
 )]
 #[norito_schema(
     name = "offline_compact::TwoOrdinaryCarrier",
-    frame = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1"
+    frame = "fastpq_prover::compact_v1::ExecutionEffectBundleV1"
 )]
 struct OrdinaryCarrier {
     version: u16,
@@ -57,7 +59,7 @@ fn carrier_frame(bytes: &[u8], is_axt: bool) -> Vec<u8> {
     } else {
         FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            quantity_profile_id(),
+            execution_effect_profile_id(),
             limits.transport,
         )
         .unwrap()
@@ -110,7 +112,7 @@ fn replace_carrier(bytes: &[u8], carrier: OrdinaryCarrier, is_axt: bool) -> Vec<
     } else {
         let mut artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            quantity_profile_id(),
+            execution_effect_profile_id(),
             limits.transport,
         )
         .unwrap();
@@ -148,11 +150,12 @@ fn verify_two(
         original.segments.iter().map(Vec::len).sum::<usize>()
     );
     assert_ne!(verified.air_row_roots()[0], verified.air_row_roots()[1]);
+    let effect = EffectFixture::from_transfer_facts(&fixture.statement);
     let verify = |changed: &[u8]| {
         if is_axt {
             verify_quantity_axt_artifact(changed, fixture.expected, fixture.context(), limits)
         } else {
-            verify_quantity_ordinary_artifact(changed, fixture.expected, limits)
+            effect.verify(changed, limits)
         }
     };
     // Valid canonical envelopes containing genuine children must retain exact
@@ -306,10 +309,27 @@ pub fn produce_fixture(
     let limits = VerificationLimits::default();
     // All receipt facts come from the independently prepared caller, never from
     // decoding an output proof. The artifact already contains the public context.
+    let effect = EffectFixture::from_transfer_facts(&fixture.statement);
+    let (statement_frame, statement_digest, source_facts) = if is_axt {
+        (
+            norito::encode_canonical(&fixture.statement).unwrap(),
+            fixture.expected.public_statement_digest,
+            String::new(),
+        )
+    } else {
+        (
+            norito::encode_canonical(&effect.statement).unwrap(),
+            effect.public_expectation().public_statement_digest,
+            format!(
+                "synthetic_source_leaf_canonical_hex={}\n",
+                hex::encode(norito::encode_canonical(&effect.source).unwrap())
+            ),
+        )
+    };
     let public_facts = format!(
-        "{shape_facts}required_device=Metal\npublic_statement_canonical_hex={}\nexpected_statement_digest={}\nmaximum_segment_charge_bytes={}\nmaximum_segment_work_units={}\nmaximum_child_frame_bytes={}\nmaximum_artifact_bytes={}\nmaximum_total_queries={}\n",
-        hex::encode(norito::encode_canonical(&fixture.statement).unwrap()),
-        hex::encode(fixture.expected.public_statement_digest),
+        "{shape_facts}{source_facts}required_device=Metal\npublic_statement_canonical_hex={}\nexpected_statement_digest={}\nmaximum_segment_charge_bytes={}\nmaximum_segment_work_units={}\nmaximum_child_frame_bytes={}\nmaximum_artifact_bytes={}\nmaximum_total_queries={}\n",
+        hex::encode(statement_frame),
+        hex::encode(statement_digest),
         proving.max_segment_charge_bytes,
         proving.max_segment_work_units,
         limits.bundle.segment.max_proof_bytes,
@@ -330,7 +350,7 @@ pub fn produce_fixture(
             limits,
         )
     } else {
-        prove_quantity_ordinary_artifact(&fixture.statement, fixture.expected, proving, limits)
+        effect.prove(proving, limits)
     }
     .unwrap();
     let elapsed = started.elapsed();

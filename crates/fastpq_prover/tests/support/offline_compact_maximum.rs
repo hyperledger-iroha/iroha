@@ -5,6 +5,7 @@
 //! physical trace. AXT additionally fills the exact canonical carrier admission
 //! boundary. Caller facts are always selected before any retained artifact read.
 
+use super::effect_fixture::EffectFixture;
 use super::*;
 use fastpq_prover::gadgets::public_transfer_statement::materialize_quantity_public_transfers;
 use iroha_crypto::{Algorithm, KeyPair};
@@ -16,6 +17,10 @@ use norito::codec::Encode;
 const SHAPE_FACTS: &str = "application_shape=four-quadrant-keys\nupdates=4\nunique_keys=4\nretained_touched_nodes=127\nretained_sibling_hashes=128\ntouched_node_hashes=251\n";
 
 fn four_quadrant_accounts() -> [AccountId; 4] {
+    four_quadrant_accounts_for(false)
+}
+
+fn four_quadrant_accounts_for(complete_effect: bool) -> [AccountId; 4] {
     let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
@@ -28,7 +33,32 @@ fn four_quadrant_accounts() -> [AccountId; 4] {
         seed.extend_from_slice(&counter.to_le_bytes());
         let key = KeyPair::from_seed(seed, Algorithm::Ed25519);
         let account = AccountId::new(key.public_key().clone());
-        let frame = transfer_balance_key(&asset, &account).unwrap();
+        let frame = if complete_effect {
+            use iroha_data_model::{
+                asset::AssetBalanceScope,
+                fastpq::{
+                    FastpqExecutionAssetV1, FastpqExecutionBalanceV1, FastpqExecutionQuantityKeyV1,
+                    execution_quantity_key_v1,
+                },
+                nexus::AxtAssetIncarnationV1,
+            };
+            execution_quantity_key_v1(&FastpqExecutionQuantityKeyV1::Balance(
+                FastpqExecutionBalanceV1 {
+                    asset: FastpqExecutionAssetV1 {
+                        definition: asset.clone(),
+                        incarnation: AxtAssetIncarnationV1::try_from_bytes(
+                            Hash::new(b"complete-effect native synthetic lifecycle").into(),
+                        )
+                        .unwrap(),
+                    },
+                    account: account.clone(),
+                    scope: AssetBalanceScope::Global,
+                },
+            ))
+            .unwrap()
+        } else {
+            transfer_balance_key(&asset, &account).unwrap()
+        };
         let hash: [u8; 32] = Hash::new_from_chunks(&[b"fastpq:v1:smt:key|", &frame]).into();
         let path = u32::from_le_bytes(hash[..4].try_into().unwrap());
         accounts[(path >> 30) as usize].get_or_insert(account);
@@ -41,6 +71,102 @@ fn four_quadrant_accounts() -> [AccountId; 4] {
 
 fn fixture() -> capture::CaptureFixture {
     capture::CaptureFixture::with_independent_accounts(four_quadrant_accounts())
+}
+
+fn effect_quadrant_fixture() -> capture::CaptureFixture {
+    capture::CaptureFixture::with_independent_accounts(four_quadrant_accounts_for(true))
+}
+
+#[test]
+fn complete_effect_keys_reach_the_same_four_quadrant_tree_capacity() {
+    use fastpq_prover::gadgets::public_transfer_statement::execution_effect::{
+        ExecutionEffectLimits, materialization_allocation_bytes,
+        materialize_source_execution_effect_statement,
+    };
+    use iroha_data_model::fastpq::{FastpqExecutionQuantityKeyV1, execution_quantity_key_v1};
+    let transfer = effect_quadrant_fixture();
+    let effect = EffectFixture::from_transfer_facts(&transfer.statement);
+    assert_eq!(effect.statement.effects.effects.len(), 2);
+    assert_eq!(effect.statement.transitions.len(), 4);
+    let mut quadrants = [false; 4];
+    for row in &effect.statement.transitions {
+        let frame = row
+            .key
+            .strip_prefix(b"iroha:fastpq:execution-quantity-key:v1\0".as_slice())
+            .expect("complete typed quantity key retains its exact domain prefix");
+        let key: FastpqExecutionQuantityKeyV1 = norito::decode_canonical(frame).unwrap();
+        assert!(matches!(key, FastpqExecutionQuantityKeyV1::Balance(_)));
+        assert_eq!(execution_quantity_key_v1(&key).unwrap(), row.key);
+        let hash: [u8; 32] = Hash::new_from_chunks(&[b"fastpq:v1:smt:key|", &row.key]).into();
+        let path = u32::from_le_bytes(hash[..4].try_into().unwrap());
+        assert!(!quadrants[(path >> 30) as usize]);
+        quadrants[(path >> 30) as usize] = true;
+    }
+    assert_eq!(quadrants, [true; 4]);
+    let limits = ExecutionEffectLimits::default();
+    let exact = TransferSmtBuildLimits {
+        max_updates: 4,
+        max_unique_keys: 4,
+        max_retained_nodes: 127,
+        max_sibling_hashes: 128,
+        max_node_hashes: 251,
+    };
+    let demand =
+        materialization_allocation_bytes(&effect.statement.effects, limits, exact).unwrap();
+    let budget = iroha_allocation::AllocationBudget::new(demand);
+    let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+    let built = materialize_source_execution_effect_statement(
+        &effect.statement.effects,
+        &effect.source,
+        limits,
+        exact,
+        &budget,
+        &mut reservation,
+    )
+    .unwrap();
+    let work = built.witnesses().work();
+    assert_eq!((work.updates, work.unique_keys), (4, 4));
+    assert_eq!(work.retained_nodes, 31 * 4 + 2 + 1);
+    assert_eq!(work.sibling_hashes, 4 * 32);
+    assert_eq!(work.node_hashes, 127 - 4 + 128);
+    assert_eq!(
+        norito::encode_canonical(&built.statement()).unwrap(),
+        norito::encode_canonical(&effect.statement).unwrap()
+    );
+    drop(built);
+    drop(reservation);
+    assert_eq!(budget.reserved_bytes(), 0);
+    for dimension in 0..5 {
+        let mut short = exact;
+        let name = match dimension {
+            0 => {
+                short.max_updates -= 1;
+                "max_transfer_smt_updates"
+            }
+            1 => {
+                short.max_unique_keys -= 1;
+                "max_transfer_smt_keys"
+            }
+            2 => {
+                short.max_retained_nodes -= 1;
+                "max_transfer_smt_nodes"
+            }
+            3 => {
+                short.max_sibling_hashes -= 1;
+                "max_transfer_smt_siblings"
+            }
+            _ => {
+                short.max_node_hashes -= 1;
+                "max_transfer_smt_node_hashes"
+            }
+        };
+        let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+        assert!(matches!(materialize_source_execution_effect_statement(
+            &effect.statement.effects, &effect.source, limits, short, &budget, &mut reservation,
+        ), Err(Error::VerifierLimitExceeded { limit, .. }) if limit == name));
+        drop(reservation);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }
 
 fn inputs(statement: &FastpqPublicTransferStatementV1) -> PublicInputs {
@@ -175,9 +301,24 @@ fn four_keys_reach_the_exact_maximum_touched_tree_under_default_updates() {
         );
     }
     assert_eq!(quadrants, [true; 4]);
-    let witnesses = table
-        .build_smt_witnesses(ProvingLimits::default().private_smt)
-        .unwrap();
+    let witnesses = {
+        // Admit an adequate fixture pool even when the tested semantic cap is one short.
+        let tree_funding_limits = TransferSmtBuildLimits::for_update_limit(table.rows().len())
+            .expect("fixture tree counts fit");
+        let tree_bytes = tree_funding_limits
+            .allocation_bytes(table.rows().len(), table.keys().len())
+            .expect("fixture backing demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        table.build_smt_witnesses(
+            ProvingLimits::default().private_smt,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
+    .unwrap();
     let work = witnesses.work();
     assert_eq!((work.updates, work.unique_keys), (4, 4));
     // Four nodes at each level0..30, two at31 and one at32.
@@ -191,7 +332,24 @@ fn four_keys_reach_the_exact_maximum_touched_tree_under_default_updates() {
         max_sibling_hashes: 128,
         max_node_hashes: 251,
     };
-    assert_eq!(table.build_smt_witnesses(exact).unwrap().work(), work);
+    assert_eq!(
+        {
+            // Admit an adequate fixture pool even when the tested semantic cap is one short.
+            let tree_funding_limits = TransferSmtBuildLimits::for_update_limit(table.rows().len())
+                .expect("fixture tree counts fit");
+            let tree_bytes = tree_funding_limits
+                .allocation_bytes(table.rows().len(), table.keys().len())
+                .expect("fixture backing demand fits");
+            let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+            let mut tree_reservation = tree_budget
+                .try_reserve_bytes(tree_bytes)
+                .expect("fixture owns complete tree credit");
+            table.build_smt_witnesses(exact, &tree_budget, &mut tree_reservation)
+        }
+        .unwrap()
+        .work(),
+        work
+    );
     for dimension in 0..5 {
         let mut short = exact;
         let name = match dimension {
@@ -216,7 +374,17 @@ fn four_keys_reach_the_exact_maximum_touched_tree_under_default_updates() {
                 "max_transfer_smt_node_hashes"
             }
         };
-        assert!(matches!(table.build_smt_witnesses(short),
+        assert!(matches!({
+        // Admit an adequate fixture pool even when the tested semantic cap is one short.
+        let tree_funding_limits = TransferSmtBuildLimits::for_update_limit(table.rows().len())
+            .expect("fixture tree counts fit");
+        let tree_bytes = tree_funding_limits.allocation_bytes(table.rows().len(), table.keys().len())
+            .expect("fixture backing demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget.try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        table.build_smt_witnesses(short, &tree_budget, &mut tree_reservation)
+    },
             Err(Error::VerifierLimitExceeded { limit, .. }) if limit == name));
     }
     let resources = quantity_artifact_resources(2, 0).unwrap();
@@ -251,13 +419,35 @@ fn three_delta_statement() -> FastpqPublicTransferStatementV1 {
     claims.push(third);
     // Construct genuinely consistent public inputs outside the production
     // default; the request below still passes unchanged default proving limits.
-    let (rows, input, ordering, private) = materialize_quantity_public_transfers(
-        &claims,
-        inputs(&fixture.statement),
-        ProofSemantics::StateTransition,
-        PublicTransferLimits::default(),
-        TransferSmtBuildLimits::for_update_limit(6).unwrap(),
-    )
+    let (rows, input, ordering, private) = {
+        // This test fixture owns its finite tree pool; production supplies its original owner.
+        let tree_claims = &claims;
+        let tree_limits = TransferSmtBuildLimits::for_update_limit(6).unwrap();
+        let tree_updates = tree_claims
+            .iter()
+            .try_fold(0_usize, |count, claim| {
+                count.checked_add(claim.deltas.len())
+            })
+            .expect("fixture effect count fits")
+            .checked_mul(2)
+            .expect("fixture row count fits");
+        let tree_bytes = tree_limits
+            .allocation_bytes(tree_updates, tree_updates)
+            .expect("fixture tree allocation demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        materialize_quantity_public_transfers(
+            tree_claims,
+            inputs(&fixture.statement),
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+            tree_limits,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
     .unwrap()
     .into_parts();
     drop(private);
@@ -336,15 +526,10 @@ pub fn assert_maximum_context_preflight() {
         "one-byte excessive AXT context returned {result:?}"
     );
     let three = three_delta_statement();
-    let expected = ExpectedStatement::from_statement(&three).unwrap();
+    let effect = EffectFixture::from_transfer_facts(&three);
     assert_eq!(three.transitions.len(), 6);
     assert!(matches!(
-        prove_quantity_ordinary_artifact(
-            &three,
-            expected,
-            ProvingLimits::default(),
-            VerificationLimits::default(),
-        ),
+        effect.prove(ProvingLimits::default(), VerificationLimits::default()),
         Err(ProvingError::Prove(Error::VerifierLimitExceeded {
             limit: "max_bundle_segments",
             actual: 3,
@@ -357,7 +542,12 @@ pub fn assert_maximum_context_preflight() {
 #[test]
 #[ignore = "complete maximum four-key ordinary public producer on required Metal"]
 fn required_metal_maximum_ordinary_producer_and_reused_verifier_controls() {
-    two::produce_fixture(false, "maximum-ordinary", fixture, SHAPE_FACTS);
+    two::produce_fixture(
+        false,
+        "maximum-ordinary",
+        effect_quadrant_fixture,
+        SHAPE_FACTS,
+    );
 }
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -384,7 +574,7 @@ fn captured_maximum_ordinary_artifact_verifies_without_reproving() {
         false,
         "maximum-ordinary",
         "FASTPQ_TEST_MAXIMUM_ORDINARY_ARTIFACT",
-        &fixture(),
+        &effect_quadrant_fixture(),
     );
 }
 

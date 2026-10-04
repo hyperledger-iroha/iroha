@@ -33,6 +33,12 @@ use snark_verifier::{
     },
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::guard_bundle::{
+    KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+    KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+    KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+};
 use super::{
     DigestV1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1 as PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1 as PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
@@ -50,10 +56,7 @@ use super::{
         accumulator_limb_count, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
     },
     guard_bundle::{
-        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1,
-        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
-        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
-        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
+        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
         KagemushaGuardBundleEqCircuitV1,
     },
     mint_authority::{
@@ -4652,6 +4655,7 @@ pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol_with_transcript
 
 /// Verify the complete Eq PlatformCredential with both authentic compact carriers.
 /// The exact three-column k16 profile is mandatory; no retired one-column proof is accepted.
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(super) fn verify_eq_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
     protocol: &PlonkProtocol<EqAffine>,
@@ -4694,6 +4698,7 @@ pub(super) fn verify_eq_platform_credential_hybrid_succinct_protocol_with_transc
 
 /// Verify the complete Ep PlatformCredential with both authentic compact carriers.
 /// Return the actual final transcript squeeze as well as the genuine IPA accumulator.
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(super) fn verify_ep_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
     protocol: &PlonkProtocol<EpAffine>,
@@ -4734,6 +4739,7 @@ pub(super) fn verify_ep_platform_credential_hybrid_succinct_protocol_with_transc
     )
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn require_platform_credential_hybrid_layout(
     k: u32,
     domain_k: usize,

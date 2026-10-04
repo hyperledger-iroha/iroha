@@ -165,7 +165,7 @@ fn nonblocking_original_maps_preserve_both_roots_and_reject_stale_or_foreign_own
 #[test]
 fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

@@ -339,6 +339,8 @@ pub use exec_witness_capture::WitnessCaptureError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
+#[cfg(test)]
+pub(crate) use fastpq_source_inventory::native_capture_fixture;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
 mod output_publication;
@@ -348,6 +350,9 @@ pub(crate) use output_capacity::{
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
+pub(crate) use fastpq_quantity_capture::{
+    AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
+};
 pub(crate) use fastpq_quantity_capture::{QuantityCaptureIssue, QuantityRetirementInvocation};
 mod fastpq_quantity_storage;
 mod fastpq_quantity_write_plan;
@@ -357,10 +362,7 @@ mod fastpq_source_quota_tests;
 pub(crate) mod native_maintenance;
 mod prepared_transfer_transcript;
 mod replay_outputs;
-pub use fastpq_source_inventory::{
-    FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
-    FastpqSourceStatementUsageV1,
-};
+pub use fastpq_source_inventory::FastpqSourceInventoryV1;
 mod lane_authority;
 mod native_execution_projection;
 mod native_lane_state;
@@ -12643,7 +12645,7 @@ pub struct StateBlockFields<'state> {
     /// Original recorder identity retained from pristine construction through capture.
     original_execution_recorder: Option<crate::exec_witness::ExecWitnessCaptureIdentity>,
     /// Captured execution witness for the block (SBV‑AM).
-    pub(crate) exec_witness: Option<ExecWitness>,
+    pub(crate) exec_witness: Option<CapturedExecWitness>,
     /// Local bounded casting-context leaves retained for durable Kura proof service.
     parliament_timed_ovn_casting_bindings: Option<
         Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
@@ -36990,6 +36992,9 @@ impl<'state> StateBlock<'state> {
                 witness
                     .writes
                     .sort_by(|left, right| left.key.cmp(&right.key));
+                // D7 is one mandatory original source write; retain exact physical
+                // backing before any witness/result owner can outlive this State.
+                let witness = state.retain_quantity_source_witness(witness)?;
                 let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = state
                     .fastpq_entry_dataspaces
                     .iter()
@@ -37076,11 +37081,12 @@ impl<'state> StateBlock<'state> {
     ) -> Result<(), String> {
         self.verify_sumeragi_lane_state_seal()?;
         if let Some(witness) = &self.exec_witness {
-            self.verify_sumeragi_lane_state_witness(witness)?;
+            self.verify_sumeragi_lane_state_witness(witness.wire())?;
             if !witness.fastpq_batches.is_empty() {
                 return Err("ordinary captured witness contains prebuilt FASTPQ batches".into());
             }
             inventory.verify_ordinary_witness_bundles(&witness.fastpq_transcripts)?;
+            witness.verify_current(self)?;
         }
         Ok(())
     }
@@ -37117,7 +37123,7 @@ impl<'state> StateBlock<'state> {
         true
     }
     /// Take a captured witness only while its retained source ownership remains valid.
-    pub(crate) fn take_exec_witness(&mut self) -> Option<ExecWitness> {
+    pub(crate) fn take_exec_witness(&mut self) -> Option<CapturedExecWitness> {
         if !self.guard_captured_exec_witness() {
             return None;
         }
@@ -39878,56 +39884,38 @@ mod fastpq_tx_set_hash_tests {
     }
     #[test]
     fn capture_exec_witness_uses_cached_tx_set_hash() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
-        // These fixtures contain only an internal execution call and no external wires.
-        let entrypoints: [TransactionEntrypoint; 0] = [];
-        let tx_set_hash: [u8; 32] =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
-                .expect("canonical empty external transaction set")
-                .into();
-        state_block.set_fastpq_tx_set_hash(tx_set_hash);
-        let delta = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            amount: Quantity::from(10u32),
-            from_balance_before: Quantity::from(100u32),
-            from_balance_after: Quantity::from(90u32),
-            to_balance_before: Quantity::from(0u32),
-            to_balance_after: Quantity::from(10u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let batch_hash = Hash::prehashed([0x11; 32]);
-        let transcript = TransferTranscript {
-            batch_hash,
-            deltas: vec![delta.clone()],
-            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
-            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
-                &delta,
-                &batch_hash,
-            )),
-        };
-        {
-            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
-            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
-            tx.apply();
-        }
-        state_block
-            .finalize_fastpq_source_inventory(&[], &[], &[])
-            .unwrap();
-        let transcripts = state_block.drain_transfer_transcripts();
-        assert_eq!(transcripts[&batch_hash], vec![transcript.clone()]);
-        state_block.capture_exec_witness().unwrap();
-        let witness = state_block.take_exec_witness().expect("exec witness");
-        let casting_writes = witness
+        crate::state::native_capture_fixture::with_native_capture_source(
+            true,
+            |_, mut state_block, _guard, mut source, batch_hash| {
+                let tx_set_hash: [u8; 32] =
+                    iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                        source.external_entrypoints_slice().iter(),
+                    )
+                    .unwrap()
+                    .into();
+                crate::state::native_capture_fixture::seal_native_source(
+                    &mut state_block,
+                    &mut source,
+                )
+                .unwrap();
+                let transcripts = source.fastpq_transcripts();
+                let [transcript] = transcripts[&batch_hash].as_slice() else {
+                    panic!("one genuine ordered transfer")
+                };
+                let transcript = transcript.clone();
+                assert_eq!(transcript.batch_hash, batch_hash);
+                assert_eq!(transcript.deltas[0].amount, Quantity::one());
+                assert_eq!(
+                    state_block
+                        .fastpq_source_inventory()
+                        .unwrap()
+                        .unwrap()
+                        .tx_set_hash(),
+                    tx_set_hash
+                );
+                state_block.capture_exec_witness().unwrap();
+                let witness = state_block.take_exec_witness().expect("exec witness");
+                let casting_writes = witness
             .writes
             .iter()
             .filter(|entry| {
@@ -39935,38 +39923,40 @@ mod fastpq_tx_set_hash_tests {
                     == iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1
             })
             .collect::<Vec<_>>();
-        assert_eq!(casting_writes.len(), 1);
-        let casting_snapshot = norito::decode_canonical::<
+                assert_eq!(casting_writes.len(), 1);
+                let casting_snapshot = norito::decode_canonical::<
             iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1,
         >(&casting_writes[0].value)
         .expect("canonical Parliament timed-OVN casting snapshot");
-        assert_eq!(
+                assert_eq!(
             casting_snapshot,
-            iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(1)
+            iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(source.header().height().get())
         );
-        assert_eq!(
-            state_block.take_parliament_timed_ovn_casting_bindings(),
-            Some(Vec::new())
+                assert_eq!(
+                    state_block.take_parliament_timed_ovn_casting_bindings(),
+                    Some(Vec::new())
+                );
+                let context = state_block
+                    .take_fastpq_witness_context()
+                    .expect("FASTPQ context");
+                assert!(witness.fastpq_batches.is_empty());
+                assert_eq!(context.tx_set_hash, Some(tx_set_hash));
+                // A second capture with no block-owned commitment must not synthesize
+                // one from the transcript's execution identity.
+                state_block.fastpq_tx_set_hash = None;
+                crate::exec_witness::start_block();
+                crate::exec_witness::record_fastpq_transcript(&transcript);
+                assert!(state_block.capture_exec_witness().is_err());
+                assert!(state_block.take_exec_witness().is_none());
+                assert!(state_block.take_fastpq_witness_context().is_none());
+                assert!(
+                    state_block
+                        .take_parliament_timed_ovn_casting_bindings()
+                        .is_none()
+                );
+                let _ = crate::exec_witness::drain_exec_witness();
+            },
         );
-        let context = state_block
-            .take_fastpq_witness_context()
-            .expect("FASTPQ context");
-        assert!(witness.fastpq_batches.is_empty());
-        assert_eq!(context.tx_set_hash, Some(tx_set_hash));
-        // A second capture with no block-owned commitment must not synthesize
-        // one from the transcript's execution identity.
-        state_block.fastpq_tx_set_hash = None;
-        crate::exec_witness::start_block();
-        crate::exec_witness::record_fastpq_transcript(&transcript);
-        assert!(state_block.capture_exec_witness().is_err());
-        assert!(state_block.take_exec_witness().is_none());
-        assert!(state_block.take_fastpq_witness_context().is_none());
-        assert!(
-            state_block
-                .take_parliament_timed_ovn_casting_bindings()
-                .is_none()
-        );
-        let _ = crate::exec_witness::drain_exec_witness();
     }
     #[test]
     fn capture_exec_witness_requires_original_execution_owner() {
@@ -40016,64 +40006,35 @@ mod fastpq_tx_set_hash_tests {
     }
     #[test]
     fn capture_exec_witness_threads_entry_dataspace_dsid() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
-        // These fixtures contain only an internal execution call and no external wires.
-        let entrypoints: [TransactionEntrypoint; 0] = [];
-        let tx_set_hash: [u8; 32] =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
-                .expect("canonical empty external transaction set")
-                .into();
-        state_block.set_fastpq_tx_set_hash(tx_set_hash);
-        let delta = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            amount: Quantity::from(10u32),
-            from_balance_before: Quantity::from(100u32),
-            from_balance_after: Quantity::from(90u32),
-            to_balance_before: Quantity::from(0u32),
-            to_balance_after: Quantity::from(10u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let batch_hash = Hash::prehashed([0x22; 32]);
-        let transcript = TransferTranscript {
-            batch_hash,
-            deltas: vec![delta.clone()],
-            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
-            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
-                &delta,
-                &batch_hash,
-            )),
-        };
-        {
-            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
-            tx.current_dataspace_id = Some(DataSpaceId::new(7));
-            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
-            tx.apply();
-        }
-        state_block
-            .finalize_fastpq_source_inventory(&[], &[], &[])
-            .unwrap();
-        let transcripts = state_block.drain_transfer_transcripts();
-        assert_eq!(transcripts[&batch_hash], vec![transcript]);
-        let dsid = DataSpaceId::new(7);
-        state_block.capture_exec_witness().unwrap();
-        let witness = state_block.take_exec_witness().expect("exec witness");
-        let context = state_block
-            .take_fastpq_witness_context()
-            .expect("FASTPQ context");
-        assert!(witness.fastpq_batches.is_empty());
-        assert_eq!(
-            context.entry_dataspaces.get(&batch_hash),
-            Some(&crate::fastpq::dataspace_id_bytes(dsid))
+        crate::state::native_capture_fixture::with_native_capture_dataspace_source(
+            |_, mut block, _recording, mut source, entry_hash| {
+                crate::state::native_capture_fixture::seal_native_source(&mut block, &mut source)
+                    .unwrap();
+                let dsid = DataSpaceId::new(7);
+                let inventory = block
+                    .verified_fastpq_source_inventory_for_capture()
+                    .unwrap();
+                assert!(
+                    inventory
+                        .entries()
+                        .iter()
+                        .any(|entry| entry.entry_hash == entry_hash && entry.dataspace_id == dsid)
+                );
+                block.capture_exec_witness().unwrap();
+                let witness = block.take_exec_witness().expect("exec witness");
+                let context = block.take_fastpq_witness_context().expect("FASTPQ context");
+                assert!(witness.fastpq_batches.is_empty());
+                assert_eq!(
+                    context.entry_dataspaces.get(&entry_hash),
+                    Some(&crate::fastpq::dataspace_id_bytes(dsid))
+                );
+                assert!(
+                    witness
+                        .leaves()
+                        .iter()
+                        .any(|leaf| leaf.entry_hash == entry_hash && leaf.dataspace_id == dsid)
+                );
+            },
         );
     }
     #[test]
@@ -40090,64 +40051,33 @@ mod fastpq_tx_set_hash_tests {
         let entries = [(role_id.clone(), role.clone())];
         let expected =
             crate::fastpq::permission_table_root(entries.iter().map(|(id, role)| (id, role)));
-        let mut world = World::with([], [], []);
-        world.roles.insert(role.id.clone(), role);
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
-        // These fixtures contain only an internal execution call and no external wires.
-        let entrypoints: [TransactionEntrypoint; 0] = [];
-        let tx_set_hash: [u8; 32] =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
-                .expect("canonical empty external transaction set")
-                .into();
-        state_block.set_fastpq_tx_set_hash(tx_set_hash);
-        let delta = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            amount: Quantity::from(10u32),
-            from_balance_before: Quantity::from(100u32),
-            from_balance_after: Quantity::from(90u32),
-            to_balance_before: Quantity::from(0u32),
-            to_balance_after: Quantity::from(10u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let batch_hash = Hash::prehashed([0x33; 32]);
-        let transcript = TransferTranscript {
-            batch_hash,
-            deltas: vec![delta.clone()],
-            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
-            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
-                &delta,
-                &batch_hash,
-            )),
-        };
-        {
-            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
-            tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
-            tx.apply();
-        }
-        state_block
-            .finalize_fastpq_source_inventory(&[], &[], &[])
-            .unwrap();
-        let transcripts = state_block.drain_transfer_transcripts();
-        assert_eq!(transcripts[&batch_hash], vec![transcript]);
-        state_block.capture_exec_witness().unwrap();
-        let witness = state_block.take_exec_witness().expect("exec witness");
-        let context = state_block
-            .take_fastpq_witness_context()
-            .expect("FASTPQ context");
-        assert!(witness.fastpq_batches.is_empty());
-        assert_eq!(
-            context.public_inputs.expect("public inputs").perm_root,
-            expected
+        crate::state::native_capture_fixture::with_native_capture_source(
+            true,
+            |_, mut state_block, _guard, mut source, batch_hash| {
+                {
+                    let mut transaction = state_block.transaction();
+                    transaction.world.roles.insert(role.id.clone(), role);
+                    transaction.apply();
+                }
+                crate::state::native_capture_fixture::seal_native_source(
+                    &mut state_block,
+                    &mut source,
+                )
+                .unwrap();
+                let transcripts = source.fastpq_transcripts();
+                assert_eq!(transcripts[&batch_hash].len(), 1);
+                assert_eq!(transcripts[&batch_hash][0].batch_hash, batch_hash);
+                state_block.capture_exec_witness().unwrap();
+                let witness = state_block.take_exec_witness().expect("exec witness");
+                let context = state_block
+                    .take_fastpq_witness_context()
+                    .expect("FASTPQ context");
+                assert!(witness.fastpq_batches.is_empty());
+                assert_eq!(
+                    context.public_inputs.expect("public inputs").perm_root,
+                    expected
+                );
+            },
         );
     }
 }

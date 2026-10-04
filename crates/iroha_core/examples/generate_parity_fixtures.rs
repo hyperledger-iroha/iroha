@@ -5,22 +5,27 @@
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
-    state::StateReadOnly,
+    state::{State, World},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, TestChainError},
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_primitives::time::TimeSource;
 use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
-// use mv::storage::StorageReadOnly; // not needed in example
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
-fn fixture_network_id() -> NetworkId {
-    NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
-        iroha_crypto::Hash::new(b"core-parity-fixture-network"),
-    ))
+fn start_fixture_chain(
+    world: World,
+    parallel_apply: bool,
+    chain_id: &ChainId,
+) -> Result<CertifiedTestChain, TestChainError> {
+    let mut config = TestChainConfig::new(world, 0);
+    config.chain_id = chain_id.clone();
+    config.pipeline.parallel_apply = parallel_apply;
+    CertifiedTestChain::start(config).map_err(|failure| failure.error)
+}
+fn fixture_network_id(chain_id: &ChainId) -> Result<NetworkId, TestChainError> {
+    Ok(start_fixture_chain(World::new(), false, chain_id)?.network_id())
 }
 fn fixtures_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -75,22 +80,12 @@ fn sign_fixture_transaction(
     builder.set_creation_time(FIXTURE_TIME);
     builder.try_sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
 }
-fn block_time_source() -> TimeSource {
-    let (_, source) = TimeSource::new_mock(FIXTURE_TIME);
-    source
-}
 fn run_block_and_events(
     parallel_apply: bool,
     chain_id: &ChainId,
     network_id: NetworkId,
     txs: Vec<SignedTransaction>,
-) -> Result<
-    (
-        Vec<iroha_data_model::events::prelude::EventBox>,
-        iroha_core::state::State,
-    ),
-    iroha_crypto::Error,
-> {
+) -> Result<(Vec<iroha_data_model::events::prelude::EventBox>, Arc<State>), Box<dyn Error>> {
     // Build a fresh world with default sandbox-like setup (62Fk4FPcMuLvW5QjDGNF2a4jAmjM).
     let alice_id = iroha_test_samples::ALICE_ID.clone();
     let bob_id = iroha_test_samples::BOB_ID.clone();
@@ -115,61 +110,32 @@ fn run_block_and_events(
     let a0 = Asset::new(a_coin.clone(), Quantity::from(60_u64));
     let b0 = Asset::new(b_coin.clone(), Quantity::from(10_u64));
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query,
-        chain_id.clone(),
+    // Preserve the seeded World and scheduling policy through the genuine signed
+    // genesis admission before submitting these network transactions at height 2.
+    let mut chain = start_fixture_chain(world, parallel_apply, chain_id)?;
+    assert_eq!(
+        chain.network_id(),
         network_id,
+        "transactions bind the actual original genesis"
     );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let mut cfg = state.view().pipeline().clone();
-    cfg.parallel_apply = parallel_apply;
-    state.set_pipeline(cfg);
-    // Build a signed block from txs
-    let block: SignedBlock = {
-        let accepted: Vec<_> = txs
-            .into_iter()
-            .map(|tx| {
-                iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx))
-            })
-            .collect();
-        BlockBuilder::new_with_time_source(accepted, block_time_source())
-            .chain(0, state.view().latest_block().as_deref())
-            .try_sign(iroha_test_samples::ALICE_KEYPAIR.private_key())?
-            .unpack(|_| {})
-            .into()
-    };
-    // Execute and commit. The boxed overlay borrows `state` until the box itself is
-    // dropped, so it stays inside this block and `state` can be returned afterwards.
-    let events = {
-        let (mut sb, sb_recorder) =
-            iroha_core::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
-                .expect("original writer-first component execution");
-        let vb = ValidBlock::validate_unchecked(block, &mut sb, sb_recorder).unpack(|_| {});
-        let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
-        assert!(
-            errors.is_empty(),
-            "parity fixture transactions failed: {errors:?}"
-        );
-        let cb = vb.commit_unchecked().unpack(|_| {});
-        // Apply block effects without re-executing transactions.
-        let events = sb.apply_without_execution(&cb, Vec::<iroha_model_base::peer::PeerId>::new());
-        sb.commit().expect("commit parity fixture state");
-        events
-    };
-    Ok((events, state))
+    chain.take_events().expect("drain original genesis events");
+    chain.commit(txs);
+    let committed = chain.committed(chain.height());
+    let errors: Vec<_> = committed.block().failed_outputs().collect();
+    assert!(
+        errors.is_empty(),
+        "parity fixture transactions failed: {errors:?}"
+    );
+    let events = chain
+        .take_events()
+        .expect("original native publication events");
+    Ok((events, Arc::clone(chain.state())))
 }
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn Error>> {
     // 1) Mint/Burn/Transfer
     let chain_id = ChainId::from("chain");
-    let network_id = fixture_network_id();
+    let network_id = fixture_network_id(&chain_id)?;
     let alice_id = iroha_test_samples::ALICE_ID.clone();
     let bob_id = iroha_test_samples::BOB_ID.clone();
     let rose: AssetDefinitionId =
@@ -402,12 +368,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_core::state::{StateReadOnly, WorldReadOnly};
+    use mv::storage::StorageReadOnly;
     #[test]
     fn parity_fixture_transaction_uses_checked_signing_and_verifies() {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
-                fixture_network_id(),
+                fixture_network_id(&ChainId::from("chain")).expect("actual fixture genesis"),
                 alice_id,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -421,7 +389,7 @@ mod tests {
     fn parity_fixture_block_uses_checked_signing() {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
         let chain_id = ChainId::from("chain");
-        let network_id = fixture_network_id();
+        let network_id = fixture_network_id(&chain_id).expect("actual fixture genesis");
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
                 network_id,
@@ -431,7 +399,93 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "checked parity block".to_owned())]),
         )
         .expect("parity fixture transaction should sign");
-        let (_events, _state) = run_block_and_events(false, &chain_id, network_id, vec![tx])
+        let (_events, state) = run_block_and_events(false, &chain_id, network_id, vec![tx])
             .expect("parity fixture block should sign");
+        let view = state.view();
+        let block = view
+            .latest_block()
+            .expect("original fixture tip can be read")
+            .expect("native successor exists");
+        assert_eq!(block.header().height().get(), 2);
+        assert_eq!(
+            NetworkId::from_genesis_hash(
+                block.header().prev_block_hash().expect("original genesis")
+            ),
+            network_id,
+        );
+        let genesis = view
+            .block_by_height(std::num::NonZeroUsize::new(1).expect("positive genesis height"))
+            .expect("original fixture genesis can be read")
+            .expect("original signed genesis exists");
+        assert_eq!(block.header().prev_block_hash(), Some(genesis.hash()));
+        assert!(block.header().creation_time() > genesis.header().creation_time());
+        assert!(block.header().creation_time() > FIXTURE_TIME);
+        assert!(block.commit_certificate().is_some());
+        assert_eq!(block.output_results().count(), 1);
+        assert!(block.failed_outputs().next().is_none());
+    }
+    #[test]
+    fn parity_fixture_native_genesis_preserves_events_and_balances_between_modes() {
+        let chain_id = ChainId::from("chain");
+        let network_id = fixture_network_id(&chain_id).expect("actual fixture genesis");
+        let alice_id = iroha_test_samples::ALICE_ID.clone();
+        let bob_id = iroha_test_samples::BOB_ID.clone();
+        let rose = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let a_coin = AssetId::of(rose.clone(), alice_id.clone());
+        let b_coin = AssetId::of(rose.clone(), bob_id.clone());
+        let txs = [
+            InstructionBox::from(Mint::asset_quantity(7_u32, a_coin.clone())),
+            InstructionBox::from(Burn::asset_quantity(3_u32, b_coin.clone())),
+            InstructionBox::from(Transfer::asset_quantity(a_coin.clone(), 5_u32, bob_id)),
+        ]
+        .into_iter()
+        .map(|instruction| {
+            sign_fixture_transaction(
+                TransactionBuilder::new(
+                    network_id,
+                    alice_id.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([instruction]),
+            )
+            .expect("checked fixture transaction")
+        })
+        .collect::<Vec<_>>();
+        let (events_seq, state_seq) =
+            run_block_and_events(false, &chain_id, network_id, txs.clone())
+                .expect("certified sequential fixture");
+        let (events_par, state_par) = run_block_and_events(true, &chain_id, network_id, txs)
+            .expect("certified parallel fixture");
+        assert!(!events_seq.is_empty());
+        assert_eq!(
+            events_json_filtered(&events_seq),
+            events_json_filtered(&events_par)
+        );
+        for state in [&state_seq, &state_par] {
+            let view = state.view();
+            assert_eq!(view.height(), 2);
+            for (asset, expected) in [(&a_coin, 62_u64), (&b_coin, 12_u64)] {
+                assert_eq!(
+                    view.world()
+                        .assets()
+                        .get(asset)
+                        .expect("seeded asset")
+                        .clone()
+                        .into_inner(),
+                    Quantity::from(expected),
+                );
+            }
+            assert_eq!(
+                view.world()
+                    .asset_definitions()
+                    .get(&rose)
+                    .expect("seeded definition")
+                    .total_quantity,
+                Quantity::from(74_u64),
+            );
+        }
     }
 }

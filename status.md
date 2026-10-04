@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-03. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-04. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -108,11 +108,34 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 The current `optimizations` checkout has merged HEAD
-`c0f2be96c6e15f773f23e916ab574a59c6806fb8`, subsequent repairs and concurrent
-Petal changes. The seventeen-target Core/Kagami build and stock Rust 1.93.1
-whole-workspace all-target check pass on their recorded inputs. They do not
-establish one unchanged release candidate. Exact component evidence and remaining
-criteria are maintained in the [ZK goals](specs/zk_first_release_goals.md).
+`68d8bb58ff4af339aba2229f18da3ed00d58d2e6` and subsequent reviewed repairs.
+The latest eighteen-target Core/Kagami build and all 262 selected native
+executions pass with unchanged source and artifacts. They account for all original
+247 obligations through genuine producer/consumer replacements and paired
+identical captures, plus the corrected chronology and FASTPQ context controls.
+The genuine producer reproduces all four canonical fixtures with actual genesis
+and sequential/parallel parity. Both Mac and Linux scalar-CALL, callable, frame
+and history selections pass all 61 ordinary controls on their recorded artifacts;
+two heavy frame controls remain unexecuted. The locked, offline workspace all-target check passes on the combined X509,
+fixture and arithmetic candidate. All 5,005 affected native tests pass: 35 artifact
+admission, 4,633 data-model, two allocation-observer and 335 Primitives controls.
+The original harness failure from 17 standard `should panic` annotations remains
+retained; independent reconciliation verifies the exact actual native events.
+The recorded strict Clippy run still fails on decoder visibility, unused CoreZK
+items and one test pattern. Reviewed visibility, projection and receipt-method
+repairs are now applied; fresh compiler and native validation remain required. These component
+results do not qualify the integrated release. Exact evidence and remaining criteria are in the
+[ZK goals](specs/zk_first_release_goals.md).
+
+The X509 padding, private-u32 path-length, mandatory copy-census and canonical
+EKU repairs are applied. Fresh Mac and Linux artifacts pass all 218 selected
+controls, including all 29 profile fields, signed capacity cases and copy-omission
+regressions, with unchanged measured source and artifacts. Authentic proof hashes
+match across platforms. The standalone DER proof is 1,527,952 bytes and takes
+268.12 seconds on Mac and 268.73 seconds on Linux; both verifier and mutation
+suites pass. Its test-only format exposes terminal products and does not
+establish complete-credential hiding. The complete maximum result below still
+misses the proving-time gate; integrated and cryptographic qualification remain open.
 
 The rebuilt Core artifact passes all five prior stack failures on the default
 stack, all 72 selected certified-chain controls and all 246 still-existing controls
@@ -127,8 +150,9 @@ audit refusal is retained; a supplemental audit validates the actual IVM sample
 inputs against every original compiler observation. The lifetime compile-fail test, Primitives 333, Norito derive
 59 unit and 17 strict-JSON controls, and 32 compiler cases pass.
 Complete Mint/Guard/receiver, genuine proof/export and full-State authority remain
-open. The current inventory preserves 105 codec owners and 1,555 nominal
-identities; publication and reduced-feature qualification remain required.
+open. The current inventory has 106 codec owners and 1,558 nominal identities,
+preserving every prior owner; publication and reduced-feature qualification
+remain required.
 
 The fresh Linux and Mac optimized privacy artifacts pass all 133 private-dispatch
 controls, including all eight direct-jump and eleven CALL descriptor/frame-work
@@ -139,22 +163,18 @@ native tests and compiled-caller review. Complete current ordinary privacy
 coverage, IVM execution, initialization and finalized-State binding remain open.
 RAM-LFE secure encryption, refresh and the full program relation remain unavailable.
 
-The latest Linux maximum X509 proof is 9,412,944 bytes. Producer and independent
-verification, wrong-genesis, corruption and all 32 nonce-byte substitutions pass;
-a separate fresh verifier passes in 8.674104 seconds. Conservative reported RSS
-is 7,147,257,856 bytes and sampled address space reaches 8,668,545,024 bytes,
-within the unchanged 12 GiB RSS and enforced 32 GiB address-space caps. These
-observations do not measure an exact physical or address-space peak. Proving
-takes 1,494.890315 seconds against 300, so the complete run fails qualification.
-The applied compact P-256, shared FFT, masked-coefficient and exact-capacity DEEP
-changes complete this proof. The repaired Metal maximum also produces and verifies the complete proof,
-including a fresh verifier and all nonce mutations. Its 1,061.052853-second
-proving time still exceeds 300; Darwin cannot enforce the 32 GiB address-space
-limit and its sampled literal address space exceeds it. The retained pre-CALL privacy artifact
-has 2,028 of 2,588 ordinary controls pending; those counts do not describe the
-current source's expanded census. Relation, adaptive transcript/hiding and
-whole-prover side-channel review remain open. Busy-host timings are not a
-quiet-host speedup claim; no cap or supported shape is relaxed.
+The latest Linux maximum X509 proof on the corrected profile is 9,412,944 bytes.
+Producer self-check, independent replay, wrong-genesis, corruption and all 32
+nonce-byte substitutions pass; a separate fresh public verifier takes 7.977963
+seconds. Conservative reported RSS is 7,163,871,232 bytes, within the unchanged
+12 GiB cap, and the kernel-enforced hard/soft 32 GiB address-space gate passes.
+These observations do not establish an exact physical or address-space peak.
+Proving takes 1,437.185689 seconds against 300, so the complete run fails its
+performance gate. The retained result and all 65 phase timers are source-bound;
+later changes require fresh validation. The preceding Metal maximum also verified
+the complete proof but failed its time and Darwin address-space gates. Relation,
+adaptive transcript/hiding and whole-prover side-channel review remain open.
+No maximum is qualified, and no cap or supported shape is relaxed.
 
 Maximum FASTPQ ordinary and AXT production and fresh verifier replays pass on
 their recorded candidate. Current hardware controls pass 57 tests, including all
@@ -163,18 +183,24 @@ transcript scenario passes after the exact authenticated query repair, preservin
 contiguous genesis-rooted finality, source substitutions and restart checks.
 This establishes transcript custody; complete q77/D7 source/spend admission,
 concrete cryptographic qualification and other hardware remain open.
+The complete-effect ordinary artifact, original-pool funding and move-only
+finalized-source lane are now integrated for compiler/native validation. The
+ordinary profile and canonical artifact layout changed; preceding transfer-only
+maximum results do not qualify this candidate. Durable completion publication,
+recovery and automatic dispatch remain unfinished.
 
-The script suite passes 718 tests and 163 subtests; typed workflows pass 58
-controls. The current eight Kotlin tasks account for 2,485 passes without skips,
-including 1,846 JVM, 30 tooling, 422 Android client managed, 91 wallet managed,
-95 client host-JNI and one wallet host-JNI tests. Native example and tooling
-distribution pass. Both Android JNI architectures pass the full 132-method audit;
-the Darwin library's four Android-only absences are explicit. The host ABI-25
-probe and all ten genuine fixture modes pass, with each mode produced twice
-identically.
+The merged-source script suite passes 722 tests and 163 subtests; typed workflows
+pass 58 controls. The rebuilt host passes its loaded ABI-25 probe and all ten
+genuine fixture modes twice with identical bytes. The current eight Kotlin tasks
+pass **2,498 tests** without failures or skips: 1,859 JVM, 30 tooling, 422 Android
+client managed, 91 wallet managed, 95 client host-JNI and one wallet host-JNI.
+The genuine native example and tooling distribution pass. Android ELF audits
+were not run in this cohort; preceding full 132-method architecture audits remain
+scoped to those artifacts. The Darwin host's four Android-only absences remain
+explicit.
 
-Current Apple packaging completes all five native targets and three
-XCFrameworks. The original projection-wrapper environment failure is retained
+Preceding Apple packaging completes all five native targets and three
+XCFrameworks; fresh packaging awaits validated X509 profile and fixture repairs. The original projection-wrapper environment failure is retained
 separately from the successful official-environment projection and authentic
 Swift pin adoption. The complete Swift host replay passes all 2,358 tests
 without failures or skips. The compact metadata test-reader repair preserves
@@ -287,10 +313,11 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** the current joint X509 maximum proof passes native and fresh
-  verification, proof size, conservative RSS and enforced address space. The
-  300-second limit fails. Complete relation, adaptive transcript/hiding and
-  side-channel qualification remain open. Maximum q77 ordinary/AXT proofs, local
+- **Privacy/crypto:** an earlier joint X509 maximum proof passes verification,
+  size, RSS and enforced address-space checks but fails the 300-second limit.
+  The corrected RFC profile and authentic component fixtures require a fresh
+  complete proof. Complete relation, adaptive transcript/hiding and side-channel
+  qualification remain open. Maximum q77 ordinary/AXT proofs, local
   M1 Ultra controls and four-validator transcript custody pass on their recorded
   candidates; complete source/spend admission and other hardware remain open.
   RAM-LFE secure encryption/full execution, IVM native

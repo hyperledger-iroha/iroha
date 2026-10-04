@@ -56,12 +56,14 @@ fn canonical_source_shape_forecasts_fit_the_preconstruction_allowances() {
     let sha_fixed = ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(sha_shape).unwrap();
     let sha_scratch = ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(sha_shape).unwrap();
     let rfc_coefficients = main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(&layout).unwrap();
-    let retained = small + p256 + sha_fixed + rfc_coefficients;
+    let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
+    assert!(sha_aux > 1_308_622_848); // Four full 524288 x 78 field matrices plus terminals.
+    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux;
     assert!(retained <= main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
     let serial_scratch = small_scratch.max(sha_scratch).max(p256_scratch);
     assert!(serial_scratch <= main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
     eprintln!(
-        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, retained_rfc={rfc_coefficients}, serial_scratch={}",
+        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, retained_rfc={rfc_coefficients}, serial_scratch={}",
         serial_scratch
     );
     // These construction bounds do not materialize or qualify the separately
@@ -130,6 +132,16 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
     assert!(plan.check_native_sources_v1(0, &[usize::MAX, 1]).is_err());
+    let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
+    assert_eq!(
+        plan.check_native_sources_v1(assembly_limit, &[source_limit - sha_aux, sha_aux])
+            .unwrap(),
+        plan.check_before_sources_v1(assembly_limit).unwrap()
+    );
+    assert!(matches!(
+        plan.check_native_sources_v1(0, &[source_limit - sha_aux + 1, sha_aux]),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
     // The source transition reuses the same retained assembly charge, rather
     // than treating a borrowed assembly as already freed after base commitment.
     assert!(matches!(
@@ -686,15 +698,15 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
             2_803_630_080,
             95_420_416,
             3_732_930_560,
-            4_070_572_032,
+            4_498_391_040, // RFC: 2,145 local residues across 2^21 quotient rows.
             9_462_349_824,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        25_357_426_688
+        25_785_245_696
     );
-    assert_eq!(residues, 25_357_426_688);
+    assert_eq!(residues, 25_785_245_696);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,

@@ -952,15 +952,6 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     pub(crate) fn authorization_binding_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         authorization(&self.captured().1, self.pending().lease.as_deref())
     }
-    pub(crate) fn approval_admission_time_ms(&self) -> u64 {
-        self.admission_interval_lower_ms()
-    }
-    pub(crate) fn admission_interval_lower_ms(&self) -> u64 {
-        self.admission_clock_context().lower_at_ms
-    }
-    pub(crate) fn admission_interval_upper_ms(&self) -> u64 {
-        self.admission_clock_context().upper_at_ms
-    }
     pub(crate) fn transition_stream(&self) -> &[u8] {
         &self.pending().originals.transition_stream
     }

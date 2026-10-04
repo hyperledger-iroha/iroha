@@ -648,3 +648,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "main_common22_coarse_diagnostic_tests.rs"]
+mod common22_coarse_diagnostic_tests;

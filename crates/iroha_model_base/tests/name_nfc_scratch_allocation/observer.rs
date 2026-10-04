@@ -11,8 +11,9 @@ struct Live {
     bytes: usize,
 }
 
+/// Retained allocation counters from one scoped observation.
 #[derive(Clone, Copy)]
-pub(super) struct Observation {
+pub struct Observation {
     active: bool,
     pub(super) requests: [usize; 64],
     pub(super) count: usize,
@@ -141,7 +142,8 @@ impl Drop for Stop {
         observe(|state| state.active = false);
     }
 }
-pub(super) fn measured<T>(operation: impl FnOnce() -> T) -> (T, Observation) {
+/// Measure one operation while restoring observation on return or unwind.
+pub fn measured<T>(operation: impl FnOnce() -> T) -> (T, Observation) {
     OBSERVED.with(|cell| {
         assert!(!cell.get().active);
         cell.set(Observation {

@@ -1,4 +1,4 @@
-//! Opt-in complete structural-maximum credential proof and public-only receipt.
+//! Opt-in complete ordinary and structural-maximum proofs with public-only receipts.
 //!
 //! This test uses the real first-release producer and independent verifier. It
 //! retains public proof bytes before checking the unchanged time target. Run
@@ -16,7 +16,7 @@ use std::{
 use sha2::{Digest as _, Sha256};
 
 thread_local! {
-    // Enabled only around the locally constructed public maximum fixture or a
+    // Enabled only around a locally constructed public release fixture or a
     // retained public candidate replay. Ordinary tests and production have no sink.
     static PUBLIC_DIAGNOSTIC_DIRECTORY_V1: std::cell::RefCell<Option<PathBuf>> =
         const { std::cell::RefCell::new(None) };
@@ -224,6 +224,16 @@ fn retained_candidate_reader_rejects_wrong_names_bounds_and_symlinks() {
 #[test]
 #[ignore = "verifier-only replay of an explicitly selected unverified public maximum-fixture candidate"]
 fn retained_public_maximum_candidate_replays_without_prover() {
+    retained_public_candidate_replays_without_prover_v1(true);
+}
+
+#[test]
+#[ignore = "verifier-only replay of an explicitly selected unverified public ordinary depth-two fixture candidate"]
+fn retained_public_ordinary_candidate_replays_without_prover() {
+    retained_public_candidate_replays_without_prover_v1(false);
+}
+
+fn retained_public_candidate_replays_without_prover_v1(maximum_shape: bool) {
     use super::super::relation::release_fixture::{
         build_zk_x509_release_fixture_v1, reference_statement_context_v1,
     };
@@ -233,8 +243,12 @@ fn retained_public_maximum_candidate_replays_without_prover() {
     );
     let proof =
         read_unverified_candidate_v1(&candidate).expect("bounded digest-bound public candidate");
-    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
-        .expect("same deterministic maximum public fixture");
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), maximum_shape)
+        .expect(if maximum_shape {
+            "same deterministic maximum public fixture"
+        } else {
+            "same deterministic ordinary depth-two public fixture"
+        });
     let genesis = *fixture.statement.context.network_id.as_bytes();
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -246,6 +260,19 @@ fn retained_public_maximum_candidate_replays_without_prover() {
         "output_directory={}\nreplay_source_candidate={}\ncandidate_status=unverified\ncandidate_sha256={}\ncandidate_bytes={}\nactivation=unavailable\nfull_release_qualification=false\nprivate_witness_recorded=false\nproof_regenerated=false",
         directory.display(), candidate.display(), hex::encode(Sha256::digest(&proof)), proof.len(),
     )).unwrap();
+    record_public_diagnostic_v1(
+        &directory,
+        &format!(
+            "fixture_kind={}\ncertificate_chain_depth={}",
+            if maximum_shape {
+                "maximum-depth-three"
+            } else {
+                "ordinary-depth-two"
+            },
+            fixture.resource_shape.certificate_chain_depth,
+        ),
+    )
+    .unwrap();
     let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
     let start = Instant::now();
     let result = verify_zk_x509_credential_proof_v1(
@@ -258,7 +285,11 @@ fn retained_public_maximum_candidate_replays_without_prover() {
     record_public_diagnostic_v1(&directory, &format!(
         "retained_public_candidate_replay={result:?}\nreplay_seconds={:.6}\nfull_release_qualification=false", start.elapsed().as_secs_f64(),
     )).unwrap();
-    result.expect("retained public maximum candidate must pass the unchanged verifier");
+    result.expect(if maximum_shape {
+        "retained public maximum candidate must pass the unchanged verifier"
+    } else {
+        "retained public ordinary candidate must pass the unchanged verifier"
+    });
 }
 
 #[test]
@@ -425,6 +456,16 @@ fn public_proof_receipt_preserves_exact_bytes_and_rejects_existing_mismatch() {
 #[test]
 #[ignore = "complete maximum-structural MAIN+CA credential proof; optimized build and external RSS measurement required"]
 fn maximum_structural_credential_proof_with_retained_public_receipt() {
+    complete_credential_proof_with_retained_public_receipt_v1(true);
+}
+
+#[test]
+#[ignore = "complete ordinary depth-two MAIN+CA credential proof; optimized build and external RSS measurement required"]
+fn ordinary_depth_two_credential_proof_with_retained_public_receipt() {
+    complete_credential_proof_with_retained_public_receipt_v1(false);
+}
+
+fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool) {
     use super::super::{
         profile::{
             ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
@@ -458,13 +499,65 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         "output_directory={}\nprofile=complete49-MAIN-plus-compactCA\nproof_cap_bytes={ZK_X509_MAX_PROOF_BYTES_V1}\nencoded_geometry_bound_bytes={ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1}\nprover_target_seconds={ZK_X509_PROVER_TARGET_SECONDS_V1}\npeak_rss_limit_bytes={ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1}\naddress_space_limit_bytes={ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1}\nrss_evidence=external-time-l-required\nactivation=unavailable\nprivate_witness_recorded=false",
         directory.display(),
     ));
-    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
-        .expect("maximum structural release fixture");
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), maximum_shape)
+        .expect(if maximum_shape {
+            "maximum structural release fixture"
+        } else {
+            "ordinary depth-two release fixture"
+        });
     fixture.resource_shape.validate_v1().unwrap();
-    assert_eq!(fixture.resource_shape.certificate_chain_depth, 3);
-    assert_eq!(fixture.statement.disclosed_attributes.len(), 4);
-    assert_eq!(fixture.crl_entry_count, 64);
-    assert_eq!(fixture.resource_shape.maximum_serial_bytes, 20);
+    if maximum_shape {
+        assert_eq!(fixture.resource_shape.certificate_chain_depth, 3);
+        assert_eq!(fixture.statement.disclosed_attributes.len(), 4);
+        assert_eq!(fixture.crl_entry_count, 64);
+        assert_eq!(fixture.resource_shape.maximum_serial_bytes, 20);
+    } else {
+        assert_eq!(fixture.resource_shape.certificate_chain_depth, 2);
+        assert_eq!(fixture.statement.disclosed_attributes.len(), 1);
+        assert_eq!(fixture.crl_entry_count, 0);
+        assert_eq!(fixture.resource_shape.maximum_serial_bytes, 1);
+        // Inspect the actual normalized document census. Depth two includes a
+        // dummy top-level slot; raw certificate slots are not document ordinals.
+        // This preflight owner drops before the measured genuine proof begins.
+        let trust_anchor = fixture.authoritative_state.trust_anchor();
+        let crl = fixture.authoritative_state.crl_record();
+        let assembly = super::super::main_assembly::build_zk_x509_main_trace_assembly_v1(
+            &fixture.statement,
+            super::super::relation::ZkX509GovernanceV1 {
+                trust_anchor: &trust_anchor,
+                certificate_policy: fixture.authoritative_state.certificate_policy(),
+                crl: &crl,
+            },
+            &fixture.witness,
+        )
+        .expect("ordinary admitted complete MAIN assembly");
+        let shape = &assembly.rfc_base.private_shape;
+        assert_eq!(shape.chain_depth, 2);
+        assert_eq!(shape.top_document_count, 3);
+        assert_eq!(shape.embedded_document_count, 11);
+        let source_documents =
+            usize::from(shape.top_document_count) + usize::from(shape.embedded_document_count);
+        let source_document_capacity = super::super::der_air::ZK_X509_DER_AIR_MAX_DOCUMENTS_V1
+            + super::super::der_air::ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1;
+        assert_eq!(source_documents, 14);
+        assert_eq!(source_document_capacity, 19);
+        assert_eq!(source_document_capacity - source_documents, 5);
+        record(format!(
+            "rfc_top_documents={}\nrfc_embedded_documents={}\nrfc_source_documents={source_documents}\nrfc_source_document_capacity={source_document_capacity}\nrfc_inactive_source_documents={}",
+            shape.top_document_count,
+            shape.embedded_document_count,
+            source_document_capacity - source_documents,
+        ));
+    }
+    record(format!(
+        "fixture_kind={}\ncertificate_chain_depth={}",
+        if maximum_shape {
+            "maximum-depth-three"
+        } else {
+            "ordinary-depth-two"
+        },
+        fixture.resource_shape.certificate_chain_depth,
+    ));
     record(format!("structural_shape={:?}", fixture.resource_shape));
     let witness = zeroize::Zeroizing::new(fixture.witness.encode_v1().unwrap());
     let genesis = *fixture.statement.context.network_id.as_bytes();

@@ -73,7 +73,7 @@ fn nominal_models_preserve_all_layout_flags_identity_and_unaligned_borrowing() {
 #[test]
 fn borrowed_semantic_validation_matches_owned_rejection_without_rewriting() {
     for raw in [
-        "".to_owned(),
+        String::new(),
         "valid".to_owned(),
         "é".to_owned(),
         "e\u{301}".to_owned(),
@@ -119,7 +119,7 @@ where
     );
     let (retried, usage) =
         with_decode_limits_measured(limits(demand), || T::decode_from_slice(&payload));
-    let (decoded, consumed) = retried.ok().expect("exact original demand");
+    let (decoded, consumed) = retried.expect("exact original demand");
     assert_eq!(decoded.as_ref(), raw);
     assert_eq!(consumed, payload.len());
     assert_eq!(usage.total_allocated_bytes(), demand);
@@ -148,11 +148,13 @@ fn binary_name_and_long_path_charge_nfc_scratch_before_owned_validation() {
     assert_eq!(usage.total_allocated_bytes(), scratch + path.len());
 }
 
+type JsonKeyDecoder<T> = fn(&str) -> Result<T, norito::json::Error>;
+
 fn json_key_scratch<T>(raw: &str, scratch: usize)
 where
     T: AsRef<str> + norito::json::JsonKeyCodec + norito::json::JsonObjectKeyOwned,
 {
-    let decoders: [fn(&str) -> Result<T, norito::json::Error>; 2] = [
+    let decoders: [JsonKeyDecoder<T>; 2] = [
         <T as norito::json::JsonKeyCodec>::decode_json_key,
         <T as norito::json::JsonObjectKeyOwned>::from_json_key_text,
     ];
@@ -167,10 +169,7 @@ where
         }
         let (retried, usage) =
             with_decode_limits_measured(limits(scratch + raw.len()), || decode(raw));
-        assert_eq!(
-            retried.ok().expect("original JSON-key demand").as_ref(),
-            raw
-        );
+        assert_eq!(retried.expect("original JSON-key demand").as_ref(), raw);
         assert_eq!(usage.total_allocated_bytes(), scratch + raw.len());
     }
 }

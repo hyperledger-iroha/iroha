@@ -441,8 +441,9 @@ pub(super) fn constrain_ordinary_receive_opening_v1<F: KagemushaPoseidonFieldV1>
             field_bytes("recipient_encryption_key")?,
         ),
         recipient_lane: selected(ctx, &range, enabled, field_bytes("recipient_lane_id")?),
-        request_id: selected(ctx, &range, enabled, field_bytes("request_id")?),
     };
+    // Keep request-id selection constraints in their original construction order.
+    let _ = selected(ctx, &range, enabled, field_bytes("request_id")?);
     let mut raw = encrypted.to_vec();
     raw.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
     if encrypted.len() > KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1 {

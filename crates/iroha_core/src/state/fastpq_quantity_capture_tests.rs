@@ -10,7 +10,7 @@ use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
     block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
     domain::Domain,
-    isi::{Burn, Mint, Register, Transfer, Unregister},
+    isi::{Burn, Mint, Register, Transfer, Unregister, error::InstructionExecutionError},
     prelude::{InstructionBox, TransactionBuilder},
     transaction::{FeePaymentIntent, SignedTransaction},
 };
@@ -832,6 +832,13 @@ fn capture_capacity_refusal_keeps_exact_prefix_counters_and_original_business_re
     assert_eq!(archive.usage.deltas, 1);
     assert_eq!(archive.entries[&call].effects.len(), 1);
     assert_exact_applied_measurement(archive);
+    assert_eq!(
+        archive.commitments.get(&call).unwrap().count(),
+        2,
+        "optional proof delta cap cannot truncate the mandatory supported source journal"
+    );
+    assert_eq!(archive.commitments.coverage_gap(), None);
+    assert!(!archive.commitments.is_invalid());
 }
 
 #[test]
@@ -1116,11 +1123,9 @@ fn sponsor_business_capability_without_original_signed_source_cannot_capture() {
     );
 }
 
-#[test]
-#[ignore = "explicit genuine fixture producer; retain its source-bound native output"]
-fn emit_genuine_signed_quantity_effect_capture() {
+fn genuine_signed_quantity_effect_capture_bytes() -> Vec<u8> {
     let (state, alice, bob) = fixture();
-    let (source, call) = source(
+    let (mut source, call) = source(
         &state,
         vec![
             Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone()).into(),
@@ -1138,6 +1143,15 @@ fn emit_genuine_signed_quantity_effect_capture() {
         .unwrap();
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block.execute_ordinary_output_plan(&source, None).unwrap();
+    block
+        .seal_execution_outputs(&mut source, |state, _, routes| {
+            assert_eq!(routes.len(), 1);
+            Ok::<_, String>(crate::state::output_capacity::ExecutionOutputSealMetadata {
+                committed_fragment_count: u64::try_from(state.committed_fragment_count()).unwrap(),
+            })
+        })
+        .unwrap();
+    block.observe_quantity_block_journals();
     assert_eq!(
         block.world.assets.get(&alice).unwrap().as_ref(),
         &Quantity::from(11_u32)
@@ -1191,7 +1205,7 @@ fn emit_genuine_signed_quantity_effect_capture() {
         Err(QuantityCaptureIssue::IncompleteCoverage)
     );
 
-    let inputs = iroha_data_model::fastpq::FastpqPublicInputs {
+    let original_inputs = iroha_data_model::fastpq::FastpqPublicInputs {
         dsid: crate::fastpq::dataspace_id_bytes(entry.context.entry.dataspace_id),
         slot: source.header().creation_time_ms.saturating_mul(1_000_000),
         old_root: [0; 32],
@@ -1204,11 +1218,26 @@ fn emit_genuine_signed_quantity_effect_capture() {
         .unwrap()
         .into(),
     };
+    let super::source_census::QuantitySourceCensusState::Sealed(census) = &candidate.source_census
+    else {
+        panic!("original completed native census");
+    };
+    let [seal] = census.entries() else {
+        panic!("one complete executed entry")
+    };
+    assert_eq!(seal.context, entry.context);
+    assert_eq!(seal.effect_count, 4);
+    let inputs = census.statement_context(0).unwrap();
+    assert_eq!(inputs, original_inputs);
+    assert_eq!(
+        seal.effects_digest,
+        iroha_data_model::fastpq::execution_effects_digest_v1(entry.wire()).unwrap()
+    );
     // The genuine transfer projection retains both occurrences. It must not
     // hide the gap by splitting the entry or synthesizing mint/burn transfers.
-    let transfers = &block.fastpq_transcripts[&call];
+    let transfers = &source.fastpq_transcripts()[&call];
     assert_eq!(transfers.len(), 2);
-    let transfer_only_result = crate::fastpq::quantity_statement_from_finalized_transcripts(
+    let transfer_only_result = crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
         inputs,
         transfers,
         fastpq_prover::gadgets::public_transfer_statement::PublicTransferLimits::default(),
@@ -1218,17 +1247,74 @@ fn emit_genuine_signed_quantity_effect_capture() {
         matches!(transfer_only_result, Err(fastpq_prover::Error::TransferInvariant { details }) if details.contains("repeated-key"))
     );
 
-    // Public disposable fixture only. This test-only diagnostic frame does
-    // not bypass require_complete or create a source/finality credential.
-    // The orchestration owner authenticates executable/source/log custody
-    // and retains these exact bytes for the separate prover test.
-    let bytes = norito::encode_canonical(&(entry.wire().clone(), inputs)).unwrap();
+    let (manifest, leaves, manifest_bytes) = block.finalized_quantity_source_for_test().unwrap();
+    assert_eq!(
+        manifest.coverage,
+        iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Complete
+    );
+    assert_eq!(manifest.executed_entry_count, 1);
+    assert_eq!(manifest.statement_count, 1);
+    assert_eq!(norito::decode_canonical::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1>(manifest_bytes).unwrap(), manifest);
+    let [leaf] = leaves else {
+        panic!("one original complete effect leaf")
+    };
+    assert_eq!(leaf.source, entry.context.source);
+    assert_eq!(leaf.entry_hash, call);
+    assert_eq!(leaf.effect_count, 4);
+    assert_eq!(leaf.effects_digest, <[u8; 32]>::from(seal.effects_digest));
+    assert_eq!(leaf.slot, inputs.slot);
+    assert_eq!(leaf.perm_root, inputs.perm_root);
+    assert_eq!(leaf.tx_set_hash, inputs.tx_set_hash);
+    // Public disposable diagnostic only: preserve the actual original leaf, not
+    // caller-reconstructed metadata. This frame grants no finality capability.
+    let bytes = norito::encode_canonical(&(entry.wire().clone(), inputs, *leaf)).unwrap();
     assert!(bytes.len() <= 1_048_576);
     let decoded: (
         FastpqExecutionEffectsV1,
         iroha_data_model::fastpq::FastpqPublicInputs,
+        iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1,
     ) = norito::decode_canonical(&bytes).unwrap();
-    assert_eq!(decoded, (entry.wire().clone(), inputs));
+    assert_eq!(decoded, (entry.wire().clone(), inputs, *leaf));
+    bytes
+}
+
+#[test]
+fn genuine_completed_census_preserves_original_transfer_mint_burn_transfer_binding() {
+    let bytes = genuine_signed_quantity_effect_capture_bytes();
+    let (effects, inputs, leaf): (
+        FastpqExecutionEffectsV1,
+        iroha_data_model::fastpq::FastpqPublicInputs,
+        iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1,
+    ) = norito::decode_canonical(&bytes).unwrap();
+    assert_eq!(effects.effects.len(), 4);
+    assert_eq!(
+        leaf.effects_digest,
+        <[u8; 32]>::from(iroha_data_model::fastpq::execution_effects_digest_v1(&effects).unwrap())
+    );
+    assert_ne!(inputs.tx_set_hash, [0; 32]);
+    for mutation in 0..5 {
+        let mut changed = effects.clone();
+        match mutation {
+            0 => {
+                changed.effects.remove(1);
+            }
+            1 => changed.effects.swap(0, 3),
+            2 => changed.context.source.height += 1,
+            3 => changed.effects[1].authority_digest = Hash::new(b"substituted mint authority"),
+            _ => changed.effects[2].authorization_context = Hash::new(b"substituted burn owner"),
+        }
+        assert!(
+            !iroha_data_model::fastpq::execution_effects_digest_v1(&changed)
+                .is_ok_and(|digest| <[u8; 32]>::from(digest) == leaf.effects_digest),
+            "mutation {mutation} must not reproduce the original effect digest",
+        );
+    }
+}
+
+#[test]
+#[ignore = "explicit genuine fixture producer; retain its source-bound native output"]
+fn emit_genuine_signed_quantity_effect_capture() {
+    let bytes = genuine_signed_quantity_effect_capture_bytes();
     println!(
         "IROHA_FASTPQ_GENUINE_EFFECT_CAPTURE_V1 {} {}",
         hex::encode(Hash::new(&bytes).as_ref()),
@@ -1666,7 +1752,7 @@ fn original_finite_port_reservation_is_atomic_retained_and_returned_on_refusal_o
             let small = iroha_allocation::AllocationBudget::new(limit);
             assert!(matches!(
                 QuantityWritePlan::from_effects(effects, 2, &small),
-                Err(super::super::fastpq_quantity_write_plan::QuantityWritePlanError::Capacity)
+                Err(super::super::fastpq_quantity_write_plan::QuantityWritePlanError::Deferred(_))
             ));
             assert_eq!(small.reserved_bytes(), 0);
             assert_eq!(
@@ -2373,7 +2459,26 @@ fn original_quantity_census_retains_ordered_success_empty_and_rejected_sources_w
                 .get(&row.context.entry.entry_hash)
                 .map_or(&empty, QuantityArchivedEntry::wire);
             let native = norito::encode_canonical(wire).unwrap();
-            assert_eq!(row.effects_digest, Hash::new(&native));
+            assert_ne!(
+                row.effects_digest,
+                Hash::new_from_chunks(&[b"fastpq:execution-effects:v1:source|", &native]),
+                "the retired whole-frame digest is not an alias for the ordered commitment"
+            );
+            assert_eq!(
+                row.effects_digest,
+                block
+                    .fastpq_quantity_candidate
+                    .commitments
+                    .original(row.context)
+                    .unwrap()
+                    .digest()
+                    .unwrap()
+            );
+            assert_eq!(
+                row.effects_digest,
+                iroha_data_model::fastpq::execution_effects_digest_v1(wire).unwrap()
+            );
+            assert_ne!(row.effects_digest, Hash::new(&native));
             assert_eq!(row.frame_bytes, u64::try_from(native.len()).unwrap());
             assert_eq!(row.effect_count, if index == 0 { 1 } else { 0 });
         }
@@ -2398,9 +2503,20 @@ fn original_quantity_census_reserves_exact_fixed_backing_and_returns_credit_on_r
 {
     use super::source_census::{QuantitySourceCensus, QuantitySourceEntrySeal};
     with_sealed_quantity_source_census(|block, _, _, _| {
-        let required = std::alloc::Layout::array::<QuantitySourceEntrySeal>(3)
+        let entry_bytes = std::alloc::Layout::array::<QuantitySourceEntrySeal>(3)
             .unwrap()
             .size();
+        let permission_bytes = crate::fastpq::permission_context::permission_table_backing_layout(
+            block.world.roles.iter(),
+        )
+        .unwrap()
+        .size();
+        let shell_bytes = iroha_allocation::ChargedShared::<
+            super::super::fastpq_quantity_archive::FrozenQuantityArchive<QuantityArchivedEntry>,
+        >::allocation_layout()
+        .size();
+        let retained_bytes = entry_bytes.checked_add(shell_bytes).unwrap();
+        let required = retained_bytes.checked_add(permission_bytes).unwrap();
         assert!(required > 0);
         let insufficient = iroha_allocation::AllocationBudget::new(required - 1);
         assert!(matches!(
@@ -2411,19 +2527,19 @@ fn original_quantity_census_reserves_exact_fixed_backing_and_returns_credit_on_r
         assert_eq!(insufficient.peak_reserved_bytes(), 0);
         let exact = iroha_allocation::AllocationBudget::new(required);
         let retained = QuantitySourceCensus::prepare(block, &exact).unwrap();
-        assert_eq!(exact.reserved_bytes(), required);
+        assert_eq!(exact.reserved_bytes(), retained_bytes);
         assert!(matches!(
             QuantitySourceCensus::prepare(block, &exact),
             Err(QuantityCaptureIssue::Capacity)
         ));
-        assert_eq!(exact.reserved_bytes(), required);
+        assert_eq!(exact.reserved_bytes(), retained_bytes);
         assert_eq!(retained.entries().len(), 3);
         drop(retained);
         assert_eq!(exact.reserved_bytes(), 0);
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let retained = QuantitySourceCensus::prepare(block, &exact).unwrap();
             assert_eq!(retained.entries().len(), 3);
-            assert_eq!(exact.reserved_bytes(), required);
+            assert_eq!(exact.reserved_bytes(), retained_bytes);
             panic!("drop original census backing during unwind");
         }));
         assert!(unwind.is_err());
@@ -2433,7 +2549,10 @@ fn original_quantity_census_reserves_exact_fixed_backing_and_returns_credit_on_r
         let original_pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
         let original_before = original_pool.reserved_bytes();
         block.reject_quantity_source_census();
-        assert_eq!(original_pool.reserved_bytes() + required, original_before);
+        assert_eq!(
+            original_pool.reserved_bytes() + entry_bytes,
+            original_before
+        );
         assert_eq!(
             block.fastpq_quantity_candidate.issue,
             Some(QuantityCaptureIssue::UnsupportedOwner)
@@ -2464,14 +2583,43 @@ fn original_quantity_census_refuses_source_reconstruction_context_change_and_mis
                     block.fastpq_quantity_candidate.entries =
                         super::super::fastpq_quantity_archive::QuantityArchiveMap::default()
                 }
-                4 => block
-                    .fastpq_quantity_candidate
-                    .entries
-                    .for_each_mut(|entry| {
-                        entry.tape.substitute_entry_hash_for_test(Hash::new(
+                4 => {
+                    // Completed backing exposes no mutable tape. A separately
+                    // funded replacement cannot recover its original ownership.
+                    let budget = block.pipeline_ivm_prepared_cache.execution_budget();
+                    let mut replacement =
+                        super::super::fastpq_quantity_archive::QuantityArchiveMap::default();
+                    replacement.grow(
+                        super::super::fastpq_quantity_archive::QuantityArchiveMap::reserve(
+                            block.fastpq_quantity_candidate.entries.len(),
+                            budget,
+                        )
+                        .unwrap(),
+                    );
+                    for (hash, entry) in block.fastpq_quantity_candidate.entries.iter() {
+                        let mut tape = QuantityTape::prepare(
+                            entry.context,
+                            &entry.effects,
+                            &[],
+                            Hash::new(b"unused no new effects"),
+                            Hash::new(b"unused no new effects"),
+                            entry.effects.len(),
+                            budget,
+                        )
+                        .unwrap();
+                        tape.substitute_entry_hash_for_test(Hash::new(
                             b"substituted quantity entry context",
                         ));
-                    }),
+                        replacement.insert_reserved(
+                            *hash,
+                            QuantityArchivedEntry {
+                                tape,
+                                measurement: entry.measurement,
+                            },
+                        );
+                    }
+                    block.fastpq_quantity_candidate.entries = replacement;
+                }
                 _ => unreachable!(),
             }
             block.observe_quantity_block_journals();
@@ -4112,3 +4260,797 @@ fn world_local_original_deferral_after_owned_retirement_rolls_back_all_disposabl
         );
     });
 }
+
+#[test]
+fn original_quantity_census_binds_final_permission_context_and_rejects_late_role_changes() {
+    use iroha_data_model::{
+        permission::Permission,
+        role::{Role, RoleId},
+    };
+    for epoch in [0, 7] {
+        with_sealed_quantity_source_census(|block, _, _, _| {
+            let id: RoleId = "late_quantity_role".parse().unwrap();
+            let role = Role::new(id.clone(), ALICE_ID.clone())
+                .add_permission_with_epoch(
+                    Permission::new(
+                        "quantity_permission".to_owned(),
+                        iroha_primitives::json::Json::new(()),
+                    ),
+                    epoch,
+                )
+                .build(&ALICE_ID);
+            block.world.roles.insert(id, role);
+            block.observe_quantity_block_journals();
+            assert_eq!(
+                block.fastpq_quantity_candidate.issue,
+                Some(QuantityCaptureIssue::InvalidFacts)
+            );
+            assert!(matches!(
+                block.fastpq_quantity_candidate.source_census,
+                super::source_census::QuantitySourceCensusState::Failed
+            ));
+            block.retain_quantity_source_census();
+            assert!(block.fastpq_quantity_candidate.require_complete().is_err());
+        });
+    }
+}
+
+#[test]
+fn completed_quantity_source_retains_original_tape_graph_and_credit_after_state_drop() {
+    let mut retained = None;
+    let mut original_pool = None;
+    let mut original_ptr = std::ptr::null();
+    let mut original_digest = None;
+    with_sealed_quantity_source_census(|block, _, _, _| {
+        let super::source_census::QuantitySourceCensusState::Sealed(census) =
+            &block.fastpq_quantity_candidate.source_census
+        else {
+            panic!("original completed census")
+        };
+        let pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
+        let before = pool.reserved_bytes();
+        let owner = census.retained_archive();
+        assert!(owner.belongs_to(&pool));
+        assert_eq!(owner.rows().len(), 1);
+        let (hash, entry) = &owner.rows()[0];
+        original_ptr = entry.effects.as_ptr();
+        assert_eq!(
+            original_ptr,
+            block.fastpq_quantity_candidate.entries[hash]
+                .effects
+                .as_ptr()
+        );
+        original_digest =
+            Some(iroha_data_model::fastpq::execution_effects_digest_v1(entry.wire()).unwrap());
+        let second = owner.clone();
+        assert!(iroha_allocation::ChargedShared::ptr_eq(&owner, &second));
+        assert_eq!(
+            pool.reserved_bytes(),
+            before,
+            "sharing performs no new admission"
+        );
+        drop(second);
+        retained = Some(owner);
+        original_pool = Some(pool);
+    });
+    let owner = retained.unwrap();
+    let pool = original_pool.unwrap();
+    assert!(
+        pool.reserved_bytes() > 0,
+        "original tape/map/control credits outlive State"
+    );
+    assert_eq!(owner.rows()[0].1.effects.as_ptr(), original_ptr);
+    assert_eq!(
+        Some(
+            iroha_data_model::fastpq::execution_effects_digest_v1(owner.rows()[0].1.wire())
+                .unwrap()
+        ),
+        original_digest
+    );
+    drop(owner);
+    assert_eq!(
+        pool.reserved_bytes(),
+        0,
+        "final source owner physically frees original graph before refund"
+    );
+}
+
+#[test]
+fn completed_quantity_source_refuses_equal_reconstruction_in_a_fresh_charged_map() {
+    with_sealed_quantity_source_census(|block, _, _, _| {
+        let budget = block.pipeline_ivm_prepared_cache.execution_budget();
+        let mut replacement = super::super::fastpq_quantity_archive::QuantityArchiveMap::default();
+        replacement.grow(
+            super::super::fastpq_quantity_archive::QuantityArchiveMap::reserve(
+                block.fastpq_quantity_candidate.entries.len(),
+                budget,
+            )
+            .unwrap(),
+        );
+        for (hash, entry) in block.fastpq_quantity_candidate.entries.iter() {
+            let tape = QuantityTape::prepare(
+                entry.context,
+                &entry.effects,
+                &[],
+                Hash::new(b"unused empty suffix"),
+                Hash::new(b"unused empty suffix"),
+                entry.effects.len(),
+                budget,
+            )
+            .unwrap();
+            assert_eq!(tape.wire(), entry.wire());
+            assert_ne!(tape.effects.as_ptr(), entry.effects.as_ptr());
+            replacement.insert_reserved(
+                *hash,
+                QuantityArchivedEntry {
+                    tape,
+                    measurement: entry.measurement,
+                },
+            );
+        }
+        block.fastpq_quantity_candidate.entries = replacement;
+        block.observe_quantity_block_journals();
+        assert_eq!(
+            block.fastpq_quantity_candidate.issue,
+            Some(QuantityCaptureIssue::InvalidFacts)
+        );
+        assert!(block.fastpq_quantity_candidate.require_complete().is_err());
+    });
+}
+
+#[test]
+fn mandatory_journal_uses_native_typed_effects_independently_of_optional_archive_pressure() {
+    for starve_archive in [false, true] {
+        with_signed_quantity_block(|block, alice, _, call| {
+            let original = block.fastpq_quantity_candidate.entries[&call]
+                .wire()
+                .clone();
+            let pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
+            let mut transaction = block.transaction();
+            let before = pool.reserved_bytes();
+            let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+            let expected = iroha_data_model::fastpq::execution_effects_digest_v1(
+                prepared.archive.as_ref().unwrap().tape.wire(),
+            )
+            .unwrap();
+            let PreparedQuantityCapture { journal, archive } = prepared;
+            drop(archive);
+            let journal_bytes = pool.reserved_bytes() - before;
+            assert!(journal.is_ok());
+            assert!(journal_bytes > 0);
+            drop(journal);
+            assert_eq!(pool.reserved_bytes(), before);
+            let pressure = starve_archive.then(|| {
+                pool.try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes() - journal_bytes)
+                    .unwrap()
+            });
+            let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+            assert!(prepared.journal.is_ok());
+            assert_eq!(prepared.archive.is_err(), starve_archive);
+            assert!(transaction.execution_deferral().is_none());
+            // Release only the unrelated diagnostic pressure; the actual already
+            // prepared original journal/permits retain their unchanged credits.
+            drop(pressure);
+            transaction
+                .apply_with_quantity_candidate(Ok(prepared), |state| {
+                    apply_owned_test_mint(state, alice);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .coverage_gap(),
+                None
+            );
+            assert!(
+                !transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .is_invalid()
+            );
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .get(&call)
+                    .unwrap()
+                    .digest()
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .issue
+                    .is_some(),
+                starve_archive
+            );
+            transaction.apply();
+            block.observe_quantity_block_journals();
+            let journal = block
+                .fastpq_quantity_candidate
+                .commitments
+                .original(original.context)
+                .unwrap();
+            assert_eq!(journal.count(), 2);
+            assert_eq!(journal.digest().unwrap(), expected);
+            assert_eq!(
+                block.world.assets.get(alice).unwrap().as_ref(),
+                &Quantity::from(10u32)
+            );
+            assert_eq!(
+                block
+                    .world
+                    .asset_definition(alice.definition())
+                    .unwrap()
+                    .total_quantity(),
+                &Quantity::from(11u32)
+            );
+            assert_eq!(
+                block.fastpq_quantity_candidate.issue.is_some(),
+                starve_archive
+            );
+        });
+    }
+}
+
+#[test]
+fn mandatory_journal_shortage_retains_original_refusal_and_never_runs_business_callback() {
+    with_signed_quantity_block(|block, alice, _, call| {
+        let pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
+        let original = *block
+            .fastpq_quantity_candidate
+            .commitments
+            .get(&call)
+            .unwrap();
+        let mut transaction = block.transaction();
+        let before = pool.reserved_bytes();
+        let pressure = pool.try_reserve_bytes(pool.limit_bytes() - before).unwrap();
+        let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+        let refusal = prepared
+            .journal
+            .as_ref()
+            .err()
+            .expect("original mandatory admission refusal")
+            .clone();
+        assert!(refusal.allocation_refusal().is_some());
+        let mut called = false;
+        assert!(
+            transaction
+                .apply_with_quantity_candidate(Ok(prepared), |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(!called);
+        assert_eq!(transaction.execution_deferral(), Some(refusal));
+        assert_eq!(
+            transaction
+                .pending_fastpq_quantity_candidate
+                .commitments
+                .coverage_gap(),
+            None
+        );
+        assert!(
+            !transaction
+                .pending_fastpq_quantity_candidate
+                .commitments
+                .is_invalid()
+        );
+        assert!(
+            transaction
+                .pending_fastpq_quantity_candidate
+                .commitments
+                .get(&call)
+                .is_none()
+        );
+        drop(transaction);
+        drop(pressure);
+        assert_eq!(pool.reserved_bytes(), before);
+        assert_eq!(
+            block.fastpq_quantity_candidate.commitments.get(&call),
+            Some(&original)
+        );
+        assert_eq!(
+            block.world.assets.get(alice).unwrap().as_ref(),
+            &Quantity::from(9u32)
+        );
+    });
+}
+
+#[test]
+fn mandatory_journal_runtime_error_without_writes_preserves_empty_scope_and_rollback() {
+    for apply in [false, true] {
+        with_signed_quantity_block(|block, alice, _, call| {
+            let original = *block
+                .fastpq_quantity_candidate
+                .commitments
+                .get(&call)
+                .unwrap();
+            let mut transaction = block.transaction();
+            let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+            let result: Result<(), Error> =
+                transaction.apply_with_quantity_candidate(Ok(prepared), |_| {
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "original business refusal before writes".into(),
+                    )
+                    .into())
+                });
+            assert!(result.is_err());
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .coverage_gap(),
+                None
+            );
+            assert!(
+                !transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .is_invalid()
+            );
+            assert!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .get(&call)
+                    .is_none()
+            );
+            if apply {
+                transaction.apply();
+            } else {
+                drop(transaction);
+            }
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.get(&call),
+                Some(&original)
+            );
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.coverage_gap(),
+                None
+            );
+            assert_eq!(
+                block.world.assets.get(alice).unwrap().as_ref(),
+                &Quantity::from(9u32)
+            );
+        });
+    }
+}
+
+#[test]
+fn mandatory_journal_caught_partial_write_marks_typed_gap_only_when_original_overlay_applies() {
+    for apply in [false, true] {
+        with_signed_quantity_block(|block, alice, _, call| {
+            let original = *block
+                .fastpq_quantity_candidate
+                .commitments
+                .get(&call)
+                .unwrap();
+            let mut transaction = block.transaction();
+            let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+            let result: Result<(), Error> =
+                transaction.apply_with_quantity_candidate(Ok(prepared), |state| {
+                    state
+                        .world
+                        .assign_quantity_balance_exact(alice, Quantity::from(10u32))
+                        .unwrap();
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "original failure after one actual port".into(),
+                    )
+                    .into())
+                });
+            assert!(result.is_err());
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .coverage_gap(),
+                Some(CoverageGap::PartialTypedOperation)
+            );
+            assert!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .get(&call)
+                    .is_none()
+            );
+            if apply {
+                transaction.apply();
+            } else {
+                drop(transaction);
+            }
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.get(&call),
+                Some(&original)
+            );
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.coverage_gap(),
+                apply.then_some(CoverageGap::PartialTypedOperation)
+            );
+            assert_eq!(
+                block.world.assets.get(alice).unwrap().as_ref(),
+                &Quantity::from(if apply { 10u32 } else { 9u32 })
+            );
+        });
+    }
+}
+
+#[test]
+fn mandatory_journal_complete_effect_survives_caught_late_error_and_rolls_back_with_world() {
+    for apply in [false, true] {
+        with_signed_quantity_block(|block, alice, _, call| {
+            let original = *block
+                .fastpq_quantity_candidate
+                .commitments
+                .get(&call)
+                .unwrap();
+            let mut transaction = block.transaction();
+            let prepared = prepare_owned_test_mint(&mut transaction, alice, call);
+            let result: Result<(), Error> =
+                transaction.apply_with_quantity_candidate(Ok(prepared), |state| {
+                    apply_owned_test_mint(state, alice);
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "original later nonquantity refusal".into(),
+                    )
+                    .into())
+                });
+            assert!(result.is_err());
+            let applied = *transaction
+                .pending_fastpq_quantity_candidate
+                .commitments
+                .get(&call)
+                .unwrap();
+            assert_eq!(applied.count(), 2);
+            assert_eq!(
+                transaction
+                    .pending_fastpq_quantity_candidate
+                    .commitments
+                    .coverage_gap(),
+                None
+            );
+            if apply {
+                transaction.apply();
+            } else {
+                drop(transaction);
+            }
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.get(&call),
+                Some(if apply { &applied } else { &original })
+            );
+            assert_eq!(
+                block.fastpq_quantity_candidate.commitments.coverage_gap(),
+                None
+            );
+            assert_eq!(
+                block.world.assets.get(alice).unwrap().as_ref(),
+                &Quantity::from(if apply { 10u32 } else { 9u32 })
+            );
+        });
+    }
+}
+
+#[test]
+fn mandatory_finalized_source_retains_complete_success_empty_and_rejected_positions() {
+    with_sealed_quantity_source_census(|block, source, _, _| {
+        let (manifest, leaves, bytes) = block.finalized_quantity_source_for_test().unwrap();
+        assert_eq!(
+            manifest.coverage,
+            iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Complete
+        );
+        assert_eq!(manifest.executed_entry_count, 3);
+        assert_eq!(manifest.statement_count, 1);
+        let inventory = block
+            .verified_fastpq_source_inventory_for_capture()
+            .unwrap();
+        assert_eq!(
+            manifest.source_entries_digest,
+            iroha_data_model::fastpq::fastpq_source_execution_entries_digest_v1(
+                inventory.entries(),
+                3
+            )
+            .unwrap()
+        );
+        let [leaf] = leaves else {
+            panic!("exact nonempty source")
+        };
+        assert_eq!(leaf.entry_index, 0);
+        assert_eq!(leaf.statement_index, 0);
+        assert_eq!(leaf.effect_count, 1);
+        assert_eq!(
+            leaf.entry_hash,
+            Hash::from(
+                source
+                    .network_entrypoint_at(0)
+                    .unwrap()
+                    .execution_call_hash()
+            )
+        );
+        assert_eq!(leaf.tx_set_hash, inventory.tx_set_hash());
+        assert_eq!(
+            leaf.effects_digest,
+            <[u8; 32]>::from(
+                block
+                    .fastpq_quantity_candidate
+                    .commitments
+                    .get(&leaf.entry_hash)
+                    .unwrap()
+                    .digest()
+                    .unwrap()
+            )
+        );
+        let tree: iroha_crypto::MerkleTree<_> = leaves
+            .iter()
+            .map(|leaf| {
+                iroha_data_model::fastpq::fastpq_ordinary_source_statement_leaf_hash_v1(leaf)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(manifest.statement_root, Hash::from(tree.root().unwrap()));
+        assert_eq!(
+            norito::decode_canonical::<
+                iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1,
+            >(bytes)
+            .unwrap(),
+            manifest
+        );
+        assert_eq!(bytes, norito::encode_canonical(&manifest).unwrap());
+    });
+}
+
+#[test]
+fn mandatory_source_bytes_ignore_optional_archive_loss_and_refusal() {
+    let (state, alice, _) = fixture();
+    let (proposal, call) = source(
+        &state,
+        vec![Mint::asset_quantity(2u32, alice.clone()).into()],
+    );
+    let mut original = None;
+    for discard_optional in [false, true] {
+        let mut source = proposal.clone();
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        block.execute_ordinary_output_plan(&source, None).unwrap();
+        let journal = *block
+            .fastpq_quantity_candidate
+            .commitments
+            .get(&call)
+            .unwrap();
+        assert_eq!(journal.count(), 1);
+        if discard_optional {
+            // Dispose only the optional retained proof tape after authentic execution.
+            // The separate real-pool-pressure control covers the refusal producer.
+            block.fastpq_quantity_candidate.entries = QuantityArchiveMap::default();
+            block
+                .fastpq_quantity_candidate
+                .poison(QuantityCaptureIssue::Capacity);
+        }
+        block
+            .seal_execution_outputs(&mut source, |state, _, routes| {
+                assert_eq!(routes.len(), 1);
+                Ok::<_, String>(crate::state::output_capacity::ExecutionOutputSealMetadata {
+                    committed_fragment_count: u64::try_from(state.committed_fragment_count())
+                        .unwrap(),
+                })
+            })
+            .unwrap();
+        let (manifest, leaves, bytes) = block.finalized_quantity_source_for_test().unwrap();
+        assert_eq!(
+            manifest.coverage,
+            iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Complete
+        );
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(
+            leaves[0].effects_digest,
+            <[u8; 32]>::from(journal.digest().unwrap())
+        );
+        let observed = (manifest, leaves.to_vec(), bytes.to_vec());
+        if let Some(expected) = &original {
+            assert_eq!(&observed, expected);
+        } else {
+            original = Some(observed);
+        }
+        assert_eq!(
+            block.fastpq_quantity_candidate.issue.is_some(),
+            discard_optional
+        );
+        assert_eq!(
+            block.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(12u32)
+        );
+    }
+    assert_eq!(
+        state.world.assets.view().get(&alice).unwrap().as_ref(),
+        &Quantity::from(10u32)
+    );
+}
+
+#[test]
+fn mandatory_source_finalizer_memory_refusal_is_original_local_deferred_without_output() {
+    let (state, alice, _) = fixture();
+    let (mut source, call) = source(
+        &state,
+        vec![Mint::asset_quantity(2u32, alice.clone()).into()],
+    );
+    let proposal_bytes = source.encode_wire().unwrap();
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block.execute_ordinary_output_plan(&source, None).unwrap();
+    let journal = *block
+        .fastpq_quantity_candidate
+        .commitments
+        .get(&call)
+        .unwrap();
+    let pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
+    let pressure = pool
+        .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+        .unwrap();
+    let error = block
+        .seal_execution_outputs(&mut source, |state, _, routes| {
+            assert_eq!(routes.len(), 1);
+            Ok::<_, String>(crate::state::output_capacity::ExecutionOutputSealMetadata {
+                committed_fragment_count: u64::try_from(state.committed_fragment_count()).unwrap(),
+            })
+        })
+        .unwrap_err();
+    let crate::state::output_capacity::ExecutionOutputSealError::Deferred(original) = error else {
+        panic!("original mandatory admission must remain a local deferral: {error:?}")
+    };
+    let refusal = original
+        .allocation_refusal()
+        .expect("original pool refusal preserved");
+    let iroha_allocation::AllocationRefusal::Capacity {
+        requested_bytes, ..
+    } = refusal
+    else {
+        panic!("occupied original finite pool")
+    };
+    assert!(*requested_bytes > 0);
+    assert_eq!(
+        pool.try_reserve_bytes(*requested_bytes).unwrap_err(),
+        *refusal
+    );
+    assert_eq!(
+        block.fastpq_quantity_candidate.commitments.get(&call),
+        Some(&journal)
+    );
+    assert_eq!(
+        block.fastpq_quantity_candidate.commitments.coverage_gap(),
+        None
+    );
+    assert!(block.finalized_quantity_source_for_test().is_err());
+    assert_eq!(source.encode_wire().unwrap(), proposal_bytes);
+    assert_eq!(
+        block.world.assets.get(&alice).unwrap().as_ref(),
+        &Quantity::from(12u32)
+    );
+    drop(pressure);
+    drop(block);
+    assert_eq!(
+        state.world.assets.view().get(&alice).unwrap().as_ref(),
+        &Quantity::from(10u32)
+    );
+}
+
+#[test]
+fn mandatory_finalized_source_refuses_late_quantity_and_original_journal_mutations() {
+    for mutation in 0..3 {
+        with_sealed_quantity_source_census(|block, _, alice, _| {
+            assert!(block.finalized_quantity_source_for_test().is_ok());
+            match mutation {
+                0 => {
+                    let mut transaction = block.transaction();
+                    transaction
+                        .world
+                        .increase_asset_total_amount(alice.definition(), &Quantity::from(1u32))
+                        .unwrap();
+                    transaction.apply();
+                }
+                1 => {
+                    block.fastpq_quantity_candidate.commitments.invalidate();
+                }
+                _ => {
+                    block
+                        .fastpq_quantity_candidate
+                        .commitments
+                        .unsupported(CoverageGap::RawQuantityWrite);
+                }
+            }
+            assert!(block.finalized_quantity_source_for_test().is_err());
+        });
+    }
+}
+
+#[test]
+fn mandatory_source_marks_only_actual_untyped_quantity_mutation_as_unsupported() {
+    let (state, alice, _) = fixture();
+    let (mut source, call) = source(
+        &state,
+        vec![Mint::asset_quantity(2u32, alice.clone()).into()],
+    );
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block.execute_ordinary_output_plan(&source, None).unwrap();
+    let original = *block
+        .fastpq_quantity_candidate
+        .commitments
+        .get(&call)
+        .unwrap();
+    block
+        .seal_execution_outputs(&mut source, |state, _, _| {
+            let mut transaction = state.transaction();
+            transaction
+                .world
+                .increase_asset_total_amount(alice.definition(), &Quantity::from(1u32))
+                .unwrap();
+            transaction.apply();
+            Ok::<_, String>(crate::state::output_capacity::ExecutionOutputSealMetadata {
+                committed_fragment_count: u64::try_from(state.committed_fragment_count()).unwrap(),
+            })
+        })
+        .unwrap();
+    let (manifest, leaves, bytes) = block.finalized_quantity_source_for_test().unwrap();
+    assert_eq!(
+        manifest.coverage,
+        iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Unsupported
+    );
+    assert_eq!(manifest.executed_entry_count, 1);
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(
+        leaves[0].effects_digest,
+        <[u8; 32]>::from(original.digest().unwrap())
+    );
+    assert_eq!(
+        block.fastpq_quantity_candidate.commitments.coverage_gap(),
+        Some(CoverageGap::RawQuantityWrite)
+    );
+    assert_eq!(
+        block
+            .world
+            .asset_definition(alice.definition())
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(13u32)
+    );
+    assert_eq!(norito::decode_canonical::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1>(bytes).unwrap(), manifest);
+    let tree: iroha_crypto::MerkleTree<_> = leaves
+        .iter()
+        .map(|leaf| {
+            iroha_data_model::fastpq::fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap()
+        })
+        .collect();
+    assert!(
+        !iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_membership_v1(
+            &leaves[0],
+            &leaves[0],
+            &manifest,
+            &tree.get_proof(0).unwrap(),
+            1,
+            1
+        )
+    );
+}
+
+#[path = "fastpq_quantity_capture_witness_tests.rs"]
+mod witness_custody;

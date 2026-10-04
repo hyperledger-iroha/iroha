@@ -1,4 +1,5 @@
 //! Core-built complete archives roundtrip through the model using real ordinary keys.
+//! Synthetic source leaves exercise codec/membership binding; no native execution or finality is claimed.
 
 use super::prepare_fastpq_ordinary_source_archive_v1;
 use crate::{
@@ -89,12 +90,15 @@ fn fixture(count: u32, entries: u32) -> (ExecWitness, Vec<FastpqOrdinarySourceSt
             source: source(),
             statement_index: index,
             entry_index: index * 2,
-            entry_transcript_count: if index < 2 { count.min(2) } else { 1 },
+            effect_count: if index < 2 { count.min(2) } else { 1 },
             entry_hash: source_entries(5)[(index * 2) as usize].entry_hash,
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
-            statement_digest: [index as u8 + 9; 32],
+            effects_digest: [index as u8 + 9; 32],
+            slot: 19_000_000,
+            perm_root: Hash::new(b"synthetic source permission root").into(),
+            tx_set_hash: Hash::new(b"synthetic ordered source transactions").into(),
         })
         .collect::<Vec<_>>();
     let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
@@ -324,7 +328,7 @@ fn bridge_preserves_all_preparation_caps_and_does_not_modify_the_witness() {
 fn bridge_preserves_reserved_key_canonical_manifest_and_completeness_rejections() {
     let _guard = exec_witness::exec_witness_guard();
     let (witness, leaves) = fixture(3, 5);
-    for mutation in 0..9 {
+    for mutation in 0..12 {
         let mut changed_witness = witness.clone();
         let mut changed_leaves = leaves.clone();
         let mut expected_source = source();
@@ -341,9 +345,12 @@ fn bridge_preserves_reserved_key_canonical_manifest_and_completeness_rejections(
                 changed_leaves.pop();
             }
             5 => changed_leaves.swap(0, 1),
-            6 => changed_leaves[1].entry_transcript_count += 1,
-            7 => changed_leaves[0].statement_digest[0] ^= 1,
+            6 => changed_leaves[1].effect_count += 1,
+            7 => changed_leaves[0].effects_digest[0] ^= 1,
             8 => expected_source.height += 1,
+            9 => changed_leaves[0].slot += 1,
+            10 => changed_leaves[0].perm_root[0] ^= 1,
+            11 => changed_leaves[0].tx_set_hash[0] ^= 1,
             _ => unreachable!(),
         }
         let expected = prepare_fastpq_ordinary_source_archive_v1(
@@ -488,7 +495,7 @@ fn model_rejects_tampered_core_built_path_content_and_independent_expectations()
         build_limits(),
     )
     .unwrap();
-    for mutation in 0..12 {
+    for mutation in 0..16 {
         let mut changed = archive.clone();
         let mut expected_source = source();
         let mut expected_root = root;
@@ -500,7 +507,7 @@ fn model_rejects_tampered_core_built_path_content_and_independent_expectations()
                 changed.leaves.pop();
             }
             3 => changed.leaves.swap(0, 1),
-            4 => changed.leaves[0].statement_digest[0] ^= 1,
+            4 => changed.leaves[0].effects_digest[0] ^= 1,
             5 => changed.manifest.statement_count -= 1,
             6 => changed.manifest.executed_entry_count += 1,
             7 => expected_source.height += 1,
@@ -513,6 +520,13 @@ fn model_rejects_tampered_core_built_path_content_and_independent_expectations()
             10 => expected_entries[1].entry_hash = Hash::new(b"wrong non-transfer source"),
             11 => {
                 expected_entries.remove(1);
+            }
+            12 => changed.leaves[0].slot += 1,
+            13 => changed.leaves[0].perm_root[0] ^= 1,
+            14 => changed.leaves[0].tx_set_hash[0] ^= 1,
+            15 => {
+                changed.manifest.coverage =
+                    iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Unsupported
             }
             _ => unreachable!(),
         }
@@ -666,5 +680,60 @@ fn bridge_requires_independent_nontransfer_entries_for_empty_and_nonempty_archiv
             )
             .is_err()
         );
+    }
+}
+
+#[test]
+fn bridge_refuses_unsupported_coverage_without_claiming_source_finality() {
+    let _guard = exec_witness::exec_witness_guard();
+    for count in [0, 3] {
+        let (mut witness, leaves) = fixture(count, 5);
+        let (mut archive, _) = build_archive(
+            &witness,
+            source(),
+            &source_entries(5),
+            leaves.clone(),
+            build_limits(),
+        )
+        .unwrap();
+        archive.manifest.coverage =
+            iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Unsupported;
+        witness.writes[2].value = norito::encode_canonical(&archive.manifest).unwrap();
+        let root = execution_ordinary_root(&witness);
+        let frame = norito::encode_canonical(&archive).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<FastpqOrdinarySourceStatementArchiveV1>(&frame).unwrap(),
+            archive
+        );
+        assert!(!verify_fastpq_ordinary_source_statement_archive_v1(
+            &archive,
+            source(),
+            &source_entries(5),
+            root,
+            5,
+            count
+        ));
+        assert!(
+            decode_fastpq_ordinary_source_statement_archive_v1(
+                &frame,
+                source(),
+                &source_entries(5),
+                root,
+                decode_limits(frame.len(), 5, count)
+            )
+            .is_err()
+        );
+        let original = witness.clone();
+        assert!(
+            build_archive(
+                &witness,
+                source(),
+                &source_entries(5),
+                leaves,
+                build_limits()
+            )
+            .is_err()
+        );
+        assert_eq!(witness, original);
     }
 }

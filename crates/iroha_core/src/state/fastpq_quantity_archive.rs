@@ -6,7 +6,10 @@
 
 use std::{alloc::Layout, ops::Deref};
 
-use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer, ChargedShared,
+    ReservedChargedShared,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{
     FastpqExecutionAssetV1, FastpqExecutionBalanceV1, FastpqExecutionEffectContextV1,
@@ -108,6 +111,56 @@ impl<'a> From<&'a FastpqExecutionEffectKindV1> for QuantityKindInput<'a> {
     }
 }
 
+impl<'a> QuantityKindInput<'a> {
+    /// Borrow the exact original facts into the sole model commitment projection.
+    pub(super) fn commitment_input(
+        self,
+    ) -> iroha_data_model::fastpq::FastpqExecutionEffectKindRefV1<'a> {
+        use iroha_data_model::fastpq::{
+            FastpqExecutionAssetRefV1 as Asset, FastpqExecutionBalanceRefV1 as Balance,
+            FastpqExecutionEffectKindRefV1 as Kind, FastpqExecutionSupplyChangeRefV1 as Supply,
+            FastpqExecutionTransferRefV1 as Transfer,
+        };
+        fn balance(value: QuantityBalanceInput<'_>) -> Balance<'_> {
+            Balance {
+                asset: Asset {
+                    definition: value.definition,
+                    incarnation: value.incarnation,
+                },
+                account: value.account,
+                scope: value.scope,
+            }
+        }
+        fn supply(value: QuantitySupplyInput<'_>) -> Supply<'_> {
+            Supply {
+                balance: balance(value.balance),
+                amount: value.amount,
+                balance_before: value.balance_before,
+                balance_after: value.balance_after,
+                supply_before: value.supply_before,
+                supply_after: value.supply_after,
+            }
+        }
+        match self {
+            Self::Transfer(value) => Kind::Transfer(Transfer {
+                source: balance(value.source),
+                destination: balance(value.destination),
+                amount: value.amount,
+                source_before: value.source_before,
+                source_after: value.source_after,
+                destination_before: value.destination_before,
+                destination_after: value.destination_after,
+            }),
+            Self::Mint(value) => Kind::Mint(supply(value)),
+            Self::Burn(value) => Kind::Burn(supply(value)),
+            Self::Retire(definition, incarnation) => Kind::Retire(Asset {
+                definition,
+                incarnation,
+            }),
+        }
+    }
+}
+
 /// The concrete canonical Vec and every nested clone retain their original funding.
 /// Only immutable access escapes; no safe operation can grow or extract the Vec.
 pub(super) struct QuantityTape {
@@ -131,6 +184,15 @@ impl std::fmt::Debug for QuantityTape {
     }
 }
 impl QuantityTape {
+    pub(super) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self._effects_charge.belongs_to(budget)
+            && self._nested_charges.belongs_to(budget)
+            && self
+                ._nested_charges
+                .as_slice()
+                .iter()
+                .all(|charge| charge.belongs_to(budget))
+    }
     pub(super) fn wire(&self) -> &FastpqExecutionEffectsV1 {
         &self.wire
     }
@@ -163,16 +225,18 @@ impl QuantityTape {
     }
 
     /// Retain one complete replacement before executing its new original effects.
-    pub(super) fn prepare_inputs<'a>(
+    pub(super) fn prepare_inputs<'a, I>(
         context: FastpqExecutionEffectContextV1,
         prefix: &[FastpqExecutionEffectV1],
-        added: impl Clone
-        + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+        added: I,
         authority_digest: Hash,
         authorization_context: Hash,
         max_effects: usize,
         budget: &AllocationBudget,
-    ) -> Result<Self, QuantityCaptureIssue> {
+    ) -> Result<Self, QuantityCaptureIssue>
+    where
+        I: Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+    {
         let count = prefix
             .len()
             .checked_add(added.len())
@@ -415,10 +479,35 @@ fn clone_kind(
 /// Small sorted archive with exact admitted backing; absent maps allocate nothing.
 pub(super) struct QuantityArchiveMap<V> {
     rows: Option<ChargedBuffer<(Hash, V)>>,
+    frozen: Option<ChargedShared<FrozenQuantityArchive<V>>>,
+}
+
+/// The same original immutable map backing after its completed source finalizer.
+/// No Clone/extraction/mutation API exists for the payload. Shared handles retain
+/// the original control allocation, original map and every nested tape charge.
+pub(super) struct FrozenQuantityArchive<V> {
+    rows: Option<ChargedBuffer<(Hash, V)>>,
+}
+
+impl<V> FrozenQuantityArchive<V> {
+    pub(super) fn rows(&self) -> &[(Hash, V)] {
+        self.rows.as_ref().map_or(&[][..], ChargedBuffer::as_slice)
+    }
+}
+
+impl<V> std::fmt::Debug for FrozenQuantityArchive<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrozenQuantityArchive")
+            .field("entries", &self.rows().len())
+            .finish()
+    }
 }
 impl<V> Default for QuantityArchiveMap<V> {
     fn default() -> Self {
-        Self { rows: None }
+        Self {
+            rows: None,
+            frozen: None,
+        }
     }
 }
 impl<V> std::fmt::Debug for QuantityArchiveMap<V> {
@@ -429,8 +518,52 @@ impl<V> std::fmt::Debug for QuantityArchiveMap<V> {
     }
 }
 impl<V> QuantityArchiveMap<V> {
+    pub(super) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        match &self.frozen {
+            Some(frozen) => {
+                frozen.belongs_to(budget)
+                    && frozen
+                        .rows
+                        .as_ref()
+                        .is_none_or(|rows| rows.belongs_to(budget))
+            }
+            None => self
+                .rows
+                .as_ref()
+                .is_none_or(|rows| rows.belongs_to(budget)),
+        }
+    }
     fn rows(&self) -> &[(Hash, V)] {
-        self.rows.as_ref().map_or(&[], ChargedBuffer::as_slice)
+        self.frozen.as_ref().map_or_else(
+            || self.rows.as_ref().map_or(&[], ChargedBuffer::as_slice),
+            |frozen| frozen.rows(),
+        )
+    }
+    pub(super) fn is_frozen(&self) -> bool {
+        self.frozen.is_some()
+    }
+    pub(super) fn retains_frozen(
+        &self,
+        original: &ChargedShared<FrozenQuantityArchive<V>>,
+    ) -> bool {
+        self.frozen
+            .as_ref()
+            .is_some_and(|current| ChargedShared::ptr_eq(current, original))
+    }
+    /// Move only original backing into a previously admitted shell. Finalization
+    /// is one-shot and grants no finality or proof capability.
+    pub(super) fn freeze(
+        &mut self,
+        shell: ReservedChargedShared<FrozenQuantityArchive<V>>,
+    ) -> Result<ChargedShared<FrozenQuantityArchive<V>>, QuantityCaptureIssue> {
+        if self.is_frozen() {
+            return Err(QuantityCaptureIssue::InvalidFacts);
+        }
+        let original = shell.initialize(FrozenQuantityArchive {
+            rows: self.rows.take(),
+        });
+        self.frozen = Some(original.clone());
+        Ok(original)
     }
     pub(super) fn len(&self) -> usize {
         self.rows().len()
@@ -454,6 +587,10 @@ impl<V> QuantityArchiveMap<V> {
         ChargedBuffer::new(capacity, budget).map_err(|_| QuantityCaptureIssue::Capacity)
     }
     pub(super) fn for_each_mut(&mut self, mut visit: impl FnMut(&mut V)) {
+        assert!(
+            !self.is_frozen(),
+            "completed quantity source has immutable backing"
+        );
         if let Some(rows) = &mut self.rows {
             for (_, value) in rows.as_mut_slice() {
                 visit(value);
@@ -462,6 +599,7 @@ impl<V> QuantityArchiveMap<V> {
     }
     /// Install pre-admitted successor backing without cloning any retained payload.
     pub(super) fn grow(&mut self, mut successor: ChargedBuffer<(Hash, V)>) {
+        assert!(!self.is_frozen(), "completed quantity source cannot grow");
         assert!(successor.as_slice().is_empty() && successor.capacity() >= self.len());
         if let Some(previous) = &mut self.rows {
             for row in previous.drain_all() {
@@ -472,6 +610,10 @@ impl<V> QuantityArchiveMap<V> {
     }
     /// Replace/insert inside the capacity already reserved before callback execution.
     pub(super) fn insert_reserved(&mut self, hash: Hash, value: V) {
+        assert!(
+            !self.is_frozen(),
+            "completed quantity source cannot replace a tape"
+        );
         let rows = self
             .rows
             .as_mut()
@@ -492,6 +634,10 @@ impl<V> QuantityArchiveMap<V> {
         mut pending: Self,
         mut successor: ChargedBuffer<(Hash, V)>,
     ) {
+        assert!(
+            !self.is_frozen() && !pending.is_frozen(),
+            "completed quantity source cannot apply another child"
+        );
         assert!(
             successor.as_slice().is_empty() && successor.capacity() >= self.len() + pending.len()
         );
@@ -523,6 +669,60 @@ impl<V> std::ops::Index<&Hash> for QuantityArchiveMap<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_map_moves_original_backing_into_exact_prepaid_shared_shell() {
+        let map_bytes = Layout::array::<(Hash, u64)>(1).unwrap().size();
+        let shell_layout = ChargedShared::<FrozenQuantityArchive<u64>>::allocation_layout();
+        let budget = AllocationBudget::new(map_bytes + shell_layout.size());
+        let foreign = AllocationBudget::new(map_bytes + shell_layout.size());
+        let key = Hash::new(b"original completed entry");
+        let mut map = QuantityArchiveMap::default();
+        map.grow(QuantityArchiveMap::reserve(1, &budget).unwrap());
+        map.insert_reserved(key, 7_u64);
+        let original = map.rows().as_ptr();
+        let mut reservation = budget.try_reserve(shell_layout).unwrap();
+        let shell = ChargedShared::reserve_from(&mut reservation).unwrap();
+        let owner = map.freeze(shell).unwrap();
+        assert_eq!(owner.rows().as_ptr(), original);
+        assert_eq!(map.rows().as_ptr(), original);
+        assert!(map.retains_frozen(&owner));
+        assert!(map.belongs_to(&budget));
+        assert!(!map.belongs_to(&foreign));
+        assert!(owner.belongs_to(&budget));
+        assert!(!owner.belongs_to(&foreign));
+        assert_eq!(budget.reserved_bytes(), map_bytes + shell_layout.size());
+        drop(map);
+        assert_eq!(owner.rows(), &[(key, 7)]);
+        assert_eq!(budget.reserved_bytes(), map_bytes + shell_layout.size());
+        let final_owner = owner.clone();
+        assert!(ChargedShared::ptr_eq(&owner, &final_owner));
+        drop(owner);
+        assert_eq!(budget.reserved_bytes(), map_bytes + shell_layout.size());
+        drop(final_owner);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn completed_map_refuses_second_freeze_and_returns_only_unused_shell_credit() {
+        let shell_layout = ChargedShared::<FrozenQuantityArchive<u64>>::allocation_layout();
+        let budget = AllocationBudget::new(shell_layout.size() * 2);
+        let mut map = QuantityArchiveMap::<u64>::default();
+        let mut first = budget.try_reserve(shell_layout).unwrap();
+        let owner = map
+            .freeze(ChargedShared::reserve_from(&mut first).unwrap())
+            .unwrap();
+        let mut second = budget.try_reserve(shell_layout).unwrap();
+        assert!(matches!(
+            map.freeze(ChargedShared::reserve_from(&mut second).unwrap()),
+            Err(QuantityCaptureIssue::InvalidFacts)
+        ));
+        assert!(map.retains_frozen(&owner));
+        assert_eq!(budget.reserved_bytes(), shell_layout.size());
+        drop(map);
+        drop(owner);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 
     #[test]
     fn sorted_archive_growth_and_complete_replacement_only_move_original_payloads() {

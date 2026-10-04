@@ -9138,6 +9138,30 @@
       "schema": 1
     },
     {
+      "owner": "iroha_data_model::sorafs::reserve::captured_reserve_schema_tests::current_policy_proof",
+      "rows": [
+        {
+          "deserialize_hash": "7d2c1001187a06a36b81d18ecd09564a",
+          "nominal": "iroha_data_model::sorafs::reserve::history::ReserveEventJournalHeadV1",
+          "root": "iroha_data_model::sorafs::reserve::history::ReserveEventJournalHeadV1",
+          "serialize_hash": "7d2c1001187a06a36b81d18ecd09564a"
+        },
+        {
+          "deserialize_hash": "847f95804a8d0357b5120a96fc767fdf",
+          "nominal": "iroha_data_model::sorafs::reserve::history::ReserveStateV1",
+          "root": "iroha_data_model::sorafs::reserve::history::ReserveStateV1",
+          "serialize_hash": "847f95804a8d0357b5120a96fc767fdf"
+        },
+        {
+          "deserialize_hash": "3ed19cc5db9dfa1f711c355cecbec7bf",
+          "nominal": "iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1",
+          "root": "iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1",
+          "serialize_hash": "3ed19cc5db9dfa1f711c355cecbec7bf"
+        }
+      ],
+      "schema": 1
+    },
+    {
       "owner": "iroha_data_model::soranet::incentives::captured_incentives_schema_tests",
       "rows": [
         {

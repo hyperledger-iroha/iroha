@@ -104,10 +104,13 @@ pub(crate) fn reject_opaque_deferred_authority(
 /// # Errors
 /// Rejects nested committee or monetary staking instructions, unresolved live
 /// multisig approvals, and proposal graphs exceeding the traversal bound.
-pub(crate) fn reject_opaque_instruction_authority<'a>(
-    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+pub(crate) fn reject_opaque_instruction_authority<'a, I>(
+    instructions: I,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), Attempt<ValidationFail>> {
+) -> Result<(), Attempt<ValidationFail>>
+where
+    I: IntoIterator<Item = &'a InstructionBox>,
+{
     if cfg!(all(test, sumeragi_core_mutation = "HC66")) {
         return Ok(());
     }
@@ -175,13 +178,14 @@ fn reject_opaque_committee_operation(
     Ok(())
 }
 
-fn reject_opaque_committee_operations_with<'a, F>(
-    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+fn reject_opaque_committee_operations_with<'a, I, F>(
+    instructions: I,
     visited: &mut std::collections::BTreeSet<String>,
     depth: usize,
     resolve: &mut F,
 ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>>
 where
+    I: IntoIterator<Item = &'a InstructionBox>,
     F: FnMut(
         &MultisigApprove,
     ) -> Result<Option<(AccountId, Vec<InstructionBox>)>, Attempt<ValidationFail>>,

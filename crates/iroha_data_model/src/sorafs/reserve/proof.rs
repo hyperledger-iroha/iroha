@@ -157,10 +157,6 @@ impl ReservePolicyProofV1 {
     /// # Errors
     /// Wrong scope/schema, substituted permission/policy/roles, absent selected entities, noncanonical
     /// or concealed state, invalid activation provenance, or exceeded finite reader bounds.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "independent trust selections remain explicit"
-    )]
     pub fn verify(
         &self,
         expected_chain: &str,
@@ -210,31 +206,23 @@ impl ReservePolicyProofV1 {
             expected_manager,
             &self.manager_permissions,
         )?;
-        let current = match &self.current {
-            Some(bytes) => {
-                world.verify_table_value(
-                    "world.smart_contract_state",
-                    reserve_state_key(),
-                    bytes,
-                )?;
-                let state = ReserveStateV1::decode_frame(bytes).map_err(map_invalid)?;
-                if state.policy.policy != *expected_policy
-                    || state.policy.policy_digest
-                        != expected_policy.digest().map_err(map_invalid)?
-                    || state.policy.activated_by != *expected_manager
-                    || state.policy.activated_at_unix > world.block_time_ms() / 1_000
-                    || state.journal_head.last_target_block_height > world.height()
-                {
-                    return Err(invalid(
-                        "Reserve policy or activation differs from selected original and certified cut",
-                    ));
-                }
-                Some(state.policy)
+        let current = if let Some(bytes) = &self.current {
+            world.verify_table_value("world.smart_contract_state", reserve_state_key(), bytes)?;
+            let state = ReserveStateV1::decode_frame(bytes).map_err(map_invalid)?;
+            if state.policy.policy != *expected_policy
+                || state.policy.policy_digest != expected_policy.digest().map_err(map_invalid)?
+                || state.policy.activated_by != *expected_manager
+                || state.policy.activated_at_unix > world.block_time_ms() / 1_000
+                || state.journal_head.last_target_block_height > world.height()
+            {
+                return Err(invalid(
+                    "Reserve policy or activation differs from selected original and certified cut",
+                ));
             }
-            None => {
-                world.verify_smart_contract_state_absent(reserve_state_key())?;
-                None
-            }
+            Some(state.policy)
+        } else {
+            world.verify_smart_contract_state_absent(reserve_state_key())?;
+            None
         };
         Ok(VerifiedReservePolicyStateV1 {
             network_id: expected_network,

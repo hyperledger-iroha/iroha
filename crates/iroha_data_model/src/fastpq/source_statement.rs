@@ -162,23 +162,22 @@ pub fn fastpq_source_execution_entries_digest_v1(
         writer.write_all(b"iroha:fastpq:source-execution-entries:v1\0")?;
         writer.write_all(&count.to_le_bytes())?;
         for entry in entries {
-            let frame =
-                norito::core::to_bytes_bounded(entry, FASTPQ_SOURCE_EXECUTION_ENTRY_MAX_BYTES_V1)
-                    .map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-                })?;
-            let length = u32::try_from(frame.len()).map_err(|error| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-            })?;
+            let length =
+                norito::canonical_frame_len(entry).map_err(|_| std::io::ErrorKind::InvalidData)?;
+            if length > FASTPQ_SOURCE_EXECUTION_ENTRY_MAX_BYTES_V1 {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            let length = u32::try_from(length).map_err(|_| std::io::ErrorKind::InvalidData)?;
             writer.write_all(&length.to_le_bytes())?;
-            writer.write_all(&frame)?;
+            norito::core::write_canonical_to_writer(entry, writer)
+                .map_err(|_| std::io::ErrorKind::InvalidData)?;
         }
         Ok(())
     })
     .ok()
 }
 
-/// One complete nonempty transcript bundle at an exact execution-entry position.
+/// One complete nonempty typed effect tape at an exact execution-entry position.
 #[derive(
     Debug,
     Clone,
@@ -197,14 +196,14 @@ pub fn fastpq_source_execution_entries_digest_v1(
 pub struct FastpqOrdinarySourceStatementLeafV1 {
     /// Source context repeated in each leaf to prevent cross-manifest reuse.
     pub source: FastpqSourceStatementContextV1,
-    /// Sequential position among all nonempty execution-entry bundles in the manifest.
+    /// Sequential position among all nonempty complete effect tapes in the manifest.
     pub statement_index: u32,
     /// Position in the complete canonical source projection: external calls, time
     /// invocations, then other applied transcript sources in ascending hash order.
     pub entry_index: u32,
-    /// Complete nonzero number of ordered transcripts in this execution-entry bundle.
+    /// Complete nonzero number of original typed effects in this execution-entry tape.
     /// This count may exceed the manifest's number of statement leaves.
-    pub entry_transcript_count: u32,
+    pub effect_count: u32,
     /// Exact source call or typed native protocol-purpose identity.
     pub entry_hash: Hash,
     /// Validator-derived meaning of the source identity.
@@ -213,9 +212,40 @@ pub struct FastpqOrdinarySourceStatementLeafV1 {
     pub route: FastpqSourceRouteV1,
     /// Validator-derived source dataspace identifier.
     pub dataspace_id: DataSpaceId,
-    /// Canonical path-free digest of this entry's complete ordered transcript bundle;
-    /// eventual proof bytes are excluded.
-    pub statement_digest: [u8; 32],
+    /// Exact `execution_effects_digest_v1` of the complete original tape, including
+    /// source context, ordinals, quantities, lifecycle and authority/purpose facts.
+    /// Private paths, derived touched roots, statement/proof bytes are excluded.
+    pub effects_digest: [u8; 32],
+    /// Original source carrier timestamp in the existing FASTPQ nanosecond slot units.
+    pub slot: u64,
+    /// Original completed role-ID/permission/epoch table root; not account membership.
+    pub perm_root: [u8; 32],
+    /// Original ordered canonical transaction-wire commitment from source execution.
+    pub tx_set_hash: [u8; 32],
+}
+
+/// Deterministic quantity-coverage status derived only by the original executor.
+/// Optional proof/archive availability and local memory pressure are never values here.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqSourceEffectCoverageV1")]
+pub enum FastpqSourceEffectCoverageV1 {
+    /// Every observed quantity mutation is covered by complete typed effect occurrences.
+    #[codec(index = 0)]
+    Complete,
+    /// Original storage observed an actual untyped quantity write/lease or a partially
+    /// applied typed quantity operation. Ordinary effect-proof admission must refuse.
+    #[codec(index = 1)]
+    Unsupported,
 }
 
 /// Untrusted ordinary manifest; authentication comes from finality.
@@ -243,6 +273,8 @@ pub struct FastpqOrdinarySourceStatementManifestV1 {
     /// Commitment to every ordered source entry, including entries without leaves.
     /// This does not replace the canonical transaction-wire hash in public inputs.
     pub source_entries_digest: Hash,
+    /// Actual deterministic quantity coverage; unrelated proof availability is excluded.
+    pub coverage: FastpqSourceEffectCoverageV1,
     /// Exact number of nonempty execution-entry bundles, authenticated with the root.
     pub statement_count: u32,
     /// Canonical application-Merkle root, or the distinct empty-manifest root.
@@ -327,7 +359,7 @@ pub fn verify_fastpq_ordinary_source_statement_opening_v1(
     )
 }
 
-/// Distinct root for an explicitly present manifest with no transcript bundles.
+/// Distinct root for an explicitly present manifest with no effect tapes.
 pub fn fastpq_ordinary_source_statement_empty_root_v1() -> Hash {
     Hash::new(b"iroha:fastpq:ordinary-source-statements:empty:v1\0")
 }
@@ -342,19 +374,25 @@ pub fn fastpq_ordinary_source_statement_leaf_hash_v1(
     leaf: &FastpqOrdinarySourceStatementLeafV1,
 ) -> Option<HashOf<FastpqOrdinarySourceStatementLeafV1>> {
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let frame =
-        norito::core::to_bytes_bounded(leaf, FASTPQ_SOURCE_STATEMENT_LEAF_MAX_BYTES_V1).ok()?;
-    // HashOf::new uses the bare codec, which omits the nominal schema identity.
-    // The complete canonical frame binds this ordinary source-leaf schema.
-    Some(HashOf::from_untyped_unchecked(Hash::new(frame)))
+    if norito::canonical_frame_len(leaf).ok()? > FASTPQ_SOURCE_STATEMENT_LEAF_MAX_BYTES_V1 {
+        return None;
+    }
+    // The complete canonical nominal frame is the same byte preimage; no
+    // input-sized frame allocation is needed for root-only hashing.
+    Hash::new_from_writer(|writer| {
+        norito::core::write_canonical_to_writer(leaf, writer)
+            .map_err(|_| std::io::ErrorKind::InvalidData.into())
+    })
+    .ok()
+    .map(HashOf::from_untyped_unchecked)
 }
 
 /// Construct a manifest only from a bounded, exact ordered entry projection.
 ///
 /// The caller must derive every leaf from its complete ordered execution-entry
-/// transcript bundle. These structural checks bind the exact entry inventory and
+/// effect tape. These structural checks bind the exact entry inventory and
 /// permit at most one nonempty bundle leaf per entry; they cannot establish that
-/// an omitted entry actually contained no transfers or authenticate bundle contents.
+/// an omitted entry actually contained no effects or authenticate bundle contents.
 pub fn build_fastpq_ordinary_source_statement_manifest_v1(
     source: FastpqSourceStatementContextV1,
     entries: &[FastpqSourceExecutionEntryV1],
@@ -375,7 +413,7 @@ pub fn build_fastpq_ordinary_source_statement_manifest_v1(
         if leaf.source != source
             || leaf.statement_index != u32::try_from(index).ok()?
             || leaf.entry_index >= executed_entry_count
-            || leaf.entry_transcript_count == 0
+            || leaf.effect_count == 0
         {
             return None;
         }
@@ -407,6 +445,7 @@ pub fn build_fastpq_ordinary_source_statement_manifest_v1(
         source,
         executed_entry_count,
         source_entries_digest,
+        coverage: FastpqSourceEffectCoverageV1::Complete,
         statement_count,
         statement_root: root
             .map_or_else(fastpq_ordinary_source_statement_empty_root_v1, Hash::from),
@@ -481,14 +520,15 @@ pub fn verify_fastpq_ordinary_source_statement_membership_v1(
     max_executed_entries: u32,
     max_statements: u32,
 ) -> bool {
-    if leaf != expected
+    if manifest.coverage != FastpqSourceEffectCoverageV1::Complete
+        || leaf != expected
         || leaf.source != manifest.source
         || manifest.source.height == 0
         || manifest.executed_entry_count > max_executed_entries
         || manifest.statement_count > max_statements
         || manifest.statement_count > manifest.executed_entry_count
         || leaf.entry_index >= manifest.executed_entry_count
-        || leaf.entry_transcript_count == 0
+        || leaf.effect_count == 0
         || leaf.statement_index >= manifest.statement_count
         || proof.leaf_index() != leaf.statement_index
         || proof.audit_path().len() > 32
@@ -561,7 +601,7 @@ mod tests {
                 },
                 statement_index: i,
                 entry_index: i * 2,
-                entry_transcript_count: i + 2,
+                effect_count: i + 2,
                 entry_hash: Hash::new([u8::try_from(i).expect("fixture value fits u8")]),
                 execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
                 route: FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
@@ -569,7 +609,10 @@ mod tests {
                     lane_incarnation: Hash::new(b"source lane incarnation"),
                 }),
                 dataspace_id: DataSpaceId::new(4),
-                statement_digest: [u8::try_from(i).expect("fixture value fits u8") + 9; 32],
+                effects_digest: [u8::try_from(i).expect("fixture value fits u8") + 9; 32],
+                slot: 19_000_000,
+                perm_root: Hash::new(b"original permission context").into(),
+                tx_set_hash: Hash::new(b"original ordered transaction wires").into(),
             })
             .collect()
     }
@@ -606,9 +649,9 @@ mod tests {
         let base = leaves()[0];
         let entries = test_entries(1, &[base]);
         // Bundle cardinality is independent of the leaf count, including its u32 boundary.
-        for entry_transcript_count in [1, 3, u32::MAX] {
+        for effect_count in [1, 3, u32::MAX] {
             let leaf = FastpqOrdinarySourceStatementLeafV1 {
-                entry_transcript_count,
+                effect_count,
                 ..base
             };
             let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
@@ -645,9 +688,9 @@ mod tests {
                 .is_none()
             );
             // The expected leaf and Merkle commitment independently bind bundle cardinality.
-            for changed_count in [0, if entry_transcript_count == 1 { 2 } else { 1 }] {
+            for changed_count in [0, if effect_count == 1 { 2 } else { 1 }] {
                 let changed = FastpqOrdinarySourceStatementLeafV1 {
-                    entry_transcript_count: changed_count,
+                    effect_count: changed_count,
                     ..leaf
                 };
                 assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
@@ -680,7 +723,7 @@ mod tests {
                 0 => changed[1] = changed[0],
                 1 => changed.swap(0, 1),
                 2 => changed.swap(1, 2),
-                3 => changed[1].entry_transcript_count = 0,
+                3 => changed[1].effect_count = 0,
                 _ => unreachable!(),
             }
             // Sequential statement positions cannot hide a duplicate or reordered entry.
@@ -706,7 +749,7 @@ mod tests {
         let base = leaves()[0];
         for index in [0, 2] {
             let mut leaves = leaves();
-            leaves[index].entry_transcript_count = 0;
+            leaves[index].effect_count = 0;
             let entries = test_entries(5, &leaves);
             assert!(
                 build_fastpq_ordinary_source_statement_manifest_v1(
@@ -727,6 +770,7 @@ mod tests {
                 executed_entry_count: 5,
                 source_entries_digest: fastpq_source_execution_entries_digest_v1(&entries, 5)
                     .unwrap(),
+                coverage: FastpqSourceEffectCoverageV1::Complete,
                 statement_count: 3,
                 statement_root: Hash::from(tree.root().unwrap()),
             };
@@ -780,7 +824,7 @@ mod tests {
                 execution_kind: leaf.execution_kind,
                 route: leaf.route,
                 dataspace_id: leaf.dataspace_id,
-                statement_digest: leaf.statement_digest,
+                statement_digest: leaf.effects_digest,
             };
             let frame = norito::encode_canonical(&previous).unwrap();
             assert!(
@@ -815,7 +859,7 @@ mod tests {
             execution_kind: leaf.execution_kind,
             route: leaf.route,
             dataspace_id: leaf.dataspace_id,
-            statement_digest: leaf.statement_digest,
+            statement_digest: leaf.effects_digest,
         };
         assert_eq!(
             norito::schema::identity::frame_hash::<EntryLeaf>(),
@@ -863,7 +907,7 @@ mod tests {
         else {
             unreachable!()
         };
-        for mutation in 0..12 {
+        for mutation in 0..15 {
             let mut changed = leaves[0];
             match mutation {
                 0 => changed.source.network_id = network(8),
@@ -884,10 +928,13 @@ mod tests {
                     })
                 }
                 7 => changed.dataspace_id = DataSpaceId::new(5),
-                8 => changed.statement_digest[0] ^= 1,
+                8 => changed.effects_digest[0] ^= 1,
                 9 => changed.route = FastpqSourceRouteV1::Unrouted,
                 10 => changed.execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
-                11 => changed.entry_transcript_count += 1,
+                11 => changed.effect_count += 1,
+                12 => changed.slot += 1,
+                13 => changed.perm_root[0] ^= 1,
+                14 => changed.tx_set_hash[0] ^= 1,
                 _ => unreachable!(),
             }
             assert!(
@@ -1175,7 +1222,7 @@ mod tests {
                 if index == other_index {
                     continue;
                 }
-                assert_eq!(leaf.statement_digest, other.statement_digest);
+                assert_eq!(leaf.effects_digest, other.effects_digest);
                 assert_ne!(frame, other_frame);
                 assert_ne!(manifest.statement_root, other_manifest.statement_root);
                 assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
@@ -1220,7 +1267,7 @@ mod tests {
                 lane_id,
                 lane_incarnation: Hash::new(b"source lane incarnation"),
                 dataspace_id: leaf.dataspace_id,
-                statement_digest: leaf.statement_digest,
+                statement_digest: leaf.effects_digest,
             };
             let frame = norito::encode_canonical(&old).unwrap();
             assert!(
@@ -1263,6 +1310,79 @@ mod tests {
                 expected,
                 "entry {index} of {count}"
             );
+        }
+    }
+
+    #[test]
+    fn streamed_source_and_leaf_hashes_retain_exact_owned_canonical_preimages() {
+        let leaves = leaves();
+        let entries = test_entries(5, &leaves);
+        let expected = Hash::new_from_writer(|writer| {
+            writer.write_all(b"iroha:fastpq:source-execution-entries:v1\0")?;
+            writer.write_all(&5u32.to_le_bytes())?;
+            for entry in &entries {
+                let frame = norito::encode_canonical(entry).unwrap();
+                assert!(frame.len() <= FASTPQ_SOURCE_EXECUTION_ENTRY_MAX_BYTES_V1);
+                writer.write_all(&u32::try_from(frame.len()).unwrap().to_le_bytes())?;
+                writer.write_all(&frame)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                fastpq_source_execution_entries_digest_v1(&entries, 5),
+                Some(expected)
+            );
+            for leaf in &leaves {
+                assert_eq!(
+                    Hash::from(fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap()),
+                    Hash::new(norito::encode_canonical(leaf).unwrap())
+                );
+            }
+        }
+        assert!(fastpq_source_execution_entries_digest_v1(&entries, 4).is_none());
+    }
+
+    #[test]
+    fn unsupported_quantity_coverage_roundtrips_but_refuses_proof_membership() {
+        let leaves = leaves();
+        let complete = build_test_manifest(leaves[0].source, 5, &leaves, 5, 3).unwrap();
+        let unsupported = FastpqOrdinarySourceStatementManifestV1 {
+            coverage: FastpqSourceEffectCoverageV1::Unsupported,
+            ..complete
+        };
+        let complete_bytes = norito::encode_canonical(&complete).unwrap();
+        let unsupported_bytes = norito::encode_canonical(&unsupported).unwrap();
+        assert_ne!(complete_bytes, unsupported_bytes);
+        assert_eq!(
+            norito::decode_canonical::<FastpqOrdinarySourceStatementManifestV1>(&complete_bytes)
+                .unwrap(),
+            complete
+        );
+        assert_eq!(
+            norito::decode_canonical::<FastpqOrdinarySourceStatementManifestV1>(&unsupported_bytes)
+                .unwrap(),
+            unsupported
+        );
+        let tree: MerkleTree<_> = leaves
+            .iter()
+            .map(|leaf| fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap())
+            .collect();
+        for leaf in &leaves {
+            let proof = tree.get_proof(leaf.statement_index).unwrap();
+            assert!(verify_fastpq_ordinary_source_statement_membership_v1(
+                leaf, leaf, &complete, &proof, 5, 3
+            ));
+            assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
+                leaf,
+                leaf,
+                &unsupported,
+                &proof,
+                5,
+                3
+            ));
         }
     }
 }

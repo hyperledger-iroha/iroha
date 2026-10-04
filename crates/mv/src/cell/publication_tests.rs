@@ -81,7 +81,7 @@ fn prepared_cell_matches_direct_commit_without_changing_existing_readers() {
 #[test]
 fn prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -545,7 +545,7 @@ fn unchanged_cell_cleanup_panic_preserves_published_pair_and_healthy_contention(
 #[test]
 fn cell_abort_retains_original_notifications_until_the_entire_aggregate_unlocks() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

@@ -4,16 +4,19 @@ use super::super::{
     decode_quantity_units_v1, prepare_public_transfers,
     quantity_tests::{delta, fixture},
 };
+use super::test_funding::{
+    derive_two_update_smt, funded_build, materialize_quantity_public_transfers,
+};
 use super::*;
 use crate::gadgets::transfer;
 use iroha_primitives::numeric::Quantity;
 
 #[derive(Clone)]
-struct Table {
-    inputs: PublicInputs,
-    keys: Vec<PublicKeyAllocation>,
-    rows: Vec<CheckedUpdateRow>,
-    pairs: Vec<CheckedUpdatePair>,
+pub(super) struct Table {
+    pub(super) inputs: PublicInputs,
+    pub(super) keys: Vec<PublicKeyAllocation>,
+    pub(super) rows: Vec<CheckedUpdateRow>,
+    pub(super) pairs: Vec<CheckedUpdatePair>,
 }
 
 impl Table {
@@ -56,7 +59,7 @@ fn limits(updates: usize) -> TransferSmtBuildLimits {
     TransferSmtBuildLimits::for_update_limit(updates).unwrap()
 }
 
-fn two_pairs() -> Table {
+pub(super) fn two_pairs() -> Table {
     let first = delta(
         Quantity::from(20_u32),
         Quantity::from(5_u32),
@@ -90,7 +93,7 @@ fn two_pairs() -> Table {
         *materialized.witnesses()
     );
     assert_eq!(
-        prepared.build_smt_witnesses(limits(4)).unwrap(),
+        funded_build(&prepared, limits(4)).unwrap(),
         *materialized.witnesses()
     );
     copied
@@ -140,7 +143,7 @@ fn transfer_adapter_preserves_full_occurrences_and_native_tree_bytes() {
     }
     let generic = derive_two_update_smt(&table, limits(2)).unwrap();
     assert_eq!(generic.pairs(), &[[debit, credit]]);
-    assert_eq!(generic, prepared.build_smt_witnesses(limits(2)).unwrap());
+    assert_eq!(generic, funded_build(&prepared, limits(2)).unwrap());
     assert_eq!(generic.roots(), (inputs.old_root, inputs.new_root));
     // Quantity-valued preparation uses exactly the same checked tree engine.
     let quantity = two_pairs();

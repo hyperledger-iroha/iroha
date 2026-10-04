@@ -322,14 +322,18 @@ fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
+    use iroha_core::{
+        block::{BlockBuilder, reserve_block_for_tests},
+        kura::PipelineDagSnapshot,
+        tx::AcceptedTransaction,
+    };
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        block::{BlockHeader, SignedBlock},
+        block::{BlockHeader, SharedSignedBlock, SignedBlock},
         prelude::*,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use std::{borrow::Cow, fs, sync::Arc};
+    use std::{borrow::Cow, fs};
     #[test]
     fn inspection_commands_require_their_own_store_and_range() {
         use clap::Parser as _;
@@ -379,7 +383,8 @@ mod tests {
         let error = args.run(&mut BufWriter::new(Vec::new())).unwrap_err();
         assert!(error.to_string().contains("from must be positive"));
     }
-    fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn fixture_block(prev: Option<&SignedBlock>) -> SharedSignedBlock {
+        let shell = reserve_block_for_tests();
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"kagami-kura-fixture-network",
@@ -403,9 +408,9 @@ mod tests {
             .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
-        Arc::new(sb)
+        shell.initialize(sb)
     }
-    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> SharedSignedBlock {
         let block = fixture_block(prev);
         store.append_block_to_chain(&block).expect("append");
         block

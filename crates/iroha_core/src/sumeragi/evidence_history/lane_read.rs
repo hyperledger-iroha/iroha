@@ -1,4 +1,5 @@
 //! One retained original global cut and native branch through every local acquisition refusal.
+#[cfg(test)]
 use std::io;
 
 use iroha_data_model::block::consensus::LaneEvidenceScope;

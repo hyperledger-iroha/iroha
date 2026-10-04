@@ -1565,6 +1565,19 @@ pub struct PendingTestExecution<'chain> {
 }
 
 impl PendingTestExecution<'_> {
+    /// Read the actual native authority and move the original complete-effect source
+    /// after publication. This is the production executor handoff, not reconstructed wire.
+    #[cfg(test)]
+    pub(crate) fn take_finalized_fastpq_source(
+        &self,
+    ) -> Result<crate::fastpq::finalized_source::FinalizedFastpqSource, String> {
+        let view = self.chain.state.view();
+        let native = super::certified_chain::CertifiedChain::new(&view)
+            .and_then(|chain| chain.authenticated_execution(self.block.header().height))
+            .map_err(|error| error.to_string())?;
+        self.chain.executor.take_finalized_fastpq_source(native)
+    }
+
     /// Durably append the original certificate and finalize its actual State metadata while
     /// a held physical history writer defers visibility. This retains the original overlay
     /// for immutable checkpoint inspection; [`Self::publish`] retries its ordinary publisher.

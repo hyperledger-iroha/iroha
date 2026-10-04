@@ -201,11 +201,14 @@ fn funded_predecessors<'a>(
     })
 }
 
-fn contains_account<'a>(
-    accounts: impl IntoIterator<Item = &'a AccountId>,
+fn contains_account<'a, I>(
+    accounts: I,
     account: &AccountId,
     work: &mut Work,
-) -> Result<bool, GroupedOwnershipError> {
+) -> Result<bool, GroupedOwnershipError>
+where
+    I: IntoIterator<Item = &'a AccountId>,
+{
     for candidate in accounts {
         work.charge()?;
         if candidate == account {

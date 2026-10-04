@@ -132,8 +132,9 @@ fn circuit<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> OutputCircuit<F> 
         credential_digest: bytes([8; 32]),
         encryption_key: bytes(recipient_key),
         recipient_lane: bytes([16; 32]),
-        request_id: bytes([17; 32]),
     };
+    // Preserve the original witness assignment order after dropping its unused projection.
+    let _ = bytes([17; 32]);
     let credit = bytes(credit_id);
     let expected_output = bytes(output_digest);
     let expected_encrypted = bytes(encrypted_digest);
