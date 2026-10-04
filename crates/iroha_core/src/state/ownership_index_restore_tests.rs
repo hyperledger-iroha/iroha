@@ -295,7 +295,7 @@ fn grouped_projection_keeps_complete_buckets_and_ignores_absent_records() {
         block.commit();
     }
     let original = encoded(&source);
-    let projected = grouped(&source.history(), |_, value| *value);
+    let projected = grouped(&source.history(), |_, value| Some(*value));
     assert_eq!(encoded(&source), original);
     assert_eq!(
         projected

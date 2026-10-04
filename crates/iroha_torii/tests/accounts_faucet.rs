@@ -4,14 +4,13 @@
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
-    block::BlockBuilder,
     governance::manifest::LaneManifestRegistry,
     kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
-    tx::{AcceptedTransaction, TransactionBuilder},
+    state::{LaneAuthorityRoute, State, World, WorldReadOnly},
+    tx::TransactionBuilder,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -36,7 +35,6 @@ use iroha_version::codec::DecodeVersioned as _;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
 use std::{
-    borrow::Cow,
     num::{NonZeroU8, NonZeroU64},
     sync::Arc,
 };
@@ -50,7 +48,6 @@ struct FaucetTestContext {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: iroha_model_base::chain::ChainId,
     asset_definition_id: AssetDefinitionId,
     authority_id: AccountId,
     authority_key_pair: KeyPair,
@@ -159,8 +156,8 @@ fn build_faucet_test_context_with_authority(
         .sorafs_por
         .state_dir
         .join(iroha_config::parameters::defaults::sorafs::por::VRF_STATE_FILE);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
+    let _kura = Kura::blank_kura_for_testing();
+    let _query = LiveQueryStore::start_test();
     let validator_keys: Vec<_> = (0xD2..=0xD5)
         .map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -224,7 +221,7 @@ fn build_faucet_test_context_with_authority(
         )
     });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
-    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let _network_id = iroha_torii::test_utils::signed_query_network_id();
     let world = World::with_assets(
         [domain, stake_domain],
         accounts,
@@ -416,7 +413,6 @@ fn build_faucet_test_context_with_authority(
             .expect("test Torii router initializes"),
         state,
         queue,
-        chain_id,
         asset_definition_id,
         authority_id,
         authority_key_pair: authority_kp,
@@ -608,6 +604,7 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
                 .and_then(std::num::NonZeroUsize::new)
                 .expect("non-zero height"),
         )
+        .expect("funded canonical history read")
         .expect("anchor block");
     let anchor_hash = anchor_block.hash();
     let challenge_salt = faucet_beacon_seed_for_anchor(state, anchor_height);

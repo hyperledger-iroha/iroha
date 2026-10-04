@@ -224,15 +224,153 @@ impl Clock for SystemClock {
     }
 }
 
+/// Original local resource owner retained with an unfinished publication.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PublicationDeferral {
+    /// The exact prepaid shared-control construction failed without a release-bearing owner.
+    #[error(transparent)]
+    SharedControl(iroha_allocation::PrepaidSharedError),
+    /// Exact original State reader or its enclosing publishing writer must release.
+    #[error("original State view reader is busy")]
+    StateViewBusy(iroha_allocation::release::ReleaseWait),
+    /// Exact allocation or decoder refusal from the original execution pool.
+    #[error(transparent)]
+    Execution(#[from] crate::execution_attempt::ExecutionDeferred),
+    /// Exact World storage or execution-root decoder refusal before validation effects.
+    #[error(transparent)]
+    StateStorage(crate::state::StateStorageAdmissionError),
+    /// Exact original evidence preparation demand or decoder scope.
+    #[error(transparent)]
+    EvidencePreparation(crate::state::EvidencePreparationError),
+    /// Exact original hash-history acquisition or changed-predecessor observation.
+    #[error(transparent)]
+    BlockHashAdmission(crate::state::BlockHashAdmissionError),
+    /// Exact original membership acquisition, capacity or changed-predecessor observation.
+    #[error(transparent)]
+    MembershipAdmission(crate::state::MembershipAdmissionError),
+    /// Original block hash publication writer must release.
+    #[error("original block hash publication is busy")]
+    BlockHashesBusy(iroha_allocation::release::ReleaseWait),
+    /// Original World, runtime or history publication participant must release.
+    #[error("original State publication participant is busy")]
+    PublicationBusy(iroha_allocation::release::ReleaseWait),
+    /// Original membership attachment writer must release.
+    #[error("original membership publication is busy")]
+    MembershipBusy(iroha_allocation::release::ReleaseWait),
+    /// Original provider archive index reader or writer must release.
+    #[error("original provider archive index is busy")]
+    ProviderArchiveBusy(iroha_allocation::release::ReleaseWait),
+    /// Original reputation archive index reader or writer must release.
+    #[error("original reputation archive index is busy")]
+    ReputationArchiveBusy(iroha_allocation::release::ReleaseWait),
+    /// Original native receipt mailbox reader or writer must release.
+    #[error("original native attestation mailbox is busy")]
+    AttestationBusy(iroha_allocation::release::ReleaseWait),
+}
+impl PublicationDeferral {
+    /// Borrow the original execution refusal; lock contention has no VM allocation category.
+    pub fn execution(&self) -> Option<&crate::execution_attempt::ExecutionDeferred> {
+        match self {
+            Self::Execution(original) => Some(original),
+            _ => None,
+        }
+    }
+    /// Borrow actual original allocation demand, never invented for a busy physical owner.
+    pub fn allocation_refusal(&self) -> Option<&iroha_allocation::AllocationRefusal> {
+        match self {
+            Self::Execution(original) => original.allocation_refusal(),
+            Self::StateStorage(crate::state::StateStorageAdmissionError::World(
+                mv::storage::AdmittedStorageError::Allocation(original),
+            ))
+            | Self::StateStorage(crate::state::StateStorageAdmissionError::NativeAmx(
+                crate::sumeragi::amx::NativeAmxAdmissionError::Admission(original),
+            ))
+            | Self::EvidencePreparation(crate::state::EvidencePreparationError::Admission(
+                original,
+            ))
+            | Self::BlockHashAdmission(crate::state::BlockHashAdmissionError::Capacity(original))
+            | Self::MembershipAdmission(crate::state::MembershipAdmissionError::Capacity(
+                original,
+            )) => Some(original),
+            _ => None,
+        }
+    }
+    /// Original pre-probe release observation which can permit this exact attempt to retry.
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
+        match self {
+            Self::SharedControl(_) => None,
+            Self::Execution(original) => match original.allocation_refusal() {
+                Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
+                    Some(release)
+                }
+                _ => None,
+            },
+            Self::StateStorage(original) => original.release_wait(),
+            Self::EvidencePreparation(original) => original.release_wait(),
+            Self::BlockHashAdmission(original) => original.release_wait(),
+            Self::MembershipAdmission(original) => original.release_wait(),
+            Self::StateViewBusy(wait)
+            | Self::BlockHashesBusy(wait)
+            | Self::PublicationBusy(wait)
+            | Self::MembershipBusy(wait)
+            | Self::ProviderArchiveBusy(wait)
+            | Self::ReputationArchiveBusy(wait)
+            | Self::AttestationBusy(wait) => Some(wait),
+        }
+    }
+}
+
 /// A local publication failure, distinguished by whether the original owner may retry.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PublicationError {
     /// No consuming publication began; the same original owner remains available.
     #[error("retryable publication refusal: {0}")]
     Retryable(String),
+    /// Retain the original local resource refusal with the unchanged queued execution.
+    #[error("deferred original publication: {0}")]
+    Deferred(PublicationDeferral),
     /// Publication consumed its owner, may be visible, or lost its worker; recovery is required.
     #[error("publication recovery required: {0}")]
     RecoveryRequired(String),
+}
+
+impl From<crate::state::StateViewError> for PublicationError {
+    fn from(error: crate::state::StateViewError) -> Self {
+        match error {
+            crate::state::StateViewError::Busy(wait) => {
+                Self::Deferred(PublicationDeferral::StateViewBusy(wait))
+            }
+            crate::state::StateViewError::Runtime(
+                crate::state::LaneLifecycleError::NposPolicy(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ),
+            ) => Self::Deferred(reason.into()),
+            error => Self::RecoveryRequired(error.to_string()),
+        }
+    }
+}
+
+impl From<String> for PublicationError {
+    fn from(reason: String) -> Self {
+        Self::Retryable(reason)
+    }
+}
+impl From<&str> for PublicationError {
+    fn from(reason: &str) -> Self {
+        Self::Retryable(reason.to_owned())
+    }
+}
+impl From<crate::execution_attempt::ExecutionAttemptError<String>> for PublicationError {
+    fn from(error: crate::execution_attempt::ExecutionAttemptError<String>) -> Self {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                Self::Retryable(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                Self::Deferred(original.into())
+            }
+        }
+    }
 }
 
 /// The application: speculative execution with a post-state cache keyed by block hash, apply,

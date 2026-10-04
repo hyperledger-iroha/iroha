@@ -174,6 +174,8 @@ fn original_state_write_fence_never_notifies_under_sibling_writers() {
 fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
     let (state, proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let before_height = state.transactions.latest_height();
     let parameters = state
@@ -277,7 +279,7 @@ fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
             wait
         }
     };
-    let mut released = wait.wait_for_release();
+    let mut released = wait.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut released)
             .poll(&mut Context::from_waker(&waker))

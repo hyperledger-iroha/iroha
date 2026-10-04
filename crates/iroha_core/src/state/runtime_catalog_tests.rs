@@ -403,7 +403,11 @@ fn runtime_catalog_fixture_retains_original_schedule_and_cannot_authorize_by_hea
         let (state, _) = catalog_fixture(InvalidMember::None);
         let original = state
             .kura_handle()
-            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .get_block(
+                std::num::NonZeroUsize::new(1).unwrap(),
+                &state.ivm_execution_budget(),
+            )
+            .expect("completed original State read")
             .expect("actual retained signed genesis");
         let header = catalog_test_header(&state);
         assert_eq!(header.prev_block_hash(), Some(original.hash()));

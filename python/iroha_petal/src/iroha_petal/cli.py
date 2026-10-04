@@ -5,8 +5,10 @@
 
 * ``encode`` renders numbered frames of a payload stream (PNG, PGM or SVG).
 * ``decode`` feeds image files (any order) through a :class:`ScanSession` and
-  writes the reassembled payload.
-* ``inspect`` reports what one image decodes to.
+  writes the reassembled payload; it reports how many frames were read by
+  tracking the previous pose and how many had a hidden corner blossom.
+* ``inspect`` reports what one image decodes to, including a hidden (inferred)
+  corner blossom.
 
 No network and no camera access: frames are files.
 """
@@ -77,6 +79,7 @@ def _decode(args: argparse.Namespace) -> int:
         return 2
     session = ScanSession()
     completed = None
+    stats = session.stats()
     for index, path in enumerate(paths):
         image = read_luma(path)
         factor_note = ""
@@ -86,6 +89,11 @@ def _decode(args: argparse.Namespace) -> int:
             factor_note = f" (downscaled 1/{factor})"
         outcome = session.push(image, index * args.frame_interval_ms)
         status = outcome.error.value if outcome.error is not None else (outcome.lanes or "-")
+        before, stats = stats, session.stats()
+        if stats.tracked > before.tracked:
+            status += " (tracked)"
+        if stats.inferred > before.inferred:
+            status += " (one corner blossom is hidden)"
         progress = outcome.progress
         if not args.quiet:
             print(
@@ -95,6 +103,12 @@ def _decode(args: argparse.Namespace) -> int:
         if outcome.completed is not None:
             completed = outcome.completed
             break
+    if not args.quiet:
+        print(
+            f"frames: {stats.frames} read, {stats.located} located, {stats.readable} readable, "
+            f"{stats.tracked} tracked, {stats.inferred} with a hidden corner blossom",
+            file=sys.stderr,
+        )
     if completed is None:
         progress = session.progress()
         print(
@@ -120,6 +134,10 @@ def _inspect(args: argparse.Namespace) -> int:
         return 1
     m = frame.homography.m
     print(f"orientation: rotation {frame.rotation} quarter turns, mirrored {frame.mirrored}")
+    if frame.inferred_corner is not None:
+        # canonical index: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left
+        corner = ("top-left", "top-right", "bottom-right", "bottom-left")[frame.inferred_corner]
+        print(f"inferred corner: {frame.inferred_corner} ({corner} blossom hidden)")
     print("homography (canvas -> pixels):")
     for row in range(3):
         print("  " + "  ".join(f"{m[row * 3 + col]: .6g}" for col in range(3)))

@@ -44,8 +44,10 @@ pub struct MusubiPublicationFinalizedPinRegistrationQueryV1 {
 }
 
 /// Redacted finality/replay failure for one signed pin registration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
+    /// Original local allocation admission has not completed; retry the same read.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// The named height or source snapshot is ahead of this node's finalized view.
     LocallyAhead,
     /// The signed intent, output, finalized block, or current pin record differs.
@@ -54,12 +56,34 @@ pub enum MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
 impl core::fmt::Display for MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "finalized history read is waiting for local capacity",
             Self::LocallyAhead => "finalized Musubi pin registration is ahead of local state",
             Self::Invalid => "finalized Musubi pin registration is invalid",
         })
     }
 }
 impl std::error::Error for MusubiPublicationFinalizedPinRegistrationReadErrorV1 {}
+impl From<iroha_core::execution_attempt::ExecutionDeferred>
+    for MusubiPublicationFinalizedPinRegistrationReadErrorV1
+{
+    fn from(error: iroha_core::execution_attempt::ExecutionDeferred) -> Self {
+        Self::Deferred(error)
+    }
+}
+impl From<iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>>
+    for MusubiPublicationFinalizedPinRegistrationReadErrorV1
+{
+    fn from(
+        error: iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    ) -> Self {
+        match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(error) => {
+                Self::Deferred(error)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => Self::Invalid,
+        }
+    }
+}
 
 /// Daemon-owned same-view finality and current-state reader for pin-registration recovery.
 ///
@@ -145,6 +169,9 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
                 super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
                     LocallyAhead
                 }
+                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(
+                    error,
+                ) => MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(error),
                 super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => Invalid,
             })?;
         let manifest = validate_signed_pin_intent(
@@ -166,14 +193,17 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
             .get(height.get() - 1)
             .copied()
             .ok_or(Invalid)?;
-        let block = view.kura().get_block(height).ok_or(Invalid)?;
+        let block = view
+            .kura()
+            .get_block(height, &view.execution_budget())?
+            .ok_or(Invalid)?;
         if !validate_finalized_block_wire(
             &view,
             &self.network_id,
             query.finalized_height,
             canonical_hash,
             &block,
-        ) || block.validate_output_merkle_cache().is_err()
+        )? || block.validate_output_merkle_cache().is_err()
             || !exact_successful_pin_transaction(&query.transaction, &block)
         {
             return Err(Invalid);

@@ -549,7 +549,7 @@ struct GovHarness {
     native_chain: parking_lot::Mutex<CertifiedTestChain>,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     authority: AccountId,
     authority_keypair: KeyPair,
 }
@@ -682,7 +682,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         native_chain: parking_lot::Mutex::new(native_chain),
         state,
         queue,
-        chain_id: Arc::new(chain_id),
+        _chain_id: Arc::new(chain_id),
         authority,
         authority_keypair,
     }
@@ -2081,7 +2081,7 @@ async fn gov_get_tally_rejects_missing_referendum() {
 async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     use iroha_data_model::governance::conviction::PlainVotingResultV1;
 
-    let mut state = State::new_for_testing(
+    let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
@@ -2098,7 +2098,7 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
     let mut publish = |totals: [u128; 3]| {
         let height = chain.height() + 1;
-        let parent = state.view().latest_block().map(|block| block.hash());
+        let parent = state.view().latest_block_hash();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(height).unwrap(),
             parent,

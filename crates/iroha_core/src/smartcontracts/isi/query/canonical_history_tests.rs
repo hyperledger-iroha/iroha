@@ -16,11 +16,13 @@ async fn block_and_header_queries_fail_on_hash_only_history_gap() -> Result<()> 
         .expect("header query must reject a canonical history gap");
     assert!(matches!(
         &blocks_error,
-        QueryExecutionFail::CanonicalHistory(
-            iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable {
-                height: 2,
-                ..
-            }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::CanonicalHistory(
+                iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable {
+                    height: 2,
+                    ..
+                }
+            )
         )
     ));
     assert_eq!(headers_error, blocks_error);

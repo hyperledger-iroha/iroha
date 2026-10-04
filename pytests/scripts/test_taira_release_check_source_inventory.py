@@ -132,6 +132,72 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                 gate.validate_selected_source_test_inventory(
                     SCRIPT.parents[1], gate.qualification_stages(scope))
 
+    def test_original_shared_history_consumers_are_selected_focusable_and_required(self):
+        root = SCRIPT.parents[1]
+        groups = {
+            "data-model": gate.MODEL_SHARED_BLOCK_STAGES,
+            "core": (gate.CORE_SHARED_BLOCK_HISTORY_STAGES
+                     + gate.CORE_CANONICAL_XOR_STAGES
+                     + gate.CORE_NATIVE_STAKING_PENALTY_STAGES
+                     + gate.CORE_NATIVE_RECEIPT_STAGES
+                     + gate.CORE_MONETARY_AUTHORITY_STAGES
+                     + gate.CORE_STATE_VIEW_CONSUMER_STAGES
+                     + gate.native_owner_stages("native lane read failure classification")
+                     + gate.native_owner_stages("native original transaction history custody")
+                     + gate.native_owner_stages("native complete State reader custody")
+                     + gate.native_owner_stages("native publication refusal identity")
+                     + gate.native_owner_stages("native durable archive recovery")),
+            "kagami": gate.KAGAMI_CANONICAL_XOR_STAGES,
+            "torii-unit": gate.TORII_SHARED_BLOCK_HISTORY_STAGES,
+        }
+        self.assertIn(
+            "routing::multisig_contract_call_tests::"
+            "original_contract_vrf_policy_refusal_is_unfinished_and_same_source_retries",
+            [name for _, names in groups["torii-unit"] for name in names],
+        )
+        self.assertIn(
+            "canonical_history::tests::"
+            "original_block_proof_refusal_remains_retryable_instead_of_missing_or_corrupt",
+            [name for _, names in groups["torii-unit"] for name in names],
+        )
+        self.assertIn(
+            "sumeragi::evidence_history::lane::tests::"
+            "native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission",
+            [name for _, names in groups["core"] for name in names],
+        )
+        gate.validate_native_consensus_test_registration(root)
+        gate.validate_selected_source_test_inventory(root, groups)
+        hydration = "state::da_hydration::release_tests::hydration_source_reader_callbacks_follow_rebuild_fences_on_success_and_failure"
+        self.assertIn(hydration, [name for _, names in groups["core"] for name in names])
+        self.assertRegex((root / "crates/iroha_core/src/state/da_hydration.rs").read_text(),
+                         r'#\[path = "da_hydration_release_tests.rs"\]\s*mod release_tests;')
+        commit = "state::world_commit::tests::actual_state_commit_publishes_prepared_da_despite_ahead_cache"
+        self.assertIn(commit, [name for _, names in groups["core"] for name in names])
+        self.assertRegex((root / "crates/iroha_core/src/state/world_commit.rs").read_text(),
+                         r'#\[path = "world_commit_tests.rs"\]\s*mod tests;')
+        model_source = root / "crates/iroha_data_model/src/block/shared/tests.rs"
+        model_leaves = set(re.findall(r"(?m)^fn (\w+)\(", model_source.read_text()))
+        self.assertEqual(model_leaves, {name.rsplit("::", 1)[-1]
+                                      for _, names in groups["data-model"] for name in names})
+        kura_source = root / "crates/iroha_core/src/kura/tests/bounded_canonical_body_reads.rs"
+        kura_leaves = set(re.findall(r"(?m)^fn (\w+)\(", kura_source.read_text()))
+        self.assertEqual(kura_leaves, {name.rsplit("::", 1)[-1]
+                                     for _, names in groups["core"] for name in names
+                                     if name.startswith("kura::tests::")})
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, stages in groups.items():
+                names = [name for _, cases in selected[harness] for name in cases]
+                for _, cases in stages:
+                    for name in cases:
+                        with self.subTest(scope=scope, harness=harness, name=name):
+                            self.assertEqual(names.count(name), 1)
+                            focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                            self.assertEqual([item for _, tests in focused[harness] for item in tests], [name])
+                            listing = "\n".join(item + ": test" for item in names if item != name)
+                            with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                                gate.require_tests(listing, selected[harness])
+
     def test_public_rate_materialization_is_required_in_the_real_cli_harness(self):
         root = SCRIPT.parents[1]
         source = root / "crates/iroha_cli/src/taira_public_reset.rs"

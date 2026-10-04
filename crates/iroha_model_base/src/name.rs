@@ -28,30 +28,7 @@ use crate::error::ParseError;
 /// normalization. Counting bytes, rather than Unicode scalar values, also
 /// bounds the canonical Norito representation independently of platform.
 pub const MAX_NAME_BYTES: usize = 255;
-// The fingerprinted Unicode NFC profile has at most four recursively decomposed scalars for one
-// input scalar. `nfc_profile_decomposition_bound_matches_charge_audit` derives this value from the
-// same ICU4X data, and the profile hash below makes a data change fail closed in production.
-
-const NFC_PROFILE_MAX_DECOMPOSITION_SCALARS: usize = 4;
-// ICU4X 2.2's NFC iterator uses `SmallVec<[CharacterAndClass; 17]>`, where
-// `CharacterAndClass` is one u32. On overflow, smallvec 1.15 grows through power-of-two capacities
-// beginning at 32. The sum below charges every requested replacement layout in one traversal,
-// independent of whether the allocator can extend a particular allocation in place.
-// ICU sorts these u32 entries stably. The pinned Rust 1.93.1 sort uses 4 KiB of
-// stack scratch, so <=255*4=1020 decomposed entries need no additional heap on
-// supported 32/64-bit targets. The source pins and physical request census are
-// qualification requirements when the toolchain or these dependencies change.
-
-fn nfc_buffer_request_bytes(source_scalars: usize) -> usize {
-    const INLINE_SCALARS: usize = 17;
-    const FIRST_HEAP_CAPACITY: usize = 32;
-    let max_decomposed = source_scalars * NFC_PROFILE_MAX_DECOMPOSITION_SCALARS;
-    if max_decomposed <= INLINE_SCALARS {
-        return 0;
-    }
-    let max_capacity = max_decomposed.next_power_of_two();
-    (2 * max_capacity - FIRST_HEAP_CAPACITY) * core::mem::size_of::<u32>()
-}
+pub(crate) mod nfc_scratch;
 
 fn name_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::WithPos {
@@ -140,6 +117,19 @@ mod model {
     pub struct Name(pub(super) ConstString);
 }
 impl Name {
+    /// Copy an already validated name through exact, fallible retained storage.
+    ///
+    /// The original constructor established canonical spelling. This operation
+    /// preserves it and charges only newly owned string storage to the active
+    /// Norito allocation scope, without repeating normalization scratch.
+    ///
+    /// # Errors
+    /// Returns a decode allocation or allocator refusal before retaining bytes.
+    #[doc(hidden)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::Error> {
+        ConstString::try_from_str_for_decode(self.as_ref()).map(Self)
+    }
+
     /// Check if `candidate` string would be valid [`Name`].
     ///
     /// # Errors
@@ -209,7 +199,7 @@ impl Name {
     /// Returns the same syntax, profile or noncanonical-spelling error as parsing.
     pub fn validate_canonical(candidate: &str) -> Result<(), ParseError> {
         Self::validate_str(candidate)?;
-        Self::require_exact_nfc(nfc_normalizer()?, candidate)
+        Self::require_exact_nfc(candidate, ERR_NAME_NFC)
     }
 
     /// Bound allocator request bytes for one borrowed canonical validation call.
@@ -226,13 +216,14 @@ impl Name {
         if Self::validate_str(candidate).is_err() || candidate.is_ascii() {
             return 0;
         }
-        nfc_buffer_request_bytes(candidate.chars().count())
+        nfc_scratch::request_bytes(candidate.chars().count())
     }
 
-    fn require_exact_nfc(
-        normalizer: &ComposingNormalizerBorrowed<'_>,
+    pub(crate) fn require_exact_nfc(
         candidate: &str,
+        noncanonical_reason: &'static str,
     ) -> Result<(), ParseError> {
+        let normalizer = nfc_normalizer()?;
         if candidate.is_ascii() {
             return Ok(());
         }
@@ -240,7 +231,7 @@ impl Name {
         if tail.is_empty() {
             Ok(())
         } else {
-            Err(ParseError::new(ERR_NAME_NFC))
+            Err(ParseError::new(noncanonical_reason))
         }
     }
 
@@ -250,16 +241,17 @@ impl Name {
     }
     /// Check exact NFC spelling while charging the audited normalization scratch.
     pub(crate) fn ensure_nfc_for_json_decode(candidate: &str) -> Result<(), norito::json::Error> {
-        let normalizer = nfc_normalizer().map_err(|err| name_json_error(err.reason()))?;
+        nfc_normalizer().map_err(|err| name_json_error(err.reason()))?;
         if candidate.is_ascii() {
             return Ok(());
         }
 
         let source_scalars = candidate.chars().count();
-        let buffer_request_bytes = nfc_buffer_request_bytes(source_scalars);
+        let buffer_request_bytes = nfc_scratch::request_bytes(source_scalars);
         norito::core::reserve_decode_allocation(buffer_request_bytes)
             .map_err(norito::json::Error::from_decode_resource)?;
-        Self::require_exact_nfc(normalizer, candidate).map_err(|err| name_json_error(err.reason()))
+        Self::require_exact_nfc(candidate, ERR_NAME_NFC)
+            .map_err(|err| name_json_error(err.reason()))
     }
 
     fn parse_for_json_decode(candidate: &str) -> Result<Self, norito::json::Error> {
@@ -279,20 +271,17 @@ impl Name {
         retain_exact(candidate)
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
-        let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
-        if len > MAX_NAME_BYTES {
-            return Err(NoritoError::Message(
-                "`Name` exceeds the 255-byte UTF-8 limit".into(),
-            ));
-        }
-        let end = header_len
-            .checked_add(len)
-            .ok_or(NoritoError::LengthMismatch)?;
-        let raw = bytes
-            .get(header_len..end)
-            .ok_or(NoritoError::LengthMismatch)?;
-        let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
+        let (value, end) = norito::core::borrow_text_payload(bytes, |len| {
+            if len > MAX_NAME_BYTES {
+                return Err(NoritoError::Message(
+                    "`Name` exceeds the 255-byte UTF-8 limit".into(),
+                ));
+            }
+            Ok(())
+        })?;
+        let len = value.len();
         norito::core::reserve_decode_allocation(len)?;
+        norito::core::reserve_decode_allocation(Self::canonical_validation_scratch_bytes(value))?;
         let name =
             Self::parse(value).map_err(|error| NoritoError::Message(error.reason().into()))?;
         norito::core::note_payload_access(bytes, end);
@@ -305,6 +294,10 @@ impl Name {
     pub fn is_reserved(&self) -> bool {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
+}
+
+impl norito::core::NominalText for Name {
+    const MAX_TEXT_BYTES: usize = MAX_NAME_BYTES;
 }
 
 impl norito::core::SerializePayload for Name {
@@ -328,21 +321,17 @@ impl<'a> norito::core::DeserializePayload<'a> for Name {
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                let preview_len = core::cmp::min(payload.len(), 32);
-                eprintln!(
-                    "Name::try_deserialize payload len={} preview={:?}",
-                    payload.len(),
-                    &payload[..preview_len]
-                );
-            }
-            return Self::decode_wire(payload).map(|(name, _)| name);
+        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        #[cfg(debug_assertions)]
+        if norito::debug_trace_enabled() {
+            let preview_len = core::cmp::min(payload.len(), 32);
+            eprintln!(
+                "Name::try_deserialize payload len={} preview={:?}",
+                payload.len(),
+                &payload[..preview_len]
+            );
         }
-        let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;
-        Name::from_str(string.as_str())
-            .map_err(|err| norito::core::Error::Message(err.reason().into()))
+        Self::decode_wire(payload).map(|(name, _)| name)
     }
 }
 impl AsRef<str> for Name {
@@ -467,14 +456,39 @@ impl norito::json::JsonKeyCodec for Name {
         norito::json::write_json_string(self.as_ref(), out);
     }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
-        encoded
-            .parse::<Name>()
-            .map_err(|err| norito::json::Error::Message(err.reason().into()))
+        Self::parse_for_json_decode(encoded)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn admitted_name_clone_retains_exact_long_bytes_and_inline_values() {
+        let long: super::Name = "long_validated_name_for_retention".parse().unwrap();
+        let limits = |allocated| norito::DecodeLimits::new(0, 0, 0, allocated, 0);
+        let (copy, usage) =
+            norito::core::with_decode_limits_measured(limits(long.as_ref().len()), || {
+                long.try_clone_for_admission()
+            });
+        assert_eq!(copy.unwrap(), long);
+        assert_eq!(usage.total_allocated_bytes(), long.as_ref().len());
+        assert!(
+            norito::core::with_decode_limits_measured(limits(long.as_ref().len() - 1), || long
+                .try_clone_for_admission())
+            .0
+            .unwrap_err()
+            .is_decode_resource_limit()
+        );
+        let short: super::Name = "inline".parse().unwrap();
+        assert_eq!(
+            norito::core::with_decode_limits_measured(limits(0), || short
+                .try_clone_for_admission())
+            .0
+            .unwrap(),
+            short
+        );
+    }
+
     use super::*;
     use norito::codec::{Decode, Encode};
     use std::borrow::ToOwned as _;
@@ -540,7 +554,7 @@ mod tests {
         let raw = "e\u{0301}".repeat(32);
         let value = norito::json::Value::String(raw);
         let source_scalars = value.as_str().expect("string fixture").chars().count();
-        let first_pass = nfc_buffer_request_bytes(source_scalars);
+        let first_pass = nfc_scratch::request_bytes(source_scalars);
         assert!(
             first_pass > 0,
             "fixture must exercise the charged ICU buffer"
@@ -638,7 +652,7 @@ mod tests {
             .map(|scalar| nfd.normalize_iter(core::iter::once(scalar)).count())
             .max()
             .expect("Unicode scalar space is non-empty");
-        assert_eq!(maximum, NFC_PROFILE_MAX_DECOMPOSITION_SCALARS);
+        assert_eq!(maximum, nfc_scratch::MAX_DECOMPOSITION_SCALARS);
     }
     #[test]
     fn decode_name() {
@@ -875,3 +889,6 @@ mod tests {
 #[cfg(test)]
 #[path = "name/scratch_tests.rs"]
 mod scratch_tests;
+
+#[cfg(test)]
+mod borrowed_text_tests;

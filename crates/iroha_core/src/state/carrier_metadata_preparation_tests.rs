@@ -86,7 +86,7 @@ fn deterministic_metadata_preparation_matches_existing_apply_without_publication
         // Exercise only the pre-existing structural metadata wrapper. This
         // supplies no QC and does not publish State or Kura.
         let committed = ValidBlock::new_unverified_for_tests(carrier.clone())
-            .commit_unchecked()
+            .commit_unchecked(crate::block::reserve_block_for_tests())
             .unpack(|_| {});
         let mut applied = state.block(carrier.header());
         let (events, result) = applied.apply_without_execution_inner(&committed, topology());

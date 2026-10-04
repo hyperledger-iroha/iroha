@@ -1836,13 +1836,17 @@ pub mod manifest {
                     .variants
                     .windows(2)
                     .all(|pair| pair[0].code < pair[1].code)
-                && self
-                    .variants
-                    .iter()
-                    .map(|variant| &variant.name)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    == self.variants.len()
+                && {
+                    // Variant count is bounded above before this expression.
+                    // Keep metadata validation independent of allocator pressure.
+                    let mut names = [""; 256];
+                    for (slot, variant) in names.iter_mut().zip(&self.variants) {
+                        *slot = &variant.name;
+                    }
+                    let names = &mut names[..self.variants.len()];
+                    names.sort_unstable();
+                    names.windows(2).all(|pair| pair[0] != pair[1])
+                }
         }
         /// Hash the canonical variant schema independently of the separately bound nominal identity.
         #[must_use]

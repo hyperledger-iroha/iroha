@@ -622,7 +622,10 @@ fn store_lane_block(
 fn merge_lane(chain: &mut CertifiedTestChain, stores: &LaneStores) {
     let proposal = {
         let view = chain.state().view();
-        let parent = view.latest_block().expect("route parent");
+        let parent = view
+            .latest_block()
+            .expect("parent history read completes")
+            .expect("route parent");
         let merges = merge::propose(&view, stores, ACTIVATION_HEIGHT)
             .expect("authenticated retail lane storage available");
         let cadence = Duration::from_millis(

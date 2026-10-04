@@ -7351,7 +7351,7 @@ impl SoracloudRuntimeManager {
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
     ) -> eyre::Result<()> {
-        let remote_sources = collect_remote_hydration_sources(view, &self.state);
+        let remote_sources = collect_remote_hydration_sources(view, &self.state)?;
         let mut required = BTreeMap::<String, (Hash, String, u64, bool)>::new();
         for versions in snapshot.services.values() {
             for plan in versions.values() {
@@ -21324,7 +21324,7 @@ fn sorafs_hydrated_file_target(root: &Path, components: &[String]) -> eyre::Resu
 fn collect_remote_hydration_sources(
     view: &StateView<'_>,
     state: &State,
-) -> Vec<RemoteHydrationSource> {
+) -> Result<Vec<RemoteHydrationSource>, iroha_core::state::DaIndexHydrationError> {
     let mut sources =
         BTreeMap::<(Reverse<u64>, Reverse<u64>, String, String), RemoteHydrationSource>::new();
     for (_order_id, record) in view.world().replication_orders().iter() {
@@ -21334,7 +21334,7 @@ fn collect_remote_hydration_sources(
         else {
             continue;
         };
-        if !manifest_is_committed(view, state, record.manifest_digest.as_bytes()) {
+        if !manifest_is_committed(view, state, record.manifest_digest.as_bytes())? {
             continue;
         }
         if record.canonical_order.is_empty()
@@ -21434,16 +21434,20 @@ fn collect_remote_hydration_sources(
             let _ = sources.pop_last();
         }
     }
-    sources.into_values().collect()
+    Ok(sources.into_values().collect())
 }
-fn manifest_is_committed(view: &StateView<'_>, state: &State, manifest_digest: &[u8; 32]) -> bool {
+fn manifest_is_committed(
+    view: &StateView<'_>,
+    state: &State,
+    manifest_digest: &[u8; 32],
+) -> Result<bool, iroha_core::state::DaIndexHydrationError> {
     let digest = ManifestDigest::new(*manifest_digest);
     let has_active_pin = view
         .world()
         .pin_manifests()
         .get(&digest)
         .is_some_and(|record| record.status.is_active());
-    has_active_pin || state.find_da_commitment_by_manifest(&digest).is_some()
+    Ok(has_active_pin || state.find_da_commitment_by_manifest(&digest)?.is_some())
 }
 fn sanitize_path_component(raw: &str) -> String {
     raw.chars()

@@ -787,7 +787,6 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
         .arg("ledger")
         .arg("domain")
         .arg("list")
-        .arg("all")
         .bounded_status()
         .await?;
     assert!(exit_status.success());
@@ -1318,8 +1317,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     );
     let no_write_stderr = String::from_utf8_lossy(&no_write_deploy.stderr);
     assert!(
-        no_write_stderr.contains("returned 400")
-            || no_write_stderr.contains("Failed to run the command"),
+        no_write_stderr.contains("returned 400") || no_write_stderr.contains("\"command\""),
         "{}",
         no_write_stderr
     );

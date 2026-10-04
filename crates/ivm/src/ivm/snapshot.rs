@@ -21,7 +21,6 @@ use crate::{
     registers::Registers,
     zk::{self, DeltaTraceLog},
 };
-use std::sync::Arc;
 
 struct SnapshotTraceCopies {
     constraints: zk::ConstraintLog,
@@ -36,7 +35,11 @@ struct SnapshotTraceCopies {
     last_diagnostic: Option<VmExecutionDiagnostic>,
 }
 impl SnapshotTraceCopies {
-    fn try_new(vm: &IVM, reg_log: &zk::RegLog) -> Result<Self, VMError> {
+    fn try_new(
+        vm: &IVM,
+        reg_log: &zk::RegLog,
+        scope: Option<&iroha_allocation::AllocationScope<'_>>,
+    ) -> Result<Self, VMError> {
         let copy_u64 = |source: &[u64]| -> Result<Vec<u64>, VMError> {
             let _ = source.len().checked_mul(std::mem::size_of::<u64>()).ok_or(
                 VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable),
@@ -51,7 +54,7 @@ impl SnapshotTraceCopies {
         let mut copied = Self {
             constraints: vm.constraints.try_clone_allocation()?,
             mem_log: vm.mem_log.try_clone_allocation()?,
-            reg_log: reg_log.try_clone_allocation()?,
+            reg_log: reg_log.try_clone_allocation(scope)?,
             trace_log: vm.trace_log.try_clone_allocation()?,
             step_log: vm.step_log.try_clone_allocation()?,
             pc_trace: copy_u64(&vm.pc_trace)?,
@@ -80,9 +83,7 @@ impl SnapshotTraceCopies {
         trace_allocation_bytes(
             &self.constraints,
             &self.mem_log,
-            &self.reg_log,
             &self.trace_log,
-            &self.step_log,
             &self.pc_trace,
             &self.delta_trace,
             self.contract_debug.as_ref(),
@@ -90,13 +91,10 @@ impl SnapshotTraceCopies {
         )
     }
 }
-#[allow(clippy::too_many_arguments)]
 fn trace_allocation_bytes(
     constraints: &zk::ConstraintLog,
     mem_log: &zk::MemLog,
-    reg_log: &zk::RegLog,
     trace_log: &DeltaTraceLog,
-    step_log: &zk::StepLog,
     pc_trace: &Vec<u64>,
     delta_trace: &DeltaTraceLog,
     contract_debug: Option<&EmbeddedContractDebugInfoV1>,
@@ -108,9 +106,7 @@ fn trace_allocation_bytes(
     for bytes in [
         constraints.allocated_bytes()?,
         mem_log.allocated_bytes()?,
-        reg_log.allocated_bytes()?,
         trace_log.allocated_bytes()?,
-        step_log.allocated_bytes()?,
         pc_trace
             .capacity()
             .checked_mul(std::mem::size_of::<u64>())
@@ -118,8 +114,6 @@ fn trace_allocation_bytes(
         delta_trace.allocated_bytes()?,
         contract_debug.map_or(Ok(0), contract_debug_allocation_bytes)?,
         last_diagnostic.map_or(Ok(0), diagnostic_allocation_bytes)?,
-        norito::core::owned_arc_allocation_bytes::<parking_lot::Mutex<zk::RegLog>>()
-            .map_err(|_| unavailable())?,
     ] {
         total = total.checked_add(bytes).ok_or_else(unavailable)?;
     }
@@ -310,9 +304,16 @@ impl IVM {
         memory: Memory,
         private_memory_bytes: PrivateMemoryRanges,
         cache_reservation: crate::cache_memory::MemoryReservation,
-        traces: SnapshotTraceCopies,
-    ) -> Self {
-        Self {
+        mut traces: SnapshotTraceCopies,
+    ) -> Result<Self, VMError> {
+        let reg_log = zk::SharedRegLog::try_from_owned_rows(
+            std::mem::replace(
+                &mut traces.reg_log,
+                zk::RegLog::new(self.memory.allocation_budget()),
+            ),
+            self.memory.allocation_budget(),
+        )?;
+        Ok(Self {
             cache_reservation,
             registers,
             memory,
@@ -334,7 +335,7 @@ impl IVM {
             contract_abort_error: self.contract_abort_error.clone(),
             constraints: traces.constraints,
             mem_log: traces.mem_log,
-            reg_log: Arc::new(parking_lot::Mutex::new(traces.reg_log)),
+            reg_log: Some(reg_log),
             host_trace_log_detached: false,
             host_trace_invocation_log: None,
             proof_state_epoch: self.proof_state_epoch,
@@ -350,6 +351,7 @@ impl IVM {
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
             contract_interface: self.contract_interface.clone(),
+            call_layouts: self.call_layouts.clone(),
             contract_debug: traces.contract_debug,
             literal_table: self.literal_table.clone(),
             predecoded: self.predecoded.clone(),
@@ -359,6 +361,8 @@ impl IVM {
             strict_return_integrity: self.strict_return_integrity,
             contract_return_stack: traces.contract_return_stack,
             contract_outer_return_pc: self.contract_outer_return_pc,
+            // A snapshot never adopts another invocation's native producer custody.
+            native_packets: None,
             #[cfg(test)]
             predecoded_misses: 0,
             #[cfg(test)]
@@ -375,12 +379,27 @@ impl IVM {
             input_bump_next: self.input_bump_next,
             acceleration_policy: self.acceleration_policy,
             hardware_capabilities: self.hardware_capabilities,
-        }
+        })
     }
 
     /// Copy the independent memory, register, and trace images before any
     /// host observes the snapshot. Immutable decoded program owners remain shared.
     pub(crate) fn try_clone_snapshot(&self) -> Result<Self, VMError> {
+        // A partially copied funded root owner may retire while copying the
+        // mutex-protected register log. Keep original-pool callbacks outside
+        // that physical guard on success, refusal and unwind.
+        match self.memory.allocation_budget() {
+            Some(budget) => budget.with_deferred_refund_notifications(|scope| {
+                self.try_clone_snapshot_inner(Some(scope))
+            }),
+            None => self.try_clone_snapshot_inner(None),
+        }
+    }
+
+    fn try_clone_snapshot_inner(
+        &self,
+        scope: Option<&iroha_allocation::AllocationScope<'_>>,
+    ) -> Result<Self, VMError> {
         #[cfg(test)]
         if REFUSE_WORKER_SNAPSHOT_FOR_TEST.with(std::cell::Cell::get) {
             return Err(VMError::ExecutionDeferred(
@@ -393,13 +412,13 @@ impl IVM {
         #[cfg(test)]
         let unavailable =
             || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
-        let reg_log = self.reg_log.lock();
+        let empty = zk::RegLog::new(self.memory.allocation_budget());
+        let reg_log = self.reg_log.as_ref().map(zk::SharedRegLog::lock);
+        let reg_log_value = reg_log.as_deref().unwrap_or(&empty);
         let trace_bytes = trace_allocation_bytes(
             &self.constraints,
             &self.mem_log,
-            &reg_log,
             &self.trace_log,
-            &self.step_log,
             &self.pc_trace,
             &self.delta_trace,
             self.contract_debug.as_ref(),
@@ -412,19 +431,11 @@ impl IVM {
         if REFUSE_TRACE_SNAPSHOT_FOR_TEST.with(std::cell::Cell::get) {
             return Err(unavailable());
         }
-        let traces = SnapshotTraceCopies::try_new(self, &reg_log)?;
+        let traces = SnapshotTraceCopies::try_new(self, reg_log_value, scope)?;
         drop(reg_log);
         let actual_bytes = traces.allocated_bytes()?;
         reservation.set_known_bytes(actual_bytes);
         reservation.mark_unmeasured();
-        // TODO: Arc logger ownership lacks a stable fallible allocator API.
-        // Reserve its lifetime footprint above before sealing G5.
-        Ok(self.clone_with_owned_snapshot(
-            registers,
-            memory,
-            private_memory_bytes,
-            reservation,
-            traces,
-        ))
+        self.clone_with_owned_snapshot(registers, memory, private_memory_bytes, reservation, traces)
     }
 }

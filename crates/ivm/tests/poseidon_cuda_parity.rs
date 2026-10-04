@@ -1,5 +1,9 @@
 //! Native Poseidon parity probes; mandatory physical qualification uses cuda_hardware.
 #![cfg(feature = "cuda")]
+/// Shared exact-owner CUDA completion controls.
+#[path = "support/cuda_completions.rs"]
+pub mod cuda_completions;
+
 use ivm::{
     poseidon2_cuda, poseidon2_cuda_many_into, poseidon2_simd, poseidon6_cuda,
     poseidon6_cuda_many_into, poseidon6_simd,
@@ -89,12 +93,12 @@ fn poseidon2_cuda_many_matches_scalar_vectors() {
     ];
     let expected: Vec<u64> = samples.iter().map(|&(a, b)| poseidon2_simd(a, b)).collect();
     let mut actual = vec![0; samples.len()];
-    let before = ivm::cuda_completed_dispatches();
+    let before = cuda_completions::capture();
     if !poseidon2_cuda_many_into(&samples, &mut actual) {
         return;
     }
     assert!(
-        ivm::cuda_completed_dispatches() > before,
+        cuda_completions::increased(&before, ivm::CudaKernel::Poseidon2),
         "native batch parity requires a completed CUDA kernel"
     );
     assert_eq!(actual, expected, "Poseidon2 CUDA batch mismatch");
@@ -121,12 +125,12 @@ fn poseidon6_cuda_many_matches_scalar_vectors() {
         .map(|&inputs| poseidon6_simd(inputs))
         .collect();
     let mut actual = vec![0; samples.len()];
-    let before = ivm::cuda_completed_dispatches();
+    let before = cuda_completions::capture();
     if !poseidon6_cuda_many_into(&samples, &mut actual) {
         return;
     }
     assert!(
-        ivm::cuda_completed_dispatches() > before,
+        cuda_completions::increased(&before, ivm::CudaKernel::Poseidon6),
         "native batch parity requires a completed CUDA kernel"
     );
     assert_eq!(actual, expected, "Poseidon6 CUDA batch mismatch");

@@ -195,7 +195,6 @@ public sealed record class ToriiNodeCurveCapabilities
 public sealed record class ToriiNodeQueryCapabilities
 {
     private ToriiNodeAggregateQueryCapabilities aggregate = new();
-    private string[] rowEnrichmentFields = Array.Empty<string>();
     private ToriiNodeProjectionCapabilities projection = new();
 
     [JsonPropertyName("aggregate")]
@@ -203,18 +202,6 @@ public sealed record class ToriiNodeQueryCapabilities
     {
         get => aggregate;
         init => aggregate = ToriiNodeCapabilitiesDirectMetadata.RequireObject(value, nameof(Aggregate));
-    }
-
-    [JsonPropertyName("indexed_snapshot_marker")]
-    public bool IndexedSnapshotMarker { get; init; }
-
-    [JsonPropertyName("row_enrichment_fields")]
-    public IReadOnlyList<string> RowEnrichmentFields
-    {
-        get => ToriiListSnapshots.CopyRequired(rowEnrichmentFields);
-        init => rowEnrichmentFields = ToriiNodeCapabilitiesDirectMetadata.CopyRequiredExactTokenTextList(
-            value,
-            nameof(RowEnrichmentFields));
     }
 
     [JsonPropertyName("projection")]

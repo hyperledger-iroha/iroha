@@ -57,6 +57,7 @@ fn finalized_block_fixture_commits_one_ordinary_block_with_durable_finality() {
         let block = app
             .state
             .block_by_height(NonZeroUsize::new(2).unwrap())
+            .expect("funded canonical history read")
             .unwrap();
         assert_eq!(block.header(), proof.block_header);
         assert_eq!(block.execution_outputs().len(), 1);

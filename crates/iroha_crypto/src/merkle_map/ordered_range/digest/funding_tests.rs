@@ -1,12 +1,11 @@
 //! Original-pool custody and unchanged commitment controls for final digest backing.
 
 use super::*;
+use iroha_allocation::release::ReleaseRegistration;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
 use std::{
     alloc::Layout,
-    future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
-    pin::pin,
     task::{Context, Poll, Waker},
 };
 
@@ -103,22 +102,40 @@ fn clones_and_borrows_retain_original_credit_after_shrink_and_eviction() {
 
 #[test]
 fn failed_admission_keeps_the_original_pool_release_observation() {
-    let budget = AllocationBudget::new(demand(1, 1));
-    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let observer_bytes = ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(demand(1, 1) + observer_bytes);
+    let mut registration = ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(registration.belongs_to(&budget));
+    let occupied = budget.try_reserve_bytes(demand(1, 1)).unwrap();
     let Err(NoritoKeyRangeError::Admission(AllocationRefusal::Capacity { release, .. })) =
         build(&[b"a"], &budget)
     else {
         panic!("expected exact original capacity refusal")
     };
-    let mut wait = pin!(release.wait_for_release());
     let mut context = Context::from_waker(Waker::noop());
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     let unrelated = AllocationBudget::new(7);
     drop(unrelated.try_reserve_bytes(7).unwrap());
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     drop(occupied);
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Ready(())
+    );
     drop(build(&[b"a"], &budget).unwrap());
+    assert_eq!(budget.reserved_bytes(), observer_bytes);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

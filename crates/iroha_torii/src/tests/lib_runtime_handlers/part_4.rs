@@ -1086,23 +1086,18 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     assert!(caps.crypto.sm.acceleration.scalar);
     assert!(caps.query.aggregate.v1);
     assert!(caps.query.aggregate.exact_results);
-    assert_eq!(
-        caps.query.aggregate.supported_resources,
-        if cfg!(feature = "app_api") {
-            crate::generic_query::aggregate_supported_resources()
-                .iter()
-                .map(|resource| (*resource).to_owned())
+    assert_eq!(caps.query.aggregate.supported_resources, {
+        #[cfg(feature = "app_api")]
+        {
+            crate::collections::aggregate_collections()
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
-        } else {
-            Vec::new()
         }
-    );
-    assert!(caps.query.indexed_snapshot_marker);
-    assert!(
-        caps.query
-            .row_enrichment_fields
-            .contains(&"primary_alias_domain".to_string())
-    );
+        #[cfg(not(feature = "app_api"))]
+        {
+            Vec::<String>::new()
+        }
+    });
     assert!(caps.query.projection.checkpoint_contract_v1);
     assert!(!caps.query.projection.da_v1_enabled);
     assert_eq!(
@@ -1131,17 +1126,17 @@ async fn runtime_metrics_and_node_capabilities_ok() {
             .metadata_keys
             .contains(&"query_projection.locator".to_string())
     );
-    if cfg!(feature = "app_api") {
+    #[cfg(feature = "app_api")]
+    {
         assert_eq!(
             caps.query.projection.export_supported_resources,
-            crate::generic_query::projection_export_supported_resources()
-                .iter()
-                .map(|resource| (*resource).to_owned())
-                .collect::<Vec<_>>()
+            crate::collections::PROJECTION_EXPORT_COLLECTIONS
+                .map(str::to_owned)
+                .to_vec()
         );
-    } else {
-        assert!(caps.query.projection.export_supported_resources.is_empty());
     }
+    #[cfg(not(feature = "app_api"))]
+    assert!(caps.query.projection.export_supported_resources.is_empty());
     assert!(
         caps.query
             .projection
@@ -1200,7 +1195,9 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
     )
     .await
     .expect("ok");
@@ -1213,7 +1210,7 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     );
     let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
+        norito::decode_from_bytes(&body).expect("decode requested Norito response");
     let canonical = crate::frame_test_support::assert_current_frame(
         &checkpoint,
         "iroha_torii::runtime::NodeProjectionCheckpointResponse",
@@ -1241,7 +1238,9 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
         }),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
     )
     .await
     .expect("ok");
@@ -1254,7 +1253,7 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     );
     let body = torii_body_bytes(response, "body").await;
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
+        norito::decode_from_bytes(&body).expect("decode requested Norito response");
     let canonical = crate::frame_test_support::assert_current_frame(
         &catalog,
         "iroha_torii::runtime::NodeProjectionShardCatalogResponse",
@@ -1549,6 +1548,29 @@ async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
+    let rejected =
+        super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    let error = extract_error(rejected).await;
+    assert_eq!(error.code(), "invalid_account");
+    assert_eq!(
+        app.push
+            .as_ref()
+            .expect("push bridge configured")
+            .device_count(),
+        0
+    );
+    let resolved = routing::resolve_account_alias_with_exact_permission_for_test(
+        &app.state,
+        &canonical_account,
+        "wallet@universal",
+    );
+    assert_eq!(resolved, canonical_account);
+    let mut req = mk_push_request(&resolved, "t-alias");
+    req.account_id = resolved.to_string();
+    let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+    let (method, uri, headers, body) =
+        signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -1784,7 +1806,15 @@ fn make_sealed_reveal_block(
 }
 fn store_block(app: &SharedAppState, block: SignedBlock) -> HashOf<BlockHeader> {
     let hash = block.hash();
-    app.kura.store_block(Arc::new(block)).expect("store block");
+    app.kura
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::try_new(
+                block,
+                &app.state.ivm_execution_budget(),
+            )
+            .expect("fund original fixture block"),
+        )
+        .expect("store block");
     hash
 }
 fn record_committed_block_hash_for_test(
@@ -1836,7 +1866,11 @@ pub(crate) fn record_latest_committed_header_for_test(
         "latest test header height must advance durable Kura height"
     );
     let mut prev_hash = NonZeroUsize::new(durable_height.try_into().expect("height fits usize"))
-        .and_then(|height| app.kura.get_block(height))
+        .and_then(|height| {
+            app.kura
+                .get_block(height, &app.state.ivm_execution_budget())
+                .expect("admit existing fixture block")
+        })
         .map(|block| block.hash());
     let mut block_hashes = app.state.block_hashes.block();
     let mut latest_header = None;

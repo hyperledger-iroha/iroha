@@ -519,22 +519,36 @@ fn validate_bound_contract_manifest(
 }
 fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
     match err {
+        ProgramAnalysisError::Metadata(error)
+            if crate::execution_attempt::ExecutionDeferred::from_vm_error(&error).is_some() =>
+        {
+            OverlayBuildError::IvmLoad(error)
+        }
         ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
         ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
     }
 }
 fn reject_state_free_axt_syscalls(bytecode: &[u8]) -> Result<(), OverlayBuildError> {
-    let analysis = ivm::analysis::analyze_program(bytecode).map_err(map_program_analysis_error)?;
-    if let Some(usage) = analysis
-        .syscalls
-        .iter()
-        .find(|usage| ivm::syscalls::is_axt_syscall(usage.number))
+    let syscalls =
+        ivm::analysis::program_syscall_numbers(bytecode).map_err(map_program_analysis_error)?;
+    if let Some(number) = syscalls
+        .filter(|number| ivm::syscalls::is_axt_syscall(*number))
+        .min()
     {
-        return Err(OverlayBuildError::StateRequiredSyscall(usage.number));
+        return Err(OverlayBuildError::StateRequiredSyscall(number));
     }
     Ok(())
 }
+fn map_artifact_admission_error(error: ivm::ContractArtifactError) -> OverlayBuildError {
+    if let Some(local) = error.local_vm_error() {
+        return OverlayBuildError::IvmLoad(local);
+    }
+    OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(error.to_string()))
+}
 fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
+    if crate::execution_attempt::ExecutionDeferred::from_vm_error(&error).is_some() {
+        return OverlayBuildError::IvmLoad(error);
+    }
     OverlayBuildError::HeaderPolicy(crate::smartcontracts::ivm::admission_reason_from_vm_error(
         error,
     ))
@@ -970,9 +984,11 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     let Some(manifest) = metadata_contract_manifest(tx.metadata())? else {
         return Ok(());
     };
-    let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
-        OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(err.to_string()))
-    })?;
+    let verified = ivm::verify_contract_artifact_with_memory_budget(
+        bytecode,
+        state_ro.prepared_contract_cache().execution_budget(),
+    )
+    .map_err(map_artifact_admission_error)?;
     if verified.code_hash != summary.code_hash {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
@@ -1066,9 +1082,7 @@ fn append_verified_contract_metadata_registration_without_state(
     let Some(manifest) = metadata_contract_manifest(tx.metadata())? else {
         return Ok(());
     };
-    let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
-        OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(err.to_string()))
-    })?;
+    let verified = ivm::verify_contract_artifact(bytecode).map_err(map_artifact_admission_error)?;
     if manifest.signature_payload() != verified.manifest.signature_payload() {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::BytecodeDecodingFailed(
@@ -1270,9 +1284,14 @@ impl VmAccessFence {
     /// Derive a fail-closed fence from decoded bytecode rather than CNTR claims.
     #[must_use]
     pub(crate) fn from_program_analysis(analysis: &ivm::analysis::ProgramAnalysis) -> Self {
+        Self::from_syscall_numbers(analysis.syscalls.iter().map(|usage| usage.number))
+    }
+    /// Classify a borrowed instruction scan without allocating an aggregate report.
+    #[must_use]
+    pub(crate) fn from_syscall_numbers(numbers: impl IntoIterator<Item = u32>) -> Self {
         let mut fence = Self::None;
-        for syscall in &analysis.syscalls {
-            match ivm::syscalls::syscall_access(syscall.number) {
+        for number in numbers {
+            match ivm::syscalls::syscall_access(number) {
                 ivm::syscalls::SyscallAccess::None => {}
                 ivm::syscalls::SyscallAccess::StateRead
                 | ivm::syscalls::SyscallAccess::StateWrite => {
@@ -3816,17 +3835,11 @@ mod tests_overlay_manifest {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
     fn analysis_with_syscalls(numbers: &[u32]) -> ivm::analysis::ProgramAnalysis {
-        ivm::analysis::ProgramAnalysis {
-            metadata: ivm::ProgramMetadata::default(),
-            instruction_count: numbers.len(),
-            registers: ivm::analysis::RegisterUsage::default(),
-            memory: ivm::analysis::MemoryAccesses::default(),
-            syscalls: numbers
-                .iter()
-                .copied()
-                .map(|number| ivm::analysis::SyscallUsage { number, count: 1 })
-                .collect(),
+        let mut program = ivm::ProgramMetadata::default().encode();
+        for number in numbers {
+            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(*number).to_le_bytes());
         }
+        ivm::analysis::analyze_program(&program).expect("diagnostic syscall fixture")
     }
     #[test]
     fn vm_access_fence_fails_closed_by_reachable_syscall_class() {
@@ -3866,6 +3879,40 @@ mod tests_overlay_manifest {
                 "syscall 0x{syscall:06x} must serialize globally"
             );
         }
+    }
+    #[test]
+    fn borrowed_syscall_classifier_preserves_fence_and_sorted_axt_error() {
+        let numbers = [
+            ivm::syscalls::SYSCALL_AXT_COMMIT,
+            ivm::syscalls::SYSCALL_STATE_GET,
+            ivm::syscalls::SYSCALL_AXT_BEGIN,
+            ivm::syscalls::SYSCALL_AXT_COMMIT,
+        ];
+        let mut bytes = ivm::ProgramMetadata::default().encode();
+        for number in numbers {
+            bytes.extend_from_slice(&ivm::encoding::wide::encode_syscallx(number).to_le_bytes());
+        }
+        let analysis = ivm::analysis::analyze_program(&bytes).unwrap();
+        assert_eq!(
+            VmAccessFence::from_syscall_numbers(
+                ivm::analysis::program_syscall_numbers(&bytes).unwrap()
+            ),
+            VmAccessFence::from_program_analysis(&analysis),
+        );
+        let expected = numbers
+            .into_iter()
+            .filter(|number| ivm::syscalls::is_axt_syscall(*number))
+            .min()
+            .unwrap();
+        assert_eq!(
+            reject_state_free_axt_syscalls(&bytes),
+            Err(OverlayBuildError::StateRequiredSyscall(expected))
+        );
+        bytes.pop();
+        assert!(matches!(
+            reject_state_free_axt_syscalls(&bytes),
+            Err(OverlayBuildError::IvmLoad(_))
+        ));
     }
     #[test]
     fn overlay_error_retryability_excludes_state_invariant_failures() {
@@ -6313,6 +6360,26 @@ seiyaku GuardedOverlayRebound {
         );
     }
     #[test]
+    fn artifact_admission_mapping_keeps_local_owner_and_deterministic_diagnostic() {
+        let budget = iroha_allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let original = budget.try_reserve_bytes(1).unwrap_err();
+        let error = map_artifact_admission_error(ivm::ContractArtifactError::preparation(
+            "instruction admission",
+            ivm::VMError::AllocationDeferred(original.clone()),
+        ));
+        assert!(
+            matches!(error, OverlayBuildError::IvmLoad(ivm::VMError::AllocationDeferred(ref retained)) if retained == &original)
+        );
+        let invalid = ivm::ContractArtifactError::invalid("missing canonical instruction");
+        let diagnostic = invalid.to_string();
+        assert!(matches!(map_artifact_admission_error(invalid),
+            OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(retained)) if retained == diagnostic));
+        drop(occupied);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
     fn policyless_transaction_entrypoint_artifact_is_rejected() {
         let artifact = minimal_contract_artifact_bytes(1, None);
         let error = ivm::verify_contract_artifact(&artifact)
@@ -6619,7 +6686,6 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 mod tests {
     use super::test_support::{execution_block, seed_active_contract};
     use super::*;
-    use crate::state::State;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
@@ -8348,14 +8414,14 @@ enum IvmRegEventV1 {
         index: u16,
         value: u64,
         tag: bool,
-        path: Vec<[u8; 32]>,
+        path: [[u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
         root: [u8; 32],
     },
     Write {
         index: u16,
         value: u64,
         tag: bool,
-        path: Vec<[u8; 32]>,
+        path: [[u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
         root: [u8; 32],
     },
 }

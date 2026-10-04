@@ -9,16 +9,21 @@ use crate::{account_activity::AccountActivityRole, secure_file_metadata};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
+use iroha_allocation::{AllocationRefusal, PrepaidSharedError, release::ReleaseRegistration};
 use iroha_config::parameters::actual;
 #[cfg(test)]
 use iroha_core::kura::Kura;
-use iroha_core::{EventsSender, state::State};
+use iroha_core::{
+    EventsSender,
+    execution_attempt::{ExecutionAttemptError, ExecutionDeferred},
+    state::State,
+};
 use iroha_crypto::HashOf;
 #[cfg(test)]
 use iroha_data_model::transaction::SignedTransaction;
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SharedSignedBlock, SignedBlock},
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
@@ -184,6 +189,17 @@ pub enum PushError {
     TopicsTooLarge { max_bytes: usize },
     Storage(String),
 }
+/// Original-pool refusal before a push worker acquires any startup effects.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PushWorkerStartError {
+    /// The original State pool could not admit the exact retry control.
+    #[error("push retry control admission: {0}")]
+    Admission(#[source] AllocationRefusal),
+    /// Construction failed after the control's exact layout was prepaid.
+    #[error("push retry control construction: {0}")]
+    Registration(#[source] PrepaidSharedError),
+}
+
 /// Dispatch settings derived from configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DispatchSettings {
@@ -269,6 +285,7 @@ impl AppliedBlockCursor {
 }
 #[derive(Debug)]
 enum PushReplayError {
+    Deferred(ExecutionDeferred),
     Backpressure {
         height: u64,
         queued: usize,
@@ -280,6 +297,14 @@ enum PushReplayError {
 impl From<PushError> for PushReplayError {
     fn from(error: PushError) -> Self {
         Self::Fatal(error)
+    }
+}
+impl From<ExecutionAttemptError<PushError>> for PushReplayError {
+    fn from(error: ExecutionAttemptError<PushError>) -> Self {
+        match error {
+            ExecutionAttemptError::Deferred(reason) => Self::Deferred(reason),
+            ExecutionAttemptError::Rejected(error) => Self::Fatal(error),
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -619,15 +644,24 @@ impl PushBridge {
         state: Arc<State>,
         events: EventsSender,
         shutdown_signal: ShutdownSignal,
-    ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
+    ) -> Result<Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>, PushWorkerStartError>
+    {
         if !self.config.enabled {
-            return None;
+            return Ok(None);
         }
+        let pool = state.ivm_execution_budget();
+        let mut prepaid = pool
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .map_err(PushWorkerStartError::Admission)?;
+        let mut registration = ReleaseRegistration::from_reservation(&mut prepaid)
+            .map_err(PushWorkerStartError::Registration)?;
+        debug_assert!(registration.belongs_to(&pool));
+        drop(prepaid);
         // Subscribe before spawning so the caller cannot observe a startup
         // window in which committed events have no receiver.
         let mut receiver = events.subscribe();
         let bridge = self.clone();
-        Some(tokio::spawn(async move {
+        Ok(Some(tokio::spawn(async move {
             if shutdown_signal.is_sent() {
                 return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
             }
@@ -636,6 +670,7 @@ impl PushBridge {
                 &state,
                 PushReplayTarget::Authoritative,
                 &shutdown_signal,
+                &mut registration,
             )
             .await
             {
@@ -669,6 +704,7 @@ impl PushBridge {
                                     &state,
                                     PushReplayTarget::Height(height),
                                     &shutdown_signal,
+                                    &mut registration,
                                 )
                                 .await
                                 {
@@ -703,6 +739,7 @@ impl PushBridge {
                                 &state,
                                 PushReplayTarget::Authoritative,
                                 &shutdown_signal,
+                                &mut registration,
                             )
                             .await
                             {
@@ -743,7 +780,7 @@ impl PushBridge {
                     }
                 }
             }
-        }))
+        })))
     }
     pub fn device_count(&self) -> usize {
         self.devices.len()
@@ -804,14 +841,14 @@ impl PushBridge {
         &self,
         state: &State,
         authoritative_height: u64,
-    ) -> Result<(), PushError> {
+    ) -> Result<(), ExecutionAttemptError<PushError>> {
         let cursor = self.applied_block_cursor.lock().clone();
         cursor.validate().map_err(storage_error)?;
         if cursor.height > authoritative_height {
             return Err(PushError::Storage(format!(
                 "push applied-block cursor height {} exceeds State's applied height {authoritative_height}",
                 cursor.height
-            )));
+            )).into());
         }
         if cursor.height == 0 {
             return Ok(());
@@ -822,13 +859,15 @@ impl PushBridge {
                 "State returned block height {} for push cursor height {}",
                 block.header().height(),
                 cursor.height
-            )));
+            ))
+            .into());
         }
         if Some(block.hash()) != cursor.block_hash {
             return Err(PushError::Storage(format!(
                 "push applied-block cursor hash does not match State at height {}",
                 cursor.height
-            )));
+            ))
+            .into());
         }
         Ok(())
     }
@@ -1306,11 +1345,34 @@ impl PushBridge {
         self.data_dir.join(APPLIED_BLOCK_CURSOR_FILE)
     }
 }
+// Only the original refused pool supplies a release wake. Demands without a
+// release source retry on the existing bounded dispatch cadence, never a spin.
+async fn wait_for_push_history_retry(
+    reason: &ExecutionDeferred,
+    shutdown: &ShutdownSignal,
+    registration: &mut ReleaseRegistration,
+) -> bool {
+    match reason.allocation_refusal() {
+        Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
+            tokio::select! {
+                () = shutdown.receive() => false,
+                () = release.clone().wait_for_release(registration) => true,
+            }
+        }
+        _ => {
+            tokio::select! {
+                () = shutdown.receive() => false,
+                () = tokio::time::sleep(DISPATCH_TICK) => true,
+            }
+        }
+    }
+}
 async fn replay_with_queue_drain(
     bridge: &PushBridge,
     state: &State,
     target: PushReplayTarget,
     shutdown_signal: &ShutdownSignal,
+    registration: &mut ReleaseRegistration,
 ) -> Result<PushReplayOutcome, PushError> {
     loop {
         let result = match target {
@@ -1320,6 +1382,12 @@ async fn replay_with_queue_drain(
         match result {
             Ok(()) => return Ok(PushReplayOutcome::Complete),
             Err(PushReplayError::Fatal(error)) => return Err(error),
+            Err(PushReplayError::Deferred(reason)) => {
+                iroha_logger::debug!(%reason, "push native history is waiting for original allocation capacity");
+                if !wait_for_push_history_retry(&reason, shutdown_signal, registration).await {
+                    return Ok(PushReplayOutcome::StoppedByShutdown);
+                }
+            }
             Err(PushReplayError::Backpressure {
                 height,
                 queued,
@@ -1617,7 +1685,10 @@ fn exact_applied_state_height(state: &State) -> Result<u64, PushError> {
     u64::try_from(state.committed_height())
         .map_err(|_| PushError::Storage("State's applied height exceeds u64".to_owned()))
 }
-fn state_block_at_height(state: &State, height: u64) -> Result<Arc<SignedBlock>, PushError> {
+fn state_block_at_height(
+    state: &State,
+    height: u64,
+) -> Result<SharedSignedBlock, ExecutionAttemptError<PushError>> {
     let height_usize = usize::try_from(height)
         .map_err(|_| PushError::Storage(format!("native block height {height} exceeds usize")))?;
     let height = NonZeroUsize::new(height_usize)
@@ -1630,7 +1701,7 @@ fn state_block_at_height(state: &State, height: u64) -> Result<Arc<SignedBlock>,
             iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
         )
         .map(|carrier| carrier.into_block())
-        .map_err(|error| PushError::Storage(error.to_string()))
+        .map_err(|error| error.map_rejection(|error| PushError::Storage(error.to_string())))
 }
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -2532,7 +2603,7 @@ mod tests {
         height: u64,
         previous: Option<&SignedBlock>,
         transactions: Vec<SignedTransaction>,
-    ) -> Arc<SignedBlock> {
+    ) -> SignedBlock {
         let signer = iroha_crypto::KeyPair::try_from_seed(
             vec![u8::try_from(height).unwrap_or(0xE7); 32],
             iroha_crypto::Algorithm::Ed25519,
@@ -2561,7 +2632,7 @@ mod tests {
         }
         let mut block = builder.build_with_signature(0, signer.private_key());
         crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
-        Arc::new(block)
+        block
     }
     /// Apply the real signed genesis and H2 so genesis output has a native successor.
     fn native_push_chain(activity: bool) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
@@ -2666,6 +2737,7 @@ mod tests {
                 events.clone(),
                 shutdown.clone(),
             )
+            .expect("original State pool admits push retry control")
             .expect("enabled push worker");
         events
             .send(EventBox::PipelineBatch(Vec::new()))
@@ -2872,9 +2944,11 @@ mod tests {
     fn replay_refuses_unfinalized_body_before_queue_side_effects() {
         let kura = Kura::blank_kura_for_testing();
         let block = signed_push_block(1, None, Vec::new());
+        let state = pristine_push_state(kura.clone());
+        let block = SharedSignedBlock::try_new(block, &state.ivm_execution_budget())
+            .expect("fund unapplied body from its original State pool");
         kura.store_block(block)
             .expect("deliberately store an unapplied body");
-        let state = pristine_push_state(kura);
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
         bridge
@@ -2909,6 +2983,7 @@ mod tests {
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
             .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .expect("original State pool admits push retry control")
             .expect("enabled push worker");
 
         wait_for_cursor(&bridge, 2).await;
@@ -2938,6 +3013,7 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         let worker = bridge
             .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .expect("original State pool admits push retry control")
             .expect("enabled push worker");
         wait_for_cursor(&bridge, 2).await;
 
@@ -2960,6 +3036,158 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn original_push_history_capacity_preserves_cursor_queue_and_pool_release() {
+        let chain = native_push_chain(false);
+        let state = chain.state();
+        let pool = state.ivm_execution_budget();
+        let occupied = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let iroha_allocation::AllocationRefusal::Capacity {
+            release: expected, ..
+        } = &original
+        else {
+            panic!("temporarily occupied original pool");
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let cursor = bridge.applied_block_cursor.lock().clone();
+        let Err(PushReplayError::Deferred(reason)) =
+            bridge.reconcile_to_authoritative_height(state)
+        else {
+            panic!("native read capacity cannot become fatal storage or successful absence");
+        };
+        let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+            reason.allocation_refusal()
+        else {
+            panic!("original capacity owner survives push carrier projection");
+        };
+        assert_eq!(release, expected);
+        assert_eq!(*bridge.applied_block_cursor.lock(), cursor);
+        assert_eq!(bridge.queued_count(), 0);
+        drop(occupied);
+        bridge.reconcile_to_authoritative_height(state).unwrap();
+        assert_eq!(bridge.applied_block_cursor.lock().height, chain.height());
+        assert_eq!(
+            bridge.applied_block_cursor.lock().block_hash,
+            Some(chain.committed(chain.height()).block_hash())
+        );
+    }
+
+    #[tokio::test]
+    async fn push_worker_admits_original_retry_control_before_startup_and_refunds_after_shutdown() {
+        let state = pristine_push_state(Kura::blank_kura_for_testing());
+        let pool = state.ivm_execution_budget();
+        let baseline = pool.reserved_bytes();
+        let occupied = pool
+            .try_reserve_bytes(pool.limit_bytes() - baseline)
+            .unwrap();
+        let expected = pool
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap_err();
+        let temp = tempfile::tempdir().unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let cursor = bridge.applied_block_cursor.lock().clone();
+        let (events, receiver) = tokio::sync::broadcast::channel(1);
+        let receiver_count = events.receiver_count();
+        let shutdown = ShutdownSignal::new();
+        let error = bridge
+            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .expect_err("occupied original pool refuses before subscription or spawn");
+        let PushWorkerStartError::Admission(actual) = error else {
+            panic!("exact original capacity refusal");
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(events.receiver_count(), receiver_count);
+        assert_eq!(*bridge.applied_block_cursor.lock(), cursor);
+        assert_eq!(bridge.queued_count(), 0);
+        assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+        drop(occupied);
+        let worker = bridge
+            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .expect("same original pool retries after its refund")
+            .expect("enabled worker");
+        assert_eq!(
+            pool.reserved_bytes(),
+            baseline + ReleaseRegistration::allocation_layout().size()
+        );
+        assert_eq!(events.receiver_count(), receiver_count + 1);
+        shutdown.send();
+        assert_eq!(
+            worker.await.unwrap(),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+        assert_eq!(pool.reserved_bytes(), baseline);
+        assert_eq!(events.receiver_count(), receiver_count);
+        drop(receiver);
+    }
+
+    #[tokio::test]
+    async fn push_history_retry_waits_only_on_original_release_and_remains_shutdown_responsive() {
+        let registration_bytes = ReleaseRegistration::allocation_layout().size();
+        let pool = iroha_allocation::AllocationBudget::new(registration_bytes + 8);
+        let mut prepaid = pool
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap();
+        let mut registration = ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+        drop(prepaid);
+        let held = pool.try_reserve_bytes(8).unwrap();
+        let reason: ExecutionDeferred = pool.try_reserve_bytes(1).unwrap_err().into();
+        let shutdown = ShutdownSignal::new();
+        let mut retry = Box::pin(wait_for_push_history_retry(
+            &reason,
+            &shutdown,
+            &mut registration,
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retry)
+                .await
+                .is_err()
+        );
+        let unrelated = iroha_allocation::AllocationBudget::new(8);
+        drop(unrelated.try_reserve_bytes(8).unwrap());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retry)
+                .await
+                .is_err()
+        );
+        drop(held);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), &mut retry)
+                .await
+                .unwrap()
+        );
+
+        drop(retry);
+        assert_eq!(pool.reserved_bytes(), registration_bytes);
+
+        let too_small = iroha_allocation::AllocationBudget::new(0);
+        let reason: ExecutionDeferred = too_small.try_reserve_bytes(1).unwrap_err().into();
+        let shutdown = ShutdownSignal::new();
+        let mut retry = Box::pin(wait_for_push_history_retry(
+            &reason,
+            &shutdown,
+            &mut registration,
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retry)
+                .await
+                .is_err(),
+            "a refusal without a release source cannot busy retry"
+        );
+        shutdown.send();
+        assert!(
+            !tokio::time::timeout(Duration::from_secs(1), &mut retry)
+                .await
+                .unwrap()
+        );
+        drop(retry);
+        drop(registration);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[tokio::test]
     async fn full_durable_queue_is_drained_before_replay_retries() {
         let chain = native_push_chain(true);
         let state = Arc::clone(chain.state());
@@ -2976,6 +3204,7 @@ mod tests {
             .register_device(register_request("activity-token"))
             .expect("register push activity target");
         let stale = test_job(91);
+        let stale_key = stale.dedupe_key.clone();
         bridge
             .persist_job(&stale)
             .expect("persist full queue fixture");
@@ -2998,8 +3227,16 @@ mod tests {
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
             .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .expect("original State pool admits push retry control")
             .expect("enabled push worker");
-        wait_for_cursor(&bridge, 1).await;
+        wait_for_cursor(&bridge, chain.height()).await;
+        assert_eq!(
+            bridge.applied_block_cursor.lock().block_hash,
+            Some(chain.committed(chain.height()).block_hash()),
+            "backlog replay reaches the exact authenticated native successor"
+        );
+        assert!(!bridge.queue.contains_key(&stale_key));
+        assert!(!bridge.job_path(&stale_key).exists());
         shutdown.send();
         assert_eq!(
             worker.await.expect("backpressured push worker joins"),

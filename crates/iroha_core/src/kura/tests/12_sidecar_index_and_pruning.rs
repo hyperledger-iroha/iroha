@@ -416,7 +416,14 @@ fn zero_length_hash_metadata_is_diagnosed_as_missing_canonical_body() {
         data.push((hash_only, None));
     }
     assert!(kura.is_canonical_body_missing(nonzero!(2_usize)));
-    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(
+        kura.get_block(
+            nonzero!(2_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+        )
+        .expect("completed structural storage read")
+        .is_none()
+    );
 }
 #[test]
 fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallback() {

@@ -157,6 +157,8 @@ jobs:
           openssl version
       - name: Test native filesystem, wallet and environment owners
         run: cargo test --locked --release -p iroha_fs -p iroha_wallet -p iroha_deploy --lib -- --test-threads=1
+      - name: Test native Musubi publication, recovery and workspace execution
+        run: cargo test --locked --release -p musubi --lib -- --test-threads=1
       - name: Test shared desktop services and GUI actions
         run: cargo test --locked --release -p mochi-core -p mochi-ui --features mochi-ui/gui --lib --bins -- --test-threads=1
       - name: Build complete release bundle and exercise all deployment inputs

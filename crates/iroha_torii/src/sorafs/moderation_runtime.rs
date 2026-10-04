@@ -1077,14 +1077,15 @@ fn validate_snapshot_finalized_block(
     view: &impl StateReadOnly,
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
 ) -> Result<(), ModerationSnapshotReadErrorV1> {
-    let block = view
-        .latest_block()
-        .ok_or(ModerationSnapshotReadErrorV1::Unavailable)?;
     validate_snapshot_finalized_block_fields(
         snapshot,
-        block.header().height().get(),
-        *block.hash().as_ref(),
-        block.header().creation_time_ms,
+        u64::try_from(view.height()).map_err(|_| ModerationSnapshotReadErrorV1::Unavailable)?,
+        *view
+            .latest_block_hash()
+            .ok_or(ModerationSnapshotReadErrorV1::Unavailable)?
+            .as_ref(),
+        view.authenticated_query_ledger_time_ms()
+            .ok_or(ModerationSnapshotReadErrorV1::Unavailable)?,
     )
 }
 fn validate_snapshot_finalized_block_fields(

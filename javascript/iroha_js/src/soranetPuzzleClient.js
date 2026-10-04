@@ -25,7 +25,7 @@ export class SoranetPuzzleClient {
     rejectRetiredFields(options, ["fetch"], "options");
     const trimmed = baseUrl.trim();
     this._baseUrl = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
-    this._fetch = options.fetchImpl ?? globalThis.fetch;
+    this._fetch = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     if (typeof this._fetch !== "function") {
       throw new Error("fetch implementation is required");
     }
@@ -159,14 +159,14 @@ export class SoranetPuzzleClient {
     if (timeoutMs == null) {
       const finalInit =
         externalSignal == null ? init : { ...init, signal: externalSignal };
-      return this._fetch(url, finalInit);
+      return Reflect.apply(this._fetch, undefined, [url, finalInit]);
     }
     const abortController = new AbortController();
     const combined = combineAbortSignals(externalSignal, abortController.signal);
     const finalInit = { ...init, signal: combined.signal };
     const timer = setTimeout(() => abortController.abort(), timeoutMs);
     try {
-      return await this._fetch(url, finalInit);
+      return await Reflect.apply(this._fetch, undefined, [url, finalInit]);
     } finally {
       clearTimeout(timer);
       combined.cleanup();

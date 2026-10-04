@@ -350,10 +350,18 @@ pub(crate) async fn enact(
             .hash(),
         sortition_pulse.finalized_chain_anchor.block_hash,
     );
+    let (expected_anchor, expected_context) = finality::certified_pulse_context(
+        &network,
+        &client,
+        sortition_pulse_height,
+        &sortition_pulse,
+    )
+    .await?;
     verify_finalized_global_threshold_beacon_pulse_v1(
         &validated_beacon_session,
         &sortition_pulse,
-        sortition_pulse.finalized_chain_anchor,
+        expected_anchor,
+        &expected_context,
     )
     .wrap_err("independently verify the sortition pulse threshold signature")?;
     let sortition_governance_seed =
@@ -917,10 +925,14 @@ pub(crate) async fn enact(
             .hash(),
         release_pulse.finalized_chain_anchor.block_hash,
     );
+    let (expected_anchor, expected_context) =
+        finality::certified_pulse_context(&network, &client, release_height, &release_pulse)
+            .await?;
     verify_finalized_global_threshold_beacon_pulse_v1(
         &validated_beacon_session,
         &release_pulse,
-        release_pulse.finalized_chain_anchor,
+        expected_anchor,
+        &expected_context,
     )
     .wrap_err("independently verify the ballot-release pulse threshold signature")?;
     assert_ne!(release_pulse.pulse_id, sortition_pulse.pulse_id);

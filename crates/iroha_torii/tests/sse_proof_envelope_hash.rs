@@ -28,7 +28,9 @@ async fn sse_filters_by_proof_envelope_hash() {
             iroha_torii::json_array(vec!["proof_envelope_hash", want_hex.as_str()]),
         ),
     ]);
-    let filter = norito::json::to_string(&filter_value).expect("serialize filter");
+    let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)
+        .expect("valid filter")
+        .to_string();
     let uri = format!("/v1/events/sse?filter={}", urlencoding::encode(&filter));
     let req = http::Request::builder()
         .method("GET")

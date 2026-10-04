@@ -1043,15 +1043,16 @@ fn native_range_specificity(
 }
 /// Negotiate the response format from an optional `Accept` header value.
 ///
-/// Omitted headers retain Torii's native Norito default. Explicit wildcard
-/// ranges select JSON for broad HTTP-client interoperability, while equal
-/// canonical JSON and Norito preferences retain the binary-first tie-break.
+/// Omitted headers and wildcard-only ranges select JSON, so ordinary HTTP
+/// clients read JSON without negotiating; Norito clients ask for
+/// `application/x-norito` explicitly, and an equal explicit preference for
+/// both keeps the binary-first tie-break.
 ///
 /// Returns an HTTP response carrying status `406 Not Acceptable` when the header
 /// explicitly forbids both JSON and Norito or contains an invalid q-value.
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<ResponseFormat, Response> {
-    negotiate_response_format_with_default(accept, ResponseFormat::Norito)
+    negotiate_response_format_with_default(accept, ResponseFormat::Json)
 }
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 fn negotiate_response_format_with_default(
@@ -1343,6 +1344,7 @@ where
                     norito::json::BoundedJsonError::Unsupported
                     | norito::json::BoundedJsonError::AllocationFailed
                     | norito::json::BoundedJsonError::DecodeResource(_)
+                    | norito::json::BoundedJsonError::ScopedDecodeResource(_)
                     | norito::json::BoundedJsonError::LengthMismatch => {
                         BoundedResponseEncodeError::Serialization
                     }
@@ -1570,7 +1572,7 @@ pub mod extractors {
             limit: usize,
         },
         Invalid(&'static str),
-        Schema,
+        Schema(String),
     }
 
     fn query_rejection(error: QueryDecodeError) -> Response {
@@ -1589,10 +1591,10 @@ pub mod extractors {
             QueryDecodeError::Invalid(message) => {
                 typed_request_rejection(StatusCode::BAD_REQUEST, "request_query_invalid", message)
             }
-            QueryDecodeError::Schema => typed_request_rejection(
+            QueryDecodeError::Schema(reason) => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_query_invalid",
-                "Query parameters do not match the endpoint schema.",
+                format!("Query parameters do not match the endpoint schema: {reason}"),
             ),
         }
     }
@@ -2432,7 +2434,8 @@ pub mod extractors {
         for (key, value) in pairs {
             object.insert(key, scalar_to_value(&value));
         }
-        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
+        json::from_value(Value::Object(object))
+            .map_err(|err| QueryDecodeError::Schema(err.to_string()))
     }
     fn decode_string_query<T: JsonDeserializeOwned>(
         query: Option<&str>,
@@ -2443,7 +2446,8 @@ pub mod extractors {
         for (key, value) in pairs {
             object.insert(key, Value::String(value));
         }
-        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
+        json::from_value(Value::Object(object))
+            .map_err(|err| QueryDecodeError::Schema(err.to_string()))
     }
     fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), QueryDecodeError> {
         // Structured query DTOs have exactly one value per field. Keep this
@@ -2495,11 +2499,6 @@ pub mod extractors {
                     "Every query parameter must use key=value framing.",
                 ));
             };
-            if raw_value.contains('=') {
-                return Err(QueryDecodeError::Invalid(
-                    "Literal equals signs in query components must be percent-encoded.",
-                ));
-            }
             if raw_key.is_empty() || raw_value.is_empty() {
                 return Err(QueryDecodeError::Invalid(
                     "Query parameter names and values must be non-empty.",
@@ -2510,45 +2509,28 @@ pub mod extractors {
         Ok(pairs)
     }
     fn decode_component(input: &str) -> Result<String, QueryDecodeError> {
-        // V1 uses one exact HTML-form spelling. Keeping the spelling unique is
-        // important for signed requests, caches, and duplicate-key checks: an
-        // accepted component cannot acquire an alternate percent-encoded alias.
+        // Ordinary RFC 3986 / HTML-form decoding: escapes may use either
+        // hexadecimal case and may escape any byte, and `+` and `%20` are
+        // both spaces. Duplicate-key checks, caches and request signatures
+        // all work on the decoded pairs, so alternate spellings of one
+        // component are equivalent rather than distinct requests.
         let bytes = input.as_bytes();
         let mut position = 0;
         while position < bytes.len() {
             match bytes[position] {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b'+' => {
-                    position += 1;
-                }
                 b'%' => {
-                    let Some(high) = bytes.get(position + 1).copied() else {
+                    let escape = bytes.get(position + 1..position + 3);
+                    if !escape.is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit)) {
                         return Err(QueryDecodeError::Invalid(
-                            "Query parameters contain invalid percent-encoding.",
-                        ));
-                    };
-                    let Some(low) = bytes.get(position + 2).copied() else {
-                        return Err(QueryDecodeError::Invalid(
-                            "Query parameters contain invalid percent-encoding.",
-                        ));
-                    };
-                    if !matches!(high, b'0'..=b'9' | b'A'..=b'F')
-                        || !matches!(low, b'0'..=b'9' | b'A'..=b'F')
-                    {
-                        return Err(QueryDecodeError::Invalid(
-                            "Query percent-encoding must use two uppercase hexadecimal digits.",
-                        ));
-                    }
-                    let decoded = (query_hex_nibble(high) << 4) | query_hex_nibble(low);
-                    if is_query_form_literal(decoded) || decoded == b' ' {
-                        return Err(QueryDecodeError::Invalid(
-                            "Query parameters contain a non-canonical percent escape.",
+                            "Query parameters contain an incomplete percent escape; write a literal `%` as `%25`.",
                         ));
                     }
                     position += 3;
                 }
+                byte if byte.is_ascii_graphic() => position += 1,
                 _ => {
                     return Err(QueryDecodeError::Invalid(
-                        "Query components must percent-encode bytes outside the canonical form literal set.",
+                        "Query parameters must percent-encode spaces, control characters and non-ASCII bytes.",
                     ));
                 }
             }
@@ -2563,19 +2545,6 @@ pub mod extractors {
             ));
         }
         Ok(decoded)
-    }
-    const fn query_hex_nibble(byte: u8) -> u8 {
-        match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'A'..=b'F' => byte - b'A' + 10,
-            _ => 0,
-        }
-    }
-    const fn is_query_form_literal(byte: u8) -> bool {
-        matches!(
-            byte,
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_'
-        )
     }
     fn scalar_to_value(raw: &str) -> Value {
         if raw == "null" {
@@ -2728,7 +2697,6 @@ pub mod extractors {
                 .map_err(KagemushaCanonicalNoritoDecodeError::Norito)
             }
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_account(seed: u8) -> iroha_data_model::account::AccountId {
             use iroha_crypto::{Algorithm, KeyPair};
 
@@ -2738,7 +2706,6 @@ pub mod extractors {
                     .clone(),
             )
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_network() -> iroha_data_model::NetworkId {
             use iroha_crypto::{Hash, HashOf};
 
@@ -2748,7 +2715,6 @@ pub mod extractors {
                 Hash::new(b"kagemusha-v1-ingress-test-network"),
             ))
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 iroha_model_base::domain::DomainId::try_new("offline", "universal")
@@ -2756,7 +2722,6 @@ pub mod extractors {
                 "ingress".parse().expect("fixture asset name"),
             )
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_asset_incarnation() -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
             use iroha_crypto::Hash;
 
@@ -2765,7 +2730,6 @@ pub mod extractors {
             )
             .expect("canonical asset incarnation")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_device_public_key(
             key: &p256::ecdsa::SigningKey,
         ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
@@ -2774,7 +2738,6 @@ pub mod extractors {
             )
             .expect("canonical P-256 device key")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_sign(
             key: &p256::ecdsa::SigningKey,
             bytes: &[u8],
@@ -2788,7 +2751,6 @@ pub mod extractors {
             )
             .expect("canonical low-S P-256 signature")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_encrypted_credit(recipient_key: [u8; 32], tag: u8) -> Vec<u8> {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
@@ -2812,7 +2774,6 @@ pub mod extractors {
             .canonical_bytes_against_recipient_key(recipient_key)
             .expect("canonical encrypted credit")
         }
-        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_paired_proof(
             semantic_digest: [u8; 32],
             proof_len: usize,
@@ -2838,7 +2799,6 @@ pub mod extractors {
                 ep_history: vec![tag.wrapping_add(9); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
             }
         }
-        #[cfg(feature = "app_api")]
         pub(crate) fn kagemusha_ingress_top_up_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
             use iroha_data_model::kagemusha::{
@@ -2935,7 +2895,6 @@ pub mod extractors {
                 })
                 .expect("attach mint authorization")
         }
-        #[cfg(feature = "app_api")]
         pub(crate) fn kagemusha_ingress_redemption_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
             use iroha_data_model::kagemusha::{
@@ -3115,7 +3074,9 @@ pub mod extractors {
             assert_eq!(envelope.code(), "request_query_invalid");
         }
         #[tokio::test]
-        async fn duplicate_and_encoded_alias_query_fields_are_rejected() {
+        async fn duplicate_query_fields_are_rejected_in_any_spelling() {
+            // Alternate percent-encodings decode to the same key, so they are
+            // duplicates rather than distinct parameters.
             for (query, expected_message) in [
                 (
                     "asset_definition_id=first&asset_definition_id=second",
@@ -3123,15 +3084,15 @@ pub mod extractors {
                 ),
                 (
                     "asset_definition_id=first&asset%5fdefinition%5fid=second",
-                    "uppercase hexadecimal",
+                    "duplicate decoded key",
                 ),
                 (
                     "asset_definition_id=first&%61sset_definition_id=second",
-                    "non-canonical percent escape",
+                    "duplicate decoded key",
                 ),
                 (
                     "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
-                    "non-canonical percent escape",
+                    "duplicate decoded key",
                 ),
             ] {
                 let request = Request::builder()
@@ -3190,7 +3151,7 @@ pub mod extractors {
                         norito::json::from_slice(&bytes).expect("decode typed query error");
                     assert_eq!(envelope.code(), "request_query_invalid");
                     assert!(
-                        envelope.message().contains("percent-encoding"),
+                        envelope.message().contains("percent escape"),
                         "query={query}, envelope={envelope:?}"
                     );
                 }
@@ -3206,21 +3167,24 @@ pub mod extractors {
             assert_eq!(plus.label.as_deref(), Some("tron+nile"));
         }
         #[test]
-        fn generic_query_rejects_noncanonical_component_aliases() {
-            for query in [
-                "label=tron%20nile",
-                "label=%74ron",
-                "label=tron%2bnile",
-                "label=tron/nile",
-                "label=tron:nile",
-                "label=tron~nile",
-                "label=tron%C2%A0nile%0A",
-                "label=tron nile",
-                "label=tron💖nile",
+        fn generic_query_accepts_rfc3986_spellings() {
+            for (query, expected) in [
+                ("label=tron%20nile", "tron nile"),
+                ("label=%74ron", "tron"),
+                ("label=tron%2bnile", "tron+nile"),
+                ("label=tron/nile", "tron/nile"),
+                ("label=tron:nile", "tron:nile"),
+                ("label=tron~nile", "tron~nile"),
+                ("label=tron%C2%A0nile", "tron\u{a0}nile"),
             ] {
+                let decoded: StringQueryForTest = super::decode_string_query(Some(query))
+                    .unwrap_or_else(|err| panic!("{query:?} decodes: {err:?}"));
+                assert_eq!(decoded.label.as_deref(), Some(expected), "{query:?}");
+            }
+            for query in ["label=tron%0Anile", "label=tron nile", "label=tron💖nile"] {
                 assert!(
                     super::decode_string_query::<StringQueryForTest>(Some(query)).is_err(),
-                    "query {query:?} must not acquire an alternate wire spelling"
+                    "query {query:?} must be rejected"
                 );
             }
             let decoded: StringQueryForTest =
@@ -3236,12 +3200,16 @@ pub mod extractors {
         }
         #[test]
         fn generic_query_rejects_empty_and_ambiguous_framing() {
-            for query in ["", "&", "label", "=value", "label=", "label=x=", "label=x&"] {
+            for query in ["", "&", "label", "=value", "label=", "label=x&"] {
                 assert!(
                     super::query_pairs(Some(query)).is_err(),
                     "query {query:?} must be rejected"
                 );
             }
+            assert_eq!(
+                super::query_pairs(Some("label=x=")).expect("`=` inside a value"),
+                vec![("label".to_owned(), "x=".to_owned())]
+            );
             assert!(super::query_pairs(None).expect("absent query").is_empty());
         }
         #[test]
@@ -3610,9 +3578,9 @@ pub mod extractors {
             assert_eq!(format, super::super::ResponseFormat::Json);
         }
         #[test]
-        fn negotiate_accept_header_defaults_norito() {
+        fn negotiate_accept_header_defaults_json() {
             let format = super::super::negotiate_response_format(None).expect("format");
-            assert_eq!(format, super::super::ResponseFormat::Norito);
+            assert_eq!(format, super::super::ResponseFormat::Json);
         }
         #[test]
         fn negotiate_accept_header_wildcards_default_json() {

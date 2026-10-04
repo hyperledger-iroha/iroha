@@ -46,9 +46,9 @@ def captures_fixture() -> dict:
     return json.loads((FIXTURES / "petal_captures_v1.json").read_text(encoding="utf-8"))
 
 
-def luma_of(entry: dict) -> Luma:
-    """Inflate a capture's zlib + base64 luma plane."""
-    data = zlib.decompress(base64.b64decode(entry["luma_zlib_base64"]))
+def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:
+    """Inflate a capture's zlib + base64 luma plane (``key`` names the field)."""
+    data = zlib.decompress(base64.b64decode(entry[key]))
     return Luma(entry["width"], entry["height"], data)
 
 

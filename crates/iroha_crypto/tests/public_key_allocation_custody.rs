@@ -582,3 +582,6 @@ fn owned_gost_public_parser_allocates_only_its_retained_payload() {
         assert_eq!(POINTER.load(SeqCst), 0);
     }
 }
+
+#[path = "signature_allocation_custody.rs"]
+mod signature_allocation_custody;

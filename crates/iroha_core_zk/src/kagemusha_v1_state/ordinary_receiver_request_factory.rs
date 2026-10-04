@@ -20,9 +20,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 #[path = "ordinary_received_credit_opening.rs"]
 mod received_credit;
 pub(crate) use received_credit::{
-    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
-    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 

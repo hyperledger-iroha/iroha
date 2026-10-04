@@ -294,6 +294,10 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxParticipantV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::SettleAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayGlobalAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
@@ -419,6 +423,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1>,
     dispatch_instruction::<
         iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
     >,
@@ -1334,8 +1339,8 @@ mod tests {
             callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "isi-mod-test".to_owned(),
@@ -1484,7 +1489,11 @@ mod tests {
         assert_eq!(state.kura().blocks_count(), 1);
         let genesis = state
             .kura()
-            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .get_block(
+                std::num::NonZeroUsize::new(1).unwrap(),
+                &state.ivm_execution_budget(),
+            )
+            .expect("completed original State read")
             .unwrap();
         assert_eq!(
             state.network_id_ref(),

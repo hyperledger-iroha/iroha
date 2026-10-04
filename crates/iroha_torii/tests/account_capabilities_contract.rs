@@ -1,4 +1,4 @@
-//! Account-free bootstrap qualification through the shipping Torii router and OpenAPI projection.
+//! Account-free bootstrap qualification through the shipping Torii router and `OpenAPI` projection.
 
 use std::sync::Arc;
 
@@ -208,7 +208,9 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
             .as_array()
             .expect("bootstrap security")
             .iter()
-            .any(|value| value.as_object().is_some_and(|object| object.is_empty()))
+            .any(|value| value
+                .as_object()
+                .is_some_and(std::collections::BTreeMap::is_empty))
     );
     let schema = &document["components"]["schemas"]["AccountCapabilitiesV1"];
     assert_eq!(schema["additionalProperties"].as_bool(), Some(false));

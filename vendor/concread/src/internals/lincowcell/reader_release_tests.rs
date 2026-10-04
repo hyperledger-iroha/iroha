@@ -20,7 +20,7 @@ fn tree() -> Tree {
     // SAFETY: the new unique tree is immediately installed in its original owner.
     LinCowCell::new(unsafe { SuperBlock::new() })
 }
-fn pending(wait: &mut iroha_allocation::release::ReleaseFuture) -> bool {
+fn pending(wait: &mut iroha_allocation::release::ReleaseFuture<'_>) -> bool {
     Pin::new(wait)
         .poll(&mut Context::from_waker(Waker::noop()))
         .is_pending()
@@ -28,6 +28,11 @@ fn pending(wait: &mut iroha_allocation::release::ReleaseFuture) -> bool {
 
 #[test]
 fn original_public_map_read_releases_wait_until_after_the_caller_fence() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     struct CheckFence {
         fence: Arc<std::sync::Mutex<()>>,
         calls: AtomicUsize,
@@ -50,7 +55,9 @@ fn original_public_map_read_releases_wait_until_after_the_caller_fence() {
         });
         let waker = Waker::from(check.clone());
         let mut context = Context::from_waker(&waker);
-        let mut wait = map.observe_reader_release().wait_for_release();
+        let mut wait = map
+            .observe_reader_release()
+            .wait_for_release(&mut release_registration_1);
         assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
         let mut batch = without_allocations(|| map.reader_release_batch());
         let held = fence.lock().unwrap();
@@ -74,11 +81,21 @@ fn original_public_map_read_releases_wait_until_after_the_caller_fence() {
 
 #[test]
 fn a_foreign_batch_refuses_before_blocking_acquisition_or_any_notice() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     let foreign = tree();
     let mut batch = foreign.reader_release_batch();
-    let mut actual_wait = cell.observe_reader_release().wait_for_release();
-    let mut foreign_wait = foreign.observe_reader_release().wait_for_release();
+    let mut actual_wait = cell
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_1);
+    let mut foreign_wait = foreign
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_2);
     assert!(pending(&mut actual_wait) && pending(&mut foreign_wait));
     // Keeping the actual native lock proves the source check precedes even the
     // blocking API. No guard is acquired and no original source may be signaled.
@@ -98,9 +115,16 @@ fn a_foreign_batch_refuses_before_blocking_acquisition_or_any_notice() {
 
 #[test]
 fn busy_acquires_nothing_and_an_empty_batch_cannot_fabricate_a_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     let mut batch = cell.reader_release_batch();
-    let mut wait = cell.observe_reader_release().wait_for_release();
+    let mut wait = cell
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     let held = cell.active.lock().unwrap();
     assert!(matches!(
@@ -123,6 +147,11 @@ fn busy_acquires_nothing_and_an_empty_batch_cannot_fabricate_a_release() {
 
 #[test]
 fn acquired_poison_is_recorded_only_after_actual_unlock_and_batch_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     for nonblocking in [false, true] {
         let cell = tree();
         assert!(catch_unwind(AssertUnwindSafe(|| {
@@ -135,7 +164,9 @@ fn acquired_poison_is_recorded_only_after_actual_unlock_and_batch_release() {
             !observation.is_poisoned(),
             "raw poison has not yet been reported"
         );
-        let mut wait = observation.clone().wait_for_release();
+        let mut wait = observation
+            .clone()
+            .wait_for_release(&mut release_registration_1);
         assert!(pending(&mut wait));
         let mut batch = cell.reader_release_batch();
         for _ in 0..2 {
@@ -163,9 +194,16 @@ fn acquired_poison_is_recorded_only_after_actual_unlock_and_batch_release() {
 
 #[test]
 fn successful_reads_coalesce_without_retaining_physical_locks() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     let mut batch = cell.reader_release_batch();
-    let mut wait = cell.observe_reader_release().wait_for_release();
+    let mut wait = cell
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     for _ in 0..256 {
         drop(without_allocations(|| {
@@ -180,9 +218,16 @@ fn successful_reads_coalesce_without_retaining_physical_locks() {
 
 #[test]
 fn retained_reader_and_release_batch_have_independent_lifetimes() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let map = BptreeMap::<usize, usize>::new();
     let mut batch = map.reader_release_batch();
-    let mut wait = map.observe_reader_release().wait_for_release();
+    let mut wait = map
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     let reader = map.read_retaining(&mut batch).unwrap();
     drop(batch);
@@ -215,9 +260,16 @@ fn one_original_batch_can_span_distinct_committed_generations() {
 
 #[test]
 fn outer_unwind_keeps_completed_immutable_reads_unpoisoned_and_deferred() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     let observation = cell.observe_reader_release();
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation
+        .clone()
+        .wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     let mut batch = cell.reader_release_batch();
     assert!(catch_unwind(AssertUnwindSafe(|| {
@@ -235,9 +287,16 @@ fn outer_unwind_keeps_completed_immutable_reads_unpoisoned_and_deferred() {
 
 #[test]
 fn actual_guard_unwind_transfer_records_poison_before_any_batch_callback() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     let observation = cell.observe_reader_release();
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation
+        .clone()
+        .wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     let mut batch = cell.reader_release_batch();
     assert!(catch_unwind(AssertUnwindSafe(|| {
@@ -260,6 +319,11 @@ fn actual_guard_unwind_transfer_records_poison_before_any_batch_callback() {
 
 #[test]
 fn actual_original_batch_survives_map_destruction_without_losing_wake() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let (batch, observation) = {
         let cell = tree();
         let mut batch = cell.reader_release_batch();
@@ -267,7 +331,7 @@ fn actual_original_batch_survives_map_destruction_without_losing_wake() {
         drop(cell.read_retaining(&mut batch).unwrap());
         (batch, observation)
     };
-    let mut wait = observation.wait_for_release();
+    let mut wait = observation.wait_for_release(&mut release_registration_1);
     assert!(pending(&mut wait));
     drop(batch);
     assert!(!pending(&mut wait));
@@ -275,9 +339,16 @@ fn actual_original_batch_survives_map_destruction_without_losing_wake() {
 
 #[test]
 fn existing_default_read_still_notifies_its_actual_release_immediately() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let cell = tree();
     for nonblocking in [false, true] {
-        let mut wait = cell.observe_reader_release().wait_for_release();
+        let mut wait = cell
+            .observe_reader_release()
+            .wait_for_release(&mut release_registration_1);
         assert!(pending(&mut wait));
         let reader = if nonblocking {
             cell.try_read().unwrap()

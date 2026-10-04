@@ -68,6 +68,10 @@ enum Stress {
     Banding(f64, f64),
     /// Linear motion blur of this length in pixels, in a random direction.
     Shake(f64),
+    /// One corner blossom covered (a thumb) or glared out (a white disc), before capture.
+    Corner(u8),
+    /// The code pushed so far that one corner blossom is outside the frame.
+    CutCorner,
 }
 
 fn stress_rows() -> Vec<(String, Stress)> {
@@ -93,6 +97,9 @@ fn stress_rows() -> Vec<(String, Stress)> {
     for px in [2.0, 4.0, 9.0, 14.0] {
         rows.push((format!("hand shake {px:.0} px"), Stress::Shake(px)));
     }
+    rows.push(("thumb over a blossom".into(), Stress::Corner(0)));
+    rows.push(("glare on a blossom".into(), Stress::Corner(255)));
+    rows.push(("corner outside frame".into(), Stress::CutCorner));
     rows
 }
 
@@ -147,7 +154,7 @@ fn main() {
                             let mut rng =
                                 Rng(0xABCD ^ (trial as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
                             let frame = (rng.next() * 60000.0) as u16;
-                            let source = render(
+                            let mut source = render(
                                 &encoder.cells(frame),
                                 &RenderOptions {
                                     size: 768,
@@ -155,6 +162,21 @@ fn main() {
                                     ..RenderOptions::default()
                                 },
                             );
+                            let corner = trial % 4;
+                            if let Stress::Corner(value) = stress {
+                                let (cx, cy) = iroha_petal::layout::FINDER_CENTERS[corner];
+                                let (cx, cy) = (f64::from(cx) * 0.75, f64::from(cy) * 0.75);
+                                let radius = if value == 0 { 60.0 } else { 71.0 };
+                                for y in 0..768 {
+                                    for x in 0..768 {
+                                        let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                                        if dx.hypot(dy) <= radius {
+                                            source.data[(y * 768 + x) * 3..(y * 768 + x) * 3 + 3]
+                                                .fill(value);
+                                        }
+                                    }
+                                }
+                            }
                             let mut config = *base;
                             config.seed = trial as u64 + 1;
                             config.rotation_deg = rng.range(0.0, 360.0);
@@ -177,8 +199,27 @@ fn main() {
                                     config.motion_px = px;
                                     config.motion_deg = rng.range(0.0, 180.0);
                                 }
+                                Stress::Corner(_) => {}
+                                Stress::CutCorner => {
+                                    // a code turned by about 45 degrees and shifted along the
+                                    // short side loses exactly one corner blossom
+                                    config.fill = 0.7;
+                                    config.rotation_deg = 45.0 + rng.range(-8.0, 8.0);
+                                    config.shift = (
+                                        rng.range(-0.03, 0.03),
+                                        if corner.is_multiple_of(2) {
+                                            0.12
+                                        } else {
+                                            -0.12
+                                        },
+                                    );
+                                }
                             }
-                            let config = fit_to_frame(&config, 4.0);
+                            let config = if matches!(stress, Stress::CutCorner) {
+                                config
+                            } else {
+                                fit_to_frame(&config, 4.0)
+                            };
                             let mut image = capture(&source, &config);
                             if let Some((depth, period)) = banding {
                                 band(&mut image, depth, period, &mut rng);

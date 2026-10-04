@@ -227,6 +227,7 @@ fn inner_refunds_notify_only_after_original_writer_unlock_on_success_error_and_u
     for mode in 0..3 {
         let storage = Arc::new(seeded());
         let budget = AllocationBudget::new(1 << 20);
+        let mut registration = crate::unit_test_support::release_registration(&budget);
         let wakes = Arc::new(UnlockedWake {
             storage: storage.clone(),
             wakes: AtomicUsize::new(0),
@@ -250,9 +251,8 @@ fn inner_refunds_notify_only_after_original_writer_unlock_on_success_error_and_u
                     else {
                         panic!("encoded row retains original capacity")
                     };
-                    let mut future = release.wait_for_release();
-                    assert!(Pin::new(&mut future).poll(&mut context).is_pending());
-                    waiting = Some(future);
+                    assert!(registration.poll_wait(&release, &mut context).is_pending());
+                    waiting = Some(release);
                     if mode == 2 {
                         panic!("unwind after funded row")
                     }
@@ -270,10 +270,15 @@ fn inner_refunds_notify_only_after_original_writer_unlock_on_success_error_and_u
         }
         assert!(wakes.wakes.load(Ordering::SeqCst) > 0);
         assert!(
-            Pin::new(waiting.as_mut().unwrap())
-                .poll(&mut context)
+            registration
+                .poll_wait(waiting.as_ref().unwrap(), &mut context)
                 .is_ready()
         );
+        assert_eq!(
+            budget.reserved_bytes(),
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+        );
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -282,7 +287,10 @@ fn inner_refunds_notify_only_after_original_writer_unlock_on_success_error_and_u
 fn occupied_original_pool_returns_original_release_and_retry_keeps_old_borrowers() {
     let storage = Arc::new(seeded());
     let budget = AllocationBudget::new(1 << 20);
-    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
     let Err(MembershipCaptureError::Table(LeafError::Admission(AllocationRefusal::Capacity {
         release,
         ..
@@ -303,13 +311,15 @@ fn occupied_original_pool_returns_original_release_and_retry_keeps_old_borrowers
     });
     let waker = Waker::from(wakes.clone());
     let mut context = Context::from_waker(&waker);
-    let mut waiting = release.wait_for_release();
+    let mut waiting = release.wait_for_release(&mut registration);
     assert!(Pin::new(&mut waiting).poll(&mut context).is_pending());
     let unrelated = AllocationBudget::new(1);
     drop(unrelated.try_reserve_bytes(1).unwrap());
     assert_eq!(wakes.wakes.load(Ordering::SeqCst), 0);
     drop(occupied);
     assert!(Pin::new(&mut waiting).poll(&mut context).is_ready());
+    drop(waiting);
+    drop(registration);
     let retained = capture_from_storage(&storage, &budget, limits()).unwrap();
     let bytes = budget.reserved_bytes();
     budget.set_limit_bytes(0);

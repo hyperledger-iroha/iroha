@@ -8,6 +8,13 @@ labelling -> blossom detection (a large, round, isolated blob) -> selection of
 the four finders that form a plausible, similarly sized quadrilateral. Solid
 blossoms survive defocus that would fill in the gaps of a ring-shaped marker.
 
+When a finger, a glare or the edge of the frame hides one blossom, three large
+blossoms that form a corner still identify the code: the fourth corner is
+inferred (and later refined by the decoder). :func:`candidates` yields the
+plausible finder sets of a frame lazily, in the order a decoder should try
+them, and :func:`follow` re-finds a finder near where the previous frame's
+pose puts it (tracking).
+
 The implementation is a function-by-function port of the Rust reference with
 pure-Python performance in mind: box sums slide over rows with C-level
 ``map``/``itemgetter`` passes, and components are labelled run by run. Both
@@ -19,29 +26,36 @@ from __future__ import annotations
 
 import math
 import re
+import struct
 from array import array
 from collections import Counter
 from dataclasses import dataclass
 from itertools import accumulate, repeat
 from operator import add, and_, gt, itemgetter, mul, sub, truediv
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
-from ._numeric import F64_MAX, ieee_div, total_key
+from ._numeric import F64_MAX, f64_max, f64_min, ieee_div, total_key
 from .image import Luma
 
 __all__ = [
     "Finder",
+    "FinderSet",
     "Component",
     "adaptive_binarize",
     "label_components",
     "blossoms",
     "select_quad",
+    "select_triple",
     "refine_center",
+    "follow",
+    "candidates",
+    "locate_candidates",
     "locate",
     "SENSITIVITIES",
 ]
 
-#: Threshold sensitivities tried by :func:`locate`, mildest first.
+#: Binarisation thresholds, from the most to the least permissive: a higher
+#: sensitivity separates blurred blossoms from their surroundings.
 SENSITIVITIES = (0.12, 0.22, 0.34)
 
 
@@ -55,6 +69,17 @@ class Finder:
     y: float
     #: Apparent outer diameter in pixels.
     size: float
+
+
+@dataclass(frozen=True)
+class FinderSet:
+    """One plausible set of corner finders for a frame."""
+
+    #: The four corners, clockwise from the one nearest the top-left of the image.
+    corners: Tuple[Finder, ...]
+    #: Index into :attr:`corners` of a corner that was not seen but inferred
+    #: from the other three, if any.
+    inferred: Optional[int] = None
 
 
 class Component:
@@ -464,13 +489,93 @@ def _fmax(values: Sequence[float]) -> float:
     return out
 
 
+def _strong_finders(finders: Sequence[Finder]) -> List[Finder]:
+    """The finders of the largest size class: lit tiles and merged dots form blob
+    candidates too, but the corner finders are the biggest isolated round blobs in view."""
+    largest = _fmax([f.size for f in finders])
+    return [f for f in finders if f.size >= 0.55 * largest]
+
+
+def _ranked(finders: Sequence[Finder]) -> List[Finder]:
+    """The ten largest candidates, largest first (ties keep discovery order), so that
+    clutter in a busy scene cannot push the real finders out of the set that is combined."""
+    order = sorted(range(len(finders)), key=lambda i: (-total_key(finders[i].size), i))
+    return [finders[i] for i in order[:10]]
+
+
+_F64_BITS = struct.Struct("<d")
+
+
+def _same_bits(a: float, b: float) -> bool:
+    """``a.to_bits() == b.to_bits()``."""
+    return _F64_BITS.pack(a) == _F64_BITS.pack(b)
+
+
+def select_triple(finders: Sequence[Finder]) -> Optional[Tuple[Tuple[Finder, ...], int]]:
+    """Choose three finders that look like three corners of one code.
+
+    The three must form an ``L``: similar sizes, two similar legs at a roughly
+    right angle. The fourth corner is completed as a parallelogram. Returns the
+    clockwise quad and the index of the inferred corner in it.
+    """
+    ranked = _ranked(finders)
+    n = len(ranked)
+    best: Optional[Tuple[float, Tuple[Finder, ...], int]] = None
+    sqrt = math.sqrt
+    for a in range(n):
+        for b in range(a + 1, n):
+            for c in range(b + 1, n):
+                group = (ranked[a], ranked[b], ranked[c])
+                sizes = [f.size for f in group]
+                smin = _fmin(sizes)
+                smax = _fmax(sizes)
+                if ieee_div(smax, smin) > 1.9:
+                    continue
+                mean_size = ((sizes[0] + sizes[1]) + sizes[2]) / 3.0
+                for corner in range(3):
+                    k = group[corner]
+                    p = group[(corner + 1) % 3]
+                    q = group[(corner + 2) % 3]
+                    ux = p.x - k.x
+                    uy = p.y - k.y
+                    vx = q.x - k.x
+                    vy = q.y - k.y
+                    lu = sqrt(ux * ux + uy * uy)
+                    lv = sqrt(vx * vx + vy * vy)
+                    if lu <= 0.0 or lv <= 0.0:
+                        continue
+                    legs = ieee_div(f64_max(lu, lv), f64_min(lu, lv))
+                    cos = ieee_div(ux * vx + uy * vy, lu * lv)
+                    # canvas geometry: side / finder diameter = 880 / 120
+                    ratio = ieee_div(0.5 * (lu + lv), mean_size)
+                    if legs > 2.0 or abs(cos) > 0.5 or not 4.8 <= ratio <= 10.5:
+                        continue
+                    fourth = Finder(p.x + q.x - k.x, p.y + q.y - k.y, mean_size)
+                    quad = _order_clockwise((k, p, q, fourth))
+                    if quad is None:
+                        continue
+                    inferred = None
+                    for index, f in enumerate(quad):
+                        if _same_bits(f.x, fourth.x) and _same_bits(f.y, fourth.y):
+                            inferred = index
+                            break
+                    if inferred is None:
+                        continue
+                    score = (
+                        (ieee_div(smax, smin) - 1.0)
+                        + (legs - 1.0)
+                        + abs(cos)
+                        + abs((ratio - 7.33) / 7.33)
+                    )
+                    if best is None or score < best[0]:
+                        best = (score, quad, inferred)
+    return None if best is None else (best[1], best[2])
+
+
 def _select_quad_from(finders: Sequence[Finder]) -> Optional[Tuple[Finder, ...]]:
     if len(finders) < 4:
         return None
-    # Largest first (ties keep discovery order) so that clutter in a busy scene
-    # cannot push the real finders out of the ten candidates that are combined.
-    order = sorted(range(len(finders)), key=lambda i: (-total_key(finders[i].size), i))
-    ranked = [finders[i] for i in order[:10]]
+    ranked = _ranked(finders)
     best: Optional[Tuple[float, Tuple[Finder, ...]]] = None
     n = len(ranked)
     for a in range(n):
@@ -520,44 +625,47 @@ def select_quad(finders: Sequence[Finder]) -> Optional[Tuple[Finder, ...]]:
     round blobs in view. Within a class the candidates are ranked by size
     (largest first, ties in discovery order) and at most ten are combined.
     """
-    largest = _fmax([f.size for f in finders])
-    strong = [f for f in finders if f.size >= 0.55 * largest]
-    quad = _select_quad_from(strong)
+    quad = _select_quad_from(_strong_finders(finders))
     if quad is None:
         quad = _select_quad_from(finders)
     return quad
 
 
-def refine_center(image: Luma, finder: Finder) -> Finder:
-    """Sharpen a finder centre with an intensity-weighted centroid."""
-    if not (math.isfinite(finder.x) and math.isfinite(finder.y) and math.isfinite(finder.size)):
-        return finder
+def _centroid(image: Luma, finder: Finder) -> Optional[Finder]:
+    """The intensity-weighted centroid of the bright part of the disc of diameter
+    ``finder.size`` around the finder, or ``None`` when that disc has less than 20 levels
+    of contrast (nothing bright is there) or the finder is not finite."""
+    fx = finder.x
+    fy = finder.y
+    if not (math.isfinite(fx) and math.isfinite(fy) and math.isfinite(finder.size)):
+        return None
     half = finder.size * 0.5
     radius = int(math.ceil(half))
-    cx = int(math.floor(finder.x))
-    cy = int(math.floor(finder.y))
+    cx = int(math.floor(fx))
+    cy = int(math.floor(fy))
     w = image.width
     h = image.height
     data = image.data
-    fx = finder.x
-    fy = finder.y
+    sqrt = math.sqrt
+    # only the part of the square inside the image is visited (same pixels, same order);
+    # Python integers do not overflow, so a huge centre or radius gives the same empty or
+    # whole-image window as the reference's saturating bounds
+    x0 = max(cx - radius, 0)
+    x1 = min(cx + radius, w - 1)
+    y0 = max(cy - radius, 0)
+    y1 = min(cy + radius, h - 1)
+    xs = [(x, x + 0.5) for x in range(x0, x1 + 1)]
     samples = []
-    for dy in range(-radius, radius + 1):
-        y = cy + dy
-        if y < 0 or y >= h:
-            continue
+    append = samples.append
+    for y in range(y0, y1 + 1):
         py = y + 0.5
         ey = py - fy
         ey2 = ey * ey
         base = y * w
-        for dx in range(-radius, radius + 1):
-            x = cx + dx
-            if x < 0 or x >= w:
-                continue
-            px = x + 0.5
+        for x, px in xs:
             ex = px - fx
-            if math.sqrt(ex * ex + ey2) <= half:
-                samples.append((px, py, float(data[base + x])))
+            if sqrt(ex * ex + ey2) <= half:
+                append((px, py, float(data[base + x])))
     floor = F64_MAX
     peak = 0.0
     for _, _, v in samples:
@@ -566,7 +674,7 @@ def refine_center(image: Luma, finder: Finder) -> Finder:
         if v > peak:
             peak = v
     if peak - floor < 20.0:
-        return finder
+        return None
     threshold = floor + 0.5 * (peak - floor)
     sw = 0.0
     sx = 0.0
@@ -578,26 +686,145 @@ def refine_center(image: Luma, finder: Finder) -> Finder:
         sw += weight
         sx += weight * px
         sy += weight * py
-    if sw <= 0.0:
-        return finder
+    if not sw > 0.0:
+        return None
     return Finder(sx / sw, sy / sw, finder.size)
 
 
-def _locate_with(threshold: _Threshold, image: Luma) -> Optional[Tuple[Finder, ...]]:
+def refine_center(image: Luma, finder: Finder) -> Finder:
+    """Sharpen a finder centre with an intensity-weighted centroid.
+
+    The finder is returned unchanged when its disc has less than 20 levels of
+    contrast.
+    """
+    refined = _centroid(image, finder)
+    return finder if refined is None else refined
+
+
+def follow(image: Luma, expected: Finder) -> Optional[Finder]:
+    """Re-find a finder near where it is expected (from the previous frame's pose).
+
+    A first centroid over a disc twice the finder's diameter catches a blossom
+    that moved up to about one diameter (nothing else bright is that close to a
+    corner finder); centroids over the finder's own disc then repeat, at most
+    five times, until the centre moves less than a quarter pixel. ``None`` when
+    nothing bright is there or the result is more than 0.75 diameters from the
+    expected centre, which means the code moved too far for tracking.
+    """
+    wide = _centroid(image, Finder(expected.x, expected.y, 2.0 * expected.size))
+    if wide is None:
+        return None
+    current = Finder(wide.x, wide.y, expected.size)
+    for _ in range(5):
+        following = _centroid(image, current)
+        if following is None:
+            return None
+        ex = following.x - current.x
+        ey = following.y - current.y
+        step = math.sqrt(ex * ex + ey * ey)
+        current = following
+        if step < 0.25:
+            break
+    ex = current.x - expected.x
+    ey = current.y - expected.y
+    moved = math.sqrt(ex * ex + ey * ey)
+    return current if moved <= 0.75 * expected.size else None
+
+
+def _complete_triple(
+    finders: Sequence[Finder], quad: Sequence[Finder], missing: int
+) -> Optional[Tuple[Finder, ...]]:
+    """A blob of at least 0.3 x the finder size within 0.3 legs of the inferred corner of
+    a triple completes it into a seen quad."""
+    d = quad[missing]
+    dx = d.x
+    dy = d.y
+
+    def distance(f: Finder) -> float:
+        ex = f.x - dx
+        ey = f.y - dy
+        return math.sqrt(ex * ex + ey * ey)
+
+    leg = 0.5 * (distance(quad[(missing + 1) % 4]) + distance(quad[(missing + 3) % 4]))
+    smallest = 0.3 * d.size
+    reach = 0.3 * leg
+    fourth: Optional[Finder] = None
+    nearest = 0
+    for f in finders:
+        span = distance(f)
+        if f.size >= smallest and span <= reach:
+            # `min_by(total_cmp)`: the first of equal distances wins
+            key = total_key(span)
+            if fourth is None or key < nearest:
+                fourth = f
+                nearest = key
+    if fourth is None:
+        return None
+    full = list(quad)
+    full[missing] = fourth
+    return _order_clockwise(full)
+
+
+def candidates(image: Luma) -> Iterator[FinderSet]:
+    """Candidate finder sets for one frame, produced lazily in the order a decoder
+    should try them, so that a clean frame costs one binarisation.
+
+    For each threshold of :data:`SENSITIVITIES` in turn: four finders of the
+    largest size class that form a quad. Then, from the first threshold that had
+    them, three large finders forming a corner, completed by the nearest smaller
+    blob within 0.3 legs of where the fourth corner belongs (steep tilt makes the
+    far finder small); then the first quad that smaller blobs form; and last the
+    same three finders with the fourth corner inferred (the nearby blob may have
+    been merged ring dots, a quad may have been clutter).
+    """
+    if image.width == 0 or image.height == 0:
+        return
+    threshold = _Threshold(image)
+    completed: Optional[Tuple[Finder, ...]] = None
+    smaller: Optional[Tuple[Finder, ...]] = None
+    inferred: Optional[Tuple[Tuple[Finder, ...], int]] = None
     for sensitivity in SENSITIVITIES:
         components = _label_rows(threshold.mask_rows(sensitivity), image.width)
-        quad = select_quad(blossoms(components))
+        finders = blossoms(components)
+        strong = _strong_finders(finders)
+        if inferred is None:
+            triple = select_triple(strong)
+            if triple is not None:
+                quad, missing = triple
+                full = _complete_triple(finders, quad, missing)
+                if full is not None:
+                    completed = tuple(refine_center(image, f) for f in full)
+                corners = tuple(
+                    f if i == missing else refine_center(image, f) for i, f in enumerate(quad)
+                )
+                inferred = (corners, missing)
+        if smaller is None:
+            quad = _select_quad_from(finders)
+            if quad is not None:
+                smaller = tuple(refine_center(image, f) for f in quad)
+        quad = _select_quad_from(strong)
         if quad is not None:
-            return tuple(refine_center(image, f) for f in quad)
-    return None
+            yield FinderSet(tuple(refine_center(image, f) for f in quad), None)
+    if completed is not None:
+        yield FinderSet(completed, None)
+    if smaller is not None:
+        yield FinderSet(smaller, None)
+    if inferred is not None:
+        yield FinderSet(inferred[0], inferred[1])
+
+
+def locate_candidates(image: Luma) -> List[FinderSet]:
+    """All candidate finder sets for one frame, in the order of :func:`candidates`."""
+    return list(candidates(image))
 
 
 def locate(image: Luma) -> Optional[Tuple[Finder, ...]]:
-    """Locate the four finders of a code, clockwise from the top-left one.
+    """Locate four seen finders of a code, clockwise from the top-left one.
 
-    Progressively stricter thresholds are tried so blurred rings still separate
-    from their cores. Returns ``None`` when no plausible quadrilateral exists.
+    This is the first candidate of :func:`candidates` without an inferred
+    corner; ``None`` when no plausible quadrilateral exists.
     """
-    if image.width == 0 or image.height == 0:
-        return None
-    return _locate_with(_Threshold(image), image)
+    for found in candidates(image):
+        if found.inferred is None:
+            return found.corners
+    return None

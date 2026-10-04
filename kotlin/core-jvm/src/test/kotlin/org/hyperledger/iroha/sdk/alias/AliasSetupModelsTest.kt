@@ -895,6 +895,7 @@ class AliasSetupModelsTest {
             TEST_NETWORK_ID,
             account(0x22),
             creationTimeMs = 49_000,
+            executable = Executable.ivm(byteArrayOf()),
             timeToLiveMs = 1_000,
             feePayment = FeePaymentIntent.authority(emptyList()),
         )

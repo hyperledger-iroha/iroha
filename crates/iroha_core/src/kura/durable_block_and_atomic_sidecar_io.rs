@@ -56,7 +56,7 @@ impl Kura {
     /// Append a debug dump while the caller holds prune and canonical-chain
     /// locks. Pending canonical bytes are captured before the lower-order
     /// geometry/sidecar capacity locks.
-    fn append_debug_block_dump(&self, block: &Arc<SignedBlock>) {
+    fn append_debug_block_dump(&self, block: &iroha_data_model::block::SharedSignedBlock) {
         let path_guard = self.block_plain_text_path.lock();
         let Some(path) = path_guard.clone() else {
             return;
@@ -191,13 +191,17 @@ impl Kura {
         Ok((before, after.len()))
     }
     #[cfg(test)]
-    fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
+    fn persist_block_at_height(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+        height: u64,
+    ) -> Result<()> {
         let write_guard = self.lock_block_store_for_write();
         self.persist_block_at_height_while_locked(block, height, &write_guard)
     }
     fn persist_block_at_height_while_locked(
         &self,
-        block: &Arc<SignedBlock>,
+        block: &iroha_data_model::block::SharedSignedBlock,
         height: u64,
         _write_guard: &parking_lot::MutexGuard<'_, ()>,
     ) -> Result<()> {
@@ -311,7 +315,10 @@ impl Kura {
         }
         Ok(())
     }
-    fn store_block_durable(&self, block: &Arc<SignedBlock>) -> Result<()> {
+    fn store_block_durable(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+    ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -411,7 +418,7 @@ impl Kura {
             drop(write_guard);
             return Err(err);
         }
-        block_data.push((block_hash, Some(Arc::clone(block))));
+        block_data.push((block_hash, Some(block.clone())));
         Self::drop_persisted_blocks(
             &mut block_data,
             actual_height_usize,
@@ -436,7 +443,10 @@ impl Kura {
         Ok(())
     }
     fn validate_next_or_existing_block(
-        block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
+        block_data: &[(
+            HashOf<BlockHeader>,
+            Option<iroha_data_model::block::SharedSignedBlock>,
+        )],
         actual_height: u64,
         actual_height_usize: usize,
         block_hash: HashOf<BlockHeader>,

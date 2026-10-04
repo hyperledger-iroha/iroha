@@ -7,7 +7,6 @@ use crate::state::{
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use std::{
-    future::Future,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Wake, Waker},
 };
@@ -39,13 +38,13 @@ impl Wake for AfterUnlockProbe {
     }
 }
 
-fn original_refund_wait(budget: &AllocationBudget) -> iroha_allocation::release::ReleaseFuture {
+fn original_refund_wait(budget: &AllocationBudget) -> iroha_allocation::release::ReleaseWait {
     assert!(
         budget.reserved_bytes() > 0,
         "the original State owns real credits"
     );
     match budget.try_reserve_bytes(budget.limit_bytes()) {
-        Err(AllocationRefusal::Capacity { release, .. }) => release.wait_for_release(),
+        Err(AllocationRefusal::Capacity { release, .. }) => release,
         other => panic!("expected original occupied-pool refusal, got {other:?}"),
     }
 }
@@ -53,6 +52,11 @@ fn original_refund_wait(budget: &AllocationBudget) -> iroha_allocation::release:
 fn replay_retirement(unwind: bool) {
     let fixture = StrictReplayFixture::new();
     let mut state = fixture.replay_state(Arc::clone(&fixture.kura));
+    let mut commit_registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+    let mut registrations = std::array::from_fn::<_, 4, _>(|_| {
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget())
+    });
     REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL.with(|armed| armed.set(true));
     let refusal = replay_blocks_from_kura_range(&fixture.kura, &mut state, 1, 1)
         .expect_err("retain an actually executed and fully prepared replay image");
@@ -78,31 +82,20 @@ fn replay_retirement(unwind: bool) {
         Ok(_) => panic!("the original commit fence is already held"),
     };
     let setup_release = setup_guard.release_deferred();
-    let mut commit_future = Box::pin(commit_wait.wait_for_release());
     let commit_waker = Waker::from(Arc::clone(&commit_probe));
     let mut commit_context = Context::from_waker(&commit_waker);
     assert!(
-        commit_future
-            .as_mut()
-            .poll(&mut commit_context)
+        commit_registration
+            .poll_wait(&commit_wait, &mut commit_context)
             .is_pending()
     );
 
-    let mut futures = [
-        state
-            .block_hashes
-            .map()
-            .unwrap()
-            .observe_reader_release()
-            .wait_for_release(),
-        state
-            .transactions
-            .reader_release_wait_for_tests()
-            .wait_for_release(),
+    let observations = [
+        state.block_hashes.map().unwrap().observe_reader_release(),
+        state.transactions.reader_release_wait_for_tests(),
         original_refund_wait(&hash_budget),
         original_refund_wait(&membership_budget),
-    ]
-    .map(Box::pin);
+    ];
     let probes = std::array::from_fn::<_, 4, _>(|_| {
         Arc::new(AfterUnlockProbe {
             commit: Arc::clone(&commit),
@@ -113,11 +106,12 @@ fn replay_retirement(unwind: bool) {
     let wakers = probes
         .each_ref()
         .map(|probe| Waker::from(Arc::clone(probe)));
-    for (future, waker) in futures.iter_mut().zip(&wakers) {
+    for ((registration, observation), waker) in
+        registrations.iter_mut().zip(&observations).zip(&wakers)
+    {
         assert!(
-            future
-                .as_mut()
-                .poll(&mut Context::from_waker(waker))
+            registration
+                .poll_wait(observation, &mut Context::from_waker(waker))
                 .is_pending()
         );
     }
@@ -147,14 +141,22 @@ fn replay_retirement(unwind: bool) {
         membership_budget.reserved_bytes() < reserved_before,
         "the displaced State really retired after unlock; retaining it forever cannot pass",
     );
-    assert!(commit_future.as_mut().poll(&mut commit_context).is_ready());
-    for ((future, waker), probe) in futures.iter_mut().zip(&wakers).zip(&probes) {
+    assert!(
+        commit_registration
+            .poll_wait(&commit_wait, &mut commit_context)
+            .is_ready()
+    );
+    for (((registration, observation), waker), probe) in registrations
+        .iter_mut()
+        .zip(&observations)
+        .zip(&wakers)
+        .zip(&probes)
+    {
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         assert!(!probe.blocked.load(Ordering::SeqCst));
         assert!(
-            future
-                .as_mut()
-                .poll(&mut Context::from_waker(waker))
+            registration
+                .poll_wait(observation, &mut Context::from_waker(waker))
                 .is_ready()
         );
     }

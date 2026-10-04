@@ -4,8 +4,10 @@
 //! Private result endpoints derive each byte mask; no caller mask, initialized
 //! count or selected subset may substitute. The source Owner packets are the
 //! original lifecycle/result reads, emitted once and shared by every cell bank.
-// TODO: Join the complete fixed scan schedule, authenticated callable lookup,
-// typed-word checks, gas/fault dispatcher and completed-root output publication.
+// The callable_lookup component joins original active-generation operands and
+// artifact-derived result counts to every cell in the complete fixed scan.
+// TODO: Join typed-word checks, gas/fault dispatch and completed-root output
+// publication to the complete invocation and its original initialization.
 // Failed returns must have no lifecycle/copyback commit, with their native error
 // separately proved. No instruction may interleave these atomic commit slots.
 
@@ -14,6 +16,8 @@ use packet::{
     AFTER, AFTER_TAG, BEFORE, BEFORE_TAG, CLOCK, ENABLED, GENERATION, INDEX, KEY, SPACE, Space, VM,
     WRITE,
 };
+
+pub(super) mod native_witness;
 
 /// A 64-KiB result interval shifted by eight bytes spans 4097 absolute cells.
 pub(super) const CELLS: usize = 4097;
@@ -104,7 +108,7 @@ fn padded_limb(bits: &[F], limb: usize) -> F {
 
 /// Constrain one mandatory public cell slot of a successful atomic return.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: Schedule,
     row: &[F; WIDTH],
     ports: Ports<'_>,
@@ -182,6 +186,8 @@ pub(super) fn append_residues(
     for lower in &row[LENGTH..LENGTH + 16] {
         out.push(row[LENGTH + 16].mul(*lower));
     }
+    // Admitted callable results have one schema root and at least one word,
+    // including Unit. Generic native empty regions are not compiled returns.
     out.push(length.mul(row[LENGTH_INVERSE]).sub(selected));
     out.push(F::ONE.sub(selected).mul(row[LENGTH_INVERSE]));
     out.push(
@@ -321,21 +327,15 @@ pub(super) struct OperandPorts<'a> {
     pub(super) packets: [&'a [F; packet::WIDTH]; OPERAND_PORTS],
 }
 
-/// Exact callable fields borrowed from the authenticated program lookup.
-pub(super) struct ReturnedCallable<'a> {
-    pub(super) entry_pc: &'a [F; 4],
-    pub(super) result_words: F,
-}
-
 /// Bind successful return operands once, using the same first-cell witness and
 /// original active packet constrained by `append_residues` and the lifecycle.
 /// The caller must use original columns, not separately supplied matching data.
 /// This checks successful values; failed native word/gas/SP ordering is separate.
 pub(super) fn append_operand_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: OperandSchedule,
     row: &[F; WIDTH],
-    callable: ReturnedCallable<'_>,
+    callable: &super::callable_lookup::SelectedCallable,
     ports: OperandPorts<'_>,
 ) {
     let residue_start = out.len();
@@ -371,18 +371,18 @@ pub(super) fn append_operand_residues(
                 .sub(padded_limb(&row[LENGTH + 3..LENGTH_INVERSE], limb)),
         );
         out.push(ports.packets[2][BEFORE + limb].sub(ports.packets[3][BEFORE + limb]));
-        out.push(ports.packets[4][BEFORE + limb].sub(callable.entry_pc[limb]));
+        out.push(ports.packets[4][BEFORE + limb].sub(callable.entry_pc()[limb]));
     }
     out.push(
         callable
-            .result_words
+            .result_words()
             .sub(pack(&row[LENGTH + 3..LENGTH_INVERSE])),
     );
     debug_assert_eq!(out.len() - residue_start, OPERAND_CONSTRAINTS);
 }
 
 fn header(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     port: &[F; packet::WIDTH],
     vm: u8,
     space: packet::Space,
@@ -422,4 +422,4 @@ fn header(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -327,6 +327,16 @@ consumption checks apply. The callback must still validate its field structure;
 framing alone grants no canonical-value or finality authority. This API changes
 no wire bytes or layout.
 
+`core::borrow_canonical_text<T: NominalText>` borrows the single UTF-8 payload
+of an explicitly declared nominal text type. The original type supplies its
+literal frame identity, alignment and model byte ceiling. Existing header,
+checksum, length and exact-consumption checks are followed by the same canonical
+streaming frame writer, with no owned string, aligned copy or decode-scope
+allocation. Outer field limits remain active. This establishes only canonical
+framing: model syntax and exact NFC validation remain separate, with scratch
+admitted before normalization. Name and StatePath share the payload reader and
+canonical NFC predicate with their owned decoders. This changes no wire layout.
+
 Hosts decoding untrusted data with narrower semantic bounds must additionally
 use `decode_from_bytes_with_limits` (or `decode_from_reader_with_limits`) and an
 explicit `DecodeLimits` value. The explicit byte-slice APIs enter a private
@@ -352,12 +362,38 @@ canonical nesting ceiling remain format rejections. This query
 adds no wire data, allocation owner or release notification, and does not retry
 the decoder.
 
+Canonical artifact admission uses `decode_canonical_for_admission` for the complete
+single decode and exact canonical-byte comparison. Its opaque result distinguishes
+actual allocator failure, an original enclosing admission-budget refusal, and invalid
+input. Canonical/default/schema budgets are checked before enclosing operational budgets
+at each resource check. The original emitting layer and fresh attempt family are carried
+privately in the Rust error, so equal numeric ceilings, cumulative consumption and nested
+attempts do not guess provenance. Reconstructing a resource error from copied fields, or
+returning one retained from an earlier attempt, cannot establish current local origin.
+The numeric active-limit helper never relabels a carried protocol error. Canonical
+re-encoding failures without decoder provenance remain invalid input. This adds no wire
+fields, second decode, allocation-pool owner or release notification. IVM `CNTR` and
+`DBG1` parsing preserve these local refusals as unmetered execution deferrals; whole-image
+and schema limits remain deterministic artifact rejections. The JSON parser and bounded
+canonical writer preserve the same opaque refusal across binary `Json` fields, including
+trigger metadata; copying diagnostic fields or formatting JSON errors cannot replace its
+scope identity. JSON body, nesting, and arithmetic-overflow bounds remain protocol failures.
+
 Rust error adapters retain these refusals through
 `core::Error::decode_resource_error` and the copyable `core::DecodeResourceError`.
-Conversion back to `Error` preserves every original variant and field without
-allocating a diagnostic. Sumeragi's native codec and the model evidence decoder
+Conversion back to `Error` preserves every resource field without allocating a
+diagnostic, but deliberately does not recreate private admission-scope provenance. Sumeragi's native codec and the model evidence decoder
 preserve this category, so a scoped refusal is not reported as malformed evidence.
 This error representation changes no V1 frame, schema or signed bytes.
+
+Standard-library B-tree ownership uses the pinned toolchain's node geometry.
+A known tree of at most eleven entries charges one complete leaf, including a
+conservative bound for every possible field order and alignment. Larger trees
+and aggregate distributions retain the largest internal-node bound. The
+allocator census checks actual insertion requests through the split boundary,
+multiple insertion orders and over-aligned keys/values; outer allocation scopes
+still refuse before insertion when the full charge does not fit. This changes
+neither the query ceiling nor canonical wire bytes.
 
 Both `Ok` and `Err` branches of the result slice decoder enter the shared
 nesting guard before decoding their bounded child. The guard restores the
@@ -1171,3 +1207,14 @@ fields. The 64 KiB result-preimage/shared-witness limit is unchanged, including
 31-member boundaries with frozen preparations. The standalone `ScheduleOutcome`
 codec still represents its full owned graph; it is not the result frame's
 schedule codec. There is no decoder for the repeated-successor result layout.
+
+## Finite count-first source traversal
+
+`core::encoded_payload_len_bounded` and `encoded_frame_len_bounded` share a finite
+byte allowance across nested count writers. Real leaf and framing writes consume
+that allowance once; incorporating an already measured child neither repeats its
+traversal nor charges it twice. An exceeded allowance stays rejected even if the
+serializer ignores the write error. The framed helper includes the canonical
+header and alignment padding. Arbitrary work before a serializer emits bytes
+remains subject to the caller's source-specific work checks. Wire layouts and
+canonical comparisons are unchanged.

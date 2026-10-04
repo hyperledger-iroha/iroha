@@ -126,7 +126,7 @@ pub(super) struct OrdinaryBootstrapStateForTestingV1 {
     pub(super) credential: KagemushaOrdinaryAppCredentialV1,
     pub(super) issuer_table: OrdinaryIssuerTableV1,
     // Retain the authenticated predecessor counter in the returned fixture.
-    pub(super) _previous_counter: Option<u32>,
+    pub(super) previous_counter: Option<u32>,
     pub(super) guard_eq_protocol: PlonkProtocol<EqAffine>,
     pub(super) guard_ep_protocol: PlonkProtocol<EpAffine>,
     pub(super) keys: Arc<StateKeys>,
@@ -747,7 +747,7 @@ pub(super) fn generate_ordinary_bootstrap_state_with_held_keys_for_testing_v1(
         state: f.state,
         credential: f.credential,
         issuer_table: f.issuer_table,
-        _previous_counter: f.previous_counter,
+        previous_counter: f.previous_counter,
         guard_eq_protocol: guard.eq.protocol.clone(),
         guard_ep_protocol: guard.ep.protocol.clone(),
         keys,

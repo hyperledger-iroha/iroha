@@ -7,7 +7,6 @@ use iroha_data_model::musubi::{MusubiArtifactGovernanceStateV1, MusubiStorageAva
 use std::{
     alloc::Layout,
     future::Future,
-    pin::pin,
     task::{Context, Poll, Waker},
 };
 
@@ -63,6 +62,10 @@ fn universal_capacity_refusal_keeps_only_the_original_release_owner() {
     let bytes = scratch_bytes(&world);
     let budget = complete_projection_budget(&world);
     let complete_limit = budget.limit_bytes();
+    budget.set_limit_bytes(
+        complete_limit + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let held = budget.try_reserve_bytes(complete_limit).unwrap();
     let ExecutionAttemptError::Deferred(reason) =
         validate_musubi_universal_projection_cut(&world.view(), ProjectionCut::Current, &budget)
@@ -79,7 +82,7 @@ fn universal_capacity_refusal_keeps_only_the_original_release_owner() {
         panic!("original finite pool refusal")
     };
     assert_eq!(*requested_bytes, bytes);
-    let mut wait = pin!(release.clone().wait_for_release());
+    let mut wait = Box::pin(release.clone().wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(bytes);
@@ -92,6 +95,8 @@ fn universal_capacity_refusal_keeps_only_the_original_release_owner() {
     ));
     drop(held);
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+    drop(wait);
+    drop(registration);
     budget.set_limit_bytes(complete_limit);
     validate_musubi_universal_projection_cuts(&world, &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), 0);

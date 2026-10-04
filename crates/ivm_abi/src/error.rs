@@ -120,6 +120,12 @@ pub enum ExecutionDeferral {
     /// Governed verifier artifacts are not loaded or require an authenticated reload.
     /// This local availability condition cannot become a transaction rejection.
     VerifierArtifactsUnavailable,
+    /// Original local committed execution history is missing, corrupt, or not readable.
+    /// This is never evidence that the signed transaction was rejected.
+    CanonicalHistoryUnavailable,
+    /// A bounded native ancestry read exhausted its local source-work or byte allowance.
+    /// No allocator wake source is implied by this independent read limit.
+    CanonicalHistoryCapacity,
 }
 impl fmt::Display for ExecutionDeferral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -127,6 +133,10 @@ impl fmt::Display for ExecutionDeferral {
             Self::AllocationUnavailable => "local allocation unavailable",
             Self::ActiveMemoryCapacity => "local active execution memory capacity unavailable",
             Self::VerifierArtifactsUnavailable => "local governed verifier artifacts unavailable",
+            Self::CanonicalHistoryUnavailable => "local canonical execution history unavailable",
+            Self::CanonicalHistoryCapacity => {
+                "local canonical execution history read capacity unavailable"
+            }
         })
     }
 }
@@ -513,9 +523,58 @@ impl StdError for VMError {
     }
 }
 
+/// Preserve a local operational refusal when mapping a deterministic decode fault.
+///
+/// The complete original error carries its finite pool/release observation.
+/// Converting it to malformed input would make transaction validity depend on
+/// local resource pressure. Semantic failures retain the caller's existing map.
+pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
+    if error.execution_deferral().is_some() {
+        error
+    } else {
+        malformed
+    }
+}
+
 #[cfg(test)]
 mod execution_deferral_tests {
-    use super::{ExecutionDeferral, VMError};
+    use super::{ExecutionDeferral, VMError, preserve_execution_deferral};
+
+    #[test]
+    fn decode_mapping_keeps_complete_operational_errors_and_existing_semantic_faults() {
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let error = VMError::AllocationDeferred(refusal);
+        assert_eq!(
+            preserve_execution_deferral(error.clone(), VMError::NoritoInvalid),
+            error
+        );
+        for reason in [
+            ExecutionDeferral::AllocationUnavailable,
+            ExecutionDeferral::ActiveMemoryCapacity,
+            ExecutionDeferral::VerifierArtifactsUnavailable,
+        ] {
+            let error = VMError::ExecutionDeferred(reason);
+            assert_eq!(
+                preserve_execution_deferral(error.clone(), VMError::DecodeError),
+                error
+            );
+        }
+        let wrapped = VMError::Metered {
+            gas: 17,
+            source: Box::new(error),
+        };
+        assert_eq!(
+            preserve_execution_deferral(wrapped.clone(), VMError::DecodeError),
+            wrapped
+        );
+        assert_eq!(
+            preserve_execution_deferral(VMError::MemoryOutOfBounds, VMError::NoritoInvalid),
+            VMError::NoritoInvalid
+        );
+        drop(occupied);
+    }
 
     #[test]
     fn contract_abort_preserves_authenticated_text_and_identity_through_metering() {
@@ -598,5 +657,20 @@ mod execution_deferral_tests {
             original.split_metered(),
             (None, VMError::ExecutionDeferred(reason))
         );
+    }
+    #[test]
+    fn canonical_history_deferrals_cannot_be_metered_as_vm_faults() {
+        for reason in [
+            ExecutionDeferral::CanonicalHistoryUnavailable,
+            ExecutionDeferral::CanonicalHistoryCapacity,
+        ] {
+            let original = VMError::ExecutionDeferred(reason);
+            assert_eq!(VMError::metered(777, original.clone()), original);
+            assert_eq!(original.execution_deferral(), Some(reason));
+            assert_eq!(
+                original.split_metered(),
+                (None, VMError::ExecutionDeferred(reason))
+            );
+        }
     }
 }

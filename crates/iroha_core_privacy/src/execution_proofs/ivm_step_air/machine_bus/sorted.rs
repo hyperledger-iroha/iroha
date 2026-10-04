@@ -8,12 +8,22 @@ fn source_word(sources: Sources<'_>, operand: usize) -> F {
     word::pack(sources.bits(operand), 1)
 }
 
-pub(super) fn append_residues(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+pub(super) fn append_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    row: &[F],
+    next: &[F],
+    fixed: &[F],
+) {
     append_with_count_boundary(out, row, next, fixed, CountBoundary::PublicExpected);
 }
 
 /// Private ordered/sorted counts agree at the last row without being public inputs.
-pub(super) fn append_private_residues(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+pub(super) fn append_private_residues(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    row: &[F],
+    next: &[F],
+    fixed: &[F],
+) {
     append_with_count_boundary(out, row, next, fixed, CountBoundary::PrivateEquality);
 }
 
@@ -24,7 +34,7 @@ enum CountBoundary {
 }
 
 fn append_with_count_boundary(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     row: &[F],
     next: &[F],
     fixed: &[F],
@@ -33,12 +43,13 @@ fn append_with_count_boundary(
     let start = out.len();
     let sources = Sources::new(&row[SOURCES..COMPARE]);
     sources.append_residues(out);
-    out.extend(branch::bank_residues(
+    branch::append_bank_residues(
+        out,
         &row[COMPARE..CONTROLS],
         std::array::from_fn(|operand| std::array::from_fn(|limb| sources.limb(operand, limb))),
         [sources.sign(0), sources.sign(1)],
         [F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ONE, F::ZERO],
-    ));
+    );
     append_packet_shape(out, row, next, fixed);
     append_source_routes(out, row, fixed);
     append_state_transitions(out, row, next, fixed, boundary);
@@ -46,7 +57,12 @@ fn append_with_count_boundary(
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }
 
-fn append_packet_shape(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+fn append_packet_shape(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    row: &[F],
+    next: &[F],
+    fixed: &[F],
+) {
     use packet::*;
     let a = &row[ORDERED..SORTED];
     let b = &row[SORTED..PREVIOUS];
@@ -102,7 +118,11 @@ fn append_packet_shape(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
     }
 }
 
-fn append_source_routes(out: &mut Vec<F>, row: &[F], fixed: &[F]) {
+fn append_source_routes(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    row: &[F],
+    fixed: &[F],
+) {
     use packet::*;
     let b = &row[SORTED..PREVIOUS];
     let previous = &row[PREVIOUS..SOURCES];
@@ -152,7 +172,7 @@ fn append_source_routes(out: &mut Vec<F>, row: &[F], fixed: &[F]) {
 }
 
 fn append_state_transitions(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     row: &[F],
     next: &[F],
     fixed: &[F],
@@ -253,7 +273,11 @@ fn append_state_transitions(
     }
 }
 
-fn append_read_preservation(out: &mut Vec<F>, row: &[F], fixed: &[F]) {
+fn append_read_preservation(
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+    row: &[F],
+    fixed: &[F],
+) {
     use packet::*;
     let b = &row[SORTED..PREVIOUS];
     let previous = &row[PREVIOUS..SOURCES];

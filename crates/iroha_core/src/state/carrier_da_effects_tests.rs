@@ -87,16 +87,11 @@ fn ahead_disposable_reset_journal_cannot_suppress_original_visibility() {
         prepared.identity_visible.as_slice()
     );
     let post = {
+        let nexus = state.nexus_snapshot();
         let mut generation_notice = state.state_view_publication();
         let _writer = state.state_write_lock.lock();
         let generation = generation_notice.begin();
-        publish(
-            prepared,
-            &state,
-            &state.nexus_snapshot().lane_config,
-            &generation,
-            false,
-        )
+        publish(prepared, &state, &nexus.lane_config, &generation, false)
     };
     assert!(
         !post.persist,
@@ -158,16 +153,11 @@ fn retired_lane_keeps_original_bundle_position_and_reserved_identity() {
     );
     let original = prepared.pending.bundle.commitments.clone();
     {
+        let nexus = state.nexus_snapshot();
         let mut generation_notice = state.state_view_publication();
         let _writer = state.state_write_lock.lock();
         let generation = generation_notice.begin();
-        let post = publish(
-            prepared,
-            &state,
-            &state.nexus_snapshot().lane_config,
-            &generation,
-            true,
-        );
+        let post = publish(prepared, &state, &nexus.lane_config, &generation, true);
         assert!(post.persist);
     }
     let commitments = state.da_commitments.read();
@@ -269,15 +259,18 @@ fn post_persistence_uses_captured_cursor_without_new_reader_release() {
     };
 
     let state = state();
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let prepared = prepare(&state, 1, vec![record(LaneId::SINGLE, 9)]);
     assert!(!state.da_shard_cursor_journal_path().as_os_str().is_empty());
+    // Capture the authenticated catalog before making publication generation odd.
+    let nexus = state.nexus_snapshot();
     let mut indexes = effect_publication::StateEffectLocks::new(&state);
     let mut notice = state.state_view_publication();
     let commit = state.state_commit_lock.lock();
     let write = state.state_write_lock.lock();
     indexes.try_prepare().expect("original effect writers");
     let generation = notice.begin();
-    let nexus = state.nexus_snapshot();
     let mut post = prepared.publish(&state, &mut indexes, &nexus.lane_config, &generation, true);
     indexes
         .da_shard_cursors
@@ -300,7 +293,7 @@ fn post_persistence_uses_captured_cursor_without_new_reader_release() {
         .da_shard_cursors
         .try_write_or_wait()
         .expect_err("original writer held");
-    let mut pending = std::pin::pin!(wait.wait_for_release());
+    let mut pending = std::pin::pin!(wait.wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert!(pending.as_mut().poll(&mut context).is_pending());
     drop(generation);

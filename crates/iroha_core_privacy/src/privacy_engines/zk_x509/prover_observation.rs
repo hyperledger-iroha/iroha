@@ -41,8 +41,43 @@ pub(super) enum PhaseV1 {
     QueryJoinedTransform,
     CompositionArithmeticFixedRows,
     CompositionArithmeticFixedInverseTransform,
+    CompositionProviders,
+    CompositionRegisteredProviders,
+    CompositionRegistrationFold,
+    CompositionTerminalLinks,
+    CompositionKeyLinks,
+    CompositionShaUnion,
+    CompositionCaRetention,
+    CompositionCaLinks,
+    CompositionBlinding,
+    CompositionFp4Evaluations,
+    CompositionCommitment,
+    SourceByteMemoryBase,
+    SourceByteMemoryAux,
+    SourceStrictDerBase,
+    SourceStrictDerAux,
+    SourceRfc5280Base,
+    SourceRfc5280Aux,
+    SourceSha256CallBusBase,
+    SourceSha256CallBusAux,
+    SourceCaAccumulatorBase,
+    SourceCaAccumulatorAux,
+    SourceProjectionBase,
+    SourceProjectionAux,
+    SourceP256ArithmeticBase,
+    SourceP256ArithmeticAux,
+    SourceP256ReductionBase,
+    SourceP256ReductionAux,
+    SourceP256LowSBase,
+    SourceP256LowSAux,
+    SourceP256WindowBase,
+    SourceP256WindowAux,
+    SourceP256ValueBusBase,
+    SourceP256ValueBusAux,
+    SourceP256ScalarBitBusBase,
+    SourceP256ScalarBitBusAux,
 }
-const PHASES: [PhaseV1; 30] = [
+const PHASES: [PhaseV1; 65] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -73,6 +108,41 @@ const PHASES: [PhaseV1; 30] = [
     PhaseV1::QueryJoinedTransform,
     PhaseV1::CompositionArithmeticFixedRows,
     PhaseV1::CompositionArithmeticFixedInverseTransform,
+    PhaseV1::CompositionProviders,
+    PhaseV1::CompositionRegisteredProviders,
+    PhaseV1::CompositionRegistrationFold,
+    PhaseV1::CompositionTerminalLinks,
+    PhaseV1::CompositionKeyLinks,
+    PhaseV1::CompositionShaUnion,
+    PhaseV1::CompositionCaRetention,
+    PhaseV1::CompositionCaLinks,
+    PhaseV1::CompositionBlinding,
+    PhaseV1::CompositionFp4Evaluations,
+    PhaseV1::CompositionCommitment,
+    PhaseV1::SourceByteMemoryBase,
+    PhaseV1::SourceByteMemoryAux,
+    PhaseV1::SourceStrictDerBase,
+    PhaseV1::SourceStrictDerAux,
+    PhaseV1::SourceRfc5280Base,
+    PhaseV1::SourceRfc5280Aux,
+    PhaseV1::SourceSha256CallBusBase,
+    PhaseV1::SourceSha256CallBusAux,
+    PhaseV1::SourceCaAccumulatorBase,
+    PhaseV1::SourceCaAccumulatorAux,
+    PhaseV1::SourceProjectionBase,
+    PhaseV1::SourceProjectionAux,
+    PhaseV1::SourceP256ArithmeticBase,
+    PhaseV1::SourceP256ArithmeticAux,
+    PhaseV1::SourceP256ReductionBase,
+    PhaseV1::SourceP256ReductionAux,
+    PhaseV1::SourceP256LowSBase,
+    PhaseV1::SourceP256LowSAux,
+    PhaseV1::SourceP256WindowBase,
+    PhaseV1::SourceP256WindowAux,
+    PhaseV1::SourceP256ValueBusBase,
+    PhaseV1::SourceP256ValueBusAux,
+    PhaseV1::SourceP256ScalarBitBusBase,
+    PhaseV1::SourceP256ScalarBitBusAux,
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -85,7 +155,6 @@ struct PhaseCountV1 {
 }
 
 /// Public counters observed from completed MAIN transform calls, separated by use.
-#[derive(Default)]
 pub(super) struct ReceiptV1 {
     // Identity prevents an accidentally long-lived timer from writing into a
     // later diagnostic on this same thread. The token contains no data.
@@ -107,6 +176,28 @@ pub(super) struct ReceiptV1 {
     fixed_inverse_columns: u64,
     fixed_forward_butterflies: u64,
     fixed_inverse_butterflies: u64,
+}
+impl Default for ReceiptV1 {
+    fn default() -> Self {
+        Self {
+            scope: std::rc::Rc::new(()),
+            phases: [PhaseCountV1::default(); PHASES.len()],
+            policies: [0; 9],
+            cpu_calls: 0,
+            cpu_columns: 0,
+            metal_calls: 0,
+            metal_columns: 0,
+            failures: 0,
+            fixed_backend_columns: [[0; 2]; 2],
+            quotient_backend_columns: [0; 2],
+            native_replay_backend_columns: [0; 2],
+            fixed_failures: 0,
+            fixed_forward_columns: 0,
+            fixed_inverse_columns: 0,
+            fixed_forward_butterflies: 0,
+            fixed_inverse_butterflies: 0,
+        }
+    }
 }
 thread_local! {
     static ACTIVE: RefCell<Option<ReceiptV1>> = const { RefCell::new(None) };
@@ -330,6 +421,81 @@ impl ReceiptV1 {
 mod tests {
     use super::*;
     #[test]
+    fn fine_phase_nested_counts_remain_separate_without_recording_payloads() {
+        let observation = ObservationV1::begin_v1();
+        let outer = PhaseTimerV1::start_v1(PhaseV1::Composition);
+        let middle = PhaseTimerV1::start_v1(PhaseV1::CompositionKeyLinks);
+        PhaseTimerV1::start_v1(PhaseV1::SourceP256ValueBusBase).complete_v1();
+        middle.complete_v1();
+        outer.complete_v1();
+        let receipt = observation.finish_v1();
+        let parent = receipt.phases[PhaseV1::Composition as usize];
+        let child = receipt.phases[PhaseV1::CompositionKeyLinks as usize];
+        let source = receipt.phases[PhaseV1::SourceP256ValueBusBase as usize];
+        assert!(parent.elapsed >= child.elapsed && child.elapsed >= source.elapsed);
+        assert_eq!(
+            receipt.phases.iter().map(|count| count.calls).sum::<u64>(),
+            3
+        );
+        assert_eq!(
+            receipt
+                .phases
+                .iter()
+                .map(|count| count.completed)
+                .sum::<u64>(),
+            3
+        );
+        let text = receipt.public_text_v1();
+        for line in text.lines().filter(|line| line.starts_with("phase=")) {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            assert_eq!(fields.len(), 6);
+            let label = fields[0].strip_prefix("phase=").unwrap();
+            assert!(PHASES.iter().any(|phase| format!("{phase:?}") == label));
+            for (field, key) in
+                fields[1..]
+                    .iter()
+                    .zip(["calls", "completed", "interrupted", "unwound", "seconds"])
+            {
+                let (actual_key, value) = field.split_once('=').unwrap();
+                assert_eq!(actual_key, key);
+                assert!(value.chars().all(|c| c.is_ascii_digit() || c == '.'));
+            }
+        }
+    }
+
+    #[test]
+    fn fine_phase_inventory_is_fixed_unique_and_preserves_every_old_phase() {
+        assert_eq!(PHASES.len(), 65);
+        let observation = ObservationV1::begin_v1();
+        for (index, phase) in PHASES.iter().copied().enumerate() {
+            assert_eq!(phase as usize, index);
+            PhaseTimerV1::start_v1(phase).complete_v1();
+        }
+        let receipt = observation.finish_v1();
+        assert!(receipt.phases.iter().all(|count| count.calls == 1
+            && count.completed == 1
+            && count.interrupted == 0
+            && count.unwound == 0));
+        let text = receipt.public_text_v1();
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("phase="))
+                .count(),
+            65
+        );
+        for phase in [
+            PhaseV1::Composition,
+            PhaseV1::CompositionRegistration,
+            PhaseV1::CompositionCaLinks,
+            PhaseV1::CompositionFp4Evaluations,
+            PhaseV1::SourceStrictDerBase,
+            PhaseV1::SourceP256ScalarBitBusAux,
+        ] {
+            assert!(text.contains(&format!("phase={phase:?} calls=1 completed=1")));
+        }
+    }
+
+    #[test]
     fn first_pass_observation_reports_combined_phases_and_keeps_sampling_subphases() {
         let observation = ObservationV1::begin_v1();
         PhaseTimerV1::start_v1(PhaseV1::BaseSampleAndCommit).complete_v1();
@@ -467,7 +633,8 @@ mod tests {
 
     #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
-        assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
+        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let observation = ObservationV1::begin_v1();
         std::thread::spawn(|| completed_transform_v1(true, 8))
             .join()
@@ -526,7 +693,8 @@ mod tests {
         .join()
         .unwrap();
         let receipt = observation.finish_v1();
-        assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
+        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         for phase in phases {
             let count = receipt.phases[phase as usize];
             assert_eq!(count.calls, 3);
@@ -568,7 +736,8 @@ mod tests {
             assert_eq!(count.unwound, 1);
         }
         assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
-        assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
+        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let next = ObservationV1::begin_v1();
         stale.complete_v1();
         let receipt = next.finish_v1();

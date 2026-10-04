@@ -25,7 +25,8 @@ use super::{
     run,
     scenario::{Fault, Profile, Scenario},
     scenarios,
-    world::{World, seeds},
+    sweep::{Failures, fold_seeds},
+    world::{World, seed_iter},
 };
 use crate::{
     api::{Event, HaltReason},
@@ -168,20 +169,23 @@ fn divergent_nodes_halted(world: &World) -> Result<(), String> {
 /// may halt, and it must (MS34).
 #[test]
 fn f21_divergent_executor_halts() {
-    let mut passed = 0usize;
-    let mut failures = Vec::new();
-    for seed in seeds(default_seeds()) {
-        let mut world = World::new(scenarios::f21(seed));
-        match world.run().and_then(|()| divergent_nodes_halted(&world)) {
-            Ok(()) => passed += 1,
-            Err(report) => failures.push((seed, report)),
-        }
-    }
-    eprintln!("F21+O3: {passed} seeds passed, {} failed", failures.len());
-    if let Some((seed, report)) = failures.first() {
-        let seeds: Vec<u64> = failures.iter().map(|(s, _)| *s).collect();
-        panic!("F21+O3: failing seeds {seeds:?}; first (seed {seed}):\n{report}");
-    }
+    let mut failures = Failures::default();
+    fold_seeds(
+        seed_iter(default_seeds()),
+        |seed| {
+            let mut world = World::new(scenarios::f21(seed));
+            world.run().and_then(|()| divergent_nodes_halted(&world))
+        },
+        |seed, result| {
+            failures.observe(seed, result);
+        },
+    );
+    eprintln!(
+        "F21+O3: {} seeds passed, {} failed",
+        failures.passed,
+        failures.failed()
+    );
+    failures.finish("F21+O3");
 }
 
 // ---- ML14: the builder quarantines on PayloadRejected (§4.2, §12.2) -----------------------

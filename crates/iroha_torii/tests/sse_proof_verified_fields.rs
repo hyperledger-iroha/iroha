@@ -41,7 +41,9 @@ fn proof_verified_filter_uri() -> String {
             ]),
         ),
     ]);
-    let filter = json::to_string(&filter_value).expect("serialize filter");
+    let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)
+        .expect("valid filter")
+        .to_string();
     format!("/v1/events/sse?filter={}", urlencoding::encode(&filter))
 }
 /// Emit a non-matching and matching proof verification event into the broadcast channel.

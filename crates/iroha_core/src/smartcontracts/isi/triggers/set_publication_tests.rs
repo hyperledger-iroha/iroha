@@ -305,6 +305,10 @@ fn trigger_abandonment_releases_every_component_before_callbacks_and_capacity() 
 
     for unwind in [false, true] {
         for component in 0..10 {
+            let waiter_budget = iroha_allocation::AllocationBudget::new(
+                iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+            );
+            let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
             let released = Arc::new(AtomicUsize::new(0));
             let target = seeded_set();
             let before = images(&target);
@@ -331,7 +335,7 @@ fn trigger_abandonment_releases_every_component_before_callbacks_and_capacity() 
                     let PublicationPreparationError::Busy(wait) = error else {
                         panic!("expected original prepared identity contention");
                     };
-                    wait.wait_for_release()
+                    wait.wait_for_release(&mut registration)
                 }};
             }
             let mut wait = match component {

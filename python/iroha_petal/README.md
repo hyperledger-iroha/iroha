@@ -77,11 +77,32 @@ if outcome.completed is not None:
 decodes the frame (`decode_frame`), feeds every readable lane into a
 `StreamAssembler`, forgets half-received streams after the idle (30 s) and
 absolute (180 s) timeouts, and delivers the CRC-verified payload exactly once.
+After a frame decodes, the next frames are first read by tracking its pose
+(`track_frame`) while it is at most `TRACK_WINDOW_MS` (500 ms) old, which skips
+the finder search; a full decode runs when tracking fails. `session.stats()`
+counts frames read, located and readable, the successes of each lane, frames
+`tracked`, and frames read with a hidden corner blossom (`inferred`, which an
+app can turn into the hint "one corner blossom is hidden").
 Lower-level entry points: `decode_frame(luma)` raises `DecodeError` with a
 `DecodeErrorKind`, `decode_frame_at(luma, homography)` reads a frame with a
-known pose, and `DecodedFrame.feed(assembler)` offers one frame's atoms to an
-assembler. `decode_frame(..., max_side=N)` optionally box-filters large images
-first (off by default) and still reports the homography in original pixels.
+known pose, `track_frame(luma, previous)` follows a previous `DecodedFrame` (or
+returns `None`), and `DecodedFrame.feed(assembler)` offers one frame's atoms to
+an assembler. `decode_frame(..., max_side=N)` optionally box-filters large
+images first (off by default) and still reports the homography in original
+pixels.
+
+When a thumb, a glare or the edge of the frame hides one corner blossom, three
+large blossoms that form a corner still locate the code: the fourth corner is
+inferred as a parallelogram point, moved to where the three dotted rings line up
+best, and its light and dark levels are extrapolated from the other three
+corners. `DecodedFrame.inferred_corner` reports it as the canonical index
+(0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright code), and
+`locate_candidates(luma)` lists the finder sets a decoder tries, in order. The
+orientation hypotheses are ranked by the ring gates plus the `天` mask (symmetric
+left to right, not top to bottom), so the quarter turns stay apart when a gate is
+hidden. Tracking re-finds each blossom near where the previous pose puts it; a
+blossom inferred in the previous frame counts as seen again only when it is found
+within a quarter diameter of where the other three say it is.
 
 The tile lanes `P` and `K` are read in up to two ways. The *level read* judges
 every 8x8 tile patch against the light and dark levels measured at the four
@@ -102,9 +123,11 @@ python3 -m iroha_petal inspect frames/frame_0004.png
 `encode` writes `frame_0000.png`, ... (default: twice the systematic frame
 count). `decode` reads PNG (8-bit grey, grey + alpha, RGB, RGBA, palette;
 non-interlaced) and binary PGM/PPM frames, downscales frames larger than
-`--max-side` (default 1280), and exits with status 1 if the stream is
-incomplete. `inspect` prints the orientation, homography and every lane that
-decodes. There is no network or camera access.
+`--max-side` (default 1280), marks frames read by tracking and frames with a
+hidden corner blossom, prints the session counters, and exits with status 1 if
+the stream is incomplete. `inspect` prints the orientation, a hidden (inferred)
+corner, the homography and every lane that decodes. There is no network or
+camera access.
 
 ## Modules
 
@@ -113,16 +136,19 @@ decodes. There is no network or camera access.
 | `crc`, `prng`, `rs` | CRC-32C, xorshift32, GF(256) Reed-Solomon with errors-and-erasures decoding |
 | `layout`, `glyphs` | canvas geometry, tile mask, ring slot roles, finder shape, katakana strokes and 8x8 templates |
 | `lanes`, `fountain`, `stream` | lane codecs and `FrameCells`, fountain code, `StreamEncoder`, `StreamAssembler` |
-| `image`, `locate`, `decode` | `Luma`, `Rgb`, `Homography`, finder location, `decode_frame`, `decode_frame_at` |
+| `image`, `locate`, `decode` | `Luma`, `Rgb`, `Homography`, finder candidates and following, `decode_frame`, `decode_frame_at`, `track_frame` |
 | `render`, `session`, `pngio`, `cli` | renderer and draw list, `ScanSession`, PNG/PGM I/O, command line |
 
 ## Conformance
 
 The tests check every section of the shared golden vectors
 `fixtures/petal/petal_stream_v1.json` and decode every golden capture in
-`fixtures/petal/petal_captures_v1.json`. All nine captures decode with exactly
-the lanes the reference read (`reference_decoded`), never with wrong data, and
-the negatives are rejected; the tile lanes of `overexposed-540p` and
+`fixtures/petal/petal_captures_v1.json`. All eleven captures decode with exactly
+the lanes the reference read (`reference_decoded`) and the recorded inferred
+corner (`hidden-corner-540p`: 3, `cut-corner-720p`: 2), never with wrong data;
+both tracking pairs follow the first frame's pose into the second with exactly
+the lanes and inferred corner the reference tracked (`reference_tracked`); and
+the negatives are rejected. The tile lanes of `overexposed-540p` and
 `shadow-band-540p`, and lane `K` of `veiled-720p`, are read only through the
 normalised read. The renderer reproduces the `clean-512` capture byte for byte.
 
@@ -134,10 +160,12 @@ read alike. The fast paths (box sums over rows, run-based component labelling,
 cell-major template matching) are tested against literal pixel-by-pixel ports
 of the reference.
 
-On CPython 3.9 (Apple Silicon) a golden capture decodes in 0.4-1.0 s
+On CPython 3.9 (Apple Silicon) a golden capture decodes in 0.5-1.0 s
 (1280x720 included; a frame whose level read leaves lane `P` or `K` unreadable
-pays about 0.25 s more for the normalised read) and a 768-pixel frame (2x2
-supersampling) renders in about 0.6 s.
+pays about 0.25 s more for the normalised read, and a hidden corner about 0.35 s
+more for the ring search), a tracked frame takes about 0.3 s (0.65 s with a
+hidden corner), and a 768-pixel frame (2x2 supersampling) renders in about
+0.6 s.
 
 ## Tests
 

@@ -161,6 +161,7 @@ pub(super) struct KagemushaOrdinaryPreparedTransitionSourcesV1<F: KagemushaPosei
     /// Same State field included in the transition SHA, normalized preparation Guard and ID.
     pub(super) state_prepared_transition_binding_digest: [AssignedValue<F>; 2],
 }
+
 /// Same fixed SHA graph for all ordinary State operations. Inactive results carry no authority;
 /// the actual State operation selects this gate and its public prepared carriers must be zero.
 pub(super) fn constrain_ordinary_prepared_transition_if_v1<F: KagemushaPoseidonFieldV1>(

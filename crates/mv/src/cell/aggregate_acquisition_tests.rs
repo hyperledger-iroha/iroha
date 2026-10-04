@@ -165,11 +165,12 @@ impl Drop for Pending<'_> {
         self.second.release();
     }
 }
-fn register(
+fn register<'a>(
     source: &ReleaseNotification,
     control: &Arc<Control>,
-) -> iroha_allocation::release::ReleaseFuture {
-    let mut wait = source.observe().wait_for_release();
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> iroha_allocation::release::ReleaseFuture<'a> {
+    let mut wait = source.observe().wait_for_release(registration_1);
     let waker = Waker::from(Arc::clone(control));
     assert!(
         Pin::new(&mut wait)
@@ -187,6 +188,14 @@ fn assert_cleanup(control: &Control) {
 
 #[test]
 fn caller_owned_cell_slots_release_all_before_later_clone_unwind_cleanup() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for fail_clone in [2, 3] {
         let (target, control) = fixture();
         let mut pending = Pending {
@@ -194,8 +203,16 @@ fn caller_owned_cell_slots_release_all_before_later_clone_unwind_cleanup() {
             second: target.second.block_acquisition_charged(control.charges()),
         };
         pending.first.initialize(BlockMode::Ordinary);
-        let first_wait = register(&target.first.revert_released, &control);
-        let second_wait = register(&target.second.revert_released, &control);
+        let first_wait = register(
+            &target.first.revert_released,
+            &control,
+            &mut helper_release_registration_1,
+        );
+        let second_wait = register(
+            &target.second.revert_released,
+            &control,
+            &mut helper_release_registration_2,
+        );
         control.armed.store(true, Ordering::SeqCst);
         control.fail_clone.store(fail_clone, Ordering::SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -222,6 +239,14 @@ fn caller_owned_cell_slots_release_all_before_later_clone_unwind_cleanup() {
 
 #[test]
 fn caller_owned_cell_slots_retain_known_poison_until_earlier_slot_unlocks() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let (target, control) = fixture();
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
@@ -235,9 +260,17 @@ fn caller_owned_cell_slots_retain_known_poison_until_earlier_slot_unlocks() {
         second: target.second.block_acquisition_charged(control.charges()),
     };
     pending.first.initialize(BlockMode::Ordinary);
-    let first_wait = register(&target.first.revert_released, &control);
+    let first_wait = register(
+        &target.first.revert_released,
+        &control,
+        &mut helper_release_registration_1,
+    );
     let observation = target.second.revert_released.observe();
-    let second_wait = register(&target.second.revert_released, &control);
+    let second_wait = register(
+        &target.second.revert_released,
+        &control,
+        &mut helper_release_registration_2,
+    );
     control.armed.store(true, Ordering::SeqCst);
     assert!(
         catch_unwind(AssertUnwindSafe(|| pending
@@ -258,13 +291,29 @@ fn caller_owned_cell_slots_retain_known_poison_until_earlier_slot_unlocks() {
 
 #[test]
 fn completed_cell_slots_transfer_without_wake_and_release_without_retirement() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let (target, control) = fixture();
     let mut first = target.first.block_acquisition_charged(control.charges());
     let mut second = target.second.block_acquisition_charged(control.charges());
     first.initialize(BlockMode::Ordinary);
     second.initialize(BlockMode::Ordinary);
-    let first_wait = register(&target.first.revert_released, &control);
-    let second_wait = register(&target.second.revert_released, &control);
+    let first_wait = register(
+        &target.first.revert_released,
+        &control,
+        &mut helper_release_registration_1,
+    );
+    let second_wait = register(
+        &target.second.revert_released,
+        &control,
+        &mut helper_release_registration_2,
+    );
     control.armed.store(true, Ordering::SeqCst);
     let mut first = first.into_block();
     let mut second = second.into_block();

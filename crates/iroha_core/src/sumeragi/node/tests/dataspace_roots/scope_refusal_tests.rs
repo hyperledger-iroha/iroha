@@ -148,7 +148,7 @@ fn signed_private_work_keeps_scope_decode_refusal_local_and_retries_original_car
     let view = state.view();
     for (account, expected) in [
         (ALICE_ID.clone(), 10_000 - fee),
-        (SAMPLE_GENESIS_ACCOUNT_ID.clone(), fee),
+        (SAMPLE_GENESIS_ACCOUNT_ID.clone(), 0),
     ] {
         assert_eq!(
             view.world()
@@ -158,11 +158,18 @@ fn signed_private_work_keeps_scope_decode_refusal_local_and_retries_original_car
                     account,
                     AssetBalanceScope::Dataspace(root.scope.dataspace_id()),
                 ))
-                .unwrap()
-                .as_ref(),
-            &Quantity::from(expected)
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone()),
+            Quantity::from(expected)
         );
     }
+    assert_eq!(
+        view.world()
+            .asset_definition(&root.fee_asset)
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(10_000 - fee),
+        "retry burns the original root's exact paid fee"
+    );
 }
 
 #[test]
@@ -436,6 +443,7 @@ fn signed_private_account_permission_read_defers_without_constructing_a_json_tok
             Some(chain.genesis().header()),
             &ALICE_ID,
             &request,
+            &view.execution_budget(),
         )
     };
     run().expect("the exact original signed genesis grant authorizes the foreign account");

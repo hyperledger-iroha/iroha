@@ -145,10 +145,12 @@ pub(super) fn install(
         height: record.execution_height,
         ordinal: record.ordinal,
     };
-    proof.stream_token = Some(account_read::StreamTokenDiscoveryProofV1 {
-        head: norito::encode_canonical(&index).unwrap(),
-        record: norito::encode_canonical(record).unwrap(),
-    });
+    proof.stream_token = Some(
+        crate::sorafs::stream_token_custody::proof::StreamTokenCustodyRecordProofV1 {
+            head: norito::encode_canonical(&index).unwrap(),
+            record: norito::encode_canonical(record).unwrap(),
+        },
+    );
 }
 #[test]
 fn signed_current_custody_and_capability_are_bound_to_same_native_cut() {

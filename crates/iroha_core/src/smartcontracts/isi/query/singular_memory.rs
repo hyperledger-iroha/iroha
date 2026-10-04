@@ -202,13 +202,13 @@ where
     .map_err(|_| Error::CapacityLimit)
 }
 /// Internal frame for a wire-equivalent query source. Only the owned output selects its header.
-struct SingularQueryFrame<'a, T> {
+pub(super) struct SingularQueryFrame<'a, T> {
     source: &'a dyn SerializePayload,
     // A zero-length array preserves the output alignment without storing or constructing it.
     _alignment: [T; 0],
 }
 impl<'a, T> SingularQueryFrame<'a, T> {
-    fn new(source: &'a dyn SerializePayload) -> Self {
+    pub(super) fn new(source: &'a dyn SerializePayload) -> Self {
         Self {
             source,
             _alignment: [],

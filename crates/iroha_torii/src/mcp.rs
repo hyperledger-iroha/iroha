@@ -45,6 +45,7 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt as _;
+mod collection_query_tools;
 mod connect_session_tools;
 mod contract_view_tools;
 mod governance_ballot_tools;
@@ -53,6 +54,10 @@ mod registry;
 mod resources;
 mod response;
 mod transaction_artifacts;
+use collection_query_tools::{
+    CollectionQueryShape, collection_get_route, collection_post_body, collection_query_tool,
+    expand_collection_query_schema,
+};
 use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
 use contract_view_tools::{dispatch_contract_view, iroha_contracts_view_tool};
 use governance_ballot_tools::{
@@ -2226,9 +2231,9 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
                 let error_class = match error {
                     BoundedJsonError::Unsupported => "unsupported",
                     BoundedJsonError::LengthMismatch => "length_mismatch",
-                    BoundedJsonError::AllocationFailed | BoundedJsonError::DecodeResource(_) => {
-                        "allocation_failed"
-                    }
+                    BoundedJsonError::AllocationFailed
+                    | BoundedJsonError::DecodeResource(_)
+                    | BoundedJsonError::ScopedDecodeResource(_) => "allocation_failed",
                     BoundedJsonError::BodyTooLarge => unreachable!("handled above"),
                 };
                 return jsonrpc_error_response(
@@ -4623,8 +4628,11 @@ macro_rules! declare_mcp_dispatch_wrappers {
         list_query {
             $( $list_query_name:ident => $list_query_route:literal; )*
         }
-        query_post {
-            $( $query_post_name:ident => $query_post_route:literal; )*
+        collection_get {
+            $( $collection_get_name:ident => $collection_get_route:literal; )*
+        }
+        collection_post {
+            $( $collection_post_name:ident => $collection_post_route:literal; )*
         }
         path_get {
             $(
@@ -4641,6 +4649,24 @@ macro_rules! declare_mcp_dispatch_wrappers {
                     $path_query_get_key:literal,
                     |$path_query_get_arguments:ident| $path_query_get_extract:expr,
                     $path_query_get_route:literal
+                );
+            )*
+        }
+        path_collection_get {
+            $(
+                $path_collection_get_name:ident => (
+                    $path_collection_get_key:literal,
+                    |$path_collection_get_arguments:ident| $path_collection_get_extract:expr,
+                    $path_collection_get_route:literal
+                );
+            )*
+        }
+        path_collection_post {
+            $(
+                $path_collection_post_name:ident => (
+                    $path_collection_post_key:literal,
+                    |$path_collection_post_arguments:ident| $path_collection_post_extract:expr,
+                    $path_collection_post_route:literal
                 );
             )*
         }
@@ -4720,20 +4746,42 @@ macro_rules! declare_mcp_dispatch_wrappers {
             }
         )*
         $(
-            async fn $query_post_name(
+            async fn $collection_get_name(
                 app: &SharedAppState,
                 inbound_headers: &HeaderMap,
                 arguments: &Map,
             ) -> Result<Value, String> {
-                let body = build_query_envelope_body(arguments)?;
-                let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
+                let route = collection_get_route($collection_get_route.to_owned(), arguments)?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $collection_post_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let body = collection_post_body(arguments)?;
                 dispatch_route(
                     app,
                     inbound_headers,
                     Method::POST,
-                    $query_post_route,
+                    $collection_post_route,
                     arguments.get("headers"),
-                    body_bytes,
+                    body,
                     Some("application/json".to_owned()),
                     arguments
                         .get("accept")
@@ -4804,6 +4852,68 @@ macro_rules! declare_mcp_dispatch_wrappers {
                 .await
             }
         )*
+        $(
+            async fn $path_collection_get_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let route = {
+                    let $path_collection_get_arguments: &Map = arguments;
+                    single_path_route(
+                        $path_collection_get_route,
+                        $path_collection_get_key,
+                        $path_collection_get_extract?,
+                    )?
+                };
+                let route = collection_get_route(route, arguments)?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $path_collection_post_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let route = {
+                    let $path_collection_post_arguments: &Map = arguments;
+                    single_path_route(
+                        $path_collection_post_route,
+                        $path_collection_post_key,
+                        $path_collection_post_extract?,
+                    )?
+                };
+                let body = collection_post_body(arguments)?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::POST,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    body,
+                    Some("application/json".to_owned()),
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
     };
 }
 
@@ -4823,8 +4933,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_gov_protected_namespaces_list => "/v1/gov/protected-namespaces";
         dispatch_iroha_gov_unlocks_stats => "/v1/gov/unlocks/stats";
         dispatch_iroha_gov_citizens_count => "/v1/gov/citizens";
-        dispatch_iroha_nfts_chain_list => "/v1/nfts";
-        dispatch_iroha_rwas_chain_list => "/v1/rwas";
     }
     object_post {
         dispatch_iroha_da_ingest => "/v1/da/ingest";
@@ -4844,21 +4952,26 @@ declare_mcp_dispatch_wrappers! {
     }
     list_query {
         dispatch_iroha_contracts_state_get => "/v1/contracts/state";
-        dispatch_iroha_accounts_list => "/v1/accounts";
-        dispatch_iroha_domains_list => "/v1/domains";
         dispatch_iroha_subscriptions_plans_list => "/v1/subscriptions/plans";
         dispatch_iroha_subscriptions_list => "/v1/subscriptions";
-        dispatch_iroha_asset_definitions => "/v1/assets/definitions";
         dispatch_iroha_assets_list => "/v1/explorer/assets";
         dispatch_iroha_nfts_list => "/v1/explorer/nfts";
         dispatch_iroha_rwas_list => "/v1/explorer/rwas";
     }
-    query_post {
+    collection_get {
+        dispatch_iroha_accounts_list => "/v1/accounts";
+        dispatch_iroha_domains_list => "/v1/domains";
+        dispatch_iroha_asset_definitions => "/v1/assets/definitions";
+        dispatch_iroha_nfts_chain_list => "/v1/nfts";
+        dispatch_iroha_rwas_chain_list => "/v1/rwas";
+    }
+    collection_post {
         dispatch_iroha_accounts_query => "/v1/accounts/query";
         dispatch_iroha_domains_query => "/v1/domains/query";
         dispatch_iroha_asset_definitions_query => "/v1/assets/definitions/query";
         dispatch_iroha_nfts_query => "/v1/nfts/query";
         dispatch_iroha_rwas_query => "/v1/rwas/query";
+        dispatch_iroha_transactions_query => "/v1/transactions/query";
     }
     path_get {
         dispatch_iroha_bridge_finality_proof => (
@@ -4953,30 +5066,49 @@ declare_mcp_dispatch_wrappers! {
         );
     }
     path_query_get {
-        dispatch_iroha_account_transactions => (
-            "account_id",
-            |arguments| extract_account_id_argument(arguments),
-            "/v1/accounts/{account_id}/transactions"
-        );
         dispatch_iroha_account_history => (
             "account_id",
             |arguments| extract_account_id_argument(arguments),
             "/v1/accounts/{account_id}/history"
-        );
-        dispatch_iroha_account_assets => (
-            "account_id",
-            |arguments| extract_account_id_argument(arguments),
-            "/v1/accounts/{account_id}/assets"
         );
         dispatch_iroha_account_portfolio => (
             "uaid",
             |arguments| extract_uaid_argument(arguments),
             "/v1/accounts/{uaid}/portfolio"
         );
+    }
+    path_collection_get {
+        dispatch_iroha_account_transactions => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/transactions"
+        );
+        dispatch_iroha_account_assets => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/assets"
+        );
         dispatch_iroha_asset_holders => (
             "definition_id",
             |arguments| extract_definition_id_argument(arguments),
             "/v1/assets/{definition_id}/holders"
+        );
+    }
+    path_collection_post {
+        dispatch_iroha_account_transactions_query => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/transactions/query"
+        );
+        dispatch_iroha_account_assets_query => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/assets/query"
+        );
+        dispatch_iroha_asset_holders_query => (
+            "definition_id",
+            |arguments| extract_definition_id_argument(arguments),
+            "/v1/assets/{definition_id}/holders/query"
         );
     }
 }
@@ -6029,98 +6161,6 @@ async fn dispatch_iroha_accounts_onboard_plan(
     )
     .await
 }
-async fn dispatch_iroha_account_transactions_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let route = single_path_route(
-        "/v1/accounts/{account_id}/transactions/query",
-        "account_id",
-        account_id,
-    )?;
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        route.as_str(),
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_transactions_query_path(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/transactions/query",
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_query_path(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-    route: &str,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        route,
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_account_assets_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let route = single_path_route(
-        "/v1/accounts/{account_id}/assets/query",
-        "account_id",
-        account_id,
-    )?;
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        route.as_str(),
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_musubi_v1(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6352,34 +6392,6 @@ async fn dispatch_iroha_asset_definitions_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_asset_holders_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let definition_id = extract_definition_id_argument(arguments)?;
-    let route = single_path_route(
-        "/v1/assets/{definition_id}/holders/query",
-        "definition_id",
-        definition_id,
-    )?;
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        route.as_str(),
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -8774,13 +8786,18 @@ fn parse_manual_static_tool_descriptors(
             path_template.starts_with('/'),
             "manual MCP descriptor asset record {record_index} has an invalid path template"
         );
-        let Some(input_schema) = record.remove("input_schema") else {
+        let Some(mut input_schema) = record.remove("input_schema") else {
             unreachable!("input_schema presence was checked");
         };
         assert!(
             input_schema.is_object(),
             "manual MCP descriptor asset record {record_index} input_schema is not an object"
         );
+        // Collection tools carry a shape marker instead of repeating the shared
+        // query-control schema in every record.
+        if let Err(error) = expand_collection_query_schema(&mut input_schema) {
+            panic!("manual MCP descriptor asset record {record_index}: {error}");
+        }
         let previous = by_function.insert(
             function,
             ManualStaticToolDescriptor {
@@ -9847,92 +9864,68 @@ fn iroha_contracts_call_tool() -> ToolSpec {
     )
 }
 fn iroha_transactions_query_tool() -> ToolSpec {
-    transactions_query_tool(
+    collection_query_tool(
         "iroha.transactions.query",
+        "Query committed transactions (`POST /v1/transactions/query`), newest first; intended for privileged operator and developer use. Fields: `entrypoint_hash`, `block_hash`, `authority`, `entrypoint_kind`, `block_height`, `block_index`, `timestamp_ms`, `result_ok`, `asset_ids`, `asset_definition_ids` and `metadata.<key>`; `block_height` bounds in the filter's top-level `and` also bound the scan. Example: {\"filter\": \"authority = 'sorau…' and block_height >= 1200\", \"limit\": 20}. The order is fixed (no `sort`, `include_total` or `aggregate`), and a page may hold fewer than `limit` rows, even none, while `next_cursor` is set: keep passing `next_cursor` as `cursor` until it is null.",
         "/v1/transactions/query",
-        "Query committed transactions with QueryEnvelope shortcuts. Intended for privileged operator and developer use.",
-    )
-}
-fn transactions_query_tool(name: &str, path_template: &str, description: &str) -> ToolSpec {
-    ToolSpec::route(
-        name.to_owned(),
-        description.to_owned(),
-        manual_tool_effect_from_name(name),
-        Method::POST,
-        path_template.to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-                },
-                "query": { "type": "string" },
-                "filter": { "type": "object", "additionalProperties": true },
-                "select": {},
-                "aggregate": { "type": "object", "additionalProperties": true },
-                "sort": { "type": "array", "items": {} },
-                "pagination": { "type": "object", "additionalProperties": true },
-                "limit": { "type": "integer" },
-                "offset": { "type": "integer" },
-                "fetch_size": { "type": "integer" },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
+        CollectionQueryShape::HistoryPost,
     )
 }
 fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
-    MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
-        let request_body = spec
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get(definition.path))
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("requestBody"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "Musubi V1 OpenAPI operation {} is missing its typed request body",
-                    definition.path
-                )
-            });
-        let body_schema = build_request_body_schema(spec, request_body)
-            .map(|schema| inline_openapi_schema(spec, &schema, 0))
-            .unwrap_or_else(|| {
-                panic!(
-                    "Musubi V1 OpenAPI operation {} has no JSON request schema",
-                    definition.path
-                )
-            });
-        ToolSpec::route(
-            definition.name.to_owned(),
-            definition.description.to_owned(),
-            definition.effect,
-            Method::POST,
-            definition.path.to_owned(),
-            norito::json!({
-                "type": "object",
-                "additionalProperties": false,
-                "x-iroha-mcp-strict-body": true,
-                "required": ["body", "headers"],
-                "properties": {
-                    "body": (body_schema),
-                    "headers": {
-                        "type": "object",
-                        "additionalProperties": { "type": "string" }
-                    },
-                    "accept": { "type": "string" }
-                }
-            }),
-        )
-    })
+    MUSUBI_V1_TOOL_DEFINITIONS
+        .iter()
+        .filter(|definition| {
+            catalog_mcp_projection_decision(
+                CATALOG_PROJECTION_GROUPS,
+                &Method::POST,
+                definition.path,
+            ) == Some(true)
+        })
+        .map(|definition| {
+            let request_body = spec
+                .get("paths")
+                .and_then(Value::as_object)
+                .and_then(|paths| paths.get(definition.path))
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("post"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("requestBody"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Musubi V1 OpenAPI operation {} is missing its typed request body",
+                        definition.path
+                    )
+                });
+            let body_schema = build_request_body_schema(spec, request_body)
+                .map(|schema| inline_openapi_schema(spec, &schema, 0))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Musubi V1 OpenAPI operation {} has no JSON request schema",
+                        definition.path
+                    )
+                });
+            ToolSpec::route(
+                definition.name.to_owned(),
+                definition.description.to_owned(),
+                definition.effect,
+                Method::POST,
+                definition.path.to_owned(),
+                norito::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "x-iroha-mcp-strict-body": true,
+                    "required": ["body", "headers"],
+                    "properties": {
+                        "body": (body_schema),
+                        "headers": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" }
+                        },
+                        "accept": { "type": "string" }
+                    }
+                }),
+            )
+        })
 }
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
@@ -10094,17 +10087,19 @@ fn iroha_subscription_action_tool(
     )
 }
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
-    simple_manual_get_tool(
+    collection_query_tool(
         "iroha.nfts.chain.list",
-        "List NFTs from chain state (`/v1/nfts`).",
+        "List NFTs from chain state (`GET /v1/nfts`). Fields: `id`, `owned_by` (sortable) and `metadata.<key>` (the NFT content); default order `id`. Example: {\"filter\": \"owned_by = 'sorau…'\", \"limit\": 20}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
         "/v1/nfts",
+        CollectionQueryShape::Get,
     )
 }
 fn iroha_rwas_chain_list_tool() -> ToolSpec {
-    simple_manual_get_tool(
+    collection_query_tool(
         "iroha.rwas.chain.list",
-        "List RWA lots from chain state (`/v1/rwas`).",
+        "List RWA lots from chain state (`GET /v1/rwas`). Fields: `id`, `owned_by`, `primary_reference`, `status`, `quantity` (sortable), `is_frozen` and `metadata.<key>`; default order `id`. Example: {\"filter\": \"quantity > 0 and is_frozen = false\", \"sort\": \"-quantity\"}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
         "/v1/rwas",
+        CollectionQueryShape::Get,
     )
 }
 include!("mcp/iso20022_tools.rs");
@@ -10348,8 +10343,6 @@ mod tests {
             iroha_gov_protected_namespaces_list_tool(),
             iroha_gov_unlocks_stats_tool(),
             iroha_gov_citizens_count_tool(),
-            iroha_nfts_chain_list_tool(),
-            iroha_rwas_chain_list_tool(),
         ];
         let audited_names = [
             "iroha.da.proof_policies",
@@ -10357,7 +10350,6 @@ mod tests {
             "iroha.gov.protected_namespaces.list",
             "iroha.gov.unlocks.stats",
             "iroha.health",
-            "iroha.nfts.chain.list",
             "iroha.node.capabilities",
             "iroha.node.query_projection_checkpoint",
             "iroha.parameters.get",
@@ -10365,7 +10357,6 @@ mod tests {
             "iroha.runtime.abi.hash",
             "iroha.runtime.metrics",
             "iroha.runtime.upgrades.list",
-            "iroha.rwas.chain.list",
             "iroha.vpn.profile",
         ];
         let expected_schema = norito::json!({
@@ -10685,3 +10676,7 @@ mod contract_artifact_route_tests {
         assert!(contract_artifact_route(missing.as_object().unwrap(), true).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "mcp/compiled_catalog_tests.rs"]
+mod compiled_catalog_tests;

@@ -14,6 +14,8 @@ use std::{
 #[test]
 fn native_reader_refusal_keeps_its_exact_source_and_releases_membership_writer() {
     let storage = TransactionsStorage::new();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&storage.budget);
     let native = storage
         .blocks
         .try_write_admitted(|demand| history::admit(&storage.budget, demand))
@@ -32,7 +34,7 @@ fn native_reader_refusal_keeps_its_exact_source_and_releases_membership_writer()
         "partial acquisition releases membership"
     );
     drop(prepared);
-    let mut waiting = reader_wait.wait_for_release();
+    let mut waiting = reader_wait.wait_for_release(&mut release_registration_0);
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(Pin::new(&mut waiting).poll(&mut context), Poll::Ready(()));
     let observation = storage
@@ -71,6 +73,8 @@ impl Wake for UnlockedProbe {
 fn original_reader_notice_waits_for_observation_release_on_success_and_unwind() {
     for unwind in [false, true] {
         let storage = Arc::new(TransactionsStorage::new());
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&storage.budget);
         let pool_before = storage.budget.reserved_bytes();
         let wait = storage.blocks.observe_reader_release();
         let probe = Arc::new(UnlockedProbe {
@@ -79,7 +83,7 @@ fn original_reader_notice_waits_for_observation_release_on_success_and_unwind() 
         });
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
-        let mut waiting = wait.wait_for_release();
+        let mut waiting = wait.wait_for_release(&mut release_registration_0);
         assert_eq!(Pin::new(&mut waiting).poll(&mut context), Poll::Pending);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             storage.budget.with_deferred_refund_notifications(|_| {

@@ -183,6 +183,7 @@ impl MainNativeDeepPointsV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in super::super) fn check_workspace_v1(
         &self,
         weighted: &[MainNativeDeepQuotientV1],
@@ -296,6 +297,7 @@ impl MainNativeDeepQuotientV1 {
         ])
     }
 
+    #[cfg(test)]
     pub(in super::super) fn add_batch_v1(
         &mut self,
         points: &MainNativeDeepPointsV1,
@@ -339,6 +341,13 @@ impl MainNativeDeepQuotientV1 {
                 }
                 Ok(())
             })?;
+        self.accumulate_validated_batch_v1(columns, count);
+        Ok(())
+    }
+
+    // Private to this owner and its mixed child: both validate all original
+    // shapes and individual claims before reaching this shared arithmetic.
+    fn accumulate_validated_batch_v1(&mut self, columns: &[NativeColumnV1<'_>], count: usize) {
         let n = self.native_rows;
         for (side, target) in self.coefficients.iter_mut().enumerate() {
             target
@@ -362,7 +371,6 @@ impl MainNativeDeepQuotientV1 {
             }
         }
         self.columns = count;
-        Ok(())
     }
 
     pub(in super::super) fn accumulate_v1(
@@ -413,3 +421,6 @@ impl MainNativeDeepQuotientV1 {
 #[cfg(test)]
 #[path = "main_native_deep_tests.rs"]
 mod tests;
+
+#[path = "main_mixed_deep.rs"]
+pub(in super::super) mod mixed;

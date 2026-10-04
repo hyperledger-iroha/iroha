@@ -1,0 +1,49 @@
+//! Shared admission for closed wallet plans; this module does not accept instructions or sign.
+
+use super::{BoundedTransactionOptions, FeePaymentIntent, Result};
+
+pub(super) fn encode_bounded<T: norito::core::NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+) -> Result<Vec<u8>> {
+    eyre::ensure!(
+        norito::canonical_frame_len(value)? <= maximum,
+        "operation frame exceeds its byte bound"
+    );
+    Ok(norito::encode_canonical(value)?)
+}
+
+pub(super) fn decode_bounded<T>(bytes: &[u8], maximum: usize) -> Result<T>
+where
+    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
+{
+    eyre::ensure!(
+        !bytes.is_empty() && bytes.len() <= maximum,
+        "operation frame exceeds its byte bound"
+    );
+    Ok(norito::decode_canonical_with_limits(
+        bytes,
+        norito::DecodeLimits::new(4096, maximum, maximum, 16 * 1024 * 1024, 32),
+    )?)
+}
+
+pub(super) fn validate_options(options: &BoundedTransactionOptions) -> Result<()> {
+    // Admit container cardinalities before cloning any caller-controlled fee authorization.
+    eyre::ensure!(
+        options.max_total_fees.len() <= 16 && options.fee_payment.charge_limits().len() <= 16,
+        "operation fee authorization exceeds sixteen entries"
+    );
+    eyre::ensure!(
+        matches!(options.fee_payment, FeePaymentIntent::Authority(_)),
+        "operation requires explicit manager-paid fees"
+    );
+    options.fee_payment.validate()?;
+    eyre::ensure!(
+        options
+            .max_total_fees
+            .values()
+            .all(|value| !value.is_zero()),
+        "operation aggregate fee maxima must be positive"
+    );
+    Ok(())
+}

@@ -4,7 +4,7 @@ mod tests {
     use http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{Algorithm, Hash, HashOf};
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::BlockHeader,
         events::{
@@ -426,6 +426,48 @@ mod tests {
         assert!(decoded.tx_queue_oldest_queued_age_ms >= 3_600_000);
     }
     #[test]
+    fn npos_diagnostics_refusal_retries_the_original_policy() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        };
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).expect("original signed NPoS genesis");
+        let view = chain.state().view();
+        let original = view
+            .world()
+            .parameters()
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .unwrap();
+        let bytes = original.payload().get().to_owned();
+        let expected = super::sumeragi_npos_diagnostics(view.world())
+            .unwrap()
+            .unwrap();
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || super::sumeragi_npos_diagnostics(view.world()),
+        );
+        assert!(matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ));
+        assert_eq!(original.payload().get(), &bytes);
+        let retry = super::sumeragi_npos_diagnostics(view.world())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.epoch_seed, expected.epoch_seed);
+        assert_eq!(retry.epoch_length_blocks, expected.epoch_length_blocks);
+        assert_eq!(original.payload().get(), &bytes);
+    }
+    #[test]
     fn malformed_npos_diagnostics_are_rejected() {
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
@@ -580,13 +622,23 @@ mod tests {
     #[test]
     fn average_block_time_handles_empty_chain() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        assert!(super::average_block_time_ms(&kura, 0, 10).is_none());
+        let budget = iroha_allocation::AllocationBudget::new(0);
+        assert!(
+            super::average_block_time_ms(&kura, 0, 10, &budget)
+                .expect("empty history needs no body admission")
+                .is_none()
+        );
     }
     #[cfg(feature = "app_api")]
     #[test]
     fn latest_block_created_at_missing_when_height_zero() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        assert!(super::latest_block_created_at(&kura, 0).is_none());
+        let budget = iroha_allocation::AllocationBudget::new(0);
+        assert!(
+            super::latest_block_created_at(&kura, 0, &budget)
+                .expect("height zero needs no body admission")
+                .is_none()
+        );
     }
     #[cfg(feature = "app_api")]
     #[test]
@@ -970,6 +1022,7 @@ mod tests {
                 let view = fixture.app.state.view();
                 let block = view
                     .latest_block()
+                    .expect("funded canonical history read")
                     .unwrap()
                     .as_ref()
                     .clone()
@@ -994,8 +1047,14 @@ mod tests {
                 ));
                 // Provision authenticated primary storage while it is empty,
                 // then inject only the deliberate certificate defect.
-                kura.store_block(block)
-                    .expect("persist canonical deliberately damaged certificate fixture");
+                kura.store_block(
+                    iroha_data_model::block::SharedSignedBlock::try_new(
+                        block,
+                        &state.ivm_execution_budget(),
+                    )
+                    .expect("fund deliberate certificate defect fixture"),
+                )
+                .expect("persist canonical deliberately damaged certificate fixture");
                 let mut hashes = state.block_hashes.block();
                 hashes.push_for_tests(hash);
                 hashes.commit_for_tests();

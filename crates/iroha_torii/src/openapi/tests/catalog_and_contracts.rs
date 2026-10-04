@@ -313,6 +313,7 @@ fn production_constants_embedded_in_openapi_remain_frozen() {
             u64::try_from(utils::MAX_REJECT_CODE_BYTES).expect("reject-code bound"),
         )
     );
+    #[cfg(feature = "app_api")]
     let multisig_limit = at(
         &document,
         &[
@@ -329,6 +330,7 @@ fn production_constants_embedded_in_openapi_remain_frozen() {
     .and_then(|variant| variant.get("maximum"))
     .and_then(Value::as_u64)
     .expect("multisig proposal query maximum");
+    #[cfg(feature = "app_api")]
     assert_eq!(
         multisig_limit,
         crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT

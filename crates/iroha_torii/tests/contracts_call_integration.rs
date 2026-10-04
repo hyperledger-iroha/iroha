@@ -10,7 +10,6 @@ use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
-    query::store::LiveQueryStore,
     queue::Queue,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
@@ -706,7 +705,7 @@ async fn run_contract_hajimari_in_test_overlay(
 #[tokio::test]
 async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_noop_program();
     let (contract_address, code_hash_hex, abi_hash_hex) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -892,7 +891,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
 #[tokio::test]
 async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
     let (contract_address, _, _) =
@@ -934,7 +933,7 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
 #[tokio::test]
 async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_bytes_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1013,7 +1012,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
 #[tokio::test]
 async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_dispatch_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1098,7 +1097,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
 #[tokio::test]
 async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_account_id_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1182,7 +1181,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
 #[tokio::test]
 async fn contracts_call_configure_roundtrips_account_id_map_state() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_configure_account_map_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1258,7 +1257,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
 #[tokio::test]
 async fn contracts_call_persists_declared_state_fields_across_calls() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1335,7 +1334,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let (creds, state, kura, mut native_chain) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_with_isi_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1410,7 +1409,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_with_mint_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1489,7 +1488,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1583,7 +1582,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
+    let (queue, _chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(

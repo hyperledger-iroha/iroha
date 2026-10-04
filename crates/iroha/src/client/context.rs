@@ -173,6 +173,7 @@ impl ClientBuilder {
     /// Returns a structured context error for an invalid endpoint or an account
     /// signing key that cannot represent the configured authority.
     pub fn build(mut self) -> crate::Result<Client> {
+        self.torii_url = crate::config::normalize_torii_api_url(self.torii_url);
         validate_endpoint(&self.torii_url)?;
         validate_authority(&self.account, &self.key_pair)?;
         if self.account_chain_discriminant == 0 {
@@ -336,9 +337,6 @@ pub(super) fn validate_endpoint(endpoint: &Url) -> core::result::Result<(), Auth
     }
     if endpoint.query().is_some() || endpoint.fragment().is_some() {
         return Err(AuthorityContextError::EndpointHasQueryOrFragment);
-    }
-    if !endpoint.path().ends_with('/') {
-        return Err(AuthorityContextError::EndpointPathMissingTrailingSlash);
     }
     Ok(())
 }

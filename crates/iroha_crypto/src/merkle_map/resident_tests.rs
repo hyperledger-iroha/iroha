@@ -1,6 +1,7 @@
 //! Exact mutation demand, error priority and final snapshot funding controls.
 
 use super::*;
+use iroha_allocation::release::ReleaseRegistration;
 
 fn key(byte: u8) -> Hash {
     let mut bytes = [0; Hash::LENGTH];
@@ -90,13 +91,17 @@ fn public_path_geometry_counts_insert_replace_and_nonroot_delete_exactly() {
 
 #[test]
 fn original_capacity_observation_survives_unrelated_release_and_final_snapshot() {
-    use std::{
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
-    };
+    use std::task::{Context, Poll, Waker};
     let unit = ChargedShared::<Node>::allocation_layout().size();
-    let budget = AllocationBudget::new(unit * 3);
+    let observer_bytes = ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(unit * 3 + observer_bytes);
+    let mut registration = ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(registration.belongs_to(&budget));
     let value = Hash::new(b"value");
     let mut blocker = MerkleMap::new(&budget);
     blocker.replace(key(0), None, Some(value)).unwrap();
@@ -108,16 +113,26 @@ fn original_capacity_observation_survives_unrelated_release_and_final_snapshot()
     else {
         panic!("original pool must refuse");
     };
-    let mut wait = pin!(release.wait_for_release());
     let mut context = Context::from_waker(Waker::noop());
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     let other = AllocationBudget::new(unit);
     drop(other.try_reserve_bytes(unit).unwrap());
     drop(blocker);
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Pending
+    );
     drop(borrowed);
-    assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+    assert_eq!(
+        registration.poll_wait(&release, &mut context),
+        Poll::Ready(())
+    );
     map.replace(key(1), None, Some(value)).unwrap();
     drop(map);
+    assert_eq!(budget.reserved_bytes(), observer_bytes);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }

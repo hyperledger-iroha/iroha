@@ -12,6 +12,7 @@ use iroha_data_model::{
     block::consensus::HeightContextId,
     isi::{
         InstructionBox,
+        musubi::CheckMusubiPinOutboxV1,
         sorafs::{
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
@@ -170,6 +171,8 @@ pub(crate) enum NativeCustodyCheckPurposeV1 {
     StreamToken,
     /// Native gateway readback; cannot stand in for signer or private-key authority.
     StreamTokenGateway,
+    /// Exact current Musubi inventory readback, without Queue authority.
+    MusubiPinOutbox,
     /// Proof binding only; role-16 Core execution and current authority remain closed.
     Topology,
 }
@@ -190,6 +193,7 @@ pub(crate) enum NativeCustodyCheckRefV1<'a> {
     ReleaseManifest(&'a MutateSorafsReleaseManifestAuthority),
     StreamToken(&'a MutateSorafsStreamTokenAuthority),
     StreamTokenGateway(&'a MutateSorafsStreamTokenGateway),
+    MusubiPinOutbox(&'a CheckMusubiPinOutboxV1),
     #[cfg_attr(
         not(test),
         expect(
@@ -281,6 +285,17 @@ impl NativeCustodyCheckRefV1<'_> {
                     Some(check.floor.context_id),
                 ))
             }
+            Self::MusubiPinOutbox(instruction) => {
+                instruction.validate().map_err(|_| Error::Transaction)?;
+                Ok((
+                    NativeCustodyCheckPurposeV1::MusubiPinOutbox,
+                    instruction.challenge,
+                    *instruction.network_id.as_bytes(),
+                    instruction.floor.height,
+                    instruction.floor.block_hash,
+                    Some(instruction.floor.context_id),
+                ))
+            }
             Self::Topology(instruction) => {
                 let TopologyActionV1::Check(check) = &instruction.transition.action else {
                     return Err(Error::Transaction);
@@ -298,6 +313,18 @@ impl NativeCustodyCheckRefV1<'_> {
             }
         }
     }
+    fn matches_instruction(&self, candidate: &InstructionBox) -> bool {
+        match self {
+            Self::FinalPromotion(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::FinalPromotionAccount(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::ReleaseManifest(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::StreamToken(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::StreamTokenGateway(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::Topology(value) => candidate.as_any().downcast_ref() == Some(*value),
+            Self::MusubiPinOutbox(value) => candidate.as_any().downcast_ref() == Some(*value),
+        }
+    }
+    #[cfg(test)]
     fn instruction(&self) -> InstructionBox {
         match self {
             Self::FinalPromotion(instruction) => (*instruction).clone().into(),
@@ -306,6 +333,7 @@ impl NativeCustodyCheckRefV1<'_> {
             Self::StreamToken(instruction) => (*instruction).clone().into(),
             Self::StreamTokenGateway(instruction) => (*instruction).clone().into(),
             Self::Topology(instruction) => (*instruction).clone().into(),
+            Self::MusubiPinOutbox(instruction) => (*instruction).clone().into(),
         }
     }
 }
@@ -338,51 +366,61 @@ pub(crate) fn bind_signed_check_v1(
     floor: NativeCheckFloorV1,
     signed: SignedTransaction,
 ) -> Result<BoundNativeCheckV1, Error> {
-    round.ensure_live()?;
-    if round.bound {
-        return Err(Error::Invalid);
-    }
-    round.bound = true;
-    floor.validate()?;
-    let (purpose, challenge, check_network, minimum_height, minimum_block_hash, check_context_id) =
-        instruction.coordinates()?;
-    if round.challenge != Some(challenge)
-        || challenge == [0; 32]
-        || chain_id.is_empty()
-        || network_id == [0; 32]
-        || check_network != network_id
-        || minimum_height != floor.height
-        || minimum_block_hash != floor.block_hash
-        || check_context_id.is_some_and(|context_id| context_id != floor.context_id)
-    {
-        return Err(Error::Transaction);
-    }
-    let Executable::Instructions(instructions) = signed.instructions() else {
-        return Err(Error::Transaction);
-    };
-    if signed.authority() != authority
-        || signed.network_id().map(|network| *network.as_bytes()) != Some(network_id)
-        || instructions.len() != 1
-        || instructions.first() != Some(&instruction.instruction())
-    {
-        return Err(Error::Transaction);
-    }
-    let entry = TransactionEntrypoint::External(signed);
-    let entry_bytes = native_signed_entry_frame_v1(&entry)?;
-    let TransactionEntrypoint::External(signed) = entry else {
-        return Err(Error::Transaction);
-    };
-    round.ensure_live()?;
-    Ok(BoundNativeCheckV1 {
-        purpose,
-        chain_id: chain_id.into(),
-        network_id,
-        floor,
-        started: round.started,
-        max_elapsed: round.max_elapsed,
-        challenge,
-        signed,
-        entry_bytes,
+    crate::query::signer_check::with_native_check_read_limits(|| {
+        round.ensure_live()?;
+        if round.bound {
+            return Err(Error::Invalid);
+        }
+        round.bound = true;
+        floor.validate()?;
+        let (
+            purpose,
+            challenge,
+            check_network,
+            minimum_height,
+            minimum_block_hash,
+            check_context_id,
+        ) = instruction.coordinates()?;
+        if round.challenge != Some(challenge)
+            || challenge == [0; 32]
+            || iroha_primitives::chain_id::validate_chain_id(chain_id).is_err()
+            || network_id == [0; 32]
+            || check_network != network_id
+            || minimum_height != floor.height
+            || minimum_block_hash != floor.block_hash
+            || check_context_id.is_some_and(|context_id| context_id != floor.context_id)
+        {
+            return Err(Error::Transaction);
+        }
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            return Err(Error::Transaction);
+        };
+        if signed.authority() != authority
+            || signed.network_id().map(|network| *network.as_bytes()) != Some(network_id)
+            || instructions.len() != 1
+            || !instructions
+                .first()
+                .is_some_and(|candidate| instruction.matches_instruction(candidate))
+        {
+            return Err(Error::Transaction);
+        }
+        let entry = TransactionEntrypoint::External(signed);
+        let entry_bytes = native_signed_entry_frame_v1(&entry)?;
+        let TransactionEntrypoint::External(signed) = entry else {
+            return Err(Error::Transaction);
+        };
+        round.ensure_live()?;
+        Ok(BoundNativeCheckV1 {
+            purpose,
+            chain_id: fallible_string(chain_id)?,
+            network_id,
+            floor,
+            started: round.started,
+            max_elapsed: round.max_elapsed,
+            challenge,
+            signed,
+            entry_bytes,
+        })
     })
 }
 
@@ -390,24 +428,28 @@ pub(crate) fn bind_signed_check_v1(
 pub(crate) fn validate_account_transaction_envelope_v1(
     payload: &TransactionPayload,
 ) -> Result<(), Error> {
-    // Bound the borrowed input before cloning it into the canonical builder. The same sole
-    // envelope ceiling bounds this necessary payload prefix, without estimating wire overhead.
-    if norito::canonical_frame_len(payload).map_err(|_| Error::Transaction)?
-        > FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1
-        || payload.attachments.is_some()
-        || validate_native_signatory_v1(&payload.authority).is_err()
-    {
-        return Err(Error::Transaction);
-    }
-    let builder =
-        TransactionBuilder::from_payload(payload.clone()).map_err(|_| Error::Transaction)?;
-    // The ordinary builder has no multisig authorization. A single Ed25519 signature is
-    // always 64 bytes, so this private, invalid placeholder has its exact canonical layout.
-    // Neither this synthetic transaction nor its bytes may escape as signing authority.
-    let entry = TransactionEntrypoint::External(
-        builder.build_with_signature(Signature::from_bytes(&[0; 64])),
-    );
-    bounded_entry(&entry).map(|_| ())
+    crate::query::signer_check::with_native_check_read_limits(|| {
+        // Bound the borrowed input before decoding it into the canonical builder. The same sole
+        // envelope ceiling bounds this necessary payload prefix, without estimating wire overhead.
+        if norito::canonical_frame_len(payload).map_err(|_| Error::Transaction)?
+            > FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1
+            || payload.attachments.is_some()
+            || validate_native_signatory_v1(&payload.authority).is_err()
+        {
+            return Err(Error::Transaction);
+        }
+        let frame = bounded_frame(payload)?;
+        let payload = norito::decode_canonical::<TransactionPayload>(&frame)
+            .map_err(|_| Error::Transaction)?;
+        let builder = TransactionBuilder::from_payload(payload).map_err(|_| Error::Transaction)?;
+        // The ordinary builder has no multisig authorization. A single Ed25519 signature is
+        // always 64 bytes, so this private, invalid placeholder has its exact canonical layout.
+        // Neither this synthetic transaction nor its bytes may escape as signing authority.
+        let entry = TransactionEntrypoint::External(
+            builder.build_with_signature(Signature::from_bytes(&[0; 64])),
+        );
+        bounded_entry(&entry).map(|_| ())
+    })
 }
 
 /// The first-release native profile has one Ed25519 account and no algorithm fallback.
@@ -427,25 +469,102 @@ pub(crate) fn validate_native_signatory_v1(authority: &AccountId) -> Result<(), 
 pub(crate) fn native_signed_entry_frame_v1(
     entry: &TransactionEntrypoint,
 ) -> Result<Vec<u8>, Error> {
-    let TransactionEntrypoint::External(signed) = entry else {
-        return Err(Error::Transaction);
-    };
-    validate_account_transaction_envelope_v1(signed.payload())?;
-    if signed.multisig_signatures().is_some() {
-        return Err(Error::Transaction);
+    native_signed_entry_frame_attempt_v1(entry).map_err(|_| Error::Transaction)
+}
+
+/// Retain the exact native External frame without cloning the borrowed signed graph.
+/// Executor callers must retain local refusal; a query facade may project a payload-free error.
+pub(crate) fn native_signed_transaction_frame_attempt_v1(
+    signed: &SignedTransaction,
+) -> Result<Vec<u8>, crate::execution_attempt::ExecutionAttemptError<Error>> {
+    validate_native_signed_profile_v1(signed)?;
+    let frame = bounded_frame_attempt(signed)?;
+    let owned = norito::decode_canonical::<SignedTransaction>(&frame)
+        .map_err(native_codec_attempt_error)?;
+    native_signed_entry_frame_attempt_v1(&TransactionEntrypoint::External(owned))
+}
+
+fn validate_native_signed_profile_v1(
+    signed: &SignedTransaction,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
+    validate_native_signatory_v1(signed.authority())?;
+    if signed.network_id().is_none()
+        || signed.time_to_live().is_none()
+        || signed.attachments().is_some()
+        || signed.multisig_signatures().is_some()
+        || signed.payload().validate_fee_payment_intent().is_err()
+    {
+        return Err(Error::Transaction.into());
     }
-    let bytes = bounded_entry(entry)?;
-    signed.verify_signature().map_err(|_| Error::Transaction)?;
+    Ok(())
+}
+
+fn native_signed_entry_frame_attempt_v1(
+    entry: &TransactionEntrypoint,
+) -> Result<Vec<u8>, crate::execution_attempt::ExecutionAttemptError<Error>> {
+    let TransactionEntrypoint::External(signed) = entry else {
+        return Err(Error::Transaction.into());
+    };
+    validate_native_signed_profile_v1(signed)?;
+    let bytes = bounded_frame_attempt(entry)?;
+    let hash = HashOf::try_new(signed.payload()).map_err(native_codec_attempt_error)?;
+    iroha_crypto::verify_signature_borrowed(
+        &signed.signature().0,
+        signed
+            .authority()
+            .try_signatory()
+            .ok_or(Error::Transaction)?,
+        hash.as_ref(),
+    )
+    .map_err(|_| Error::Transaction)?;
     Ok(bytes)
 }
 
+fn native_codec_attempt_error(
+    error: norito::Error,
+) -> crate::execution_attempt::ExecutionAttemptError<Error> {
+    crate::execution_attempt::norito_decode_attempt_error(error, |_| Error::Transaction)
+}
+
 pub(crate) fn bounded_entry(entry: &TransactionEntrypoint) -> Result<Vec<u8>, Error> {
-    if norito::canonical_frame_len(entry).map_err(|_| Error::Transaction)?
-        > FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1
-    {
-        return Err(Error::Transaction);
+    bounded_frame(entry)
+}
+
+fn bounded_frame<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
+    bounded_frame_attempt(value).map_err(|_| Error::Transaction)
+}
+
+fn bounded_frame_attempt<T: norito::NoritoSerialize>(
+    value: &T,
+) -> Result<Vec<u8>, crate::execution_attempt::ExecutionAttemptError<Error>> {
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let length = norito::core::encoded_frame_len(value).map_err(native_codec_attempt_error)?;
+    if length > FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1 {
+        return Err(Error::Transaction.into());
     }
-    norito::encode_canonical(entry).map_err(|_| Error::Transaction)
+    norito::core::reserve_decode_allocation(length).map_err(native_codec_attempt_error)?;
+    norito::core::to_bytes_bounded(value, length).map_err(|error| {
+        native_codec_attempt_error(match error {
+            norito::core::BoundedEncodeError::Serialization(error) => error,
+            norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
+                norito::Error::AllocationFailed {
+                    bytes: bytes as u64,
+                }
+            }
+            // The same borrowed value was counted immediately before encoding.
+            norito::core::BoundedEncodeError::FrameTooLarge { .. } => norito::Error::LengthMismatch,
+        })
+    })
+}
+
+fn fallible_string(value: &str) -> Result<String, Error> {
+    norito::core::reserve_decode_allocation(value.len()).map_err(|_| Error::Transaction)?;
+    let mut retained = String::new();
+    retained
+        .try_reserve_exact(value.len())
+        .map_err(|_| Error::Transaction)?;
+    retained.push_str(value);
+    Ok(retained)
 }
 
 /// Actual same-State view retained until the purpose wrapper finishes eligibility checks.
@@ -479,7 +598,9 @@ impl<'state> AuthenticatedCheckExecutionCutV1<'state> {
 }
 
 mod certified_walk;
-pub(crate) use certified_walk::{SignerCertifiedBlockV1, SignerCertifiedWalkV1};
+pub(crate) use certified_walk::{
+    SignerCertifiedBlockV1, SignerCertifiedWalkV1, with_native_check_read_limits,
+};
 
 mod execution;
 pub(crate) use execution::{BorrowedCheckExecutionCutV1, PreparedCheckExecutionV1};
@@ -491,23 +612,25 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
     bound: BoundNativeCheckV1,
     round: &NativeCheckRoundV1,
 ) -> Result<AuthenticatedCheckExecutionCutV1<'state>, Error> {
-    round.ensure_live()?;
-    let view = state.view();
-    let mut proof = PreparedCheckExecutionV1::new(&view, purpose, bound, round)?;
-    let chain = SignerCertifiedWalkV1::new(&view)?;
-    for block in chain.walk(proof.floor_height(), proof.applied_height()) {
+    crate::query::signer_check::with_native_check_read_limits(|| {
         round.ensure_live()?;
-        proof.consume(&block.map_err(|_| Error::Finality)?)?;
-    }
-    let data = proof.finish()?.into_data();
-    drop(chain);
-    Ok(AuthenticatedCheckExecutionCutV1 {
-        view,
-        check_height: data.check_height,
-        applied_floor: data.applied_floor,
-        entry_hash: data.entry_hash,
-        canonical_external: data.canonical_external,
-        check_block_hash: data.check_block_hash,
+        let view = state.view();
+        let mut proof = PreparedCheckExecutionV1::new(&view, purpose, bound, round)?;
+        let chain = SignerCertifiedWalkV1::new(&view)?;
+        for block in chain.walk(proof.floor_height(), proof.applied_height()) {
+            round.ensure_live()?;
+            proof.consume(&block.map_err(|_| Error::Finality)?)?;
+        }
+        let data = proof.finish()?.into_data();
+        drop(chain);
+        Ok(AuthenticatedCheckExecutionCutV1 {
+            view,
+            check_height: data.check_height,
+            applied_floor: data.applied_floor,
+            entry_hash: data.entry_hash,
+            canonical_external: data.canonical_external,
+            check_block_hash: data.check_block_hash,
+        })
     })
 }
 

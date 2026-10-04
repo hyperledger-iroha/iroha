@@ -6,7 +6,7 @@ use crate::{
         specialized::LoadedActionTrait as _,
         trigger_is_enabled,
     },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{StateReadOnly, StateTransaction, WorldReadOnly, validate_network_xor_asset},
     tx::TransactionRejectionReason,
 };
 use iroha_data_model::{
@@ -438,20 +438,15 @@ pub(crate) fn enforce_deferred_instruction_list(
 fn validation_fee_payout_xor_scale(
     state_transaction: &StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
-) -> Result<u32, ValidationFeeAdmissionError> {
-    let definition = state_transaction
-        .world
-        .asset_definition(&binding.xor_asset_id)
-        .map_err(
-            |_| ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset definition is missing",
-            },
-        )?;
-    definition.spec().scale().ok_or(
-        ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-            reason: "the bound XOR asset must have a fixed minor-unit scale",
+) -> Result<u32, ExecutionAttemptError<ValidationFeeAdmissionError>> {
+    validate_network_xor_asset(&state_transaction.world, &binding.xor_asset_id).map_err(
+        |error| {
+            error.map_rejection(|error| {
+                ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+            })
         },
-    )
+    )?;
+    Ok(9)
 }
 
 fn quantity_to_minor_units_u128(
@@ -520,14 +515,39 @@ pub(crate) fn active_payout_binding_at_height(
     Option<ValidationFeeTreasuryPayoutBindingV1>,
     ExecutionAttemptError<TransactionRejectionReason>,
 > {
-    Ok(
-        validated_policy_registry(state_transaction)?.and_then(|registry| {
+    active_payout_binding_in_world_at_height(&state_transaction.world, height)
+}
+
+/// Read the same authenticated payout lifecycle for execution and signing preparation.
+pub(crate) fn active_payout_binding_in_world_at_height(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> Result<
+    Option<ValidationFeeTreasuryPayoutBindingV1>,
+    ExecutionAttemptError<TransactionRejectionReason>,
+> {
+    Ok(validated_policy_registry_in_world(world)
+        .map_err(|error| error.map_rejection(admission_rejection))?
+        .and_then(|registry| {
             registry
                 .payout_policies
                 .effective_entry_at_height(height)
                 .map(|entry| entry.payout_binding.clone())
-        }),
-    )
+        }))
+}
+
+/// Return the authenticated immutable custody coordinates retained by every lifecycle revision.
+pub(crate) fn retained_payout_custody_binding(
+    world: &impl WorldReadOnly,
+) -> Result<Option<ValidationFeeTreasuryPayoutBindingV1>, ExecutionAttemptError<String>> {
+    Ok(validated_policy_registry_in_world(world)
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?
+        .and_then(|registry| {
+            registry
+                .payout_policies
+                .head()
+                .map(|entry| entry.payout_binding.clone())
+        }))
 }
 
 fn validated_policy_registry(
@@ -576,6 +596,11 @@ fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
         validate_registry_entry_governance(entry, world)?;
     }
     for entry in &registry.payout_policies.entries {
+        validate_network_xor_asset(world, &entry.payout_binding.xor_asset_id).map_err(|error| {
+            error.map_rejection(|error| {
+                ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+            })
+        })?;
         let exact_kind = ProposalKind::ValidationFeePayoutLifecycle(
             iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal {
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
@@ -615,6 +640,7 @@ pub(crate) fn validate_persisted_policy_registry_runtime_v1(
     }
     let restored_timestamp_ms = state
         .latest_block()
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?
         .ok_or_else(|| {
             "active fee policy restoration requires its retained block timestamp".to_owned()
         })?
@@ -784,6 +810,11 @@ fn validate_treasury_payout_contract_subject(
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let custody = &policy.reward_custody;
+    validate_network_xor_asset(state.world(), &custody.xor_asset_id).map_err(|error| {
+        error.map_rejection(|error| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+        })
+    })?;
     let record =
         crate::smartcontracts::code::fetch_bound_contract_record(state, &custody.contract_address)
             .map_err(|error| {
@@ -852,6 +883,11 @@ fn validate_treasury_payout_binding_contract_subject(
     ds_scale: u8,
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
+    validate_network_xor_asset(state.world(), &binding.xor_asset_id).map_err(|error| {
+        error.map_rejection(|error| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+        })
+    })?;
     let Some(record) =
         crate::smartcontracts::code::fetch_bound_contract_record(state, &binding.contract_address)
             .map_err(|error| {
@@ -919,22 +955,6 @@ fn validate_treasury_payout_binding_contract_subject(
         return Err(
             ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the governed SBD scale differs",
-            }
-            .into(),
-        );
-    }
-    let xor_definition = state
-        .world()
-        .asset_definition(&binding.xor_asset_id)
-        .map_err(
-            |_| ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset definition is missing",
-            },
-        )?;
-    if xor_definition.spec().scale().is_none() {
-        return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset must have a fixed minor-unit scale",
             }
             .into(),
         );
@@ -1241,7 +1261,8 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
     // Committee and monetary staking authority are independent of native fee
     // accounting. Resolve deferred approvals against this execution overlay first.
-    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;
+    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)
+        .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let registry = validated_policy_registry(stx)
         .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let _ = active_policy_from_validated_registry(registry.as_ref(), stx)
@@ -1258,14 +1279,15 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
     let binding = &lifecycle.binding;
-    let scale = validation_fee_payout_xor_scale(stx, binding).map_err(admission_rejection)?;
+    let scale = validation_fee_payout_xor_scale(stx, binding)
+        .map_err(|error| fee_attempt_rejection(stx, error))?;
     let rewards_error = |error: iroha_data_model::isi::error::InstructionExecutionError| {
         admission_rejection(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             error.to_string(),
         ))
     };
-    let Some(offer) = crate::validation_fee_rewards::conversion_offer(stx, binding, scale)
-        .map_err(rewards_error)?
+    let Some(offer) =
+        crate::validation_fee_rewards::conversion_offer(stx, binding).map_err(rewards_error)?
     else {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     };

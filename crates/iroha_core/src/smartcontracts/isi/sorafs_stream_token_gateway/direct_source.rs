@@ -1,6 +1,6 @@
 //! One-shot provenance for a gateway action in an exact directly signed Network entry.
 
-use crate::state::{StateReadOnly, StateTransaction};
+use crate::state::StateTransaction;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId, executor::ValidationFail,

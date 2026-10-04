@@ -19,62 +19,88 @@ pub(crate) fn fixture(
     now: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, ValidationFeePolicyV1),
 ) {
-    crate::validation_fee::tests::with_validation_fee_payout_state_at_time(
+    crate::validation_fee::tests::with_validation_fee_payout_invocation_at_time(
         200_000,
         now,
+        Hash::new(b"retail-native-test"),
         |stx, deployer, code, code_hash| {
-            let asset = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("fees", "paynet").unwrap(),
-                "fee_token".parse().unwrap(),
-            );
-            let mut bound = crate::validation_fee::tests::activate_bound_payout_runtime(
-                stx,
-                deployer,
-                code,
-                code_hash,
-                91,
-                asset.clone(),
-                "retail_test_conversion",
-            );
-            let pool = crate::validation_fee::tests::activate_bound_payout_runtime(
-                stx,
-                deployer,
-                code,
-                code_hash,
-                92,
-                asset.clone(),
-                "retail_test_pool",
-            );
-            bound.binding.pool_vault_account_id = pool.binding.treasury_account_id;
-            bound.binding.pool_contract_address = pool.binding.contract_address;
-            bound.binding.pool_code_hash = pool.binding.code_hash;
-            let policy = ValidationFeePolicyV1 {
-                schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-                network_id: stx.network_id,
-                policy_version: 1,
-                previous_policy_hash: None,
-                ds_asset_id: asset,
-                ds_scale: 2,
-                fee: "0.10".parse().unwrap(),
-                treasury_account_id: bound.binding.treasury_account_id.clone(),
-                charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
-
-                retail_schedule: RetailFeeScheduleV1::default(),
-                effective_from_ms: START,
-                notice_published_at_ms: START - RETAIL_FEE_NOTICE_MS,
-                exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.into()],
-                reward_custody: bound.binding.custody(),
-            };
-            let registry =
-                crate::validation_fee::tests::policy_registry(&[policy.clone()], &[bound.binding]);
-            registry.validate().unwrap();
-            crate::validation_fee::tests::install_policy_registry_fixture(&registry, stx);
-            // Keep the component fixture's retained original invocation; a copied hash
-            // cannot replace its producer-owned FASTPQ source entry.
+            let policy = install_retail_policy_fixture(stx, deployer, code, code_hash);
+            assert_eq!(stx.tx_call_hash, Some(Hash::new(b"retail-native-test")));
+            // The finite invocation owner was retained before borrowing State.
             test(stx, policy);
         },
     );
 }
+pub(crate) fn fixture_block(
+    now: u64,
+    test: impl FnOnce(&mut crate::state::StateBlock<'_>, ValidationFeePolicyV1),
+) {
+    crate::validation_fee::tests::with_validation_fee_payout_block_at_time(
+        200_000,
+        now,
+        |block, deployer, code, code_hash| {
+            let mut setup = block.transaction();
+            let policy = install_retail_policy_fixture(&mut setup, deployer, code, code_hash);
+            setup.apply();
+            test(block, policy);
+        },
+    );
+}
+fn install_retail_policy_fixture(
+    stx: &mut StateTransaction<'_, '_>,
+    deployer: &AccountId,
+    code: &[u8],
+    code_hash: Hash,
+) -> ValidationFeePolicyV1 {
+    let asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "paynet").unwrap(),
+        "fee_token".parse().unwrap(),
+    );
+    let mut bound = crate::validation_fee::tests::activate_bound_payout_runtime(
+        stx,
+        deployer,
+        code,
+        code_hash,
+        91,
+        asset.clone(),
+        "retail_test_conversion",
+    );
+    let pool = crate::validation_fee::tests::activate_bound_payout_runtime(
+        stx,
+        deployer,
+        code,
+        code_hash,
+        92,
+        asset.clone(),
+        "retail_test_pool",
+    );
+    bound.binding.pool_vault_account_id = pool.binding.treasury_account_id;
+    bound.binding.pool_contract_address = pool.binding.contract_address;
+    bound.binding.pool_code_hash = pool.binding.code_hash;
+    let policy = ValidationFeePolicyV1 {
+        schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+        network_id: stx.network_id,
+        policy_version: 1,
+        previous_policy_hash: None,
+        ds_asset_id: asset,
+        ds_scale: 2,
+        fee: "0.10".parse().unwrap(),
+        treasury_account_id: bound.binding.treasury_account_id.clone(),
+        charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
+        retail_schedule: RetailFeeScheduleV1::default(),
+        effective_from_ms: START,
+        notice_published_at_ms: START - RETAIL_FEE_NOTICE_MS,
+        exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.into()],
+        reward_custody: bound.binding.custody(),
+    };
+    let registry =
+        crate::validation_fee::tests::policy_registry(&[policy.clone()], &[bound.binding]);
+    registry.validate().unwrap();
+    crate::validation_fee::tests::install_policy_registry_fixture(&registry, stx);
+    policy
+}
+
 fn seed(
     stx: &mut StateTransaction<'_, '_>,
     policy: &ValidationFeePolicyV1,
@@ -218,26 +244,55 @@ fn included_payments_have_zero_receipts_without_treasury_balance_entries() {
 }
 #[test]
 fn direct_unquoted_and_stale_free_payments_cannot_silently_charge() {
-    fixture(START + 1000, |stx, policy| {
+    fixture_block(START + 1000, |block, policy| {
         let owner = account(3);
-        seed(stx, &policy, &owner, 1000, 49, START);
+        let mut setup = block.transaction();
+        seed(&mut setup, &policy, &owner, 1000, 49, START);
+        setup.apply();
         let req = request(&policy, &owner, 1);
         let transfer = Transfer::asset_quantity(
             AssetId::new(policy.ds_asset_id.clone(), owner.clone()),
             Quantity::from(1_u32),
             account(4),
         );
-        assert!(transfer.clone().execute(&owner, stx).is_err());
-        let old = reviewed(stx, &req, 3);
-        assert_eq!(old.fee_minor, 0);
-        pay(stx, &req);
-        finalize(stx).unwrap();
-        stx.world.retail_fee_assessment = Some(old);
-        stx.world.retail_fee_source_transaction_hash = Some(*Hash::new([4]).as_ref());
-        pay(stx, &req);
-        assert!(finalize(stx).is_err());
+        let mut unquoted =
+            block.transaction_for_fastpq_testing(Hash::new(b"retail-unquoted-refusal"));
+        assert!(transfer.clone().execute(&owner, &mut unquoted).is_err());
         assert_eq!(
-            account_state(&stx.world, &owner)
+            unquoted
+                .world
+                .assets
+                .get(&AssetId::new(policy.ds_asset_id.clone(), owner.clone()))
+                .unwrap()
+                .as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(unquoted.retail_fee_transcripts_for_test().is_empty());
+        drop(unquoted);
+        let mut accepted =
+            block.transaction_for_fastpq_testing(Hash::new(b"retail-reviewed-payment"));
+        assert_eq!(
+            account_state(&accepted.world, &owner)
+                .unwrap()
+                .unwrap()
+                .payments_used,
+            49,
+            "unquoted refusal rolled back the original account"
+        );
+        let old = reviewed(&mut accepted, &req, 3);
+        assert_eq!(old.fee_minor, 0);
+        pay(&mut accepted, &req);
+        finalize(&mut accepted).unwrap();
+        accepted.apply();
+        let mut stale = block.transaction_for_fastpq_testing(Hash::new(b"retail-stale-payment"));
+        stale.world.retail_fee_assessment = Some(old);
+        stale.world.retail_fee_source_transaction_hash = Some(*Hash::new([4]).as_ref());
+        pay(&mut stale, &req);
+        assert!(finalize(&mut stale).is_err());
+        drop(stale);
+        let check = block.transaction();
+        assert_eq!(
+            account_state(&check.world, &owner)
                 .unwrap()
                 .unwrap()
                 .payments_used,
@@ -441,22 +496,29 @@ fn enrollment_requires_the_wallet_primary_alias_issuer_domain() {
 
 #[test]
 fn idle_maintenance_transcript_uses_immutable_receipt_protocol_identity() {
-    fixture(START + 30 * 86_400_000, |stx, policy| {
-        let owner = account(3);
-        seed(stx, &policy, &owner, 30, 0, START);
-        stx.tx_call_hash = None;
-        settle_balance(
-            &mut stx.world,
-            &AssetId::new(policy.ds_asset_id, owner.clone()),
-        )
-        .unwrap();
-        finalize(stx).unwrap();
-        let receipt = receipts(&stx.world, &owner, None, 10).unwrap().remove(0);
-        let hash = Hash::prehashed(receipt.receipt_id);
-        assert_eq!(stx.retail_fee_transcripts_for_test()[0].batch_hash, hash);
-        assert!(stx.retail_fee_source_kind_for_test(&hash));
-        assert_eq!((receipt.collected_minor, receipt.waived_minor), (30, 70));
-    });
+    crate::validation_fee::tests::with_validation_fee_payout_protocol_at_time(
+        200_000,
+        START + 30 * 86_400_000,
+        |stx, deployer, code, code_hash| {
+            // Reuse the same activated runtime and policy installation under the explicit
+            // mandatory component owner rather than grant that owner to ordinary fixtures.
+            let policy = install_retail_policy_fixture(stx, deployer, code, code_hash);
+            let owner = account(3);
+            seed(stx, &policy, &owner, 30, 0, START);
+            assert!(stx.tx_call_hash.is_none());
+            settle_balance(
+                &mut stx.world,
+                &AssetId::new(policy.ds_asset_id, owner.clone()),
+            )
+            .unwrap();
+            finalize(stx).unwrap();
+            let receipt = receipts(&stx.world, &owner, None, 10).unwrap().remove(0);
+            let hash = Hash::prehashed(receipt.receipt_id);
+            assert_eq!(stx.retail_fee_transcripts_for_test()[0].batch_hash, hash);
+            assert!(stx.retail_fee_source_kind_for_test(&hash));
+            assert_eq!((receipt.collected_minor, receipt.waived_minor), (30, 70));
+        },
+    );
 }
 
 #[test]
@@ -943,4 +1005,47 @@ fn multi_year_dormancy_rejects_before_mutation_and_bounded_sweeps_preserve_waive
         assert_eq!(history.iter().map(|r| r.collected_minor).sum::<u64>(), 30);
         assert_eq!(history.iter().map(|r| r.waived_minor).sum::<u64>(), 3570);
     });
+}
+#[test]
+fn empty_idle_sweep_retains_original_fragment_count_and_dirty_sibling() {
+    let state = crate::state::State::new_for_testing(
+        crate::state::World::default(),
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        0,
+        0,
+    ));
+    let fragments = block.committed_fragment_count();
+    process_idle_accounts(&mut block).unwrap();
+    assert_eq!(block.committed_fragment_count(), fragments);
+
+    let key: StatePath = "retail_idle_original_sibling_TESTDATA".parse().unwrap();
+    {
+        let mut sibling = block.transaction();
+        sibling
+            .world
+            .smart_contract_state
+            .insert(key.clone(), vec![23]);
+        sibling.apply();
+    }
+    assert_eq!(block.committed_fragment_count(), fragments + 1);
+    assert_eq!(block.world.smart_contract_state.touched_entries().len(), 1);
+    process_idle_accounts(&mut block).unwrap();
+    assert_eq!(block.committed_fragment_count(), fragments + 1);
+    assert_eq!(block.world.smart_contract_state.get(&key), Some(&vec![23]));
+    assert_eq!(block.world.smart_contract_state.touched_entries().len(), 1);
+    drop(block);
+    assert!(
+        state
+            .view()
+            .world()
+            .smart_contract_state
+            .get(&key)
+            .is_none()
+    );
 }

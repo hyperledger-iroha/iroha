@@ -198,3 +198,5 @@ ordinary_circuit!(KagemushaOrdinaryAppGuardEpCircuitV1, Fq);
 mod composition;
 pub(crate) use composition::{OrdinaryGuardWitnessV1, build_ordinary_app_guard_pair_v1};
 pub(crate) use composition::{bind_credential, bind_subject};
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+pub(crate) use composition::{build_ordinary_app_guard_ep_v1, build_ordinary_app_guard_eq_v1};

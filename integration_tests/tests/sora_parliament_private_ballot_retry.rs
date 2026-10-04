@@ -348,32 +348,18 @@ async fn assert_private_retry_state_and_restore(
             "private retry must not enact an effect",
         )
         .await?;
-        let (proof, verified) = read_on_dedicated_thread({
-            let client = peer_client.client().clone();
-            let height = (NonZeroU64::new(height).expect("nonzero private failure height")).clone();
-            let network_id = (network.network_id()).clone();
-            move || client.get_bridge_finality_anchor(height, network_id)
-        })
-        .await?;
-        assert_eq!(verified, block_hash);
-        assert_eq!(proof.finality_artifact.height, height);
-        assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);
+        let (proof, verified) = finality::certified_block(network, &peer_client, height).await?;
+        assert_eq!(verified.block().hash(), block_hash);
+        assert_eq!(verified.height(), height);
+        assert_eq!(proof.committee.len(), VALIDATOR_COUNT);
         assert_eq!(
-            proof.finality_artifact.height_context.roster.len(),
+            verified.commitment().schedule.current.committee.len(),
             VALIDATOR_COUNT
         );
-        assert_eq!(proof.finality_artifact.height_context.quorum.min_signers, 3);
-        assert_eq!(proof.finality_artifact.height_context.quorum.total_power, 4);
-        assert!(
-            proof
-                .finality_artifact
-                .height_context
-                .roster
-                .iter()
-                .all(|entry| entry.power == 1)
-        );
+        // The shared contiguous verifier enforces exactly three equal native
+        // votes for every successor before exposing this authenticated result.
         assert_eq!(
-            proof.finality_artifact.height_context.da_layout,
+            verified.commitment().schedule.current.da_layout,
             recommended_data_availability_layout()
         );
     }

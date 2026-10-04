@@ -310,7 +310,9 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
             enc::encode_ri(wide::arithmetic::ADDI, 9, 9, 1),
         ];
         let prepared = contract_with_cycle_policy(&body, cost - 1, 0);
-        let root_words = crate::ivm_test_support::unit_callable(0).result_words.len() as u64;
+        let root_words = crate::ivm_test_support::unit_callable(0)
+            .result_word_count()
+            .unwrap() as u64;
         let mut vm = IVM::new(100 + root_words * (ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + 1));
         vm.load_prepared(&prepared).unwrap();
         vm.set_register(6, 17);

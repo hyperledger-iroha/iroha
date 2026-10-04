@@ -1,6 +1,7 @@
 ﻿using System.Security.Cryptography;
 using Hyperledger.Iroha;
 using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Query;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
@@ -35,10 +36,15 @@ using var client = new IrohaClient(
 try
 {
     var capabilities = await client.Torii.GetNodeCapabilitiesAsync();
-    var accounts = await client.Torii.GetAccountsAsync(limit: 5);
-    var aliases = accounts.Items.Count == 0
+    var accounts = await client.Torii.Accounts.GetPageAsync(new ListQuery { Limit = 5 });
+    var aliases = accounts.Items.IsEmpty
         ? null
         : await client.Torii.LookupAliasesByAccountAsync(accounts.Items[0].Id);
+    var domainCount = 0;
+    await foreach (var domain in client.Torii.Domains.EnumerateAsync(new ListQuery { Sort = ["id"], Limit = 100 }))
+    {
+        domainCount++;
+    }
     var faucetPuzzle = await client.Torii.GetAccountFaucetPuzzleAsync();
     if (faucetPuzzle.NetworkId != exactNetworkId)
     {
@@ -48,7 +54,8 @@ try
 
     Console.WriteLine($"Torii ABI version: {capabilities.AbiVersion}");
     Console.WriteLine($"Torii data model version: {capabilities.DataModelVersion}");
-    Console.WriteLine($"Visible accounts in first page: {accounts.Items.Count}");
+    Console.WriteLine($"Visible accounts in first page: {accounts.Items.Length}");
+    Console.WriteLine($"Visible domains: {domainCount}");
     Console.WriteLine($"Aliases on first account: {aliases?.Total ?? 0}");
     Console.WriteLine($"Faucet puzzle difficulty bits: {faucetPuzzle.DifficultyBits}");
     Console.WriteLine($"Faucet puzzle exact network: {faucetPuzzle.NetworkId}");

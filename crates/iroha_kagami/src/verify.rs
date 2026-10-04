@@ -24,7 +24,7 @@ use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::peer::PeerId;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, HashSet},
     io::{BufWriter, Write},
     path::PathBuf,
 };
@@ -174,14 +174,14 @@ fn enforce_public_xor_binding(
         DomainId::parse_fully_qualified("nexus.universal")?,
         "xor".parse()?,
     );
-    let mut registered_asset_definitions = BTreeSet::new();
+    let mut registered_asset_definitions = BTreeMap::new();
     let mut public_xor_binding = None;
     for instruction in manifest.instructions() {
         if let Some(register) = instruction
             .as_any()
             .downcast_ref::<Register<AssetDefinition>>()
         {
-            registered_asset_definitions.insert(register.object.id.clone());
+            registered_asset_definitions.insert(register.object.id.clone(), &register.object);
             continue;
         }
         if let Some(register) = instruction
@@ -191,7 +191,7 @@ fn enforce_public_xor_binding(
             if let iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) =
                 register
             {
-                registered_asset_definitions.insert(register.object.id.clone());
+                registered_asset_definitions.insert(register.object.id.clone(), &register.object);
             }
             continue;
         }
@@ -210,7 +210,7 @@ fn enforce_public_xor_binding(
             public_xor_binding = Some(bind.asset_definition_id.clone());
         }
     }
-    if registered_asset_definitions.contains(&synthetic_stake_asset_id) {
+    if registered_asset_definitions.contains_key(&synthetic_stake_asset_id) {
         return Err(eyre!(
             "public profile {:?} must not register synthetic `nexus.universal/xor` as the NPoS stake asset",
             profile
@@ -255,10 +255,18 @@ fn enforce_public_xor_binding(
             "public XOR alias differs from the immutable NPoS XOR definition"
         ));
     }
-    if !registered_asset_definitions.contains(&public_xor_asset_definition_id) {
+    if !registered_asset_definitions.contains_key(&public_xor_asset_definition_id) {
         return Err(eyre!(
             "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to `{public_xor_asset_definition_id}` but does not register that asset definition",
             profile
+        ));
+    }
+    let definition = registered_asset_definitions[&public_xor_asset_definition_id];
+    if definition.spec != iroha_primitives::numeric::NumericSpec::fractional(9)
+        || definition.balance_scope_policy != iroha_data_model::asset::AssetBalancePolicy::Global
+    {
+        return Err(eyre!(
+            "public XOR asset `{public_xor_asset_definition_id}` requires global scope and scale nine"
         ));
     }
     Ok(())
@@ -385,6 +393,19 @@ mod tests {
         manifest: RawGenesisTransaction,
         asset_definition_id: AssetDefinitionId,
     ) -> RawGenesisTransaction {
+        append_public_xor_binding_with_shape_for_test(
+            manifest,
+            asset_definition_id,
+            NumericSpec::fractional(9),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+        )
+    }
+    fn append_public_xor_binding_with_shape_for_test(
+        manifest: RawGenesisTransaction,
+        asset_definition_id: AssetDefinitionId,
+        spec: NumericSpec,
+        scope: iroha_data_model::asset::AssetBalancePolicy,
+    ) -> RawGenesisTransaction {
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
         let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid alias");
@@ -408,8 +429,8 @@ mod tests {
                 AssetDefinition::new(
                     asset_definition_id.clone(),
                     "xor".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    spec,
+                    scope,
                     None,
                 )
                 .with_metadata(Metadata::default()),
@@ -591,6 +612,65 @@ mod tests {
         let report = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
             .expect("Nexus explicit XOR binding should verify");
         assert_eq!(report.peer_count, 4);
+    }
+    #[test]
+    fn public_xor_verification_rejects_wrong_scope_and_precision() {
+        for profile in [GenesisProfile::Iroha3Taira, GenesisProfile::Iroha3Nexus] {
+            let seed = [8_u8; 32];
+            let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+            let defaults = profile_defaults(profile);
+            let builder = complete_builder_for_test_peers(
+                GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+                &peers,
+            );
+            let manifest = crate::genesis::generate_default(
+                builder,
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+                None,
+                SumeragiConsensusMode::Npos,
+                Some(&defaults),
+                Some(seed),
+            )
+            .unwrap();
+            for (spec, scope) in [
+                (
+                    NumericSpec::fractional(9),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                ),
+                (
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                ),
+                (
+                    NumericSpec::fractional(18),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                ),
+                (
+                    NumericSpec::fractional(9),
+                    iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                ),
+            ] {
+                let candidate = append_public_xor_binding_with_shape_for_test(
+                    manifest.clone(),
+                    test_public_xor_asset_definition_id(profile),
+                    spec,
+                    scope,
+                );
+                let result = enforce_public_xor_binding(&candidate, profile);
+                if spec == NumericSpec::fractional(9)
+                    && scope == iroha_data_model::asset::AssetBalancePolicy::Global
+                {
+                    result.unwrap();
+                } else {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("requires global scope and scale nine")
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn verify_rejects_public_profile_missing_xor_binding() {

@@ -577,15 +577,34 @@ fn canonical_lane_reset_filters_pins_before_world_or_cache_publication() {
 
 #[test]
 fn actual_state_commit_publishes_prepared_da_despite_ahead_cache() {
+    use std::{
+        future::Future,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context, Wake, Waker},
+    };
+    struct ReaderProbe {
+        state: Arc<State>,
+        calls: AtomicUsize,
+        blocked: AtomicUsize,
+    }
+    impl Wake for ReaderProbe {
+        fn wake(self: Arc<Self>) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.state.state_commit_lock.try_lock().is_none()
+                || self.state.state_write_lock.try_lock().is_none()
+                || self.state.da_pin_intents.try_write().is_none()
+            {
+                self.blocked.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
     let (state, key) = fixture();
+    let state = Arc::new(state);
+    let mut registrations = [
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget()),
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget()),
+    ];
     let pin = intent(&state, &key, 0, None);
-    state.da_pin_intents.write().insert(
-        pin.clone(),
-        DaCommitmentLocation {
-            block_height: 77,
-            index_in_bundle: 9,
-        },
-    );
     let mut block = state.block(BlockHeader::new(
         std::num::NonZeroU64::MIN,
         None,
@@ -593,10 +612,46 @@ fn actual_state_commit_publishes_prepared_da_despite_ahead_cache() {
         1,
         0,
     ));
+    // State block acquisition hydrates the derived cache from World. Install
+    // this contradictory cache only afterward, so the actual publisher must
+    // take its collision reconstruction path instead of seeing an empty cache.
+    assert!(state.da_pin_intents.write().insert(
+        pin.clone(),
+        DaCommitmentLocation {
+            block_height: 77,
+            index_in_bundle: 9,
+        },
+    ));
     block
         .stage_da_pin_intent_bundle(1, vec![pin.clone()])
         .unwrap();
+    let probe = Arc::new(ReaderProbe {
+        state: Arc::clone(&state),
+        calls: AtomicUsize::new(0),
+        blocked: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&probe));
+    let mut context = Context::from_waker(&waker);
+    let mut pending: Vec<_> = [
+        state
+            .world
+            .da_pin_intents_by_ticket
+            .observe_reader_release(),
+        state.world.da_pin_intents_by_alias.observe_reader_release(),
+    ]
+    .into_iter()
+    .zip(registrations.iter_mut())
+    .map(|(wait, registration)| Box::pin(wait.wait_for_release(registration)))
+    .collect();
+    for wait in &mut pending {
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+    }
     block.commit_empty_block_for_testing().unwrap();
+    assert_eq!(probe.calls.load(Ordering::SeqCst), pending.len());
+    assert_eq!(probe.blocked.load(Ordering::SeqCst), 0);
+    for wait in &mut pending {
+        assert!(wait.as_mut().poll(&mut context).is_ready());
+    }
     let world = state.world.da_pin_intents_by_ticket.view();
     let record = world.get(&pin.storage_ticket).unwrap();
     assert_eq!(record.location.block_height, 1);

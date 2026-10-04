@@ -162,6 +162,7 @@ fn hash_prepared_writer_release_before_wait_registration_is_not_lost() {
     };
     for finish in 0..3 {
         let owner = BlockHashes::new(vec![hash(1)]);
+        let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
         let first = detached(&owner, false, &[2]);
         let second = detached(&owner, false, &[3]);
         let prepared = prepare(first, &owner);
@@ -181,7 +182,7 @@ fn hash_prepared_writer_release_before_wait_registration_is_not_lost() {
                 prepared.publish();
             }
         }
-        let mut wait = wait.wait_for_release();
+        let mut wait = wait.wait_for_release(&mut release_slot_0);
         assert!(
             Pin::new(&mut wait)
                 .poll(&mut Context::from_waker(Waker::noop()))
@@ -344,6 +345,7 @@ fn changed_after_admission_signals_the_writer_released_during_refusal() {
         task::{Context, Waker},
     };
     let owner = BlockHashes::new(vec![hash(1)]);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
     let journal = detached(&owner, false, &[2]);
     let mut observation = None;
     let (_, error, _cleanup) = journal
@@ -355,7 +357,7 @@ fn changed_after_admission_signals_the_writer_released_during_refusal() {
         .err()
         .expect("changed base");
     assert!(matches!(error, PublicationPreparationError::Changed));
-    let mut wait = observation.unwrap().wait_for_release();
+    let mut wait = observation.unwrap().wait_for_release(&mut release_slot_0);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -378,13 +380,19 @@ fn advisory_predecessor_observation_notifies_only_successful_acquisition() {
         task::{Context, Waker},
     };
     let owner = BlockHashes::new(vec![hash(1)]);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_1 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_2 = crate::unit_test_support::release_registration(&owner.budget);
     let journal = detached(&owner, false, &[2]);
     let mut released = owner
         .map()
         .unwrap()
         .observe_reader_release()
-        .wait_for_release();
-    let mut writer_released = owner.released.observe().wait_for_release();
+        .wait_for_release(&mut release_slot_0);
+    let mut writer_released = owner
+        .released
+        .observe()
+        .wait_for_release(&mut release_slot_1);
     assert!(journal.matches_current(&owner));
     assert!(
         Pin::new(&mut released)
@@ -401,7 +409,7 @@ fn advisory_predecessor_observation_notifies_only_successful_acquisition() {
         .map()
         .unwrap()
         .observe_reader_release()
-        .wait_for_release();
+        .wait_for_release(&mut release_slot_2);
     assert!(!journal.matches_current(&owner));
     assert!(
         Pin::new(&mut blocked)
@@ -424,6 +432,7 @@ fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
         task::{Context, Waker},
     };
     let owner = BlockHashes::new(vec![hash(1)]);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
     let journal = detached(&owner, false, &[2]);
     let held = prepare(detached(&owner, false, &[]), &owner);
     let expected = owner.map().unwrap().observe_reader_release();
@@ -439,7 +448,7 @@ fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
     };
     assert_eq!(wait, expected);
     assert_ne!(wait, writer_release);
-    let mut wait = wait.wait_for_release();
+    let mut wait = wait.wait_for_release(&mut release_slot_0);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -465,8 +474,6 @@ fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
 #[test]
 fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
     use std::{
-        future::Future,
-        pin::Pin,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -502,6 +509,7 @@ fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
     }
     for unwind in [false, true] {
         let owner = Arc::new(BlockHashes::new(vec![hash(1)]));
+        let mut registration = crate::unit_test_support::release_registration(&owner.budget);
         let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
         let guard = outer.lock();
         let probe = Arc::new(Probe {
@@ -516,11 +524,11 @@ fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
         let (journal, error, cleanup) = journal
             .try_prepare_publication(&owner, |_, target| {
                 target.block().commit();
-                let mut observation = target.released.observe().wait_for_release();
+                let observation = target.released.observe();
                 let waker = Waker::from(Arc::clone(&probe));
                 assert!(
-                    Pin::new(&mut observation)
-                        .poll(&mut Context::from_waker(&waker))
+                    registration
+                        .poll_wait(&observation, &mut Context::from_waker(&waker))
                         .is_pending()
                 );
                 wait = Some(observation);
@@ -549,8 +557,8 @@ fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
         assert_eq!(probe.wakes.load(Ordering::SeqCst), 1);
         assert_eq!(probe.refunds.load(Ordering::SeqCst), 1);
         assert!(
-            Pin::new(&mut wait.unwrap())
-                .poll(&mut Context::from_waker(Waker::noop()))
+            registration
+                .poll_wait(&wait.unwrap(), &mut Context::from_waker(Waker::noop()))
                 .is_ready()
         );
     }

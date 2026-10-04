@@ -73,7 +73,7 @@ fn strict_native_journal_audit_rejects_hash_mismatch_without_rewriting_hashes() 
 #[test]
 fn native_capacity_refusal_preserves_original_journals_and_da_custody() {
     let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
-    let block = Arc::clone(chain.committed(1).block());
+    let block = chain.committed(1).block().clone();
     let mut kura = Kura::blank_kura_for_testing();
     Arc::get_mut(&mut kura).unwrap().max_disk_usage_bytes = 1;
     let before = journal_image(&kura.block_store.lock());
@@ -96,8 +96,8 @@ fn native_pending_capacity_counts_each_original_wire_with_its_index_and_hash() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit(Vec::new());
     let kura = Kura::blank_kura_for_testing();
-    let first = Arc::clone(chain.committed(1).block());
-    let second = Arc::clone(chain.committed(2).block());
+    let first = chain.committed(1).block().clone();
+    let second = chain.committed(2).block().clone();
     let expected =
         Kura::block_required_bytes(&first).unwrap() + Kura::block_required_bytes(&second).unwrap();
     {

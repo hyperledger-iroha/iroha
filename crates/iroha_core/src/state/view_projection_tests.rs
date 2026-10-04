@@ -148,7 +148,7 @@ async fn get_blocks_from_height() {
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply_without_execution(&block, Vec::new());
         state_block.commit().unwrap();
-        kura.store_block(block).expect("store block");
+        kura.store_block(block.into_shared()).expect("store block");
     }
     assert_eq!(
         &state
@@ -179,7 +179,7 @@ async fn canonical_history_stops_at_missing_kura_entry() {
         let _events = state_block.apply_without_execution(&block, Vec::new());
         state_block.commit().unwrap();
         if height != 3 {
-            kura.store_block(block).expect("store block");
+            kura.store_block(block.into_shared()).expect("store block");
         }
     }
     let view = state.view();
@@ -188,7 +188,9 @@ async fn canonical_history_stops_at_missing_kura_entry() {
     assert_eq!(blocks.next().unwrap().unwrap().header().height().get(), 2);
     assert!(matches!(
         blocks.next().expect("missing slot must be explicit"),
-        Err(CanonicalHistoryError::BodyUnavailable { height: 3, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            CanonicalHistoryError::BodyUnavailable { height: 3, .. }
+        ))
     ));
     assert!(blocks.next().is_none(), "cursor must stop after a gap");
 }
@@ -203,13 +205,16 @@ async fn canonical_history_reports_authenticated_hash_only_body() {
     let mut state_block = state.block(block.as_ref().header());
     let _events = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
-    kura.store_block(block).expect("store canonical test block");
+    kura.store_block(block.into_shared())
+        .expect("store canonical test block");
     kura.corrupt_canonical_body_for_testing(nonzero!(1_usize))
         .expect("convert canonical test block to hash-only form");
     let view = state.view();
     assert!(matches!(
         view.canonical_block_by_height(nonzero!(1_usize)),
-        Err(CanonicalHistoryError::BodyUnavailable { height: 1, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            CanonicalHistoryError::BodyUnavailable { height: 1, .. }
+        ))
     ));
 }
 #[test]
@@ -217,11 +222,11 @@ fn canonical_block_authentication_rejects_header_height_mismatch() {
     let block = new_dummy_block_with_payload(|header| {
         header.set_height(nonzero!(2_u64));
     });
-    let block = Arc::<SignedBlock>::new(block.as_ref().clone());
+    let block = block.into_shared();
     let error = canonical_history::authenticate_canonical_block(
         nonzero!(1_usize),
         block.hash(),
-        Some(Arc::clone(&block)),
+        Some(block.clone()),
     )
     .expect_err("slot and header height must agree");
     assert_eq!(

@@ -1605,9 +1605,7 @@ fn committed_transaction_by_hash(
             work,
             iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
         )
-        .map_err(|error| {
-            conversion_error(format!("VPN payment history is unavailable: {error}"))
-        })?;
+        .map_err(crate::canonical_history::query_attempt_error)?;
     let mut found = None;
     for (entrypoint_hash, tx, result) in crate::canonical_history::signed_calls(carrier.block())
         .map_err(|error| conversion_error(error.to_string()))?

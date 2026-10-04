@@ -765,7 +765,7 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
         .expect("execute native genesis");
     chain.commit(Vec::new());
     let kura = chain.kura();
-    let original = Arc::clone(chain.committed(2).block());
+    let original = (chain.committed(2).block()).clone();
     let original_wire = original.encode_wire().unwrap();
     let journal_image = || {
         let store = kura.block_store.lock();
@@ -808,7 +808,7 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
     );
     assert_ne!(substituted.encode_wire().unwrap(), original_wire);
     assert!(matches!(
-        kura.store_block(substituted),
+        kura.store_block(share_storage_fixture(substituted)),
         Err(Error::CanonicalBlockWireMismatch { height: 2 })
     ));
     assert_eq!(journal_image(), before);
@@ -818,7 +818,7 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
             .unwrap(),
         original_wire
     );
-    kura.store_block(Arc::clone(&original))
+    kura.store_block((original).clone())
         .expect("exact original retry remains available");
     assert_eq!(journal_image(), before);
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
@@ -828,7 +828,7 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
 fn native_height_gap_refusal_preserves_journals_and_contiguous_retry() {
     let frames = native_storage_frames(3);
     let kura = Kura::blank_kura_for_testing();
-    kura.store_block(Arc::clone(&frames[0])).unwrap();
+    kura.store_block((frames[0]).clone()).unwrap();
     let journal_image = || {
         let store = kura.block_store.lock();
         [
@@ -841,7 +841,7 @@ fn native_height_gap_refusal_preserves_journals_and_contiguous_retry() {
     };
     let before = journal_image();
     assert!(matches!(
-        kura.store_block(Arc::clone(&frames[2])),
+        kura.store_block((frames[2]).clone()),
         Err(Error::BlockHeightGap {
             expected_next_height: 2,
             actual_height: 3
@@ -850,7 +850,7 @@ fn native_height_gap_refusal_preserves_journals_and_contiguous_retry() {
     assert_eq!(journal_image(), before);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
     for frame in &frames[1..] {
-        kura.store_block(Arc::clone(frame)).unwrap();
+        kura.store_block((frame).clone()).unwrap();
     }
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 3);
     for (offset, frame) in frames.iter().enumerate() {

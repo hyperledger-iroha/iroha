@@ -32,7 +32,7 @@ pub(in super::super) struct OrdinaryFundedStateForTestingV1 {
     pub(in super::super) generated: KagemushaGeneratedRecursiveStateProofV1,
     pub(in super::super) public_original: Vec<u8>,
     // Hold the exact consumed-credit replay index for the funded fixture lifetime.
-    pub(in super::super) _consumed_credits: OrdinaryConsumedCreditsForQualificationV1,
+    pub(in super::super) consumed_credits: OrdinaryConsumedCreditsForQualificationV1,
     pub(in super::super) mint_source: ProvenMintForTesting,
 }
 
@@ -165,6 +165,10 @@ pub(in super::super) fn prove_funded_ordinary_state_with_held_keys_for_testing_v
         wrapper_eq, wrapper_ep,
         &seed_mint.pair.eq.protocol, &seed_mint.pair.ep.protocol,
         &seed_mint.source.eq_protocol, &seed_mint.source.ep_protocol, held_keys,
+    );
+    assert_eq!(
+        bootstrap.previous_counter, seed_f.enrollment.previous_counter,
+        "the retained Bootstrap floor must match the actual original enrollment before Mint progression"
     );
     let expected_mint_protocols = [
         seed_mint.pair.eq.protocol_digest,
@@ -907,7 +911,7 @@ pub(in super::super) fn prove_funded_ordinary_state_with_held_keys_for_testing_v
         state: preview.successor,
         generated,
         public_original,
-        _consumed_credits: consumed,
+        consumed_credits: consumed,
         mint_source: mint,
     }
 }

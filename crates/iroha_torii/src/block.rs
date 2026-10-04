@@ -1,5 +1,7 @@
+//! Charged canonical block delivery with explicit retryable read refusals.
+
 use crate::stream::{self, WebSocketNorito};
-use iroha_core::kura::Kura;
+use iroha_core::{execution_attempt::ExecutionAttemptError, kura::Kura, state::AllocationBudget};
 use iroha_data_model::block::stream::{BlockMessageSend, BlockSubscriptionRequest};
 use std::{
     num::{NonZeroU64, NonZeroUsize},
@@ -14,6 +16,9 @@ pub enum Error {
     /// Invalid block subscription height: {0}
     #[error("Invalid block subscription height: {0}")]
     InvalidHeight(String),
+    /// Original Kura read outcome; local allocation refusal is never an absent block.
+    #[error("Block history read failed: {0}")]
+    History(#[source] ExecutionAttemptError<iroha_core::kura::Error>),
 }
 impl From<stream::Error> for Error {
     fn from(error: stream::Error) -> Self {
@@ -28,6 +33,7 @@ pub struct Consumer<'ws> {
     pub stream: &'ws mut WebSocketNorito,
     height: NonZeroUsize,
     kura: Arc<Kura>,
+    execution_budget: AllocationBudget,
 }
 impl<'ws> Consumer<'ws> {
     /// Constructs [`Consumer`], which forwards blocks through the `stream`.
@@ -35,13 +41,18 @@ impl<'ws> Consumer<'ws> {
     /// # Errors
     /// Can fail due to timeout or without message at websocket or during decoding request
     #[iroha_futures::telemetry_future]
-    pub async fn new(stream: &'ws mut WebSocketNorito, kura: Arc<Kura>) -> Result<Self> {
+    pub async fn new(
+        stream: &'ws mut WebSocketNorito,
+        kura: Arc<Kura>,
+        execution_budget: AllocationBudget,
+    ) -> Result<Self> {
         let BlockSubscriptionRequest(height) = stream.recv().await?;
         let height = request_height_to_kura(height)?;
         Ok(Consumer {
             stream,
             height,
             kura,
+            execution_budget,
         })
     }
     /// Forwards block if block for given height already exists
@@ -50,7 +61,11 @@ impl<'ws> Consumer<'ws> {
     /// Can fail due to timeout. Also receiving might fail
     #[iroha_futures::telemetry_future]
     pub async fn consume(&mut self) -> Result<()> {
-        if let Some(block) = self.kura.get_block(self.height) {
+        if let Some(block) = self
+            .kura
+            .get_block(self.height, &self.execution_budget)
+            .map_err(Error::History)?
+        {
             self.stream.send(BlockMessageSend(block)).await?;
             self.height = self.height.checked_add(1).ok_or_else(|| {
                 Error::InvalidHeight("maximum block height is achieved".to_string())

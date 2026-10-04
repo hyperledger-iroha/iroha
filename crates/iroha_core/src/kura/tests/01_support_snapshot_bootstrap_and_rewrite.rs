@@ -18,9 +18,7 @@ use iroha_config::{
         defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL},
     },
 };
-use iroha_crypto::{
-    Algorithm, Hash, HashOf,
-};
+use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     Level,
     block::BlockHeader,
@@ -54,7 +52,7 @@ use std::{
 use tempfile::TempDir;
 
 /// Original executed native carriers, retained without changing their signed body or QC.
-fn native_storage_frames(count: usize) -> Vec<Arc<SignedBlock>> {
+fn native_storage_frames(count: usize) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     assert!(count > 0);
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
         .expect("execute genuine native genesis");
@@ -62,8 +60,17 @@ fn native_storage_frames(count: usize) -> Vec<Arc<SignedBlock>> {
         chain.commit(Vec::new());
     }
     (1..=count)
-        .map(|height| Arc::clone(chain.committed(height as u64).block()))
+        .map(|height| (chain.committed(height as u64).block()).clone())
         .collect()
+}
+
+/// Explicit standalone structural fixture control; real executed chains retain their State owner.
+fn share_storage_fixture(block: SignedBlock) -> iroha_data_model::block::SharedSignedBlock {
+    let budget = crate::state::AllocationBudget::new(
+        iroha_data_model::block::SharedSignedBlock::allocation_layout().size(),
+    );
+    iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
+        .expect("admit one standalone structural fixture block")
 }
 
 fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
@@ -512,7 +519,7 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
     let lanes = RuntimeLaneConfig::default();
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
     for block in &originals {
-        kura.store_block(Arc::clone(block)).unwrap();
+        kura.store_block((block).clone()).unwrap();
     }
     kura.block_store.lock().flush_pending_fsync(true).unwrap();
     let original_wires = originals
@@ -523,7 +530,10 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
     let (reopened, count) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lanes).unwrap();
     assert_eq!(count.0, originals.len());
-    let verified = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &reopened).unwrap();
+    let history_budget = crate::state::AllocationBudget::new(64 * 1024 * 1024);
+    let verified =
+        CertifiedChain::from_pinned(&chain_id, &network, &hashes, &reopened, &history_budget)
+            .unwrap();
     for height in 1..=3 {
         let authority = verified.authenticated_execution(height).unwrap();
         let original = &originals[height as usize - 1];
@@ -538,7 +548,10 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
             )
             .unwrap()
             .unwrap();
-        assert!(Arc::ptr_eq(&retained, authority.block()));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &retained,
+            authority.block()
+        ));
         assert_eq!(bytes, original_wires[height as usize - 1]);
     }
     assert!(!reopened.store_root().join("merge_ledger").exists());

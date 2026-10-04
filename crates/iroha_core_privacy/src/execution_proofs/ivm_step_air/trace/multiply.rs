@@ -82,7 +82,7 @@ pub(in super::super) fn witness(left: u64, right: u64, digits: &[F], active: boo
 }
 
 fn correction_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     input: &[F],
     sources: Sources<'_>,
@@ -135,7 +135,7 @@ pub(in super::super) struct Selection {
 }
 
 pub(in super::super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     digits: &[F],
     sources: Sources<'_>,

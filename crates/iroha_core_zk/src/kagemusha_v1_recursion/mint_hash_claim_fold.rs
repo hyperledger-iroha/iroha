@@ -50,6 +50,8 @@ use super::carrier_binding::{
     KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1 as ClaimCarrierBindingV1,
     placeholder_carrier_binding_v1 as placeholder_claim_carrier_binding_v1,
 };
+#[cfg(test)]
+use super::carrier_rlc::streaming as rlc_streaming;
 use super::carrier_rlc::*;
 const CLAIM_CARRIER_BINDING_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
     KagemushaCarrierBindingLayoutV1 {

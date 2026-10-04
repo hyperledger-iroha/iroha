@@ -295,6 +295,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
     head_policy_version: 2,
     head_policy_hash: "9b".repeat(32),
     current_policy: null,
+    conversion_policy: null,
     trusted_checkpoint_height: 100,
     trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127,
@@ -488,7 +489,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
         projection.conversion_policy.binding.sbdAssetDefinitionId =
           projection.current_policy.reward_custody.ds_asset_id;
       },
-      error: /binding contains unknown, aliased, or missing fields/u,
+      error: /binding contains unsupported fields: sbdAssetDefinitionId$/u,
     },
     {
       label: "invalid conversion loss limit",
@@ -527,9 +528,27 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
         projection.current_policy.parliament
           .governance_certificate.body_bindings[0].ballot.outcome = {
             outcome: "Rejected",
+            details: null,
           };
       },
       error: /approving aggregate outcome/u,
+    },
+    {
+      label: "missing native ballot outcome details",
+      mutate(projection) {
+        projection.current_policy.parliament
+          .governance_certificate.body_bindings[0].ballot.outcome = {
+            outcome: "Rejected",
+          };
+      },
+      error: /ballot\.outcome contains unknown, aliased, or missing fields/u,
+    },
+    {
+      label: "conversion authority is not available at its enactment height",
+      mutate(projection) {
+        projection.evaluated_block_height = 120;
+      },
+      error: /conversion_policy is not available at the finalized height/u,
     },
   ];
   for (const fixture of malformedFixtures) {
@@ -576,6 +595,7 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
     },
   };
   const client = new ToriiClient("https://torii.invalid", {
+    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => assert.fail("overridden request path should be used"),
     [TORII_TEST_NATIVE_BINDING]: native,
   });
@@ -875,6 +895,16 @@ test("native fee projection metadata must remain coherent with its verified page
     { evaluated_block_height: 100 },
     { observed_ledger_tip_height: 126 },
     { more_available: false },
-  ]) assert.throws(() => verifyProjectionFixture({ ...completeVerifiedProjection(), ...changes }),
-    /canonical Iroha hash marker|immutable binding|did not advance/u);
+  ]) {
+    // Isolate page/checkpoint consistency from optional policy activation. A page
+    // before either enactment has explicit null policy projections in Rust.
+    const projection = {
+      ...completeVerifiedProjection(),
+      current_policy: null,
+      conversion_policy: null,
+      ...changes,
+    };
+    assert.throws(() => verifyProjectionFixture(projection),
+      /canonical Iroha hash marker|immutable binding|did not advance/u);
+  }
 });

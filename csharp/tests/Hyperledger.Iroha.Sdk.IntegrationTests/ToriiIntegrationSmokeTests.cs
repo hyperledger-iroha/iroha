@@ -1,5 +1,6 @@
 using System.Net;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Query;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
 
@@ -127,9 +128,11 @@ public sealed class ToriiIntegrationSmokeTests
         var activeAbi = await client.GetRuntimeAbiActiveAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, activeAbi.AbiVersion);
 
-        var accounts = await client.GetAccountsAsync(limit: 5, cancellationToken: TestContext.Current.CancellationToken);
+        var accounts = await client.Accounts.GetPageAsync(
+            new ListQuery { Limit = 5, IncludeTotal = true },
+            TestContext.Current.CancellationToken);
         Assert.NotEmpty(accounts.Items);
-        Assert.True(accounts.Total >= accounts.Items.Count);
+        Assert.True(accounts.Total >= (ulong)accounts.Items.Length);
 
         var qrSnapshot = await client.GetExplorerAccountQrAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(accounts.Items[0].Id, qrSnapshot.CanonicalId);

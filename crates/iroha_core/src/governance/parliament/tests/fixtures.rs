@@ -763,7 +763,8 @@ fn validation_fee_payout_lifecycle_proposal() -> ProposalKind {
             .parse()
             .expect("canonical validation-fee entrypoint"),
         ds_asset_id: validation_fee_asset("fee_token"),
-        xor_asset_id: validation_fee_asset("xor"),
+        xor_asset_id: iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id,
         pool_vault_account_id: pool_contract_address.subject_id(),
         pool_contract_address,
         pool_code_hash: root(48),
@@ -799,6 +800,58 @@ fn public_requirements(bodies: &[ParliamentBody]) -> Vec<RequiredParliamentBodyV
             },
         })
         .collect()
+}
+
+#[test]
+fn validation_fee_proposals_bind_committed_global_network_xor() {
+    use iroha_data_model::{
+        Registrable as _,
+        asset::{AssetBalancePolicy, AssetDefinition},
+        parameter::{Parameter, system::SumeragiNposParameters},
+    };
+    use iroha_primitives::numeric::NumericSpec;
+
+    let ProposalKind::ValidationFeePayoutLifecycle(lifecycle) =
+        validation_fee_payout_lifecycle_proposal()
+    else {
+        unreachable!()
+    };
+    let binding = lifecycle.payout_binding;
+    let parameters = SumeragiNposParameters::default();
+    assert_eq!(binding.xor_asset_id, parameters.xor_asset_definition_id);
+    assert_ne!(binding.ds_asset_id, binding.xor_asset_id);
+    let owner = account(43);
+    let definitions = [
+        (
+            binding.ds_asset_id.clone(),
+            "fee_token",
+            u32::from(VALIDATION_FEE_DS_SCALE),
+        ),
+        (binding.xor_asset_id.clone(), "xor", 9),
+    ]
+    .map(|(id, name, scale)| {
+        AssetDefinition::new(
+            id,
+            name.to_owned(),
+            NumericSpec::fractional(scale),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner)
+    });
+    let world = World::with([], [], definitions);
+    {
+        let mut committed = world.parameters.block();
+        committed.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
+        committed.commit();
+    }
+    crate::state::validate_network_xor_asset(&world.view(), &binding.xor_asset_id)
+        .expect("Parliament fee proposal uses committed global scale-nine XOR");
+    assert!(crate::state::validate_network_xor_asset(&world.view(), &binding.ds_asset_id).is_err());
+    let ProposalKind::ValidationFeePolicy(policy) = validation_fee_policy_proposal() else {
+        unreachable!()
+    };
+    assert_eq!(policy.policy.reward_custody, binding.custody());
 }
 
 #[test]

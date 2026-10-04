@@ -1,12 +1,13 @@
 // From a camera luma plane to lane data.
 //
-// The decoder locates the four finders, derives a homography for each
-// orientation hypothesis, picks the orientation whose ring gates line up (and
-// whose lane D codeword checks out), then reads the tiles and dots. Every tile
-// is classified jointly: the 8x8 sample patch is compared against the 32
-// hypotheses (polarity x glyph) and the best match wins, so the katakana and
-// the light/dark bit help each other. Cells the decoder is unsure about become
-// Reed-Solomon erasures.
+// The decoder locates the four finders (or three, inferring the fourth),
+// derives a homography for each orientation hypothesis, ranks the hypotheses
+// by how well the ring gates and the `天` line up, then reads the tiles and
+// dots. Every tile is classified jointly: the 8x8 sample patch is compared
+// against the 32 hypotheses (polarity x glyph) and the best match wins, so the
+// katakana and the light/dark bit help each other. Cells the decoder is unsure
+// about become Reed-Solomon erasures. A scan session follows a code from one
+// frame to the next by tracking its pose instead of searching again.
 //
 // The tile level read judges every patch against the light and dark levels
 // measured at the finders. When it leaves lane P or K unreadable, the
@@ -19,7 +20,7 @@
 // cos, exp and atan2 agree (they are not guaranteed to across platforms);
 // conformance is that the golden captures decode to the recorded lanes.
 
-import { PetalHomography, homographyFromPoints } from "./geometry.js";
+import { PetalHomography, applyHomography, homographyFromPoints } from "./geometry.js";
 import { GLYPH_COUNT, TEMPLATES, TEMPLATE_N } from "./glyphs.js";
 import { sampleLuma } from "./image.js";
 import { D_WORD, K_WORD, P_WORD, PetalFrameCells, decodeLaneCountedStatus, laneSpec } from "./lanes.js";
@@ -30,6 +31,7 @@ import {
   GATE_SLOT_LIST,
   GLYPH_BOX,
   GUARD_SLOT_LIST,
+  MASK,
   RING_COUNT,
   SLOT_CENTER_X,
   SLOT_CENTER_Y,
@@ -37,8 +39,11 @@ import {
   TILE_CENTER_X,
   TILE_CENTER_Y,
   TILE_COUNT,
+  TILE_ORIGIN,
+  TILE_PITCH,
+  TOTAL_SLOTS,
 } from "./layout.js";
-import { locateFinders } from "./locate.js";
+import { finderCandidates, followFinder } from "./locate.js";
 import { parseAtomLane, parseDLane } from "./stream.js";
 import { PetalError, clamp, fmax, fmin, totalCmp } from "./support.js";
 
@@ -129,13 +134,19 @@ function dotSamples(image, m, x, y, spread) {
 }
 
 /**
- * Lit and dark levels at the four corners (bilinear over the canvas), or `null` when a finder
- * has too little contrast. Exported for tests only.
+ * Light and dark levels at the four corners: the solid blossom core, and the black canvas 100
+ * units inward of it (interpolated bilinearly over the canvas by the readers), or `null` when a
+ * finder has too little contrast. An `inferred` corner (canonical index) was not seen, so its
+ * levels are extrapolated from the other three by the parallelogram rule and kept within their
+ * range, and must differ by 12 like a seen corner's. Exported for tests only.
  */
-export function referenceLevels(image, m) {
+export function referenceLevels(image, m, inferred = null) {
   const lit = new Float64Array(4);
   const dark = new Float64Array(4);
   for (let i = 0; i < 4; i += 1) {
+    if (inferred === i) {
+      continue;
+    }
     const cx = FINDER_CENTERS[i][0];
     const cy = FINDER_CENTERS[i][1];
     // the blossom is solid out to radius 24 around its centre
@@ -149,7 +160,25 @@ export function referenceLevels(image, m) {
     const a = dotSamples(image, m, cx + sx * 100, cy, 5);
     const b = dotSamples(image, m, cx, cy + sy * 100, 5);
     dark[i] = 0.5 * (a + b);
-    if (lit[i] - dark[i] < 12) {
+    // also refuses NaN levels, which only a non-finite pose can produce
+    if (!Number.isFinite(lit[i] - dark[i]) || lit[i] - dark[i] < 12) {
+      return null;
+    }
+  }
+  if (inferred !== null) {
+    const n1 = (inferred + 1) % 4;
+    const opposite = (inferred + 2) % 4;
+    const n2 = (inferred + 3) % 4;
+    const extrapolate = (v) => {
+      const low = fmin(fmin(v[n1], v[opposite]), v[n2]);
+      const high = fmax(fmax(v[n1], v[opposite]), v[n2]);
+      return clamp(v[n1] + v[n2] - v[opposite], low, high);
+    };
+    lit[inferred] = extrapolate(lit);
+    dark[inferred] = extrapolate(dark);
+    // uneven light can push the estimates past each other; an inferred corner
+    // needs the same contrast as a seen one
+    if (lit[inferred] - dark[inferred] < 12) {
       return null;
     }
   }
@@ -164,6 +193,119 @@ function mixCorners(c, u, v) {
 
 function clampUnit(value) {
   return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
+/** `(x, y)` normalised with the light and dark levels interpolated there. */
+function normalisedLevel(reference, sample, x, y) {
+  const u = clampUnit(x / 1024);
+  const v = clampUnit(y / 1024);
+  const lit = mixCorners(reference.lit, u, v);
+  const dark = mixCorners(reference.dark, u, v);
+  return (sample - dark) / (lit - dark);
+}
+
+// Centres of the lattice cells outside the `天` mask (no tile is ever drawn there), row-major.
+const EMPTY_X = [];
+const EMPTY_Y = [];
+MASK.forEach((line, row) => {
+  for (let col = 0; col < line.length; col += 1) {
+    if (line[col] !== "#") {
+      EMPTY_X.push(TILE_ORIGIN + TILE_PITCH * (col + 0.5));
+      EMPTY_Y.push(TILE_ORIGIN + TILE_PITCH * (row + 0.5));
+    }
+  }
+});
+
+/**
+ * How well the `天` lines up: the mean normalised level over the tiles (each sampled at five
+ * points across the tile, so a glyph stroke at the centre does not decide it) minus the mean
+ * over the empty lattice cells. The mask is symmetric left to right but not top to bottom, so
+ * this tells the four quarter turns apart even when the ring gates are damaged. Exported for
+ * tests only.
+ */
+export function maskScore(image, m, reference) {
+  let tiles = -0;
+  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
+    const x = TILE_CENTER_X[tile];
+    const y = TILE_CENTER_Y[tile];
+    tiles += normalisedLevel(reference, dotSamples(image, m, x, y, 8), x, y);
+  }
+  let empty = -0;
+  for (let cell = 0; cell < EMPTY_X.length; cell += 1) {
+    const x = EMPTY_X[cell];
+    const y = EMPTY_Y[cell];
+    empty += normalisedLevel(reference, dotSamples(image, m, x, y, 8), x, y);
+  }
+  return tiles / TILE_COUNT - empty / EMPTY_X.length;
+}
+
+/**
+ * Canonical index (0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright code)
+ * of the corner at index `index` of a finder quad under one orientation hypothesis.
+ */
+function canonicalCorner(index, rotation, mirrored) {
+  return mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4;
+}
+
+const CANONICAL_X = Float64Array.from(FINDER_CENTERS, (center) => center[0]);
+const CANONICAL_Y = Float64Array.from(FINDER_CENTERS, (center) => center[1]);
+
+/**
+ * The brightness summed over all ring slots under the pose that maps the canonical corners onto
+ * the quad `(xs[i], ys[i])`, or `null` when that pose is degenerate. The slots form the same set
+ * of points under every quarter turn and mirror of the canvas (80, 92 and 104 are multiples of
+ * four), so the value does not depend on the orientation.
+ */
+function ringBrightness(image, xs, ys) {
+  const m = homographyFromPoints(CANONICAL_X, CANONICAL_Y, xs, ys);
+  if (m === null) {
+    return null;
+  }
+  let sum = -0;
+  for (let flat = 0; flat < TOTAL_SLOTS; flat += 1) {
+    sum += dotSamples(image, m, SLOT_CENTER_X[flat], SLOT_CENTER_Y[flat], 3.5);
+  }
+  return sum;
+}
+
+/**
+ * Moves an inferred corner to where the three dotted rings line up best: a 13 x 13 search in
+ * steps of 2 % of the mean leg around the parallelogram estimate, then a 9 x 9 search in steps
+ * of 0.5 % around the best point. The rings fix the geometry only; the orientation is decided
+ * afterwards by the gates and the `天`. Returns a new quad. Exported for tests only.
+ */
+export function refineInferredCorner(image, corners, inferred) {
+  const xs = Float64Array.from(corners, (finder) => finder.x);
+  const ys = Float64Array.from(corners, (finder) => finder.y);
+  const startX = xs[inferred];
+  const startY = ys[inferred];
+  const distance = (other) =>
+    Math.sqrt((xs[other] - startX) * (xs[other] - startX) + (ys[other] - startY) * (ys[other] - startY));
+  const leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4));
+  let bestBrightness = -Number.MAX_VALUE;
+  let bestX = startX;
+  let bestY = startY;
+  const search = (centreX, centreY, step, reach) => {
+    for (let dy = -reach; dy <= reach; dy += 1) {
+      for (let dx = -reach; dx <= reach; dx += 1) {
+        const x = centreX + dx * step;
+        const y = centreY + dy * step;
+        xs[inferred] = x;
+        ys[inferred] = y;
+        const brightness = ringBrightness(image, xs, ys);
+        if (brightness !== null && brightness > bestBrightness) {
+          bestBrightness = brightness;
+          bestX = x;
+          bestY = y;
+        }
+      }
+    }
+  };
+  search(startX, startY, 0.02 * leg, 6);
+  search(bestX, bestY, 0.005 * leg, 4);
+  const refined = corners.slice();
+  refined[inferred] = { x: bestX, y: bestY, size: corners[inferred].size };
+  return refined;
 }
 
 function normalisedDot(image, m, reference, flat) {
@@ -564,9 +706,13 @@ export function readTileLanes(patches, reference, sigmas) {
   return { p, k };
 }
 
-function hypotheses(finders, tryMirrored) {
-  const srcX = Float64Array.from(FINDER_CENTERS, (center) => center[0]);
-  const srcY = Float64Array.from(FINDER_CENTERS, (center) => center[1]);
+/**
+ * The orientation hypotheses `{rotation, mirrored, m}` of a finder quad: four quarter turns, and
+ * four mirrored ones when `tryMirrored`. Exported for tests only.
+ */
+export function hypotheses(finders, tryMirrored) {
+  const srcX = CANONICAL_X;
+  const srcY = CANONICAL_Y;
   const out = [];
   for (const mirrored of [false, true]) {
     if (mirrored && !tryMirrored) {
@@ -591,7 +737,7 @@ function hypotheses(finders, tryMirrored) {
 
 /** Everything read from one camera frame. */
 export class PetalDecodedFrame {
-  constructor(homography, rotation, mirrored, p, k, d) {
+  constructor(homography, rotation, mirrored, p, k, d, inferredCorner) {
     /** Canvas-to-pixel homography that was used. */
     this.homography = homography;
     /** Orientation: how many quarter turns the code is rotated. */
@@ -604,6 +750,12 @@ export class PetalDecodedFrame {
     this.k = k;
     /** Lane D result or `null`. */
     this.d = d;
+    /**
+     * The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
+     * inferred from the other three, as its canonical index: 0 top-left, 1 top-right,
+     * 2 bottom-right, 3 bottom-left of the upright code; `null` when all four were seen.
+     */
+    this.inferredCorner = inferredCorner;
     Object.freeze(this);
   }
 
@@ -663,7 +815,7 @@ export class PetalDecodedFrame {
  * `null`) skips work the caller has done; the result is identical either way
  * because every read is a pure function of its inputs.
  */
-function finish(image, options, candidate, d) {
+function finish(image, options, candidate, d, inferredCorner) {
   const laneD = d !== null ? d : readLaneD(image, candidate.m, candidate.reference);
   const patches = samplePatches(image, candidate.m, PATCHES);
   const tiles = readTileLanes(patches, candidate.reference, options.templateSigmas);
@@ -674,6 +826,7 @@ function finish(image, options, candidate, d) {
     tiles.p,
     tiles.k,
     laneD,
+    inferredCorner,
   );
 }
 
@@ -711,31 +864,58 @@ function isDecodable(image, options) {
 /**
  * Decodes one frame; returns `{frame}` or `{error}` with a `PetalError` code.
  * Shared by `decodePetalFrame` and the scan session.
+ *
+ * Tries the finder candidates of `finderCandidates` in order and returns the
+ * first that reads.
  */
 export function decodeFrameResult(image, options) {
   requireLumaShape(image);
   if (!isDecodable(image, options)) {
     return { error: "unsupported_image" };
   }
-  const finders = locateFinders(image);
-  if (finders === null) {
-    return { error: "no_finders" };
+  let located = false;
+  for (const set of finderCandidates(image)) {
+    located = true;
+    const frame = decodeCandidate(image, options, set);
+    if (frame !== null) {
+      return { frame };
+    }
   }
+  return { error: located ? "no_orientation" : "no_finders" };
+}
+
+/**
+ * One finder set: an inferred corner is first refined against the rings; the
+ * orientation hypotheses are ranked by gate score plus `天` score; lane D is
+ * tried under the best three whose gate score is at least 0.2, then the tile
+ * lanes under the best four.
+ */
+function decodeCandidate(image, options, set) {
+  const corners = set.inferred === null ? set.corners : refineInferredCorner(image, set.corners, set.inferred);
+  const inferredCorner = (rotation, mirrored) =>
+    set.inferred === null ? null : canonicalCorner(set.inferred, rotation, mirrored);
   const scored = [];
-  for (const hypothesis of hypotheses(finders, options.tryMirrored)) {
-    const reference = referenceLevels(image, hypothesis.m);
+  for (const hypothesis of hypotheses(corners, options.tryMirrored)) {
+    const reference = referenceLevels(image, hypothesis.m, inferredCorner(hypothesis.rotation, hypothesis.mirrored));
     if (reference === null) continue;
-    scored.push({ ...hypothesis, reference, score: gateScore(image, hypothesis.m, reference) });
+    scored.push({
+      ...hypothesis,
+      reference,
+      gate: gateScore(image, hypothesis.m, reference),
+      mask: maskScore(image, hypothesis.m, reference),
+    });
   }
-  scored.sort((a, b) => totalCmp(b.score, a.score));
-  // 1. the ring beacon is the cheapest and strongest orientation check
+  // a stable sort, like the reference's
+  scored.sort((a, b) => totalCmp(b.gate + b.mask, a.gate + a.mask));
+  // 1. the ring beacon is the cheapest and strongest orientation check; the
+  // ranking is not by gate score, so a weak gate skips to the next hypothesis
   for (const candidate of scored.slice(0, 3)) {
-    if (candidate.score < 0.2) {
-      break;
+    if (candidate.gate < 0.2) {
+      continue;
     }
     const d = readLaneD(image, candidate.m, candidate.reference);
     if (d !== null) {
-      return { frame: finish(image, options, candidate, d) };
+      return finish(image, options, candidate, d, inferredCorner(candidate.rotation, candidate.mirrored));
     }
   }
   // 2. fall back to the tile lanes under the most promising orientations
@@ -743,29 +923,31 @@ export function decodeFrameResult(image, options) {
     const patches = samplePatches(image, candidate.m, PATCHES);
     const tiles = readTileLanes(patches, candidate.reference, options.templateSigmas);
     if (tiles.p !== null || tiles.k !== null) {
-      return {
-        frame: new PetalDecodedFrame(
-          new PetalHomography(candidate.m),
-          candidate.rotation,
-          candidate.mirrored,
-          tiles.p,
-          tiles.k,
-          readLaneD(image, candidate.m, candidate.reference),
-        ),
-      };
+      return new PetalDecodedFrame(
+        new PetalHomography(candidate.m),
+        candidate.rotation,
+        candidate.mirrored,
+        tiles.p,
+        tiles.k,
+        readLaneD(image, candidate.m, candidate.reference),
+        inferredCorner(candidate.rotation, candidate.mirrored),
+      );
     }
   }
-  return { error: "no_orientation" };
+  return null;
 }
 
 /**
  * Decodes one camera frame.
  *
- * Lanes P and K are read against the light and dark levels measured at the
- * finders first; a lane that does not decode that way is re-read with a
- * normalised read that rescales every tile by its own contrast (over-exposure,
- * veiling light, glare and shadows cancel). An orientation is accepted when
- * lane D, P or K decodes.
+ * The finder candidates are tried in order: four corner blossoms, or three
+ * that form a corner with the fourth inferred (hidden by a finger, a glare or
+ * the edge of the frame; reported in `inferredCorner`). Orientations are
+ * ranked by the ring gates plus the `天`. Lanes P and K are read against the
+ * light and dark levels measured at the finders first; a lane that does not
+ * decode that way is re-read with a normalised read that rescales every tile
+ * by its own contrast (over-exposure, veiling light, glare and shadows
+ * cancel). An orientation is accepted when lane D, P or K decodes.
  *
  * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
  * @param {{tryMirrored?: boolean, templateSigmas?: readonly number[], maxPixels?: number}} [options]
@@ -791,12 +973,147 @@ function homographyValues(homography) {
   throw new TypeError("homography must be a PetalHomography or nine coefficients");
 }
 
+/** The inferred canonical corner of a decoded frame (`null` when it has none). */
+function inferredCornerOf(frame) {
+  const corner = frame.inferredCorner ?? null;
+  if (corner !== null && !(Number.isInteger(corner) && corner >= 0 && corner < 4)) {
+    throw new TypeError("inferredCorner must be null or a corner index 0..3");
+  }
+  return corner;
+}
+
+/**
+ * Follows a code from the previous frame that decoded; returns the frame or `null`. The shared
+ * part of `trackPetalFrame` and the scan session (arguments already validated).
+ */
+export function trackFrame(image, previous, options) {
+  requireLumaShape(image);
+  if (!isDecodable(image, options)) {
+    return null;
+  }
+  const h0 = homographyValues(previous.homography);
+  const previousInferred = inferredCornerOf(previous);
+  const span = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
+  const expected = FINDER_CENTERS.map(([cx, cy]) => {
+    const [x, y] = applyHomography(h0, cx, cy);
+    const size = fmax(
+      span(applyHomography(h0, cx - 60, cy), applyHomography(h0, cx + 60, cy)),
+      span(applyHomography(h0, cx, cy - 60), applyHomography(h0, cx, cy + 60)),
+    );
+    return { x, y, size };
+  });
+  // a broken previous pose (non-finite, or finders larger than the image) is not followed
+  const short = Math.min(image.width, image.height);
+  if (
+    expected.some(
+      (finder) =>
+        !(Number.isFinite(finder.x) && Number.isFinite(finder.y) && Number.isFinite(finder.size)) || finder.size > short,
+    )
+  ) {
+    return null;
+  }
+  // every corner but the one inferred in the previous frame is followed
+  const found = expected.map((finder, index) => (previousInferred === index ? null : followFinder(image, finder)));
+  // the mean movement of the corners that were followed predicts the others
+  let sumX = -0;
+  let sumY = -0;
+  let moved = 0;
+  for (let index = 0; index < 4; index += 1) {
+    if (found[index] === null) continue;
+    sumX += found[index].x - expected[index].x;
+    sumY += found[index].y - expected[index].y;
+    moved += 1;
+  }
+  if (moved < 3) {
+    return null;
+  }
+  const shiftX = sumX / moved;
+  const shiftY = sumY / moved;
+  const predicted = (index) => ({
+    x: expected[index].x + shiftX,
+    y: expected[index].y + shiftY,
+    size: expected[index].size,
+  });
+  // a corner that was hidden is seen again only when its blossom is found right where the
+  // others say it is (a bright thumb beside it must not count)
+  if (previousInferred !== null) {
+    const at = predicted(previousInferred);
+    const again = followFinder(image, at);
+    found[previousInferred] =
+      again !== null && Math.sqrt((again.x - at.x) * (again.x - at.x) + (again.y - at.y) * (again.y - at.y)) <= 0.25 * at.size
+        ? again
+        : null;
+  }
+  const lost = [0, 1, 2, 3].filter((index) => found[index] === null);
+  let inferred = null;
+  if (lost.length === 1) {
+    inferred = lost[0];
+    found[inferred] = predicted(inferred);
+  } else if (lost.length > 1) {
+    return null;
+  }
+  const corners = inferred === null ? found : refineInferredCorner(image, found, inferred);
+  const m = homographyFromPoints(
+    CANONICAL_X,
+    CANONICAL_Y,
+    Float64Array.from(corners, (finder) => finder.x),
+    Float64Array.from(corners, (finder) => finder.y),
+  );
+  if (m === null) {
+    return null;
+  }
+  const reference = referenceLevels(image, m, inferred);
+  if (reference === null) {
+    return null;
+  }
+  const d = readLaneD(image, m, reference);
+  const patches = samplePatches(image, m, PATCHES);
+  const tiles = readTileLanes(patches, reference, options.templateSigmas);
+  if (tiles.p === null && tiles.k === null && d === null) {
+    return null;
+  }
+  return new PetalDecodedFrame(
+    new PetalHomography(m),
+    previous.rotation,
+    previous.mirrored,
+    tiles.p,
+    tiles.k,
+    d,
+    inferred,
+  );
+}
+
+/**
+ * Follows a code from the previous frame that decoded, without searching the whole image for
+ * finders (the most expensive part of {@link decodePetalFrame}).
+ *
+ * Each corner finder is re-found near where the previous pose puts it; a corner inferred in the
+ * previous frame is seen again only when its blossom is found within a quarter diameter of where
+ * the mean movement of the others puts it. When exactly one corner is not found it is placed by
+ * that mean movement and refined against the rings like an inferred corner. The orientation is
+ * kept from the previous frame. Returns `null` for a broken previous pose, when two corners are
+ * lost or when no lane decodes; the caller then runs {@link decodePetalFrame}. A
+ * {@link PetalScanSession} does this by itself.
+ *
+ * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
+ * @param {PetalDecodedFrame} previous the last frame that decoded
+ * @param {{tryMirrored?: boolean, templateSigmas?: readonly number[], maxPixels?: number}} [options]
+ * @returns {PetalDecodedFrame | null}
+ */
+export function trackPetalFrame(image, previous, options) {
+  const resolved = resolveDecodeOptions(options);
+  if (!(previous instanceof PetalDecodedFrame)) {
+    throw new TypeError("previous must be a PetalDecodedFrame");
+  }
+  return trackFrame(image, previous, resolved);
+}
+
 /**
  * Reads all lanes with a known canvas-to-pixel homography (no finder search).
  *
  * Returns `null` when the image is unusable or the finder reference levels
- * are too weak. Used by trackers that already know the pose, by refinement
- * passes and by qualification tooling with a ground-truth pose.
+ * are too weak. Used by refinement passes and by qualification tooling with a
+ * ground-truth pose; {@link trackPetalFrame} follows a moving code.
  */
 export function decodePetalFrameAt(image, homography, options) {
   const resolved = resolveDecodeOptions(options);
@@ -809,12 +1126,13 @@ export function decodePetalFrameAt(image, homography, options) {
   if (reference === null) {
     return null;
   }
-  return finish(image, resolved, { m, rotation: 0, mirrored: false, reference }, null);
+  return finish(image, resolved, { m, rotation: 0, mirrored: false, reference }, null, null);
 }
 
 /**
  * Builds the cells a decoder believes it saw, for diagnostics; `null` when the image is unusable
- * or the finder reference levels are too weak.
+ * or the finder reference levels are too weak. The levels of the frame's inferred corner, if
+ * any, are extrapolated as in the decoder.
  *
  * Tiles are taken from the level read (the one that judges against the finder levels), even for
  * a frame whose lanes were rescued by the normalised read.
@@ -823,10 +1141,11 @@ export function observedCells(image, frame, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
   const m = homographyValues(frame.homography);
+  const inferred = inferredCornerOf(frame);
   if (!isDecodable(image, resolved)) {
     return null;
   }
-  const reference = referenceLevels(image, m);
+  const reference = referenceLevels(image, m, inferred);
   if (reference === null) {
     return null;
   }
@@ -847,10 +1166,11 @@ export function tileMatchError(image, frame, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
   const m = homographyValues(frame.homography);
+  const inferred = inferredCornerOf(frame);
   if (!isDecodable(image, resolved)) {
     return null;
   }
-  const reference = referenceLevels(image, m);
+  const reference = referenceLevels(image, m, inferred);
   if (reference === null) {
     return null;
   }

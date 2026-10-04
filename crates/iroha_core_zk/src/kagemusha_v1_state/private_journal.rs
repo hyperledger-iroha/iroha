@@ -809,6 +809,8 @@ pub(crate) enum TestPersistenceFailure {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[cfg(not(target_vendor = "apple"))]
+    use rustix::fs::Mode;
     const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
         filename: "test.wal",
         magic: b"IKGTEST1",

@@ -221,7 +221,7 @@ pub struct PublicLanePreparationBalanceV1 {
     pub balance: Quantity,
     /// Bonded and pending-unbond custody reserve.
     pub stake_reserved: Quantity,
-    /// Unpaid reward reserve.
+    /// Sum of unpaid public-lane and validation-fee reward reserves for this exact asset.
     pub rewards_reserved: Quantity,
 }
 
@@ -298,6 +298,7 @@ mod tests {
                 expected_state: None,
                 records: vec![],
                 sources: vec![],
+                fee_claim: None,
             }),
             balances: vec![],
         };

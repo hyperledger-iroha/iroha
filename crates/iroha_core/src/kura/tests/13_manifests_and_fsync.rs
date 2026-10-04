@@ -313,7 +313,13 @@ fn fast_init_poisoned_oversized_interior_index_before_body_read() {
     assert_eq!(count, 3);
     assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
 
-    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(matches!(
+        kura.get_block(
+            nonzero!(2_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+        ),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+    ));
     assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
     assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
     assert!(kura.block_store.lock().data_mmap.is_none());
@@ -937,7 +943,13 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
     }
     assert_eq!(kura.get_block_hash(nonzero!(2_usize)), Some(forged));
     assert_eq!(kura.get_block_height_by_hash(forged), None);
-    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(matches!(
+        kura.get_block(
+            nonzero!(2_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+        ),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+    ));
     assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
     let mut store = new_block_store(&temp_dir);
     assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
@@ -957,7 +969,11 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
 
     let oldest_hash = kura.get_block_hash(nonzero!(1_usize)).unwrap();
     let oldest = kura
-        .get_block(nonzero!(1_usize))
+        .get_block(
+            nonzero!(1_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("completed structural storage read")
         .expect("load an old body on demand");
     assert_eq!(oldest.hash(), oldest_hash);
     assert_eq!(
@@ -971,7 +987,11 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
     ));
 
     let tip = kura
-        .get_block(nonzero!(3_usize))
+        .get_block(
+            nonzero!(3_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024),
+        )
+        .expect("completed structural storage read")
         .expect("load the retained-window tip on demand");
     assert_eq!(
         kura.get_block_height_by_hash(tip.hash()),
@@ -982,7 +1002,7 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
         BlockData::Deferred { len: 3, entries } if entries.len() <= 2
     ));
     assert!(matches!(
-        kura.store_block(Arc::clone(&tip)),
+        kura.store_block((tip).clone()),
         Err(Error::EmergencyFastAuxiliaryUnavailable {
             subsystem: "canonical mutation"
         })

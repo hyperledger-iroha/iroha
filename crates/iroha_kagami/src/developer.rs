@@ -254,13 +254,31 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
             Self::ValidateBeaconLaunch(args) => args.run(writer),
             Self::Up(args) => {
                 let store = args.named.store.open()?;
-                let status = up(&store, &args.named.name, args.timeout)?;
-                print_status(writer, &status, args.named.store.json)?;
-                ensure!(
-                    status.phase == ManagedPhase::Ready,
-                    "localnet is not ready; inspect its status and logs"
-                );
-                Ok(())
+                match up(&store, &args.named.name, args.timeout) {
+                    Ok(status) if status.phase == ManagedPhase::Ready => {
+                        print_status(writer, &status, args.named.store.json)
+                    }
+                    Ok(status) => localnet_failure(
+                        writer,
+                        store.root(),
+                        &args.named.name,
+                        Some(&status),
+                        args.named.store.json,
+                        eyre!("localnet is not ready"),
+                    ),
+                    Err(error) => {
+                        // Observation cannot replace the original error or create a generation.
+                        let retained = store.status(&args.named.name).ok();
+                        localnet_failure(
+                            writer,
+                            store.root(),
+                            &args.named.name,
+                            retained.as_ref(),
+                            args.named.store.json,
+                            error,
+                        )
+                    }
+                }
             }
             Self::Status(args) => print_status(
                 writer,
@@ -273,20 +291,9 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
                 args.store.json,
             ),
             Self::Reset(args) => {
-                args.store.open()?.reset(&args.name)?;
-                if args.store.json {
-                    write_json(
-                        writer,
-                        &norito::json!({"name": (args.name), "state": "reset"}),
-                    )
-                } else {
-                    writeln!(
-                        writer,
-                        "{} reset; run `kagami localnet up {}` to create a fresh ledger",
-                        args.name, args.name
-                    )?;
-                    Ok(())
-                }
+                let store = args.store.open()?;
+                store.reset(&args.name)?;
+                print_reset(writer, store.root(), &args.name, args.store.json)
             }
             Self::Logs(args) => {
                 let logs = args.named.store.open()?.logs(
@@ -593,6 +600,94 @@ fn print_status(writer: &mut impl Write, status: &ManagedStatus, json: bool) -> 
     Ok(())
 }
 
+fn localnet_action(root: &Path, name: &str, action: &str, json: bool) -> norito::json::Value {
+    // The opened canonical store already binds --workspace and any relative --state input.
+    // Never turn a non-UTF-8 native path into different executable arguments through lossiness.
+    let argv = root.to_str().map(|root| {
+        let mut args = vec![
+            "kagami".to_owned(),
+            "localnet".to_owned(),
+            action.to_owned(),
+            name.to_owned(),
+            "--state".to_owned(),
+            root.to_owned(),
+        ];
+        if json {
+            args.push("--json".to_owned());
+        }
+        args
+    });
+    norito::json!({
+        "action": action,
+        "name": name,
+        "argv": argv,
+        "argv_unavailable": (root.to_str().is_none().then_some("state_path_not_utf8")),
+    })
+}
+
+fn print_localnet_action(
+    writer: &mut impl Write,
+    root: &Path,
+    name: &str,
+    action: &str,
+) -> Outcome {
+    // Separate fields are portable across shells and cannot disguise spaces as extra argv.
+    writeln!(writer, "action: kagami localnet {action}")?;
+    writeln!(writer, "  name: {name}")?;
+    writeln!(writer, "  --state (quoted path): {root:?}")?;
+    Ok(())
+}
+
+fn localnet_failure(
+    writer: &mut impl Write,
+    root: &Path,
+    name: &str,
+    status: Option<&ManagedStatus>,
+    json: bool,
+    original: color_eyre::Report,
+) -> Outcome {
+    // Even a failed writer must not replace the startup failure with a presentation error.
+    let _ = (|| -> Outcome {
+        if json {
+            return write_json(
+                writer,
+                &norito::json!({
+                    "status": status,
+                    "recovery": [
+                        (localnet_action(root, name, "status", true)),
+                        (localnet_action(root, name, "logs", true)),
+                    ],
+                }),
+            );
+        }
+        if let Some(status) = status {
+            print_status(writer, status, false)?;
+        }
+        writeln!(
+            writer,
+            "Inspect the requested environment with these action fields:"
+        )?;
+        print_localnet_action(writer, root, name, "status")?;
+        print_localnet_action(writer, root, name, "logs")
+    })();
+    Err(original)
+}
+
+fn print_reset(writer: &mut impl Write, root: &Path, name: &str, json: bool) -> Outcome {
+    if json {
+        return write_json(
+            writer,
+            &norito::json!({
+                "name": name,
+                "state": "reset",
+                "next": (localnet_action(root, name, "up", true)),
+            }),
+        );
+    }
+    writeln!(writer, "{name} reset; the next up creates a fresh ledger.")?;
+    print_localnet_action(writer, root, name, "up")
+}
+
 fn print_dataspace_status(
     writer: &mut impl Write,
     status: &ManagedDataspaceStatus,
@@ -678,6 +773,183 @@ mod tests {
         ));
         assert!(crate::Cli::try_parse_from(["kagami", "localnet", "reset"]).is_err());
         assert!(crate::Cli::try_parse_from(["kagami", "localnet-wizard"]).is_err());
+    }
+
+    #[test]
+    fn failed_start_reports_exact_store_actions_and_retains_the_original_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("workspace with spaces");
+        let state = temporary.path().join("state with spaces and 'quotes'");
+        std::fs::create_dir(&workspace).unwrap();
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "localnet",
+            "up",
+            "acme-dev",
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--state",
+            state.to_str().unwrap(),
+            "--json",
+        ])
+        .unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = cli.command else {
+            panic!("expected localnet startup");
+        };
+        let store = args.named.store.open().unwrap();
+        let status = ManagedStatus {
+            context: ManagedContext {
+                name: args.named.name.clone(),
+                chain_id: "public-fixture".into(),
+                network_id: "public-network".into(),
+                account_id: "public-account".into(),
+                dataspace_id: 0,
+                dataspace_alias: "universal".into(),
+                torii_url: "http://127.0.0.1:8080/".into(),
+                client_config: store.root().join("private-client.toml"),
+            },
+            phase: ManagedPhase::Failed,
+            running_peers: 0,
+            failure: Some("startup readiness deadline expired".into()),
+        };
+        for retained in [None, Some(&status)] {
+            let original = std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "sensitive upstream detail",
+            );
+            let mut output = Vec::new();
+            let error = localnet_failure(
+                &mut output,
+                store.root(),
+                &args.named.name,
+                retained,
+                true,
+                original.into(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            let text = std::str::from_utf8(&output).unwrap();
+            assert_eq!(text.lines().count(), 1);
+            assert!(!text.contains("sensitive upstream detail"));
+            let value: norito::json::Value = norito::json::from_slice(&output).unwrap();
+            assert_eq!(
+                value.get("status").unwrap(),
+                &norito::json::to_value(&retained).unwrap()
+            );
+            let recovery = value.get("recovery").unwrap().as_array().unwrap();
+            assert_eq!(recovery.len(), 2);
+            for (action, expected) in recovery.iter().zip(["status", "logs"]) {
+                let argv = action.get("argv").unwrap().as_array().unwrap();
+                let argv: Vec<_> = argv.iter().map(|arg| arg.as_str().unwrap()).collect();
+                assert_eq!(argv[2], expected);
+                let parsed = crate::Cli::try_parse_from(argv).unwrap();
+                let named = match parsed.command {
+                    crate::Command::Localnet(LocalnetCommand::Status(named)) => named,
+                    crate::Command::Localnet(LocalnetCommand::Logs(logs)) => logs.named,
+                    _ => panic!("expected exact recovery action"),
+                };
+                assert_eq!(named.name, args.named.name);
+                assert_eq!(named.store.state.as_deref(), Some(store.root()));
+                assert!(named.store.json);
+            }
+        }
+        let mut human = Vec::new();
+        assert!(
+            localnet_failure(
+                &mut human,
+                store.root(),
+                &args.named.name,
+                Some(&status),
+                false,
+                eyre!("original failure"),
+            )
+            .is_err()
+        );
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("acme-dev: Failed"));
+        assert!(human.contains("action: kagami localnet status"));
+        assert!(human.contains("action: kagami localnet logs"));
+        assert!(human.contains(&format!("--state (quoted path): {:?}", store.root())));
+        assert!(!human.contains("original failure"));
+    }
+
+    #[test]
+    fn failed_recovery_output_never_replaces_the_startup_cause() {
+        struct BrokenWriter;
+        impl Write for BrokenWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "closed",
+                ))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        for json in [false, true] {
+            let original = iroha_deploy::managed::Error::Timeout(Duration::from_secs(9));
+            let error = localnet_failure(
+                &mut BrokenWriter,
+                Path::new("state"),
+                "named",
+                None,
+                json,
+                original.into(),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<iroha_deploy::managed::Error>(),
+                Some(iroha_deploy::managed::Error::Timeout(duration))
+                    if *duration == Duration::from_secs(9)
+            ));
+        }
+    }
+
+    #[test]
+    fn reset_next_action_preserves_custom_name_and_space_containing_state() {
+        let root = Path::new("/a workspace/private state");
+        let mut output = Vec::new();
+        print_reset(&mut output, root, "acme-dev", true).unwrap();
+        let value: norito::json::Value = norito::json::from_slice(&output).unwrap();
+        assert_eq!(value.get("state").and_then(|v| v.as_str()), Some("reset"));
+        let argv = value
+            .get("next")
+            .unwrap()
+            .get("argv")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        let cli = crate::Cli::try_parse_from(argv.iter().map(|arg| arg.as_str().unwrap())).unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = cli.command else {
+            panic!("reset must suggest an explicit startup");
+        };
+        assert_eq!(args.named.name, "acme-dev");
+        assert_eq!(args.named.store.state.as_deref(), Some(root));
+        assert!(args.named.store.json);
+        let mut human = Vec::new();
+        print_reset(&mut human, root, "acme-dev", false).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("acme-dev reset; the next up creates a fresh ledger."));
+        assert!(human.contains("action: kagami localnet up"));
+        assert!(human.contains("  name: acme-dev"));
+        assert!(human.contains(&format!("--state (quoted path): {root:?}")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_does_not_emit_lossy_arguments_for_non_utf8_state_paths() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let root = PathBuf::from(std::ffi::OsString::from_vec(b"/state/\xff".to_vec()));
+        let action = localnet_action(&root, "named", "status", true);
+        assert_eq!(action.get("argv"), Some(&norito::json::Value::Null));
+        assert_eq!(
+            action.get("argv_unavailable").and_then(|v| v.as_str()),
+            Some("state_path_not_utf8")
+        );
     }
 
     #[test]

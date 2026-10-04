@@ -11,8 +11,9 @@
 //!   reused, an `Execute` of it still queued is answered from the apply), durable append to the
 //!   block store, commit — and `BlockApplied` carries the applied header; a local commitment
 //!   that differs from the certified one is reported as `ApplyDiverged` and apply stops; local
-//!   retryable refusals retain the original owner and back off; consuming failures halt;
-//! - once prepared, and while a failed step backs off, a commit runs alone: no other executor
+//!   retryable refusals retain the original owner and await its release when supplied;
+//!   source-less failures back off, and consuming failures halt;
+//! - once prepared, and while a failed step waits, a commit runs alone: no other executor
 //!   call comes between its prepare and its commit (the executor may hold a single live
 //!   overlay); a failed commit is retried after a fresh prepare, without a second append or
 //!   resetting its failure backoff;
@@ -22,16 +23,31 @@
 //!   what both keep), and rejections are deduplicated and capped (the oldest go first: the
 //!   quarantine is best effort).
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    task::{Context, Waker},
+};
+
+use iroha_allocation::{
+    ChargedBuffer,
+    release::{ReleaseRegistration, ReleaseWait},
+};
 
 use iroha_sumeragi::{
     api::{ApplicationControlContext, ControlWitnessContext, Event, ExecOutcome, HaltReason},
     availability::{AvailableBody, PayloadBytes},
     message::{ApplicationControl, Qc},
-    types::{AppliedConfig, ControlWitness, Hash32, MAX_COMMITTEE_SIZE, Millis, PublicKey},
+    types::{
+        AppliedConfig, ControlWitness, Hash32, MAX_COMMITTEE_SIZE, MAX_PUBLIC_KEY_LEN, Millis,
+        PublicKey,
+    },
 };
 
 use super::{persist::Backoff, traits::PublicationError};
+
+// Every execution queue retains its own preadmitted release custody. Shared wire
+// ingress admission and nested execution-graph funding have separate owners.
 
 /// Rejections kept while the executor is busy (the oldest are dropped beyond).
 const MAX_REJECTS: usize = 64;
@@ -44,6 +60,10 @@ pub struct Commit {
     /// Its `CommitQC` (carries the block hash and the certified result).
     pub qc: Qc,
 }
+
+/// Process-local identity of one owed inbound occurrence, never encoded on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlOccurrence(pub(super) u64);
 
 /// An operation for the executor thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +99,8 @@ pub enum ExecOp {
     DriveApplicationControl(ApplicationControlContext),
     /// Reduce one bounded authenticated peer partial.
     ReceiveApplicationControl {
+        /// Same internal occurrence retained through every retry.
+        occurrence: ControlOccurrence,
         /// P2P authenticated sender.
         from: PublicKey,
         /// Exact context and bounded application bytes.
@@ -131,7 +153,16 @@ pub enum ExecDone {
     /// At most one source-bound own partial from the sole producer.
     ApplicationControlDriven(Result<Option<ApplicationControl>, PublicationError>),
     /// The application accepted/rejected one peer partial.
-    ApplicationControlReceived(Result<(), PublicationError>),
+    ApplicationControlReceived {
+        /// The original internal occurrence moved through the worker.
+        occurrence: ControlOccurrence,
+        /// The exact authenticated sender moved through the worker.
+        from: PublicKey,
+        /// The same original admitted partial, returned without reconstruction.
+        message: ApplicationControl,
+        /// The outcome of borrowing this exact original partial.
+        result: Result<(), PublicationError>,
+    },
     /// Exact admitted payload, genuine absence, or a retained local failure.
     Built(Result<(Option<PayloadBytes>, bool), PublicationError>),
     /// `Reject` done.
@@ -162,7 +193,7 @@ enum Running {
     Build(BuildRequest),
     BuildControl(ControlBuild),
     DriveControl(ApplicationControlContext),
-    ReceiveControl(u64),
+    ReceiveControl { index: usize },
     Reject,
 }
 
@@ -174,23 +205,245 @@ enum Stage {
     Appended,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BuildRequest {
     req: u64,
     height: u64,
     view: u64,
     max_bytes: u32,
     exec_budget_ms: u32,
-    retry_at: Millis,
-    failures: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ControlBuild {
     req: u64,
     context: ControlWitnessContext,
+    source: ApplicationControlContext,
+}
+
+/// Exact preadmitted waiter custody for every bounded execution queue.
+#[derive(Debug)]
+pub struct ExecutionRegistrations {
+    committed: ReleaseRegistration,
+    payload: ReleaseRegistration,
+    witness: ReleaseRegistration,
+    drive: ReleaseRegistration,
+    inbound: InboundSlots,
+}
+
+impl ExecutionRegistrations {
+    /// Total physical control bytes required before any Core work is started.
+    pub fn admission_bytes() -> usize {
+        Self::inbound_layout().size()
+            + ReleaseRegistration::allocation_layout().size() * (4 + MAX_COMMITTEE_SIZE)
+    }
+
+    fn inbound_layout() -> std::alloc::Layout {
+        std::alloc::Layout::array::<InboundSlot>(MAX_COMMITTEE_SIZE)
+            .expect("the fixed protocol peer bound has a representable layout")
+    }
+
+    /// Admit every control and the fixed peer-slot backing from the same instance authority.
+    ///
+    /// # Errors
+    /// Returns the exact pool or physical-allocation refusal. Every partial
+    /// construction refunds its original controls before returning an error.
+    pub fn admit(
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, super::KernelStartError> {
+        let mut reservation = budget.try_reserve_bytes(Self::admission_bytes())?;
+        let mut slots = ChargedBuffer::from_reservation(MAX_COMMITTEE_SIZE, &mut reservation)?;
+        // Initialize one owned slot at a time in its final prepaid backing, with
+        // no large temporary array, extra Vec, or allocation after Core starts.
+        for _ in 0..MAX_COMMITTEE_SIZE {
+            slots.push_reserved(InboundSlot {
+                input: None,
+                in_flight: None,
+                retry: RetryGate::new(ReleaseRegistration::from_reservation(&mut reservation)?),
+            });
+        }
+        Ok(Self {
+            committed: ReleaseRegistration::from_reservation(&mut reservation)?,
+            payload: ReleaseRegistration::from_reservation(&mut reservation)?,
+            witness: ReleaseRegistration::from_reservation(&mut reservation)?,
+            drive: ReleaseRegistration::from_reservation(&mut reservation)?,
+            inbound: InboundSlots { slots },
+        })
+    }
+}
+
+/// Refusal belongs to one immutable request until success, replacement or cancellation.
+#[derive(Debug)]
+struct RetryGate {
+    registration: ReleaseRegistration,
+    error: Option<PublicationError>,
     retry_at: Millis,
     failures: u32,
+}
+impl RetryGate {
+    fn new(registration: ReleaseRegistration) -> Self {
+        Self {
+            registration,
+            error: None,
+            retry_at: 0,
+            failures: 0,
+        }
+    }
+    fn reset(&mut self) {
+        self.registration.cancel();
+        self.error = None;
+        self.retry_at = 0;
+        self.failures = 0;
+    }
+    fn source(&self) -> Option<&ReleaseWait> {
+        match &self.error {
+            Some(PublicationError::Deferred(reason)) => reason.release_wait(),
+            _ => None,
+        }
+    }
+    fn refuse(&mut self, now: Millis, backoff: Backoff, error: PublicationError) {
+        debug_assert!(!matches!(error, PublicationError::RecoveryRequired(_)));
+        self.registration.cancel();
+        self.error = Some(error);
+        self.failures = self.failures.saturating_add(1);
+        self.retry_at = now.saturating_add(backoff.delay(self.failures));
+    }
+    fn ready(&mut self, now: Millis, waker: &Waker) -> bool {
+        let Some(PublicationError::Deferred(reason)) = &self.error else {
+            return now >= self.retry_at;
+        };
+        let Some(source) = reason.release_wait() else {
+            return now >= self.retry_at;
+        };
+        // HC76: timers and identical requests cannot defeat an original physical refusal.
+        if cfg!(all(test, sumeragi_core_mutation = "HC76")) {
+            return now >= self.retry_at;
+        }
+        if self
+            .registration
+            .poll_wait(source, &mut Context::from_waker(waker))
+            .is_pending()
+        {
+            return false;
+        }
+        self.registration.cancel();
+        // Retain the typed failure through this actual retry, until its result arrives.
+        true
+    }
+    fn deadline(&self) -> Millis {
+        if self.source().is_some() {
+            Millis::MAX
+        } else {
+            self.retry_at
+        }
+    }
+    fn expedite(&mut self) {
+        if self.source().is_none() {
+            self.retry_at = 0;
+        }
+    }
+}
+
+/// Fixed identity of a moved partial; matching never clones its key or proof graph.
+#[derive(Clone, Copy, Debug)]
+struct ReceiveIdentity {
+    sender: [u8; MAX_PUBLIC_KEY_LEN],
+    sender_len: usize,
+    context: ApplicationControlContext,
+    occurrence: ControlOccurrence,
+    bytes: ControlWitness,
+}
+impl ReceiveIdentity {
+    fn new(occurrence: ControlOccurrence, from: &PublicKey, message: &ApplicationControl) -> Self {
+        assert!(
+            from.is_well_formed(),
+            "Core authenticates bounded sender keys"
+        );
+        let mut sender = [0; MAX_PUBLIC_KEY_LEN];
+        sender[..from.as_bytes().len()].copy_from_slice(from.as_bytes());
+        Self {
+            sender,
+            sender_len: from.as_bytes().len(),
+            context: message.context,
+            occurrence,
+            bytes: message.bytes,
+        }
+    }
+    fn sender_is(&self, from: &PublicKey) -> bool {
+        &self.sender[..self.sender_len] == from.as_bytes()
+    }
+    fn matches(
+        &self,
+        occurrence: ControlOccurrence,
+        from: &PublicKey,
+        message: &ApplicationControl,
+    ) -> bool {
+        self.occurrence == occurrence
+            && self.sender_is(from)
+            && self.context == message.context
+            && self.bytes == message.bytes
+    }
+}
+
+#[derive(Debug)]
+struct InboundControl {
+    occurrence: ControlOccurrence,
+    from: PublicKey,
+    message: ApplicationControl,
+}
+
+#[derive(Debug)]
+struct InboundSlot {
+    input: Option<InboundControl>,
+    /// Complete fixed-value identity stays in charged backing while the worker owns the input.
+    in_flight: Option<ReceiveIdentity>,
+    retry: RetryGate,
+}
+
+/// One fixed, fully initialized backing; only its existing slot contents can change.
+struct InboundSlots {
+    slots: ChargedBuffer<InboundSlot>,
+}
+impl std::fmt::Debug for InboundSlots {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_list().entries(self.iter()).finish()
+    }
+}
+impl InboundSlots {
+    fn iter(&self) -> std::slice::Iter<'_, InboundSlot> {
+        self.slots.as_slice().iter()
+    }
+    fn iter_mut(&mut self) -> std::slice::IterMut<'_, InboundSlot> {
+        self.slots.as_mut_slice().iter_mut()
+    }
+}
+impl std::ops::Index<usize> for InboundSlots {
+    type Output = InboundSlot;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.slots.as_slice()[index]
+    }
+}
+impl std::ops::IndexMut<usize> for InboundSlots {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.slots.as_mut_slice()[index]
+    }
+}
+
+/// The original failed operation whose resource release permits another attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitWaitPhase {
+    Prepare,
+    Append,
+    Commit,
+}
+
+/// Only the current committed head may use this original release observation.
+#[derive(Debug)]
+struct CommitWait {
+    height: u64,
+    block_hash: Hash32,
+    phase: CommitWaitPhase,
+    release: ReleaseWait,
 }
 
 /// The execution scheduler of one instance.
@@ -202,17 +455,30 @@ pub struct ExecSched {
     /// Queued jobs of the block being applied, answered from its apply.
     merged: Vec<Job>,
     running: Option<Running>,
+    /// Cancellation is sticky until the actual original worker completion returns.
+    running_cancelled: bool,
     commits: VecDeque<Arc<Commit>>,
     stage: Stage,
     /// The head commit is durable in the block store (a re-prepare skips the append).
     appended: bool,
     append_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
+    /// Original local preparation refusal stays with the queued committed decision.
+    preparation_refusal: Option<super::traits::PublicationDeferral>,
+    /// Prepaid before Core starts; rearming never allocates while the pool is exhausted.
+    commit_registration: ReleaseRegistration,
+    commit_wait: Option<CommitWait>,
+    release_waker: Waker,
     build: Option<BuildRequest>,
+    active_build: Option<BuildRequest>,
     control_build: Option<ControlBuild>,
-    control_round: Option<(u64, u64)>,
+    control_context: Option<(ApplicationControlContext, u64)>,
+    payload_retry: RetryGate,
+    witness_retry: RetryGate,
+    drive_retry: RetryGate,
+    inbound: InboundSlots,
+    inbound_cursor: usize,
+    next_occurrence: u64,
     control_drive: Option<ApplicationControlContext>,
-    /// At most one pending partial per authenticated committee sender, with a hard protocol cap.
-    control_inbox: VecDeque<(PublicKey, ApplicationControl)>,
     /// Alternate one control operation with ordinary work so partial ingress cannot starve it.
     prefer_control: bool,
     /// Rotate drive, ingress and due builds within the control class under saturation.
@@ -232,21 +498,39 @@ pub struct ExecSched {
 
 impl ExecSched {
     /// A scheduler whose executor has applied `applied`.
-    pub fn new(applied: u64, backoff: Backoff) -> Self {
+    pub fn new(applied: u64, backoff: Backoff, registrations: ExecutionRegistrations) -> Self {
+        let ExecutionRegistrations {
+            committed,
+            payload,
+            witness,
+            drive,
+            inbound,
+        } = registrations;
         Self {
             jobs: Vec::new(),
             parked: Vec::new(),
             merged: Vec::new(),
             running: None,
+            running_cancelled: false,
             commits: VecDeque::new(),
             stage: Stage::Fresh,
             appended: false,
             append_refusal: None,
+            preparation_refusal: None,
+            commit_registration: committed,
+            commit_wait: None,
+            release_waker: Waker::noop().clone(),
             build: None,
+            active_build: None,
             control_build: None,
-            control_round: None,
+            control_context: None,
+            payload_retry: RetryGate::new(payload),
+            witness_retry: RetryGate::new(witness),
+            drive_retry: RetryGate::new(drive),
+            inbound,
+            inbound_cursor: 0,
+            next_occurrence: 0,
             control_drive: None,
-            control_inbox: VecDeque::new(),
             prefer_control: true,
             control_cursor: 0,
             rejects: VecDeque::new(),
@@ -340,128 +624,287 @@ impl ExecSched {
         self.commits.push_back(Arc::new(Commit { block, qc }));
     }
 
-    /// `BuildPayload`: supersedes an unanswered older request.
+    /// `BuildPayload`: replace only a different exact request; duplicates preserve retry custody.
     pub fn build(&mut self, req: u64, height: u64, view: u64, max_bytes: u32, exec_budget_ms: u32) {
         if self.halted.is_some() {
             return;
         }
-        self.build = Some(BuildRequest {
+        let next = BuildRequest {
             req,
             height,
             view,
             max_bytes,
             exec_budget_ms,
-            retry_at: 0,
-            failures: 0,
-        });
-    }
-
-    /// Supersede only with a new exact fresh-proposal request. A refusal retains this source.
-    pub fn build_control(&mut self, req: u64, context: ControlWitnessContext) {
-        if self.halted.is_some() || context.height <= self.applied {
+        };
+        if self.active_build == Some(next) {
             return;
         }
-        self.control_round = Some((context.height, context.view));
-        self.control_build = Some(ControlBuild {
-            req,
-            context,
-            retry_at: 0,
-            failures: 0,
-        });
+        if matches!(self.running, Some(Running::Build(_))) {
+            self.running_cancelled = true;
+        }
+        self.payload_retry.reset();
+        self.pending_ready = None;
+        self.build = Some(next);
+        self.active_build = Some(next);
+        self.arrived_during_build = false;
     }
 
-    /// Cancel retry work that no longer belongs to the core's live signing round. Partial
-    /// production is view independent but cannot outlive its current height or a local halt.
-    pub fn retain_control_round(&mut self, round: Option<(u64, u64)>) {
-        self.control_round = round;
+    fn witness_is_current(&self, context: &ControlWitnessContext) -> bool {
+        self.control_context.is_some_and(|(source, view)| {
+            source.height == context.height
+                && view == context.view
+                && source.epoch == context.epoch
+                && source.parent_hash == context.parent_hash
+                && source.parent_result == context.parent_result
+        })
+    }
+    fn witness_build_is_current(&self, build: &ControlBuild) -> bool {
+        self.partial_is_current(build.source) && self.witness_is_current(&build.context)
+    }
+    fn partial_is_current(&self, context: ApplicationControlContext) -> bool {
+        self.control_context
+            .is_some_and(|(source, _)| source == context)
+    }
+
+    /// Keep only the live Core's complete applied-parent source and fresh signing view.
+    pub fn retain_control_context(&mut self, context: Option<(ApplicationControlContext, u64)>) {
+        // First cancel every affected observer without dropping any retained source or
+        // input. Their subsequent refunds cannot wake another cancelled queue.
+        if self.control_context != context {
+            self.payload_retry.registration.cancel();
+            self.witness_retry.registration.cancel();
+        }
+        let next_source = context.map(|(source, _)| source);
+        if self.control_context.map(|(source, _)| source) != next_source {
+            self.drive_retry.registration.cancel();
+            for slot in self.inbound.iter_mut() {
+                slot.retry.registration.cancel();
+            }
+        }
+        if self.control_context != context {
+            if matches!(self.running, Some(Running::Build(_))) {
+                self.running_cancelled = true;
+            }
+            self.build = None;
+            self.active_build = None;
+            self.pending_ready = None;
+            self.payload_retry.reset();
+            self.arrived_during_build = false;
+        }
+        self.control_context = context;
+        match &self.running {
+            Some(Running::BuildControl(build)) if !self.witness_build_is_current(build) => {
+                self.running_cancelled = true;
+                self.witness_retry.reset()
+            }
+            Some(Running::DriveControl(source)) if !self.partial_is_current(*source) => {
+                self.running_cancelled = true;
+                self.drive_retry.reset()
+            }
+            Some(Running::ReceiveControl { index })
+                if !self.partial_is_current(
+                    self.inbound[*index]
+                        .in_flight
+                        .as_ref()
+                        .expect("running original identity")
+                        .context,
+                ) =>
+            {
+                self.running_cancelled = true;
+                self.inbound[*index].retry.reset()
+            }
+            _ => {}
+        }
         if self
             .control_build
-            .is_some_and(|build| Some((build.context.height, build.context.view)) != round)
+            .is_some_and(|build| !self.witness_build_is_current(&build))
         {
             self.control_build = None;
+            self.witness_retry.reset();
         }
         if self
             .control_drive
-            .is_some_and(|context| round.is_none_or(|(height, _)| height != context.height))
+            .is_some_and(|source| !self.partial_is_current(source))
         {
             self.control_drive = None;
+            self.drive_retry.reset();
         }
-        self.control_inbox.retain(|(_, message)| {
-            round.is_some_and(|(height, _)| height == message.context.height)
-        });
+        for index in 0..MAX_COMMITTEE_SIZE {
+            if self.inbound[index]
+                .input
+                .as_ref()
+                .is_some_and(|item| !self.partial_is_current(item.message.context))
+            {
+                self.inbound[index].retry.reset();
+                self.inbound[index].input = None;
+            }
+        }
     }
 
-    /// Bounded periodic drive requests coalesce; the application owns retransmission state.
+    /// Supersede only with a different exact fresh-proposal request.
+    pub fn build_control(&mut self, req: u64, context: ControlWitnessContext) {
+        if self.halted.is_some()
+            || context.height <= self.applied
+            || !self.witness_is_current(&context)
+        {
+            return;
+        }
+        let next = ControlBuild {
+            req,
+            context,
+            source: self.control_context.expect("current witness source").0,
+        };
+        if self.control_build == Some(next)
+            || (!self.running_cancelled
+                && matches!(&self.running, Some(Running::BuildControl(original)) if *original == next))
+        {
+            return;
+        }
+        if matches!(self.running, Some(Running::BuildControl(_))) {
+            self.running_cancelled = true;
+        }
+        self.witness_retry.reset();
+        self.control_build = Some(next);
+    }
+
+    /// Coalesce periodic drives without releasing a blocked original request.
     pub fn drive_control(&mut self, context: ApplicationControlContext) {
-        if self.halted.is_some() || context.height <= self.applied {
+        if self.halted.is_some()
+            || context.height <= self.applied
+            || !self.partial_is_current(context)
+        {
             return;
         }
+        if self.control_drive == Some(context)
+            || (!self.running_cancelled
+                && matches!(&self.running, Some(Running::DriveControl(original)) if *original == context))
+        {
+            return;
+        }
+        self.drive_retry.reset();
         self.control_drive = Some(context);
-        self.control_inbox
-            .retain(|(_, message)| message.context == context);
     }
 
-    /// Keep one partial per authenticated sender; source/sender checks precede this call in
-    /// the core and are repeated by the application before reducing any cryptographic state.
+    /// Retain one original partial per authenticated sender, counting the in-flight owner.
+    /// Repeated ingress cannot replace a partial whose local operation is still owed.
     pub fn receive_control(&mut self, from: PublicKey, message: ApplicationControl) {
-        if self.halted.is_some() || message.context.height <= self.applied {
+        if self.halted.is_some()
+            || message.context.height <= self.applied
+            || !self.partial_is_current(message.context)
+            || !from.is_well_formed()
+        {
             return;
         }
-        if let Some((_, pending)) = self.control_inbox.iter_mut().find(|(key, _)| key == &from) {
-            *pending = message;
-        } else if self.control_inbox.len() < MAX_COMMITTEE_SIZE {
-            self.control_inbox.push_back((from, message));
+        let running_index = match &self.running {
+            Some(Running::ReceiveControl { index }) => {
+                if self.inbound[*index]
+                    .in_flight
+                    .as_ref()
+                    .expect("running original identity")
+                    .sender_is(&from)
+                {
+                    return;
+                }
+                Some(*index)
+            }
+            _ => None,
+        };
+        if self
+            .inbound
+            .iter()
+            .filter_map(|slot| slot.input.as_ref())
+            .any(|item| item.from == from)
+        {
+            return;
+        }
+        if let Some(index) = (0..MAX_COMMITTEE_SIZE)
+            .find(|index| Some(*index) != running_index && self.inbound[*index].input.is_none())
+        {
+            let Some(next) = self.next_occurrence.checked_add(1) else {
+                self.require_recovery(
+                    message.context.height,
+                    "local control occurrence identifiers exhausted",
+                );
+                return;
+            };
+            let occurrence = ControlOccurrence(self.next_occurrence);
+            self.next_occurrence = next;
+            self.inbound[index].retry.reset();
+            self.inbound[index].input = Some(InboundControl {
+                occurrence,
+                from,
+                message,
+            });
         }
     }
 
     fn next_control(&mut self, now: Millis) -> Option<ExecOp> {
-        self.control_round?;
+        self.control_context?;
         let next = self.applied.checked_add(1)?;
-        self.control_inbox
-            .retain(|(_, message)| message.context.height >= next);
-        if self
-            .control_drive
-            .is_some_and(|context| context.height < next)
-        {
-            self.control_drive = None;
-        }
-        if self
-            .control_build
-            .is_some_and(|build| build.context.height < next)
-        {
-            self.control_build = None;
-        }
         for offset in 0..3 {
             let kind = (self.control_cursor + offset) % 3;
             let op = match kind {
-                0 => self
-                    .control_drive
-                    .filter(|context| context.height == next)
-                    .map(|context| {
+                0 => {
+                    if let Some(context) = self.control_drive
+                        && context.height == next
+                        && self.drive_retry.ready(now, &self.release_waker)
+                    {
                         self.control_drive = None;
                         self.running = Some(Running::DriveControl(context));
-                        ExecOp::DriveApplicationControl(context)
-                    }),
-                1 => self
-                    .control_inbox
-                    .iter()
-                    .position(|(_, message)| message.context.height == next)
-                    .and_then(|index| self.control_inbox.remove(index))
-                    .map(|(from, message)| {
-                        self.running = Some(Running::ReceiveControl(message.context.height));
-                        ExecOp::ReceiveApplicationControl { from, message }
-                    }),
-                _ => self
-                    .control_build
-                    .filter(|build| build.context.height == next && now >= build.retry_at)
-                    .map(|build| {
+                        Some(ExecOp::DriveApplicationControl(context))
+                    } else {
+                        None
+                    }
+                }
+                1 => {
+                    let mut ready = None;
+                    for offset in 0..MAX_COMMITTEE_SIZE {
+                        let index = (self.inbound_cursor + offset) % MAX_COMMITTEE_SIZE;
+                        if self.inbound[index]
+                            .input
+                            .as_ref()
+                            .is_some_and(|item| item.message.context.height == next)
+                            && self.inbound[index].retry.ready(now, &self.release_waker)
+                        {
+                            ready = Some(index);
+                            break;
+                        }
+                    }
+                    ready.map(|index| {
+                        let InboundControl {
+                            occurrence,
+                            from,
+                            message,
+                        } = self.inbound[index]
+                            .input
+                            .take()
+                            .expect("selected original partial");
+                        self.inbound_cursor = (index + 1) % MAX_COMMITTEE_SIZE;
+                        self.inbound[index].in_flight =
+                            Some(ReceiveIdentity::new(occurrence, &from, &message));
+                        self.running = Some(Running::ReceiveControl { index });
+                        ExecOp::ReceiveApplicationControl {
+                            occurrence,
+                            from,
+                            message,
+                        }
+                    })
+                }
+                _ => {
+                    if let Some(build) = self.control_build
+                        && build.context.height == next
+                        && self.witness_retry.ready(now, &self.release_waker)
+                    {
                         self.control_build = None;
                         self.running = Some(Running::BuildControl(build));
-                        ExecOp::BuildControlWitness {
+                        Some(ExecOp::BuildControlWitness {
                             req: build.req,
                             context: build.context,
-                        }
-                    }),
+                        })
+                    } else {
+                        None
+                    }
+                }
             };
             if op.is_some() {
                 self.control_cursor = (kind + 1) % 3;
@@ -494,7 +937,7 @@ impl ExecSched {
         }
         if let Some(req) = self.pending_ready.take() {
             self.events.push(Event::PayloadReady { req });
-        } else if matches!(self.running, Some(Running::Build(_))) {
+        } else if self.build.is_some() || matches!(self.running, Some(Running::Build(_))) {
             self.arrived_during_build = true;
         }
     }
@@ -511,7 +954,7 @@ impl ExecSched {
             && !self.commits.is_empty()
             && (self.stage != Stage::Fresh || self.retry_at.is_some());
         if committing {
-            let due = self.retry_at.is_none_or(|at| at <= now);
+            let due = self.commit_retry_ready(now);
             return if due { self.commit_step() } else { None };
         }
         if let Some((height, keep)) = self.discards.pop_front() {
@@ -529,12 +972,11 @@ impl ExecSched {
         }
         if let Some(build) = self.build
             && build.height <= self.applied.saturating_add(1)
-            && now >= build.retry_at
+            && self.payload_retry.ready(now, &self.release_waker)
         {
             self.build = None;
             self.prefer_control = true;
             self.running = Some(Running::Build(build));
-            self.arrived_during_build = false;
             return Some(ExecOp::Build {
                 req: build.req,
                 height: build.height,
@@ -563,6 +1005,67 @@ impl ExecSched {
         };
         self.running = Some(Running::Execute(job));
         Some(op)
+    }
+
+    /// Bind the production loop's original charged wake control before dispatch.
+    pub(super) fn bind_release_waker(&mut self, waker: Waker) {
+        self.release_waker = waker;
+    }
+
+    fn clear_commit_wait(&mut self) {
+        self.commit_registration.cancel();
+        self.commit_wait = None;
+    }
+
+    fn retain_commit_wait(&mut self, phase: CommitWaitPhase, release: Option<ReleaseWait>) {
+        self.clear_commit_wait();
+        if let Some(release) = release {
+            let head = self
+                .commits
+                .front()
+                .expect("only a committed head can refuse publication");
+            self.commit_wait = Some(CommitWait {
+                height: head.block.header().height,
+                block_hash: head.qc.block_hash,
+                phase,
+                release,
+            });
+        }
+    }
+
+    fn commit_retry_ready(&mut self, now: Millis) -> bool {
+        let Some(wait) = self.commit_wait.as_ref() else {
+            return self.retry_at.is_none_or(|at| at <= now);
+        };
+        let head = self
+            .commits
+            .front()
+            .expect("the refused committed head is retained");
+        assert_eq!(
+            (wait.height, wait.block_hash),
+            (head.block.header().height, head.qc.block_hash)
+        );
+        debug_assert!(matches!(
+            (wait.phase, self.stage),
+            (
+                CommitWaitPhase::Prepare | CommitWaitPhase::Commit,
+                Stage::Fresh
+            ) | (CommitWaitPhase::Append, Stage::Prepared)
+        ));
+        // HC74: elapsed time grants no right to retry an unchanged busy source.
+        if cfg!(all(test, sumeragi_core_mutation = "HC74")) {
+            return self.retry_at.is_none_or(|at| at <= now);
+        }
+        let mut context = Context::from_waker(&self.release_waker);
+        if self
+            .commit_registration
+            .poll_wait(&wait.release, &mut context)
+            .is_pending()
+        {
+            return false;
+        }
+        self.clear_commit_wait();
+        true
     }
 
     /// The next step of the head commit.
@@ -603,20 +1106,45 @@ impl ExecSched {
         iroha_logger::warn!(%reason, step = what, "sumeragi apply failed; retrying");
     }
 
+    /// Original local preparation source retained with the unchanged committed head.
+    /// This observation grants neither successful preparation nor future allocation credit.
+    pub fn preparation_refusal(&self) -> Option<&super::traits::PublicationDeferral> {
+        self.preparation_refusal.as_ref()
+    }
+
     /// Why execution scheduling stopped; a halt never schedules a publication retry.
     pub fn halted(&self) -> Option<HaltReason> {
         self.halted
     }
 
+    fn cancel_registrations(&mut self) {
+        self.commit_registration.cancel();
+        self.payload_retry.registration.cancel();
+        self.witness_retry.registration.cancel();
+        self.drive_retry.registration.cancel();
+        for slot in self.inbound.iter_mut() {
+            slot.retry.registration.cancel();
+        }
+    }
+
     fn require_recovery(&mut self, height: u64, reason: &str) {
+        self.cancel_registrations();
+        self.clear_commit_wait();
         self.halted = Some(HaltReason::PublicationRecoveryRequired { height });
         self.retry_at = None;
         self.pending_ready = None;
         self.build = None;
+        self.active_build = None;
         self.control_build = None;
-        self.control_round = None;
+        self.control_context = None;
         self.control_drive = None;
-        self.control_inbox.clear();
+        self.inbound.iter_mut().for_each(|slot| {
+            slot.input = None;
+            slot.retry.reset();
+        });
+        self.payload_retry.reset();
+        self.witness_retry.reset();
+        self.drive_retry.reset();
         self.rejects.clear();
         self.discards.clear();
         // Preserve the committed head for diagnostics; no owner is re-entered after this point.
@@ -639,6 +1167,9 @@ impl ExecSched {
     #[allow(clippy::too_many_lines)] // one arm per operation
     pub fn done(&mut self, now: Millis, done: ExecDone) -> Option<u64> {
         let running = self.running.take()?;
+        // HC78: once cancelled, the original in-flight work cannot become current again.
+        let cancelled = std::mem::take(&mut self.running_cancelled)
+            && !cfg!(all(test, sumeragi_core_mutation = "HC78"));
         match (running, done) {
             (Running::Execute(job), ExecDone::Executed(outcome)) => match outcome {
                 _ if job.cancelled => self.answer(&job, ExecOutcome::Cancelled),
@@ -658,6 +1189,8 @@ impl ExecSched {
                 let commit = self.commits.front().cloned()?;
                 match result {
                     Ok(Some(local)) if local == commit.qc.result => {
+                        self.clear_commit_wait();
+                        self.preparation_refusal = None;
                         // Re-prepare after append is part of the same failed commit attempt.
                         // In particular, archive capture may still be pending after State
                         // publication: obtaining that retained result is not recovery.
@@ -676,6 +1209,7 @@ impl ExecSched {
                     }
                     Ok(local) => {
                         // O3: the local state or executor disagrees with a certified result.
+                        self.clear_commit_wait();
                         self.halted = Some(HaltReason::ApplyDiverged {
                             height: commit.block.header().height,
                         });
@@ -689,7 +1223,25 @@ impl ExecSched {
                             local_result: local.unwrap_or(Hash32::ZERO),
                         });
                     }
-                    Err(PublicationError::Retryable(reason)) => self.retry(now, "prepare", &reason),
+                    Err(PublicationError::Retryable(reason)) => {
+                        self.clear_commit_wait();
+                        self.preparation_refusal = None;
+                        self.retry(now, "prepare", &reason);
+                    }
+                    Err(PublicationError::Deferred(original)) => {
+                        let diagnostic = original.to_string();
+                        // HC60: a diagnostic cannot replace the source-bound release observation.
+                        if !cfg!(all(test, sumeragi_core_mutation = "HC60")) {
+                            self.preparation_refusal = Some(original);
+                        }
+                        let release = self
+                            .preparation_refusal
+                            .as_ref()
+                            .and_then(|reason| reason.release_wait())
+                            .cloned();
+                        self.retain_commit_wait(CommitWaitPhase::Prepare, release);
+                        self.retry(now, "prepare", &diagnostic);
+                    }
                     Err(PublicationError::RecoveryRequired(reason)) => {
                         self.require_recovery(commit.block.header().height, &reason)
                     }
@@ -702,17 +1254,29 @@ impl ExecSched {
                     deferred
                 };
                 if durable {
+                    self.clear_commit_wait();
                     self.append_refusal = None;
                     self.failures = 0;
                     self.retry_at = None;
                     self.appended = true;
                     self.stage = Stage::Appended;
                 } else {
+                    let release = self.append_refusal.as_ref().and_then(|reason| {
+                        match reason.allocation_refusal() {
+                            Some(iroha_allocation::AllocationRefusal::Capacity {
+                                release, ..
+                            }) => Some(release.clone()),
+                            _ => None,
+                        }
+                    });
+                    self.retain_commit_wait(CommitWaitPhase::Append, release);
                     self.retry(now, "append", "block store write failed");
                 }
             }
             (Running::Commit, ExecDone::Committed(result)) => match result {
                 Ok(config) => {
+                    self.clear_commit_wait();
+                    self.preparation_refusal = None;
                     let commit = self.commits.pop_front()?;
                     self.failures = 0;
                     self.retry_at = None;
@@ -748,7 +1312,17 @@ impl ExecSched {
                     self.unpark(&commit.qc.block_hash);
                     return Some(height);
                 }
+                Err(PublicationError::Deferred(original)) => {
+                    let diagnostic = original.to_string();
+                    let release = original.release_wait().cloned();
+                    self.preparation_refusal = Some(original);
+                    self.retain_commit_wait(CommitWaitPhase::Commit, release);
+                    self.stage = Stage::Fresh;
+                    self.retry(now, "commit", &diagnostic);
+                }
                 Err(PublicationError::Retryable(reason)) => {
+                    self.clear_commit_wait();
+                    self.preparation_refusal = None;
                     // Re-prepare the retained original owner; the append is kept.
                     self.stage = Stage::Fresh;
                     self.retry(now, "commit", &reason);
@@ -759,67 +1333,106 @@ impl ExecSched {
                     }
                 }
             },
-            (Running::BuildControl(mut build), ExecDone::ControlWitnessBuilt(result)) => {
+            (Running::BuildControl(build), ExecDone::ControlWitnessBuilt(result)) => {
+                let current = !cancelled
+                    && self.witness_build_is_current(&build)
+                    && self.control_build.is_none_or(|pending| pending == build);
                 match result {
-                    Ok(_)
-                        if self.control_round
-                            != Some((build.context.height, build.context.view)) => {}
-                    Ok((witness, attest)) => self.events.push(Event::ControlWitnessBuilt {
-                        req: build.req,
-                        context: build.context,
-                        witness,
-                        attest,
-                    }),
-                    Err(PublicationError::Retryable(_))
-                        if self.control_build.is_none()
-                            && self.control_round
-                                == Some((build.context.height, build.context.view)) =>
-                    {
-                        build.failures = build.failures.saturating_add(1);
-                        build.retry_at = now.saturating_add(self.backoff.delay(build.failures));
-                        self.control_build = Some(build);
-                    }
-                    Err(PublicationError::Retryable(_)) => {} // superseded by a newer exact request
                     Err(PublicationError::RecoveryRequired(reason)) => {
                         self.require_recovery(build.context.height, &reason)
+                    }
+                    _ if !current => {}
+                    Ok((witness, attest)) => {
+                        self.witness_retry.reset();
+                        self.events.push(Event::ControlWitnessBuilt {
+                            req: build.req,
+                            context: build.context,
+                            witness,
+                            attest,
+                        });
+                    }
+                    Err(error) => {
+                        self.witness_retry.refuse(now, self.backoff, error);
+                        self.control_build = Some(build);
                     }
                 }
             }
             (Running::DriveControl(context), ExecDone::ApplicationControlDriven(result)) => {
+                let current = !cancelled
+                    && self.partial_is_current(context)
+                    && self.control_drive.is_none_or(|pending| pending == context);
                 match result {
-                    Ok(Some(message))
-                        if message.context == context
-                            && self
-                                .control_round
-                                .is_some_and(|(height, _)| height == context.height) =>
-                    {
-                        self.events.push(Event::ApplicationControlBuilt { message })
-                    }
-                    Ok(_) | Err(PublicationError::Retryable(_)) => {} // next periodic drive retries the sole retained owner
                     Err(PublicationError::RecoveryRequired(reason)) => {
                         self.require_recovery(context.height, &reason)
                     }
-                }
-            }
-            (Running::ReceiveControl(height), ExecDone::ApplicationControlReceived(result)) => {
-                match result {
-                    Ok(()) => {
-                        if let Some(build) = self.control_build.as_mut() {
-                            build.retry_at = now;
+                    _ if !current => {}
+                    Ok(message) => {
+                        self.drive_retry.reset();
+                        if let Some(message) = message
+                            && message.context == context
+                        {
+                            self.events.push(Event::ApplicationControlBuilt { message });
                         }
                     }
-                    Err(PublicationError::Retryable(_)) => {} // authenticated sender periodically retries its same partial
-                    Err(PublicationError::RecoveryRequired(reason)) => {
-                        self.require_recovery(height, &reason)
+                    Err(error) => {
+                        self.drive_retry.refuse(now, self.backoff, error);
+                        self.control_drive = Some(context);
                     }
                 }
             }
-            (Running::Build(mut build), ExecDone::Built(result)) => {
-                // A newer request supersedes this result. Local refusal keeps the exact
-                // source in the executor; it never produces an EMPTY answer to Core.
-                if self.build.is_none_or(|pending| pending.req == build.req) {
+            (
+                Running::ReceiveControl { index },
+                ExecDone::ApplicationControlReceived {
+                    occurrence,
+                    from,
+                    message,
+                    result,
+                },
+            ) => {
+                let identity = self.inbound[index]
+                    .in_flight
+                    .take()
+                    .expect("running original identity");
+                if !identity.matches(occurrence, &from, &message) {
+                    self.require_recovery(
+                        identity.context.height,
+                        "application-control completion replaced the original input",
+                    );
+                    return None;
+                }
+                match result {
+                    Err(PublicationError::RecoveryRequired(reason)) => {
+                        self.require_recovery(identity.context.height, &reason)
+                    }
+                    _ if cancelled || !self.partial_is_current(identity.context) => {
+                        self.inbound[index].retry.reset()
+                    }
+                    Ok(()) => {
+                        self.inbound[index].retry.reset();
+                        // New shares accelerate awaiting-share backoff, never a held physical source.
+                        self.witness_retry.expedite();
+                    }
+                    Err(error) => {
+                        debug_assert!(self.inbound[index].input.is_none());
+                        self.inbound[index].retry.refuse(now, self.backoff, error);
+                        self.inbound[index].input = Some(InboundControl {
+                            occurrence,
+                            from,
+                            message,
+                        });
+                    }
+                }
+            }
+            (Running::Build(build), ExecDone::Built(result)) => {
+                if let Err(PublicationError::RecoveryRequired(reason)) = &result {
+                    self.require_recovery(build.height, reason);
+                    return None;
+                }
+                if !cancelled && self.active_build == Some(build) {
                     match result {
                         Ok((payload, attest)) => {
+                            self.active_build = None;
+                            self.payload_retry.reset();
                             let empty = payload.is_none();
                             let arrived = std::mem::take(&mut self.arrived_during_build);
                             self.pending_ready = (empty && !arrived).then_some(build.req);
@@ -832,14 +1445,12 @@ impl ExecSched {
                                 self.events.push(Event::PayloadReady { req: build.req });
                             }
                         }
-                        Err(PublicationError::Retryable(reason)) => {
-                            build.failures = build.failures.saturating_add(1);
-                            build.retry_at = now.saturating_add(self.backoff.delay(build.failures));
-                            self.build = Some(build);
-                            iroha_logger::warn!(%reason, "sumeragi payload build retained for retry");
-                        }
                         Err(PublicationError::RecoveryRequired(reason)) => {
                             self.require_recovery(build.height, &reason)
+                        }
+                        Err(error) => {
+                            self.payload_retry.refuse(now, self.backoff, error);
+                            self.build = Some(build);
                         }
                     }
                 }
@@ -848,6 +1459,7 @@ impl ExecSched {
             (running, done) => {
                 iroha_logger::error!(?running, ?done, "sumeragi executor answer does not match");
                 self.running = Some(running);
+                self.running_cancelled = cancelled;
             }
         }
         None
@@ -860,17 +1472,38 @@ impl ExecSched {
             return Millis::MAX;
         }
         if !self.commits.is_empty() {
-            return self.retry_at.unwrap_or(Millis::MAX);
+            // The actual release wakes the loop; an expired timer must not spin it.
+            return if self.commit_wait.is_some() {
+                Millis::MAX
+            } else {
+                self.retry_at.unwrap_or(Millis::MAX)
+            };
         }
-        let control = self
+        let next = self.applied.saturating_add(1);
+        let witness = self
             .control_build
-            .filter(|build| build.context.height == self.applied.saturating_add(1))
-            .map_or(Millis::MAX, |build| build.retry_at);
+            .filter(|build| build.context.height == next)
+            .map_or(Millis::MAX, |_| self.witness_retry.deadline());
+        let drive = self
+            .control_drive
+            .filter(|context| context.height == next)
+            .map_or(Millis::MAX, |_| self.drive_retry.deadline());
+        let inbound = self
+            .inbound
+            .iter()
+            .filter(|slot| {
+                slot.input
+                    .as_ref()
+                    .is_some_and(|item| item.message.context.height == next)
+            })
+            .map(|slot| slot.retry.deadline())
+            .min()
+            .unwrap_or(Millis::MAX);
         let payload = self
             .build
-            .filter(|build| build.height <= self.applied.saturating_add(1))
-            .map_or(Millis::MAX, |build| build.retry_at);
-        control.min(payload)
+            .filter(|build| build.height <= next)
+            .map_or(Millis::MAX, |_| self.payload_retry.deadline());
+        witness.min(drive).min(inbound).min(payload)
     }
 
     /// The local events produced so far (answers for the core), in order.
@@ -900,7 +1533,19 @@ impl ExecSched {
             + usize::from(self.build.is_some())
             + usize::from(self.control_build.is_some())
             + usize::from(self.control_drive.is_some())
-            + self.control_inbox.len()
+            + self
+                .inbound
+                .iter()
+                .filter(|slot| slot.input.is_some())
+                .count()
+    }
+}
+
+impl Drop for ExecSched {
+    fn drop(&mut self) {
+        if !cfg!(all(test, sumeragi_core_mutation = "HC83")) {
+            self.cancel_registrations();
+        }
     }
 }
 
@@ -912,13 +1557,15 @@ mod refusal_tests {
 
     #[test]
     fn append_refusal_keeps_original_commit_and_release_owner_until_durable() {
-        let budget = iroha_allocation::AllocationBudget::new(1);
+        let registration_bytes = ExecutionRegistrations::admission_bytes();
+        let budget = iroha_allocation::AllocationBudget::new(registration_bytes + 1);
+        let registration = ExecutionRegistrations::admit(&budget).unwrap();
         let held = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
         let result = Hash32([9; 32]);
         let qc = commit_qc(&body, result);
-        let mut scheduler = ExecSched::new(0, Backoff::default());
+        let mut scheduler = ExecSched::new(0, Backoff::default(), registration);
         scheduler.commit(body, qc);
         let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
             panic!("prepare original")
@@ -974,3 +1621,11 @@ mod refusal_tests {
         assert_eq!(scheduler.applied(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "source_retry_tests.rs"]
+mod source_retry_tests;
+
+#[cfg(test)]
+#[path = "producer_retry_tests.rs"]
+mod producer_retry_tests;

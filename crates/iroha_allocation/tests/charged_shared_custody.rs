@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code)]
 
+use iroha_allocation::release::ReleaseRegistration;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},
@@ -139,6 +140,51 @@ fn assert_freed(slot: usize, layout: Layout) {
 #[derive(Debug)]
 #[repr(align(128))]
 struct AlignedPayload(u64);
+
+fn registration(budget: &AllocationBudget) -> ReleaseRegistration {
+    ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn reserved_shared_shell_funds_physical_control_before_consumption_and_final_release() {
+    let _serial = SERIAL.lock().unwrap();
+    let layout = ChargedShared::<AlignedPayload>::allocation_layout();
+    let budget = AllocationBudget::new(layout.size());
+    let mut parent = budget.try_reserve_bytes(layout.size()).unwrap();
+    observe_next(0, true, Some(&budget));
+    let error = ChargedShared::<AlignedPayload>::reserve_from(&mut parent)
+        .err()
+        .expect("physical allocator must refuse the original shell");
+    disarm();
+    assert!(matches!(error, PrepaidSharedError::Allocator { .. }));
+    assert_allocation(0, layout, layout.size());
+    assert_eq!(budget.reserved_bytes(), 0);
+    drop(parent);
+    let mut parent = budget.try_reserve_bytes(layout.size()).unwrap();
+    observe_next(1, false, Some(&budget));
+    let shell = ChargedShared::<AlignedPayload>::reserve_from(&mut parent).unwrap();
+    disarm();
+    assert_allocation(1, layout, layout.size());
+    budget.set_limit_bytes(0);
+    observe_next(2, true, Some(&budget));
+    let owner = shell.initialize(AlignedPayload(91));
+    disarm();
+    assert_eq!(OBSERVED[2].requested_size.load(SeqCst), 0);
+    assert!(owner.belongs_to(&budget));
+    let last = owner.clone();
+    drop(owner);
+    assert!(!OBSERVED[1].freed.load(SeqCst));
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert_eq!(last.0, 91);
+    drop(last);
+    assert_freed(1, layout);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
 
 #[test]
 fn exact_aligned_layout_partitions_original_credit_after_budget_shrink() {
@@ -294,7 +340,10 @@ impl Wake for AfterPayload {
     fn wake_by_ref(self: &Arc<Self>) {
         assert_eq!(self.dropped.load(SeqCst), 1);
         assert!(OBSERVED[0].freed.load(SeqCst));
-        assert_eq!(self.budget.reserved_bytes(), 0);
+        assert_eq!(
+            self.budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         let reentrant = self.budget.try_reserve_bytes(self.size).unwrap();
         drop(reentrant);
         self.wakes.fetch_add(1, SeqCst);
@@ -305,7 +354,9 @@ impl Wake for AfterPayload {
 fn final_concurrent_clone_frees_payload_before_original_pool_reentrant_wake() {
     let _serial = SERIAL.lock().unwrap();
     let layout = ChargedShared::<Probe>::allocation_layout();
-    let budget = AllocationBudget::new(layout.size());
+    let budget =
+        AllocationBudget::new(layout.size() + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let dropped = Arc::new(AtomicUsize::new(0));
     let value = Probe {
         slot: 0,
@@ -327,7 +378,7 @@ fn final_concurrent_clone_frees_payload_before_original_pool_reentrant_wake() {
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&observer));
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = pin!(release.wait_for_release(&mut budget_registration));
     let mut context = Context::from_waker(&waker);
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(layout.size());
@@ -347,7 +398,10 @@ fn final_concurrent_clone_frees_payload_before_original_pool_reentrant_wake() {
     });
     assert_freed(0, layout);
     assert_eq!(dropped.load(SeqCst), 1);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        0 + ReleaseRegistration::allocation_layout().size()
+    );
     assert_eq!(observer.wakes.load(SeqCst), 1);
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
 }
@@ -437,5 +491,74 @@ fn unwind_reclaims_actual_control_block_and_original_credit() {
     assert!(result.is_err());
     assert_freed(0, layout);
     assert_eq!(dropped.load(SeqCst), 1);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn charged_waker_keeps_exact_physical_control_until_last_consumed_wake() {
+    #[derive(Debug)]
+    struct WakePayload {
+        budget: AllocationBudget,
+        identity: Arc<AtomicUsize>,
+        calls: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+    impl iroha_allocation::shared::SharedWake for WakePayload {
+        fn wake(&self) {
+            assert!(!OBSERVED[0].freed.load(SeqCst));
+            assert_eq!(
+                std::ptr::from_ref(self) as usize,
+                self.identity.load(SeqCst)
+            );
+            assert_eq!(
+                self.budget.reserved_bytes(),
+                ChargedShared::<Self>::allocation_layout().size()
+            );
+            self.calls.fetch_add(1, SeqCst);
+        }
+    }
+    impl Drop for WakePayload {
+        fn drop(&mut self) {
+            let layout = ChargedShared::<Self>::allocation_layout();
+            assert_freed(0, layout);
+            assert_eq!(
+                self.budget.reserved_bytes(),
+                layout.size(),
+                "physical free precedes original charge refund"
+            );
+            self.drops.fetch_add(1, SeqCst);
+        }
+    }
+    let _serial = SERIAL.lock().unwrap();
+    let layout = ChargedShared::<WakePayload>::allocation_layout();
+    let budget = AllocationBudget::new(layout.size());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let identity = Arc::new(AtomicUsize::new(0));
+    let payload = WakePayload {
+        budget: budget.clone(),
+        identity: Arc::clone(&identity),
+        calls: Arc::clone(&calls),
+        drops: Arc::clone(&drops),
+    };
+    let mut original = budget.try_reserve(layout).unwrap();
+    observe_next(0, false, Some(&budget));
+    let owner = ChargedShared::from_reservation(payload, &mut original).unwrap();
+    disarm();
+    assert_allocation(0, layout, layout.size());
+    identity.store(std::ptr::from_ref(&*owner) as usize, SeqCst);
+    drop(original);
+    let first = owner.into_waker();
+    let last = first.clone();
+    assert!(first.will_wake(&last));
+    first.wake_by_ref();
+    first.wake();
+    assert_eq!(calls.load(SeqCst), 2);
+    assert_eq!(drops.load(SeqCst), 0);
+    assert!(!OBSERVED[0].freed.load(SeqCst));
+    std::thread::spawn(move || last.wake()).join().unwrap();
+    assert_eq!(calls.load(SeqCst), 3);
+    assert_eq!(drops.load(SeqCst), 1);
+    assert_freed(0, layout);
     assert_eq!(budget.reserved_bytes(), 0);
 }

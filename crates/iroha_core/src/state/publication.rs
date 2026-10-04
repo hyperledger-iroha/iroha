@@ -276,7 +276,7 @@ impl<'state> StateBlock<'state> {
         let world_cut_capture = this.world_cut_capture.as_ref();
         let StateBlockFields {
             local_storage_refusal: _,
-            read_releases: _,
+            _read_releases: _,
             // Keep the linear finality/output and native-source owners alive
             // through publication of every original journal below.
             execution_output_plan: _publication_owner,
@@ -697,6 +697,7 @@ impl<'state> StateBlock<'state> {
                         .da_pin_intents
                         .as_mut()
                         .expect("prepared pin cache"),
+                    &mut lifecycle_index_releases.world,
                 );
             #[cfg(feature = "telemetry")]
             state_ref
@@ -893,11 +894,31 @@ impl<'state> StateBlock<'state> {
 }
 
 #[cfg(test)]
+impl StateBlock<'_> {
+    /// The original publisher has completed the deterministic World tail and frozen it.
+    /// Snapshot fixture projections must read that exact cut without replaying its writes.
+    pub(super) fn has_finalized_world_tail_for_snapshot(&self) -> bool {
+        self.publication
+            .as_ref()
+            .is_some_and(|publication| publication.fields_frozen)
+    }
+}
+
+#[cfg(test)]
 impl State {
     /// Real history-lock contention after original validation; no fabricated refusal.
     pub(crate) fn with_publication_blocked_for_test<R>(&self, action: impl FnOnce() -> R) -> R {
         self.transactions
             .with_physical_publication_blocked_for_test(action)
+    }
+
+    /// Hold the actual logical membership writer after freezing the original execution.
+    pub(crate) fn with_membership_publication_blocked_for_test<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> R {
+        self.transactions
+            .with_membership_publication_blocked_for_test(action)
     }
 
     /// Hold the actual native hash writer for a later-prefix refusal test.
@@ -1038,3 +1059,7 @@ impl StateBlock<'_> {
         fields.block_hashes.retire_retry_notices();
     }
 }
+
+#[cfg(test)]
+#[path = "replay_retirement_probe.rs"]
+mod replay_retirement_probe;

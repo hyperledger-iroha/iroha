@@ -5,6 +5,7 @@ import { createValidationFeeConsensusApi, normalizeValidationFeeCheckpointV1 } f
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { ToriiClient } from "../src/toriiClient.js";
+import { exactKeys } from "../src/validationFeeTrust.js";
 
 const anchor = Buffer.from([100, 57]);
 const promoted = Buffer.from([127, 189]);
@@ -19,7 +20,8 @@ function projection(changes = {}) {
     schema: "iroha.validation_fee.verified_policy_projection.v1", version: 1,
     network_id: binding.networkId.toString(), policy_chain_genesis_hash: binding.policyChainGenesisHash,
     registry_hash: "79".repeat(32), head_policy_version: 1, head_policy_hash: "ab".repeat(32),
-    current_policy: null, trusted_checkpoint_height: 100, trusted_checkpoint_context_id: "57".repeat(32),
+    current_policy: null, conversion_policy: null,
+    trusted_checkpoint_height: 100, trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127, evaluated_context_id: "bd".repeat(32), evaluated_block_hash: "df".repeat(32),
     observed_ledger_tip_height: 190, more_available: true, ...changes,
   };
@@ -34,6 +36,22 @@ function api(verify, encode = () => Buffer.of(8)) {
 function check(owner) {
   return owner.verifyValidationFeeCurrentPolicyProofV1(Buffer.of(9), binding, binding.checkpoint, 753);
 }
+
+test("exact policy fields do not depend on declaration or object insertion order", () => {
+  const expected = Object.freeze(["revision", "binding", "authority", "lifecycle_seal_hash"]);
+  for (const fields of [expected, [...expected].reverse(), [...expected].sort()]) {
+    const value = Object.fromEntries(fields.map((field) => [field, null]));
+    assert.doesNotThrow(() => exactKeys(value, expected, "conversion policy"));
+    assert.throws(() => exactKeys({ ...value, unknown: null }, expected, "conversion policy"));
+    for (const field of expected) {
+      const incomplete = { ...value };
+      delete incomplete[field];
+      assert.throws(() => exactKeys(incomplete, expected, "conversion policy"));
+    }
+  }
+  assert.deepEqual(expected, ["revision", "binding", "authority", "lifecycle_seal_hash"]);
+  assert.throws(() => exactKeys({ revision: 1, binding: null }, ["revision", "revision"], "conversion policy"));
+});
 
 test("full checkpoint bytes retain private immutable copies and exact subview bounds", () => {
   const bytes = Uint8Array.from([0, 100, 57, 0]);
@@ -89,6 +107,16 @@ test("a projection alone never synthesizes a checkpoint and a native refusal pro
   ]) assert.throws(() => check(api(() => result)), /plain object|must contain exactly|must contain 1/u);
   const refusal = new Error("native exact pinned decision rejected");
   assert.throws(() => check(api(() => { throw refusal; })), (error) => error === refusal);
+});
+
+test("verified projections require both explicit policy fields", () => {
+  for (const field of ["current_policy", "conversion_policy"]) {
+    const incomplete = projection();
+    delete incomplete[field];
+    assert.throws(() => check(api(() => ({
+      projectionJson: JSON.stringify(incomplete), promotedCheckpointNorito: promoted,
+    }))), /verified projection must contain exactly/u);
+  }
 });
 
 test("verified page metadata cannot regress or change immutable deployment bindings", () => {

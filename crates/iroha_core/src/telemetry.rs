@@ -5550,6 +5550,8 @@ struct Actor {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     last_sync_block: usize,
     last_sync_hash: Option<HashOf<BlockHeader>>,
+    /// Original local history refusal retained independently of an HTTP waiter's lifetime.
+    status_read_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
     #[cfg(test)]
     status_chunk_barrier: Option<(oneshot::Sender<usize>, oneshot::Receiver<()>)>,
     last_online_peers: BTreeSet<PeerId>,
@@ -5999,14 +6001,13 @@ impl Actor {
         self.classify_status_target(&target).await?;
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
-            let genesis_timestamp = NonZeroUsize::new(1).and_then(|index| {
-                if self.kura.is_canonical_body_missing(index) {
-                    return None;
-                }
-                self.kura
-                    .get_block(index)
+            let index = NonZeroUsize::MIN;
+            let genesis_timestamp = if self.kura.is_canonical_body_missing(index) {
+                None
+            } else {
+                self.read_status_block(index)?
                     .map(|genesis_block| genesis_block.header().creation_time())
-            });
+            };
             if let Some(timestamp) = genesis_timestamp {
                 let curr_time = self.time_source.get_unix_time();
                 // this will overflow in 584,942,417 years
@@ -6204,6 +6205,7 @@ pub fn start(
                     queue,
                     last_sync_block: 0,
                     last_sync_hash: None,
+                    status_read_refusal: None,
                     #[cfg(test)]
                     status_chunk_barrier: None,
                     last_online_peers: BTreeSet::new(),
@@ -6229,9 +6231,7 @@ fn refresh_sumeragi_mode(metrics: &Metrics, state: &State) {
     let schedule = view.world().consensus_schedule();
     let mode_tag = u64::try_from(view.height())
         .ok()
-        .filter(|height| schedule.tip() == Some(*height) && schedule.is_well_formed())
-        .and_then(|height| height.checked_add(1))
-        .and_then(|height| schedule.ready(height).ok())
+        .and_then(|height| schedule.ready_after_tip(height))
         .map(|config| match config.epoch.mode {
             ConsensusMode::Permissioned => "permissioned",
             ConsensusMode::Npos => "npos",
@@ -9735,7 +9735,7 @@ mod tests {
                     )
                     .expect("durable original metadata defers at the actual history writer");
                 let certified = pending
-                    .inspect_prepared(|view| view.block.as_ref().clone())
+                    .inspect_prepared(|view| view.block.shared().clone())
                     .expect("retain the exact unpublished certified carrier");
                 let external_count = certified.external_transactions().len() as u64;
                 sut.kura

@@ -28,6 +28,7 @@ EXPECTED_DEFAULT_BINS = frozenset(
         ("irohad", "iroha3d_taira"),
         ("irohad", "sorafs_governance_dag"),
         ("irohad", "taira_bootle_lantern_broker"),
+        ("ivm_artifact_admission", "ivm_artifact_admit"),
         ("kotodama_toolchain", "koto"),
         ("izanami", "izanami"),
         ("mochi-ui", "mochi"),

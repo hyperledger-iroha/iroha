@@ -896,7 +896,16 @@ pub mod json {
         /// An active decode scope rejected allocation or structural work.
         #[error("JSON decode resource limit exceeded")]
         DecodeResourceLimit,
-        /// A fallible allocation needed by the JSON decoder failed.
+        /// Original resource refusal retained across a canonical binary/JSON boundary.
+        #[error(transparent)]
+        ScopedDecodeResource(crate::core::ScopedDecodeResourceError),
+        /// An original binary decoder allocation failed with its recorded request size.
+        #[error("JSON decode allocation of {bytes} bytes failed")]
+        DecodeAllocationFailed {
+            /// Exact requested allocation size from the binary decoder.
+            bytes: u64,
+        },
+        /// A fallible allocation needed by the JSON decoder failed without a recorded size.
         #[error("JSON decode allocation failed")]
         AllocationFailed,
         #[error("invalid utf8")]
@@ -930,6 +939,8 @@ pub mod json {
             matches!(
                 self,
                 Self::DecodeResourceLimit
+                    | Self::ScopedDecodeResource(_)
+                    | Self::DecodeAllocationFailed { .. }
                     | Self::AllocationFailed
                     | Self::NestingDepthExceeded { .. }
             )
@@ -937,10 +948,33 @@ pub mod json {
         /// Convert a core decode-budget failure without copying its diagnostics.
         #[doc(hidden)]
         pub fn from_decode_resource(error: crate::core::Error) -> Self {
+            if let crate::core::Error::ScopedDecodeResource(origin) = error {
+                return Self::ScopedDecodeResource(origin);
+            }
+            if let crate::core::Error::AllocationFailed { bytes } = error {
+                return Self::DecodeAllocationFailed { bytes };
+            }
             if error.is_decode_resource_limit() {
                 Self::DecodeResourceLimit
             } else {
                 Self::AllocationFailed
+            }
+        }
+        /// Preserve an original scoped refusal when returning to binary decoding.
+        ///
+        /// Other JSON errors retain their JSON category. A native allocation failure has no
+        /// recorded byte count; zero reports that unavailable size without inventing a scope.
+        #[doc(hidden)]
+        pub fn into_core_error(self) -> crate::core::Error {
+            match self {
+                Self::ScopedDecodeResource(origin) => {
+                    crate::core::Error::ScopedDecodeResource(origin)
+                }
+                Self::DecodeAllocationFailed { bytes } => {
+                    crate::core::Error::AllocationFailed { bytes }
+                }
+                Self::AllocationFailed => crate::core::Error::AllocationFailed { bytes: 0 },
+                error => crate::core::Error::Json(error),
             }
         }
     }
@@ -2832,6 +2866,22 @@ pub mod json {
             assert_eq!(rendered, format!("\"{sample}\""));
         }
         #[test]
+        fn string_writer_escapes_identically_on_every_path() {
+            // Short strings take the scalar path; long ASCII strings take the
+            // SIMD paths where the build enables them. All must agree.
+            for padding in [0usize, 7, 15, 16, 31, 32, 63, 64] {
+                let pad = "x".repeat(padding);
+                let input = format!("{pad}a\u{08}b\u{0C}c\u{0B}\"\\\n{pad}\u{08}\u{0C}");
+                let expected = format!("\"{pad}a\\bb\\fc\\u000b\\\"\\\\\\n{pad}\\b\\f\"");
+                let mut rendered = String::new();
+                write_json_string(&input, &mut rendered);
+                assert_eq!(rendered, expected, "padding {padding}");
+                let mut charwise = String::new();
+                write_json_string_charwise(&input, &mut charwise);
+                assert_eq!(charwise, expected, "charwise padding {padding}");
+            }
+        }
+        #[test]
         fn string_writer_uses_lowercase_hex_for_control_escapes() {
             let mut rendered = String::new();
             write_json_string("a\u{000b}b", &mut rendered);
@@ -3028,6 +3078,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3089,6 +3141,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3156,6 +3210,8 @@ pub mod json {
                                 b'\n' => out.push_str("\\n"),
                                 b'\r' => out.push_str("\\r"),
                                 b'\t' => out.push_str("\\t"),
+                                0x08 => out.push_str("\\b"),
+                                0x0C => out.push_str("\\f"),
                                 c if c < 0x20 => {
                                     out.push_str("\\u00");
                                     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -9045,6 +9101,28 @@ where
         return Err(Error::NonCanonicalEncoding);
     }
     Ok(())
+}
+
+/// Decode one exact canonical V1 frame while retaining the original admission refusal.
+///
+/// The complete synchronous decode and canonical byte comparison use the same implementation as
+/// [`decode_canonical_with_limits`]. Default and schema ceilings remain protocol errors. An actual
+/// refusal from an enclosing decode budget is identified by its original scope, including cumulative
+/// limits; matching numeric ceilings alone cannot establish that origin. This does not alter the
+/// wire encoding or provide an allocation-pool release owner.
+///
+/// # Errors
+/// Returns the original decoder error with an opaque classification established before its scopes
+/// unwind. Reconstructed resource errors without current-attempt provenance are invalid input.
+pub fn decode_canonical_for_admission<T>(
+    bytes: &[u8],
+    limits: DecodeLimits,
+) -> Result<T, core::DecodeAttemptError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    core::classify_decode_attempt(|| decode_canonical_with_limits(bytes, limits))
 }
 
 /// Decode one exact canonical V1 frame under default and schema-specific limits.

@@ -1597,8 +1597,18 @@ impl SignedTransaction {
     /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        let entry_hash = HashOf::new(&ExternalEntrypointRef(self.payload()));
-        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
+        self.try_hash_as_entrypoint()
+            .expect("external transaction hash encoding should not fail")
+    }
+    /// Hash the original external intent without erasing a serializer or allocation refusal.
+    ///
+    /// Uses the same borrowed payload projection and fixed V1 hash domain as [`Self::hash`].
+    ///
+    /// # Errors
+    /// Returns the original codec failure without producing a partial transaction identity.
+    pub fn try_hash_as_entrypoint(&self) -> Result<HashOf<TransactionEntrypoint>, norito::Error> {
+        let entry_hash = HashOf::try_new(&ExternalEntrypointRef(self.payload()))?;
+        Ok(HashOf::from_untyped_unchecked(Hash::from(entry_hash)))
     }
     /// Injects a set of fictitious instructions into the transaction payload for testing.
     ///

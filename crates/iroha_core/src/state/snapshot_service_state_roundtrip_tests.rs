@@ -55,7 +55,7 @@ state_test! { sync service_snapshot_roundtrip_preserves_state_hash_and_actual_re
         crate::snapshot::canonical_state_snapshot_hash(state).unwrap());
     let mut before = String::new();
     super::snapshot_service_state::serialize(&restored.world, &mut before);
-    let carrier = restored.kura.get_block(NonZeroUsize::new(restored.committed_height()).unwrap()).unwrap();
+    let carrier = restored.kura.get_block(NonZeroUsize::new(restored.committed_height()).unwrap(), &restored.ivm_execution_budget()).expect("completed original State read").unwrap();
     {
         let replacement = restored.block_and_revert(carrier.header());
         assert_eq!(carrier.header().prev_block_hash(), predecessor_hash);

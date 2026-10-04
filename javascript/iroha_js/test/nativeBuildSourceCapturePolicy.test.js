@@ -58,12 +58,14 @@ function patchedFs(overrides, run) {
   try { run(); }
   finally { Object.assign(fs, originals); syncBuiltinESMExports(); }
 }
-const options = ({ policy, runner }) => ({ run: runner, sourceCapturePolicy: policy });
+// Synthetic roots own their own lockfile and Git observations. Do not inherit
+// the official build's repository-root lock selection into a different fixture.
+const options = ({ policy, runner }) => ({ env: {}, run: runner, sourceCapturePolicy: policy });
 const clone = value => structuredClone(value);
 
 test('bounded capture has identical ordinary fingerprint bytes, including root lock and optional paths', () => {
   withFixture(f => {
-    const old = proposal.readNativeBuildSourceState(f.source, { run: f.runner });
+    const old = proposal.readNativeBuildSourceState(f.source, { env: {}, run: f.runner });
     assert.deepEqual(proposal.readNativeBuildSourceState(f.source, options(f)), old);
     const snapshot = proposal.createNativeBuildSourceSnapshot(f.source, f.target, options(f));
     try {
@@ -93,7 +95,7 @@ for (const [name, mutate, error] of [
   withFixture(f => {
     const policy = clone(f.policy); mutate(policy); let reads = 0;
     patchedFs({ readSync: old => (...args) => { reads++; return old(...args); } }, () => {
-      assert.throws(() => proposal.readNativeBuildSourceState(f.source, { run: f.runner, sourceCapturePolicy: policy }), error);
+      assert.throws(() => proposal.readNativeBuildSourceState(f.source, { env: {}, run: f.runner, sourceCapturePolicy: policy }), error);
     });
     assert.equal(reads, 0);
   });
@@ -202,7 +204,7 @@ test('caller mutation after normalization cannot widen held source size or ident
       if (!changed) { changed = true; f.policy.maximumTotalBytes = 1024 ** 3; f.policy.entries[0].identity.ino = '0'; }
       return f.runner(command, args, opts);
     };
-    assert.doesNotThrow(() => proposal.readNativeBuildSourceState(f.source, { run, sourceCapturePolicy: f.policy }));
+    assert.doesNotThrow(() => proposal.readNativeBuildSourceState(f.source, { env: {}, run, sourceCapturePolicy: f.policy }));
   });
 });
 
@@ -215,7 +217,7 @@ test('missing, extra, type-swapped and changed gitlink claims reject exact roste
       p => { p.entries[p.entries.findIndex(e => e.path === 'tracked.txt')] = { path: 'tracked.txt', kind: 'absent' }; },
     ]) {
       const policy = clone(f.policy); mutate(policy);
-      assert.throws(() => proposal.readNativeBuildSourceState(f.source, { run: f.runner, sourceCapturePolicy: policy }), /Reviewed (?:source|absent)/);
+      assert.throws(() => proposal.readNativeBuildSourceState(f.source, { env: {}, run: f.runner, sourceCapturePolicy: policy }), /Reviewed (?:source|absent)/);
     }
   });
 });

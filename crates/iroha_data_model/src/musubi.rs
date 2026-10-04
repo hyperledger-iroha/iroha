@@ -1690,6 +1690,8 @@ pub struct MusubiArchiveRecordV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     IntoSchema,
@@ -1726,6 +1728,14 @@ impl MusubiPinOutboxHighWaterV1 {
     /// # Errors
     /// Rejects zero identities, counters, digests, or malformed authority identity.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.validate_fields()?;
+        validate_musubi_account_id_v1(&self.pin_authority)
+    }
+    /// Validate immutable field bindings after the caller bounds the exact authority encoding.
+    ///
+    /// # Errors
+    /// Rejects inert identities, counters, digests, or a different closed version.
+    pub fn validate_fields(&self) -> Result<(), ParseError> {
         if self.version != MUSUBI_PIN_OUTBOX_HIGH_WATER_VERSION_V1
             || self.network_id.as_bytes()[31] & 1 != 1
             || self.session_id == [0; 32]
@@ -1736,9 +1746,74 @@ impl MusubiPinOutboxHighWaterV1 {
         {
             return Err(ParseError::new("Musubi pin-outbox high-water is invalid"));
         }
-        validate_musubi_account_id_v1(&self.pin_authority)?;
         Ok(())
     }
+}
+/// Original committed execution below a challenged pin-outbox Check.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiPinOutboxCheckFloorV1")]
+pub struct MusubiPinOutboxCheckFloorV1 {
+    /// Positive committed height strictly before the Check executes.
+    pub height: u64,
+    /// Exact block hash at that height.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub block_hash: [u8; 32],
+    /// Exact native header/result context authenticated by the original State.
+    pub context_id: crate::block::consensus::HeightContextId,
+}
+impl MusubiPinOutboxCheckFloorV1 {
+    /// Validate coordinates without granting decoded claims any execution authority.
+    ///
+    /// # Errors
+    /// Rejects inert heights, hashes, and height contexts.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.height == 0
+            || self.block_hash == [0; 32]
+            || *self.context_id.0.as_ref() == [0; 32]
+            || iroha_crypto::Hash::from(self.context_id.0) == iroha_crypto::Hash::prehashed([0; 32])
+        {
+            return Err(ParseError::new("Musubi pin-outbox Check floor is invalid"));
+        }
+        Ok(())
+    }
+}
+/// Complete authority-wide assertion in a challenged pin-outbox Check.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiPinOutboxCheckExpectationV1")]
+pub enum MusubiPinOutboxCheckExpectationV1 {
+    /// The authority has no high-water row, regardless of its session or inventory.
+    Absent,
+    /// The authority's entire current row equals this independently supplied value.
+    Present(MusubiPinOutboxHighWaterV1),
 }
 /// Lifecycle of one renewable `SoraFS` archive location.
 #[derive(

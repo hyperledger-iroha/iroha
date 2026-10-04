@@ -21,6 +21,15 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
 }
 
 impl<V: Value, C: Send + Sync + 'static> CellField<'_, V, C> {
+    /// Borrow exact undo without dereferencing a frozen field as an executing block.
+    #[cfg(test)]
+    pub(crate) fn original_undo(&self) -> &Option<V> {
+        match self.read_phase() {
+            ReadPhase::Executing(block) => block.original_undo(),
+            ReadPhase::Frozen(original) => original.original_undo(),
+        }
+    }
+
     /// Borrow the exact original successor without acquiring a current view.
     pub fn get(&self) -> &V {
         match self.read_phase() {
@@ -181,6 +190,17 @@ where
 }
 
 impl<K: Key, V: Value, M: mv::storage::StorageMode<K, V>> StorageField<'_, K, V, M> {
+    /// Borrow original undo rows without acquiring a view or reopening execution.
+    #[cfg(test)]
+    pub(crate) fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+        match self.read_phase() {
+            ReadPhase::Executing(block) => OriginalReadIter::Executing(block.revert_map().iter()),
+            ReadPhase::Frozen(original) => {
+                OriginalReadIter::Frozen(original.original_undo_entries())
+            }
+        }
+    }
+
     /// Borrow the original preimage; absent original entries stay absent.
     pub fn get_before_block(&self, key: &K) -> Option<&V> {
         match self.read_phase() {

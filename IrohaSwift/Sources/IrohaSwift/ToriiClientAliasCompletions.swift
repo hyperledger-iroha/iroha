@@ -1,14 +1,5 @@
 extension ToriiClient {
     @discardableResult
-    public func getAssets(accountId: String,
-                          limit: Int = 100,
-                          asset: String? = nil,
-                          scope: String? = nil,
-                          completion: @escaping (Result<[ToriiAssetBalance], Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) }
-    }
-
-    @discardableResult
     public func resolveAssetAlias(_ alias: String,
                                   completion: @escaping (Result<ToriiAssetAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.resolveAssetAlias(alias) }

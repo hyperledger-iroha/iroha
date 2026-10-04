@@ -46,6 +46,8 @@ fn publish(mut block: BlockHashesBlock<'_>, value: u8) {
 #[test]
 fn successor_reader_contention_wakes_from_original_reader_release() {
     let owner = empty(1024 * 1024);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_1 = crate::unit_test_support::release_registration(&owner.budget);
     let map = owner.map().unwrap();
     let held = map
         .try_write_admitted(|demand| {
@@ -58,7 +60,8 @@ fn successor_reader_contention_wakes_from_original_reader_release() {
         .prepare_commit();
     let expected = map.observe_reader_release();
     let writer_release = owner.released.observe();
-    let mut writer_wait = std::pin::pin!(writer_release.clone().wait_for_release());
+    let mut writer_wait =
+        std::pin::pin!(writer_release.clone().wait_for_release(&mut release_slot_0));
     let error = match owner.try_next_block(false) {
         Err(error) => error,
         Ok(_) => panic!("actual reader mutex is held"),
@@ -68,7 +71,7 @@ fn successor_reader_contention_wakes_from_original_reader_release() {
     };
     assert_eq!(wait, expected);
     assert_ne!(wait, writer_release);
-    let mut wait = std::pin::pin!(wait.wait_for_release());
+    let mut wait = std::pin::pin!(wait.wait_for_release(&mut release_slot_1));
     let mut context = Context::from_waker(Waker::noop());
     assert!(wait.as_mut().poll(&mut context).is_pending());
     assert!(writer_wait.as_mut().poll(&mut context).is_pending());
@@ -107,13 +110,21 @@ fn successor_admission_signals_only_actual_writer_after_unlock() {
         }
     }
     let owner = Arc::new(empty(1024 * 1024));
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_1 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_2 = crate::unit_test_support::release_registration(&owner.budget);
     let counter = Arc::new(CheckUnlocked {
         owner: Arc::clone(&owner),
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&counter));
     let mut context = Context::from_waker(&waker);
-    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    let mut wait = std::pin::pin!(
+        owner
+            .released
+            .observe()
+            .wait_for_release(&mut release_slot_0)
+    );
     assert!(wait.as_mut().poll(&mut context).is_pending());
     let held = owner
         .released
@@ -134,7 +145,12 @@ fn successor_admission_signals_only_actual_writer_after_unlock() {
         .budget
         .try_reserve_bytes(owner.budget.limit_bytes() - owner.budget.reserved_bytes())
         .unwrap();
-    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    let mut wait = std::pin::pin!(
+        owner
+            .released
+            .observe()
+            .wait_for_release(&mut release_slot_1)
+    );
     assert!(wait.as_mut().poll(&mut context).is_pending());
     assert!(matches!(
         owner.try_next_block(false),
@@ -150,7 +166,12 @@ fn successor_admission_signals_only_actual_writer_after_unlock() {
     assert!(owner.view().is_empty());
     drop(occupied);
 
-    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    let mut wait = std::pin::pin!(
+        owner
+            .released
+            .observe()
+            .wait_for_release(&mut release_slot_2)
+    );
     assert!(wait.as_mut().poll(&mut context).is_pending());
     let block = owner.try_next_block(false).unwrap();
     assert_eq!(
@@ -184,7 +205,12 @@ fn current_tree_plus_successor_is_a_permanent_bound_not_a_refund_wait() {
 fn private_successor_refund_wakes_original_capacity_wait() {
     let calibration = empty(1024 * 1024);
     let (existing, additional) = demand(&calibration, false);
-    let owner = empty(existing + additional);
+    let owner = empty(
+        existing
+            + additional
+            + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
     let original = owner.try_next_block(false).unwrap();
     let wait = match owner.try_next_block(false) {
         Err(BlockHashAdmissionError::Capacity(AllocationRefusal::Capacity { release, .. })) => {
@@ -192,7 +218,7 @@ fn private_successor_refund_wakes_original_capacity_wait() {
         }
         _ => panic!("original private successor must hold its exact finite credits"),
     };
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut release_slot_0));
     let mut context = Context::from_waker(Waker::noop());
     assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending));
     drop(original);
@@ -209,7 +235,11 @@ fn old_reader_refunds_only_when_its_original_generation_is_released() {
     let first = demand(&calibration, false);
     publish(calibration.try_next_block(false).unwrap(), 1);
     let second = demand(&calibration, false);
-    let owner = empty((first.0 + first.1).max(second.0 + second.1));
+    let owner = empty(
+        (first.0 + first.1).max(second.0 + second.1)
+            + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
     let old = owner.view();
     publish(owner.try_next_block(false).unwrap(), 1);
     assert!(old.is_empty());
@@ -219,7 +249,7 @@ fn old_reader_refunds_only_when_its_original_generation_is_released() {
         }
         _ => panic!("original old reader must retain its charged allocations"),
     };
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut release_slot_0));
     let mut context = Context::from_waker(Waker::noop());
     assert!(future.as_mut().poll(&mut context).is_pending());
     drop(old);

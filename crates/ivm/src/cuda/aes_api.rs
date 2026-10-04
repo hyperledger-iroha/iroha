@@ -33,9 +33,13 @@ fn stage(
         // are owned here. Input and key arrays stay unchanged through completion.
         unsafe { launch::aes_output(device, ARTIFACT, decrypt, fused, states, keys) }
     }) {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == states.len() && !states.is_empty() => {
+            super::imp::record_completed_cuda_dispatch(kernel, ARTIFACT);
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(

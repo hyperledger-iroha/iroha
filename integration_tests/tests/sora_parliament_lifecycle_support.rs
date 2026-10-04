@@ -21,8 +21,8 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     client::{
-        AccountTransactionDraft, FeeQuoteRequest, ParliamentTimedOvnCastingContextResponseV1,
-        ParliamentTlePartialReleaseShareV1, ParliamentTleReleaseContextResponseV1,
+        ParliamentTimedOvnCastingContextResponseV1, ParliamentTlePartialReleaseShareV1,
+        ParliamentTleReleaseContextResponseV1,
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
@@ -56,10 +56,6 @@ use iroha::{
                 ParliamentTleFinalReleaseSignatureV1, ProposeDeployContract, RegisterCitizen,
                 SubmitParliamentLifecycleTransitionV1,
             },
-            smart_contract_code::{
-                FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
-                SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
-            },
         },
         parameter::{
             Parameter,
@@ -72,7 +68,6 @@ use iroha::{
         prelude::{
             Account, AssetId, FeePaymentIntent, FindAssetById, FindBlocks, Grant,
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
-            SignedTransaction,
         },
         query::dsl::IntoPredicate as _,
         smart_contract::ContractAddress,
@@ -107,7 +102,7 @@ use iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTE
 use iroha_executor_data_model::permission::{
     governance::CanProposeContractDeployment, smart_contract::CanManageSmartContractCode,
 };
-use iroha_model_base::{metadata::Metadata, peer::PeerId};
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode, read_on_dedicated_thread};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode as _;
@@ -142,7 +137,6 @@ pub(super) const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
 pub(super) const EXACT_HEIGHT_SUBMISSION_CADENCE: Duration = Duration::from_secs(5);
 pub(super) const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1_073_741_824;
-pub(super) const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const FAIL_CLOSED_BEACON_OBSERVATION_WINDOW: Duration = Duration::from_secs(8);
 pub(super) const POSITIVE_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_COUNT] = [
     ParliamentBeaconSignerMode::Valid,
@@ -161,128 +155,13 @@ pub(super) const CONTRACT_ADDRESS: &str =
 pub(super) const NO_RESULT_RETRY_CONTRACT_ADDRESS: &str =
     "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
-pub(super) fn fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
-
-// The blocking client is retained only as the test network's account/configuration
-// holder. All writes use its current account-owned async signing and finality API.
-pub(super) async fn prepare_parliament_transaction(
-    client: &Client,
-    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
-) -> Result<SignedTransaction> {
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
-        instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
-        fee(),
-        Metadata::default(),
-    ))?;
-    let quote = tokio::time::timeout(
-        OPERATION_TIMEOUT,
-        account.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload }),
-    )
-    .await
-    .map_err(|_| eyre!("Parliament fee quote exceeded {OPERATION_TIMEOUT:?}"))??;
-    if !payload
-        .fee_payment
-        .has_same_payer_and_gas_bound(&quote.intent)
-    {
-        return Err(eyre!("Parliament fee quote changed payer or gas bound"));
-    }
-    payload.fee_payment = quote.intent;
-    Ok(account.sign_transaction(payload)?)
-}
-
-pub(super) async fn submit_parliament_instructions(
-    client: &Client,
-    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
-) -> Result<()> {
-    let transaction = prepare_parliament_transaction(client, instructions).await?;
-    let applied_hash = tokio::time::timeout(
-        OPERATION_TIMEOUT,
-        client
-            .account_client()
-            .submit_transaction_and_wait(&transaction),
-    )
-    .await
-    .map_err(|_| eyre!("Parliament Applied finality exceeded {OPERATION_TIMEOUT:?}"))??;
-    if applied_hash != transaction.hash() {
-        return Err(eyre!(
-            "Parliament Applied response substituted the signed transaction hash"
-        ));
-    }
-    Ok(())
-}
-
-// The caller observes the exact certified carrier height after native admission.
-pub(super) async fn admit_parliament_height_carrier(
-    client: &Client,
-    instructions: [Log; 1],
-) -> Result<()> {
-    let transaction = prepare_parliament_transaction(client, instructions).await?;
-    let admitted_hash = tokio::time::timeout(
-        OPERATION_TIMEOUT,
-        client.account_client().submit_transaction(&transaction),
-    )
-    .await
-    .map_err(|_| eyre!("Parliament carrier admission exceeded {OPERATION_TIMEOUT:?}"))??;
-    if admitted_hash != transaction.hash() {
-        return Err(eyre!(
-            "Parliament carrier admission substituted the signed hash"
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn minimal_contract_artifact() -> Vec<u8> {
-    minimal_contract_artifact_with_identity("ParliamentLifecycleSmoke", "integration-tests")
-}
-
-pub(super) fn minimal_contract_artifact_with_identity(
-    seiyaku_name: &str,
-    compiler_fingerprint: &str,
-) -> Vec<u8> {
-    let metadata = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 0,
-        max_cycles: 1_000,
-        abi_version: 1,
-    };
-    let interface = ivm::EmbeddedContractInterfaceV1 {
-        seiyaku_name: seiyaku_name.to_owned(),
-        compiler_fingerprint: compiler_fingerprint.to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        features_bitmap: 0,
-        access_set_hints: None,
-        kotoba: Vec::new(),
-        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-            name: "main".to_owned(),
-            kind: iroha::data_model::smart_contract::manifest::EntryPointKind::View,
-            params: Vec::new(),
-            argument_schema: None,
-            return_type: Some("()".to_owned()),
-            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
-            }),
-            permission: None,
-            read_keys: Vec::new(),
-            write_keys: Vec::new(),
-            access_hints_complete: Some(true),
-            access_hints_skipped: Vec::new(),
-            triggers: Vec::new(),
-            entry_pc: 0,
-        }],
-        error_types: Vec::new(),
-        error_messages: Vec::new(),
-        states: Vec::new(),
-    };
-    let mut artifact = metadata.encode();
-    artifact.extend_from_slice(&interface.encode_section());
-    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    artifact
-}
+#[path = "support/parliament_submission.rs"]
+mod submission;
+pub(super) use submission::{
+    OPERATION_TIMEOUT, admit_parliament_height_carrier, fee, minimal_contract_artifact,
+    minimal_contract_artifact_with_identity, prepare_parliament_transaction,
+    stage_contract_artifact, submit_parliament_instructions,
+};
 
 pub(super) fn citizen_keys() -> Vec<KeyPair> {
     (0..CITIZEN_COUNT)
@@ -891,66 +770,6 @@ pub(super) fn release_partial(
         z_r: partial.z_r,
         z_u: partial.z_u,
     }
-}
-
-pub(super) async fn stage_contract_artifact(
-    client: &Client,
-    artifact: &[u8],
-) -> Result<(ContractCodeHash, ContractAbiHash)> {
-    let verified = ivm::verify_contract_artifact(artifact)
-        .map_err(|error| eyre!("verify integration contract artifact: {error}"))?;
-    let manifest = verified
-        .manifest
-        .try_signed(client.client().key_pair())
-        .map_err(|error| eyre!("sign integration contract manifest: {error}"))?;
-    let total_size = u64::try_from(artifact.len())?;
-    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
-    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
-        let chunk_index = u32::try_from(index)?;
-        let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                verified.code_hash,
-            ),
-            total_size,
-            chunk_index,
-            chunk_count,
-            chunk: chunk.to_vec(),
-        })];
-        if chunk_index + 1 == chunk_count {
-            instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    verified.code_hash,
-                ),
-                total_size,
-                chunk_count,
-            }));
-        }
-        submit_parliament_instructions(&client, instructions).await?;
-    }
-    submit_parliament_instructions(
-        &client,
-        [{
-            let scoped_manifest = manifest;
-            RegisterSmartContractCode {
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    scoped_manifest
-                        .code_hash
-                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
-                ),
-                manifest: scoped_manifest,
-            }
-        }],
-    )
-    .await?;
-    let code_hash = *verified.code_hash.as_ref();
-    let abi_hash = *verified.abi_hash.as_ref();
-    Ok((
-        ContractCodeHash::new(code_hash),
-        ContractAbiHash::new(abi_hash),
-    ))
 }
 
 pub(super) fn public_finding_root(

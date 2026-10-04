@@ -275,6 +275,14 @@ final class PetalCodecTests: XCTestCase {
         XCTAssertLessThan(farthest + 10, PetalLayout.ringRadii[0] - PetalLayout.dotRadius)
     }
 
+    /// `f64::from(slot_center(ring, slot))` bit patterns of the Rust reference for slots
+    /// (0, 5), (1, 30) and (2, 77), which `2 * Float.pi` would move by an ulp.
+    private static let referenceSlotCenterBits: [[UInt64]] = [
+        [0x408A_64C5_E000_0000, 0x4084_4E20_E000_0000],
+        [0x4074_35F9_0000_0000, 0x408B_6043_8000_0000],
+        [0x407E_439D_4000_0000, 0x404A_6B6C_0000_0000],
+    ]
+
     func testSlotCentersSitOnTheirRings() {
         for (ring, slots) in PetalLayout.ringSlots.enumerated() {
             for slot in 0..<slots {
@@ -286,6 +294,12 @@ final class PetalCodecTests: XCTestCase {
         }
         let first = PetalLayout.slotCenter(ring: 0, slot: 0)
         XCTAssertEqual(first, PetalPoint(x: 872, y: 512))
+        // single-precision values of the reference (`f32::consts::TAU`, not `2 * Float.pi`)
+        let bits = [(0, 5), (1, 30), (2, 77)].map { ring, slot -> [UInt64] in
+            let point = PetalLayout.slotCenter(ring: ring, slot: slot)
+            return [point.x.bitPattern, point.y.bitPattern]
+        }
+        XCTAssertEqual(bits, Self.referenceSlotCenterBits)
         XCTAssertEqual(PetalLayout.splitSlot(80).ring, 1)
         XCTAssertEqual(PetalLayout.splitSlot(275).slot, 103)
     }

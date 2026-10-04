@@ -7,7 +7,7 @@
 use super::*;
 use crate::native_projection_response::{capacity, encode, native_committee_original_bytes};
 use iroha_core::{
-    state::{AllocationBudget, StateReadOnly},
+    state::AllocationBudget,
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
 };
 use iroha_torii_shared::authority_originals::{

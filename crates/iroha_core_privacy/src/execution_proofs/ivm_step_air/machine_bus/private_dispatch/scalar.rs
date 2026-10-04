@@ -26,6 +26,8 @@ use super::super::super::{
 };
 use super::*;
 
+mod native_witness;
+pub(super) use native_witness::{fill as fill_native_scalar, supported as is_native_public_scalar};
 mod gcd;
 
 const SOURCES: usize = 0;
@@ -251,7 +253,7 @@ pub(super) fn is_supported(instruction: u32) -> bool {
 }
 
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     program: &Program,
     schedule: Schedule,
     row: &[F; super::WIDTH],
@@ -272,6 +274,32 @@ pub(super) fn append_residues(
             })
     };
     let select = |predicate: &dyn Fn(u32) -> bool| weighted(&|w| F(u64::from(predicate(w))));
+    // LOAD and LDI use this same original atomic destination port. Their
+    // values are owned by the memory effect relation and admitted literal table,
+    // respectively; no sequential diagnostic tag event is fabricated.
+    let external = |value: &dyn Fn(u32) -> F| {
+        program
+            .words
+            .iter()
+            .copied()
+            .enumerate()
+            .fold(F::ZERO, |sum, (i, word)| {
+                sum.add(row[FETCH + i].mul(value(word)))
+            })
+    };
+    let load = external(&|word| F(u64::from(role(word) == Some(Role::Load))));
+    let external_destination = external(&|word| {
+        F(u64::from(
+            matches!(role(word), Some(Role::Load | Role::Literal)) && wide::rd(word) != 0,
+        ))
+    });
+    let external_index = external(&|word| {
+        if matches!(role(word), Some(Role::Load | Role::Literal)) {
+            F(wide::rd(word) as u64)
+        } else {
+            F::ZERO
+        }
+    });
     let register_left = select(&|w| reads_left(w));
     let division_selected = select(&|w| is_division(w));
     let ceiling_selected = select(&|w| is_division_ceiling(w));
@@ -288,7 +316,9 @@ pub(super) fn append_residues(
     let move_destination =
         select(&|w| is_conditional_move(w) && has_destination(w)).mul(move_taken);
     let ordinary_destination = select(&|w| !is_conditional_move(w) && has_destination(w));
-    let destination = ordinary_destination.add(move_destination);
+    let destination = ordinary_destination
+        .add(move_destination)
+        .add(external_destination);
     for (slot, index, enabled, write) in [
         (
             SCALAR_LEFT,
@@ -330,7 +360,8 @@ pub(super) fn append_residues(
                 } else {
                     F::ZERO
                 }
-            }),
+            })
+            .add(external_index),
             destination,
             destination,
         ),
@@ -523,16 +554,15 @@ pub(super) fn append_residues(
     // Only CLZ reverses this public-code
     // selected traversal; no secret value controls a branch in these equations.
     let count_prefixes = &row[SCALAR + COUNT..SCALAR + MOVE];
-    let count_start = out.len();
     bit_count::append_residues(
-        out,
+        &mut crate::execution_proofs::ivm_step_air::residues::Scaled::new(
+            out,
+            F::ONE.sub(gcd_selected),
+        ),
         count_prefixes,
         source.bits(0),
         select(&|w| wide::opcode(w) == wide::arithmetic::CLZ),
     );
-    for residue in &mut out[count_start..] {
-        *residue = F::ONE.sub(gcd_selected).mul(*residue);
-    }
     let prefix_count = count_prefixes.iter().copied().fold(F::ZERO, F::add);
     let population = source.bits(0).iter().copied().fold(F::ZERO, F::add);
     // Canonical bit sums cannot wrap the field. On ABS rows the routed right
@@ -568,17 +598,20 @@ pub(super) fn append_residues(
     let mut kinds = core::array::from_fn(|kind| select(&|w| shift_kind(w) == Some(kind)));
     // Canonical SLL on every non-shift row, including zero-source padding.
     kinds[0] = kinds[0].add(F::ONE.sub(select(&|w| shift_kind(w).is_some())));
-    let shift_start = out.len();
-    shift::append_bank_residues(out, shifts, source, kinds);
-    // Reuse the original 208 cells; the old barrel equations are at most cubic.
+    // Reuse the original 208 cells; barrel equations are at most cubic.
     // Division's radix-four checks remain unconditional and degree four.
-    for residual in &mut out[shift_start..] {
-        *residual = F::ONE
-            .sub(division_selected)
-            .sub(square_selected)
-            .sub(gcd_selected)
-            .mul(*residual);
-    }
+    shift::append_bank_residues(
+        &mut crate::execution_proofs::ivm_step_air::residues::Scaled::new(
+            out,
+            F::ONE
+                .sub(division_selected)
+                .sub(square_selected)
+                .sub(gcd_selected),
+        ),
+        shifts,
+        source,
+        kinds,
+    );
     let gas_digits = core::array::from_fn::<_, 32, _>(|digit| {
         let offset = WORDS + 64 + 2 * digit;
         row[offset].add(F(2).mul(row[offset + 1]))
@@ -662,6 +695,20 @@ pub(super) fn append_residues(
         });
         out.push(
             p[SCALAR_DESTINATION][AFTER + limb]
+                .mul(F::ONE.sub(load))
+                .sub(external(&|word| {
+                    if role(word) == Some(Role::Literal) && wide::rd(word) != 0 {
+                        constant_limb(
+                            program
+                                .contract
+                                .scalar_literal(wide::literal_index(word) as u16)
+                                .expect("Program retains admitted scalar literal"),
+                            limb,
+                        )
+                    } else {
+                        F::ZERO
+                    }
+                }))
                 // The same original port is range-constrained and debited by
                 // the dispatcher, and retained in its mandatory history join.
                 // Do not accept a second supplied gas value or the pre-debit word.
@@ -715,6 +762,7 @@ pub(super) fn append_residues(
     // regardless of the overwritten register's old tag or unused encoding bytes.
     out.push(
         p[SCALAR_DESTINATION][AFTER_TAG]
+            .mul(F::ONE.sub(load))
             .sub(ordinary_destination.mul(p[SCALAR_LEFT][BEFORE_TAG]))
             .sub(moved_tag),
     );

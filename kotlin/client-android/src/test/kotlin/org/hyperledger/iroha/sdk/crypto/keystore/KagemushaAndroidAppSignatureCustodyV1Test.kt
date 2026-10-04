@@ -139,11 +139,21 @@ class KagemushaAndroidAppSignatureCustodyV1Test {
         runner.signOrRecoverExact(original())
         val name = io.files.keys.single { it.endsWith(".der") }
         val retained = checkNotNull(io.files[name]).copyOf()
+        // A maximum-size genuine DER plus a byte fails the bounded journal read
+        // before decoding; shorter malformed envelopes reach the corruption check.
+        val maximumResultBytes = 5 + 32 + 1 + 72
         for (changed in listOf(retained + 0, retained.copyOfRange(0, retained.lastIndex),
             retained.copyOf().also { it[5] = (it[5].toInt() xor 1).toByte() },
-            retained.copyOf().also { it[38] = 0x31 })) {
+            retained.copyOf().also { it[38] = 0x31 },
+            retained.copyOf().also { it[37] = (it[37].toInt() + 1).toByte() },
+            retained.copyOf(maximumResultBytes + 1))) {
             io.files[name] = changed
-            failure(KagemushaAndroidAppSignatureCustodyFailureV1.CORRUPT_ORIGINAL) { runner.signOrRecoverExact(original()) }
+            val expected = if (changed.size > maximumResultBytes)
+                KagemushaAndroidAppSignatureCustodyFailureV1.CUSTODY_UNAVAILABLE
+            else KagemushaAndroidAppSignatureCustodyFailureV1.CORRUPT_ORIGINAL
+            failure(expected) { runner.signOrRecoverExact(original()) }
+            assertArrayEquals(changed, io.files[name], "refusal must not replace the retained original")
+            assertEquals(1, device.signs, "refusal must never trigger another signature")
         }
         assertEquals(1, device.signs)
     }

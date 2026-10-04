@@ -3,17 +3,24 @@ struct PrintJsonContext<W, E> {
     err_write: E,
     config: Config,
     filesystem_config: client_config::FilesystemConfig,
+    /// The configuration is the offline sentinel used by configuration-free helpers.
+    offline_fallback: bool,
     operator_key_pair: Option<KeyPair>,
     transaction_metadata: Option<Metadata>,
     fee_payment: FeePaymentArgs,
     input_instructions: bool,
     output_instructions: bool,
     output_format: CliOutputFormat,
+    /// Render JSON as compact newline-delimited values (`--output-format jsonl`).
+    json_lines: bool,
     i18n: Localizer,
 }
 impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config
+    }
+    fn has_client_config(&self) -> bool {
+        !self.offline_fallback
     }
     fn connect_queue_root(&self) -> PathBuf {
         self.filesystem_config.connect_queue_root.clone()
@@ -44,6 +51,9 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
     fn output_format(&self) -> CliOutputFormat {
         self.output_format
     }
+    fn json_lines(&self) -> bool {
+        self.json_lines
+    }
     /// Serialize and print data
     ///
     /// # Errors
@@ -54,11 +64,7 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
     where
         T: JsonSerialize + ?Sized,
     {
-        let mut rendered = norito::json::to_json_pretty(data)
-            .map_err(|err| eyre!("failed to render JSON: {err}"))?;
-        if !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
+        let rendered = render_json_output(data, self.json_lines)?;
         self.write.write_all(rendered.as_bytes())?;
         Ok(())
     }

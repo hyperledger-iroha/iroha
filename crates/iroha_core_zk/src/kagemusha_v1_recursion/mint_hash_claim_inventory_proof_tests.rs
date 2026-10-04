@@ -8,6 +8,7 @@ use super::super::proof::{
     KagemushaClaimInventoryVerifierPinsV1, verify_kagemusha_claim_inventory_proof_v1,
 };
 use super::*;
+use crate::kagemusha_v1_recursion::carrier_binding::KagemushaCarrierCommitmentsV1 as ClaimCarrierCommitmentsV1;
 use crate::{
     kagemusha_v1_recursion::{
         KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1, KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,

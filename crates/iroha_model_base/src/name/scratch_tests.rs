@@ -23,10 +23,10 @@ fn syntax_and_ascii_demand_match_the_actual_pre_normalization_gate() {
         let raw = "\u{301}".repeat(count);
         Name::validate_str(&raw).unwrap();
         let bytes = Name::canonical_validation_scratch_bytes(&raw);
-        assert!(bytes <= nfc_buffer_request_bytes(MAX_NAME_BYTES));
-        assert_eq!(bytes, nfc_buffer_request_bytes(count));
+        assert!(bytes <= nfc_scratch::request_bytes(MAX_NAME_BYTES));
+        assert_eq!(bytes, nfc_scratch::request_bytes(count));
     }
-    assert_eq!(nfc_buffer_request_bytes(MAX_NAME_BYTES), 8064);
+    assert_eq!(nfc_scratch::request_bytes(MAX_NAME_BYTES), 8064);
 }
 
 #[test]
@@ -54,7 +54,8 @@ fn nfc_heap_and_stable_sort_audit_is_bound_to_the_reviewed_sources() {
     }
     assert!(matches!(usize::BITS, 32 | 64));
     assert!(
-        MAX_NAME_BYTES * NFC_PROFILE_MAX_DECOMPOSITION_SCALARS * std::mem::size_of::<u32>() <= 4096
+        MAX_NAME_BYTES * nfc_scratch::MAX_DECOMPOSITION_SCALARS * std::mem::size_of::<u32>()
+            <= 4096
     );
     assert_eq!(nfc_data_sha256(), EXPECTED_NFC_DATA_SHA256);
 }

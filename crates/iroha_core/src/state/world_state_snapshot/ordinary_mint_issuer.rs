@@ -28,7 +28,7 @@ impl State {
             Option<&Permissions>,
             Option<&Role>,
         ) -> Result<T, String>,
-    ) -> Result<T, String> {
+    ) -> Result<T, WorldStateSnapshotError> {
         if authenticated_issuer.try_signatory() != Some(authenticated_signer)
             || authenticated_signer.algorithm() != Algorithm::Ed25519
         {

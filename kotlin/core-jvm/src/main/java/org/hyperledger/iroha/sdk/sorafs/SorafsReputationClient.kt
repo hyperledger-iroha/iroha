@@ -300,35 +300,7 @@ class SorafsReputationClient @JvmOverloads constructor(
     private fun canonicalHeaders(
         target: URI,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): Map<String, String> {
-        val timestampMs = canonicalAuth.timestampMs
-        val nonce = canonicalAuth.nonce
-        require((timestampMs == null) == (nonce == null)) {
-            "timestampMs and nonce must be provided together"
-        }
-        return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(
-                networkId,
-                "GET",
-                target,
-                EMPTY_BODY,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-            )
-        } else {
-            require(timestampMs >= 0) { "timestampMs must be non-negative" }
-            CanonicalRequestSigner.buildHeaders(
-                networkId,
-                "GET",
-                target,
-                EMPTY_BODY,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-                timestampMs,
-                nonce!!,
-            )
-        }
-    }
+    ): Map<String, String> = canonicalAuth.headers(networkId, "GET", target, EMPTY_BODY)
 
     private fun buildTarget(path: String, query: Map<String, String>): URI {
         val base = baseUri.toString()

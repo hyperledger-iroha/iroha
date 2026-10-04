@@ -218,6 +218,9 @@ impl KagemushaNativeOrdinaryInstalledContextV1 {
     }
     /// Retained exact authority for the existing genuine Native account/startup constructor.
     /// Reading it establishes no current S/W or monetary capability.
+    ///
+    /// # Errors
+    /// Refuses changed retained originals, invalid release authentication or lost custody.
     pub fn runtime_authority(&self) -> Result<Arc<KagemushaNativeInstalledRuntimeAuthorityV1>> {
         self.recheck()?;
         Ok(self.authority.clone())
@@ -227,11 +230,17 @@ impl KagemushaNativeOrdinaryInstalledContextV1 {
         self.data.inventory_sha256
     }
     /// Real admitted shared inventory; its complete threshold/proof-key gates stay authoritative.
+    ///
+    /// # Errors
+    /// Refuses changed retained originals, invalid release authentication or lost custody.
     pub fn inventory(&self) -> Result<Arc<KagemushaAdmittedOrdinaryNativeInventoryV1>> {
         self.recheck()?;
         Ok(self.inventory.clone())
     }
     /// Exact released profile, never a caller-supplied layout or zero placeholder.
+    ///
+    /// # Errors
+    /// Refuses changed retained originals, invalid release authentication or lost custody.
     pub fn recursive_profile(&self) -> Result<KagemushaRecursiveVerifierProfileV1> {
         self.recheck()?;
         Ok(self.profile.clone())

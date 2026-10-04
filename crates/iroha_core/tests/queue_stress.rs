@@ -49,6 +49,9 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
         capacity: NonZeroUsize::new(capacity).expect("non-zero capacity"),
         capacity_per_user: NonZeroUsize::new(capacity).expect("non-zero per-user capacity"),
         transaction_time_to_live: ttl,
+        // This regression exercises reclamation on every bounded snapshot, not
+        // the independent one-second production sweep throttle.
+        expired_cull_interval: Duration::ZERO,
         ..QueueConfig::default()
     }
 }
@@ -88,10 +91,12 @@ fn expired_transactions_drain_without_panic() {
             i,
             Duration::from_millis(20),
         );
+        let retained = tx.clone();
         queue
             .push(tx, state.view())
             .expect("queue accepts new transaction");
         thread::sleep(Duration::from_millis(30));
+        assert!(queue.is_expired(&retained), "original signed input expired");
         let view = state.view();
         let pending = queue
             .bounded_pending_snapshot_for_testing(&view, nonzero!(1_usize))
@@ -99,5 +104,9 @@ fn expired_transactions_drain_without_panic() {
         drop(view);
         assert!(pending.is_empty(), "expired tx should not remain available");
         assert_eq!(queue.queued_len(), 0, "queue drained expired transaction");
+        assert!(
+            queue.is_expired(&retained),
+            "outstanding original clone remains valid to inspect"
+        );
     }
 }

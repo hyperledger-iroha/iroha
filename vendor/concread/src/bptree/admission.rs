@@ -925,11 +925,7 @@ where
         let Some(acquired) = self.try_acquire_writer() else {
             return Err(MapAdmissionError::Busy);
         };
-        match acquired.write_with_source(|source, additional| {
-            let existing =
-                current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
-            admit(existing, additional).map_err(MapAdmissionError::Refused)
-        }) {
+        match acquired.try_write_admitted_with_footprint(admit) {
             Ok(writer) => Ok(writer),
             Err((acquired, error)) => {
                 drop(acquired);
@@ -1873,6 +1869,21 @@ where
     V: Copy + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
+    /// Admit a no-edit successor while retaining the original acquired writer.
+    /// The exact tree footprint and new cursor demand come from this guard.
+    /// Refusal returns this same guard before any payload changes; success keeps
+    /// it in the returned writer. The caller owns release and refund deferral.
+    pub fn try_write_admitted_with_footprint<E>(
+        self,
+        admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
+    ) -> AcquiredWriteResult<'a, K, V, P, E> {
+        self.write_with_source(|source, additional| {
+            let existing =
+                current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
+            admit(existing, additional).map_err(MapAdmissionError::Refused)
+        })
+    }
+
     /// Admit one fixed-size insertion while retaining the actual acquired writer.
     /// Both footprint and successor demand come from this guard's original tree.
     /// Refusal returns the same guard and input without allocating or editing;

@@ -28,10 +28,11 @@ use iroha_data_model::{
         kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         musubi::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AdvanceMusubiPinOutboxV1,
-            AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
-            RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
-            RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
-            RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            AssertMusubiReleaseDigestV1, CheckMusubiPinOutboxV1, InviteMusubiPackageMaintainerV1,
+            PublishMusubiReleaseV1, RecoverMusubiPackageV1, RegisterMusubiAliasV1,
+            RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
+            RegisterMusubiProviderBundleAttestationV1, RemoveMusubiPackageMaintainerV1,
+            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
             RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
@@ -311,6 +312,18 @@ pub enum RoutingResolveError {
         /// Policy selected by the settlement instruction.
         policy_id: Name,
     },
+    /// A retained native proposal does not reproduce its exact approved account and body.
+    #[error(
+        "invalid persisted multisig proposal `{instructions_hash}` for account `{account}`: {reason}"
+    )]
+    InvalidMultisigProposal {
+        /// Canonical account used to look up the row.
+        account: AccountId,
+        /// Signed instruction-list digest used to look up the row.
+        instructions_hash: HashOf<Vec<InstructionBox>>,
+        /// Completed binding or decoding error.
+        reason: String,
+    },
     /// A persisted multisig proposal graph recursively approves the same proposal.
     #[error(
         "persisted multisig proposal `{instructions_hash}` for account `{account}` contains an approval cycle"
@@ -357,6 +370,7 @@ impl RoutingResolveError {
             Self::FxCorridorPolicyRegistryMissing => "fx_corridor_policy_registry_missing",
             Self::FxCorridorPolicyRegistryMalformed => "fx_corridor_policy_registry_malformed",
             Self::FxCorridorPolicyNotFound { .. } => "fx_corridor_policy_not_found",
+            Self::InvalidMultisigProposal { .. } => "invalid_multisig_proposal",
             Self::MultisigProposalCycle { .. } => "multisig_proposal_cycle",
             Self::StaleRoutingPlan => "stale_routing_plan",
             Self::OrdinaryRouteUnavailable { .. } => "ordinary_route_unavailable",
@@ -381,7 +395,7 @@ pub fn evaluate_policy_plan_with_catalog(
     tx: &dyn TransactionRoutingView,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     let matched_rule = first_matching_rule(&policy.rules, |rule| rule_matches(rule, tx, None))?;
-    if transaction_contains_fx_corridor_settlement(tx)
+    if transaction_contains_fx_corridor_settlement(tx)?
         && let Some(decision) =
             settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
     {
@@ -946,7 +960,7 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-    if !transaction_contains_fx_corridor_settlement(tx) {
+    if !transaction_contains_fx_corridor_settlement(tx)? {
         return Ok(None);
     }
     let coordinator_route =
@@ -1039,6 +1053,14 @@ impl MultisigProposalRoutingStack {
         instructions_hash: &HashOf<Vec<InstructionBox>>,
         resolve: impl FnOnce(&mut Self) -> Result<T, RoutingResolveError>,
     ) -> Result<T, RoutingResolveError> {
+        if !cfg!(all(test, sumeragi_core_mutation = "HC70"))
+            && self.active.len()
+                >= crate::smartcontracts::isi::multisig::MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH
+        {
+            return Err(RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: "multisig proposal exceeds the deferred execution depth bound".into(),
+            });
+        }
         let key = (account.clone(), *instructions_hash);
         if !self.active.insert(key.clone()) {
             return Err(RoutingResolveError::MultisigProposalCycle {
@@ -1100,30 +1122,37 @@ impl FxCorridorRoutingOverlay {
             Err(error) => Err(error),
         }
     }
-    fn record_executed_multisig_proposal(&mut self, propose: MultisigPropose) {
+    fn record_executed_multisig_proposal(
+        &mut self,
+        propose: MultisigPropose,
+    ) -> Result<(), RoutingResolveError> {
         let MultisigPropose {
             account,
             instructions,
             ..
         } = propose;
-        let instructions_hash = HashOf::new(&instructions);
+        let instructions_hash = proposal_instructions_hash(&instructions)?;
         self.executed_multisig_proposals
             .entry((account, instructions_hash))
             .or_insert(instructions);
+        Ok(())
     }
     fn multisig_proposal_instructions_with_world<W: WorldReadOnly>(
         &self,
         world: &W,
         account: &AccountId,
         instructions_hash: &HashOf<Vec<InstructionBox>>,
-    ) -> Option<Vec<InstructionBox>> {
-        self.executed_multisig_proposals
+    ) -> Result<Option<Vec<InstructionBox>>, RoutingResolveError> {
+        if let Some(instructions) = self
+            .executed_multisig_proposals
             .get(&(account.clone(), *instructions_hash))
-            .cloned()
-            .or_else(|| {
-                multisig_proposal_state_raw(world, account, instructions_hash)
-                    .map(|proposal| proposal.instructions)
-            })
+        {
+            return Ok(Some(instructions.clone()));
+        }
+        Ok(
+            multisig_proposal_state_raw(world, account, instructions_hash)?
+                .map(|proposal| proposal.instructions),
+        )
     }
 }
 fn fx_corridor_policy_with_state(
@@ -1196,7 +1225,7 @@ where
             usize::MAX,
             &[],
             world,
-        );
+        )?;
     }
     Ok(merged)
 }
@@ -1283,7 +1312,7 @@ fn trigger_executable_transaction_dataspace_target_with_world_and_fx_overlay<W: 
                             usize::MAX,
                             &[],
                             world,
-                        );
+                        )?;
                         target
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -1561,7 +1590,7 @@ fn executable_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
@@ -1586,7 +1615,7 @@ fn executable_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>
                         top_level_instruction_index,
                         &same_transaction_multisig_proposals,
                         world,
-                    );
+                    )?;
                     top_level_instruction_index += 1;
                 }
             }
@@ -1610,7 +1639,7 @@ fn executable_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly>
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
     }
@@ -1687,7 +1716,7 @@ fn instruction_settlement_dataspace_target_with_stack(
         return settlement_atomic::target(atomic);
     }
 
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 instruction_list_settlement_dataspace_target_with_stack(
@@ -1882,7 +1911,7 @@ fn instruction_list_settlement_dataspace_target_with_world_and_stack<W: WorldRea
             usize::MAX,
             &[],
             world,
-        );
+        )?;
     }
     Ok(target_dataspace)
 }
@@ -1899,7 +1928,7 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
         return settlement_atomic::target(atomic);
     }
 
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 instruction_list_settlement_dataspace_target_with_world_and_stack(
@@ -2069,25 +2098,35 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
     }
     Ok(None)
 }
-fn executable_contains_fx_corridor_settlement(executable: &Executable) -> bool {
+fn executable_contains_fx_corridor_settlement(
+    executable: &Executable,
+) -> Result<bool, RoutingResolveError> {
     match executable {
-        Executable::Instructions(instructions) => instructions
-            .iter()
-            .any(|instruction| instruction_contains_fx_corridor_settlement(&**instruction)),
-        Executable::IvmProved(proved) => proved
-            .overlay
-            .iter()
-            .any(|instruction| instruction_contains_fx_corridor_settlement(&**instruction)),
-        Executable::Batch(items) => items.iter().any(|item| match item {
-            ExecutableBatchItem::Instruction(instruction) => {
-                instruction_contains_fx_corridor_settlement(&**instruction)
-            }
-            ExecutableBatchItem::ContractCall(_) => false,
+        Executable::Instructions(instructions) => {
+            instructions.iter().try_fold(false, |found, instruction| {
+                Ok(found || instruction_contains_fx_corridor_settlement(&**instruction)?)
+            })
+        }
+        Executable::IvmProved(proved) => {
+            proved.overlay.iter().try_fold(false, |found, instruction| {
+                Ok(found || instruction_contains_fx_corridor_settlement(&**instruction)?)
+            })
+        }
+        Executable::Batch(items) => items.iter().try_fold(false, |found, item| {
+            Ok(found
+                || match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        instruction_contains_fx_corridor_settlement(&**instruction)?
+                    }
+                    ExecutableBatchItem::ContractCall(_) => false,
+                })
         }),
-        Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::Ivm(_) => Ok(false),
     }
 }
-fn instruction_contains_fx_corridor_settlement(instruction: &dyn Instruction) -> bool {
+fn instruction_contains_fx_corridor_settlement(
+    instruction: &dyn Instruction,
+) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if any.downcast_ref::<SettleFxCorridor>().is_some()
         || matches!(
@@ -2095,27 +2134,31 @@ fn instruction_contains_fx_corridor_settlement(instruction: &dyn Instruction) ->
             Some(SettlementInstructionBox::SettleFxCorridor(_))
         )
     {
-        return true;
+        return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => propose
                 .instructions
                 .iter()
-                .any(|nested| instruction_contains_fx_corridor_settlement(&**nested)),
+                .try_fold(false, |found, nested| {
+                    Ok(found || instruction_contains_fx_corridor_settlement(&**nested)?)
+                }),
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
-            | MultisigInstructionBox::InvalidateOutstanding(_) => false,
+            | MultisigInstructionBox::InvalidateOutstanding(_) => Ok(false),
         };
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return executable_contains_fx_corridor_settlement(register.object.action().executable());
     }
-    false
+    Ok(false)
 }
-fn transaction_contains_fx_corridor_settlement(tx: &dyn TransactionRoutingView) -> bool {
-    transaction_executable(tx).is_some_and(executable_contains_fx_corridor_settlement)
+fn transaction_contains_fx_corridor_settlement(
+    tx: &dyn TransactionRoutingView,
+) -> Result<bool, RoutingResolveError> {
+    transaction_executable(tx).map_or(Ok(false), executable_contains_fx_corridor_settlement)
 }
 fn transaction_executable(tx: &dyn TransactionRoutingView) -> Option<&Executable> {
     tx.executable()
@@ -2340,7 +2383,7 @@ fn merge_top_level_instruction_dataspace_target(
         same_transaction_multisig_proposals,
         instruction,
         top_level_instruction_index,
-    );
+    )?;
     let instruction_target = match same_transaction_approve_target {
         Some(proposal) => proposal.dataspace_id,
         None => {
@@ -2389,7 +2432,7 @@ fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
         same_transaction_multisig_proposals,
         instruction,
         top_level_instruction_index,
-    );
+    )?;
     let instruction_target = match same_transaction_approve_target {
         Some(proposal) => proposal.dataspace_id,
         None => instruction_transaction_dataspace_target_with_world_and_fx_overlay(
@@ -2557,7 +2600,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
@@ -2583,7 +2626,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                             top_level_instruction_index,
                             &same_transaction_multisig_proposals,
                             world,
-                        );
+                        )?;
                         top_level_instruction_index += 1;
                         continue;
                     }
@@ -2621,7 +2664,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
     }
@@ -2820,7 +2863,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
         Executable::ContractCall(call) => {
@@ -2851,7 +2894,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                             top_level_instruction_index,
                             &same_transaction_multisig_proposals,
                             world,
-                        );
+                        )?;
                         top_level_instruction_index += 1;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -2883,7 +2926,7 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                     top_level_instruction_index,
                     &same_transaction_multisig_proposals,
                     world,
-                );
+                )?;
             }
         }
     }
@@ -2904,7 +2947,7 @@ fn collect_top_level_instruction_native_amx_participants<W: WorldReadOnly>(
         same_transaction_multisig_proposals,
         instruction,
         top_level_instruction_index,
-    ) && !proposal.concrete_dataspaces.is_empty()
+    )? && !proposal.concrete_dataspaces.is_empty()
     {
         let has_collapsed_universal = proposal
             .concrete_dataspaces
@@ -3046,7 +3089,7 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
         Executable::Batch(items) => {
@@ -3068,7 +3111,7 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                             usize::MAX,
                             &[],
                             world,
-                        );
+                        )?;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         insert_native_amx_participant(
@@ -3097,7 +3140,7 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
     }
@@ -3156,7 +3199,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         }
         return Ok(());
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         let collect_payload = |instructions: &[InstructionBox],
                                account: &AccountId,
                                stack: &mut MultisigProposalRoutingStack|
@@ -3179,7 +3222,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
             if nested_dataspaces.is_empty() {
                 insert_native_amx_participant(
@@ -3597,11 +3640,36 @@ fn retail_monetary_dataspace_target_with_world<W: WorldReadOnly>(
     Ok(dataspace)
 }
 
+/// Participant instructions name their exact root; global proofs do not add a second route.
+fn native_amx_participant_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    use iroha_data_model::isi::sumeragi_amx::{
+        PrepareAmxV1, RegisterAmxParticipantV1, RelayGlobalAmxHandoffV1, SettleAmxV1,
+    };
+    let any = instruction.as_any();
+    any.downcast_ref::<RegisterAmxParticipantV1>()
+        .map(|value| value.dataspace)
+        .or_else(|| {
+            any.downcast_ref::<PrepareAmxV1>()
+                .map(|value| value.dataspace)
+        })
+        .or_else(|| {
+            any.downcast_ref::<SettleAmxV1>()
+                .map(|value| value.dataspace)
+        })
+        .or_else(|| {
+            any.downcast_ref::<RelayGlobalAmxHandoffV1>()
+                .map(|value| value.dataspace)
+        })
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -3665,7 +3733,7 @@ fn instruction_transaction_dataspace_target(
             )?,
         );
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
                 multisig_propose_transaction_dataspace_target(
@@ -4020,6 +4088,9 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -4078,7 +4149,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
             )?,
         );
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
                 multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay(
@@ -4450,39 +4521,55 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     }
     Ok(None)
 }
-fn multisig_instruction(instruction: &dyn Instruction) -> Option<MultisigInstructionBox> {
-    let any = instruction.as_any();
-    if let Some(multisig) = instruction
-        .as_any()
-        .downcast_ref::<MultisigInstructionBox>()
-    {
-        return Some(multisig.clone());
-    }
-    if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
-        return Some(MultisigInstructionBox::Propose(propose.clone()));
-    }
-    if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
-        return Some(MultisigInstructionBox::Approve(approve.clone()));
-    }
-    any.downcast_ref::<CustomInstruction>().and_then(|custom| {
-        MultisigInstructionBox::try_from(custom.payload())
-            .ok()
-            .or_else(|| {
-                custom
-                    .payload()
-                    .try_into_any_norito::<MultisigPropose>()
-                    .ok()
-                    .map(MultisigInstructionBox::Propose)
-            })
-            .or_else(|| {
-                custom
-                    .payload()
-                    .try_into_any_norito::<MultisigApprove>()
-                    .ok()
-                    .map(MultisigInstructionBox::Approve)
-            })
+fn proposal_instructions_hash(
+    instructions: &Vec<InstructionBox>,
+) -> Result<HashOf<Vec<InstructionBox>>, RoutingResolveError> {
+    HashOf::try_new(instructions).map_err(|error| {
+        match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+            error,
+            |error| RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: error.to_string(),
+            },
+        ) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                RoutingResolveError::Deferred(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        }
     })
 }
+fn multisig_instruction(
+    instruction: &dyn Instruction,
+) -> Result<Option<MultisigInstructionBox>, RoutingResolveError> {
+    let any = instruction.as_any();
+    if let Some(multisig) = any.downcast_ref::<MultisigInstructionBox>() {
+        return Ok(Some(multisig.clone()));
+    }
+    if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
+        return Ok(Some(MultisigInstructionBox::Propose(propose.clone())));
+    }
+    if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
+        return Ok(Some(MultisigInstructionBox::Approve(approve.clone())));
+    }
+    let Some(custom) = any.downcast_ref::<CustomInstruction>() else {
+        return Ok(None);
+    };
+    match MultisigInstructionBox::try_from(custom.payload()) {
+        Ok(multisig) => Ok(Some(multisig)),
+        Err(error) => {
+            match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                error,
+                |_| (),
+            ) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    Err(RoutingResolveError::Deferred(reason))
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(()) => Ok(None),
+            }
+        }
+    }
+}
+#[cfg(test)]
 fn multisig_proposal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -4503,10 +4590,24 @@ fn multisig_proposal_state_raw<W: WorldReadOnly>(
     world: &W,
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Option<MultisigProposalState> {
-    let key = multisig_proposal_state_key(multisig_account, instructions_hash);
-    let bytes = world.smart_contract_state().get(&key)?;
-    norito::decode_from_bytes::<MultisigProposalState>(bytes).ok()
+) -> Result<Option<MultisigProposalState>, RoutingResolveError> {
+    crate::smartcontracts::isi::multisig::read_proposal_state(
+        world,
+        multisig_account,
+        instructions_hash,
+    )
+    .map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            RoutingResolveError::Deferred(reason)
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            RoutingResolveError::InvalidMultisigProposal {
+                account: multisig_account.clone(),
+                instructions_hash: *instructions_hash,
+                reason: error.to_string(),
+            }
+        }
+    })
 }
 fn with_multisig_proposal_state<W: WorldReadOnly, T>(
     world: &W,
@@ -4518,7 +4619,7 @@ fn with_multisig_proposal_state<W: WorldReadOnly, T>(
         &mut MultisigProposalRoutingStack,
     ) -> Result<T, RoutingResolveError>,
 ) -> Result<Option<T>, RoutingResolveError> {
-    let Some(proposal) = multisig_proposal_state_raw(world, account, instructions_hash) else {
+    let Some(proposal) = multisig_proposal_state_raw(world, account, instructions_hash)? else {
         return Ok(None);
     };
     stack
@@ -4539,7 +4640,7 @@ fn with_multisig_proposal_instructions<W: WorldReadOnly, T>(
     ) -> Result<T, RoutingResolveError>,
 ) -> Result<Option<T>, RoutingResolveError> {
     let Some(instructions) =
-        fx_overlay.multisig_proposal_instructions_with_world(world, account, instructions_hash)
+        fx_overlay.multisig_proposal_instructions_with_world(world, account, instructions_hash)?
     else {
         return Ok(None);
     };
@@ -4760,7 +4861,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
             compare_and_set_primary_account_alias_dataspace_targets(primary),
         ));
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         let collect = |instructions: &[InstructionBox],
                        stack: &mut MultisigProposalRoutingStack|
          -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
@@ -5040,7 +5141,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
             compare_and_set_primary_account_alias_dataspace_targets(primary),
         ));
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         let collect = |instructions: &[InstructionBox],
                        stack: &mut MultisigProposalRoutingStack|
          -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
@@ -5192,7 +5293,7 @@ fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_s
         targets.extend(fx_targets);
         return Ok(());
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         let mut collect = |instructions: &[InstructionBox],
                            stack: &mut MultisigProposalRoutingStack|
          -> Result<(), RoutingResolveError> {
@@ -5213,7 +5314,7 @@ fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_s
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
             Ok(())
         };
@@ -5290,7 +5391,7 @@ fn extend_trigger_executable_concrete_dataspace_targets_with_world_and_fx_overla
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
         Executable::Batch(items) => {
@@ -5312,7 +5413,7 @@ fn extend_trigger_executable_concrete_dataspace_targets_with_world_and_fx_overla
                             usize::MAX,
                             &[],
                             world,
-                        );
+                        )?;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         if let Some(target) =
@@ -5342,7 +5443,7 @@ fn extend_trigger_executable_concrete_dataspace_targets_with_world_and_fx_overla
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
     }
@@ -5355,7 +5456,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_fx_overlay<W: 
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
-    let is_nested_scope = multisig_instruction(instruction).is_some()
+    let is_nested_scope = multisig_instruction(instruction)?.is_some()
         || matches!(
             instruction.as_any().downcast_ref::<RegisterBox>(),
             Some(RegisterBox::Trigger(_))
@@ -5386,7 +5487,7 @@ fn same_transaction_multisig_proposal_targets(
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
     for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
-        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
+        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)?
         else {
             continue;
         };
@@ -5411,7 +5512,7 @@ fn same_transaction_multisig_proposal_targets(
         proposals.push(SameTransactionMultisigProposalTarget {
             top_level_instruction_index,
             account: propose.account,
-            instructions_hash: HashOf::new(&propose.instructions),
+            instructions_hash: proposal_instructions_hash(&propose.instructions)?,
             instructions: propose.instructions,
             dataspace_id,
             concrete_dataspaces,
@@ -5430,7 +5531,8 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
     let mut proposals = Vec::new();
     let mut outer_fx_overlay = fx_overlay.clone();
     for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
-        if let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
+        if let Some(MultisigInstructionBox::Propose(propose)) =
+            multisig_instruction(&**instruction)?
         {
             let mut target_fx_overlay = outer_fx_overlay.clone();
             let instruction_target = merge_instruction_dataspace_targets_with_world_and_fx_overlay(
@@ -5470,13 +5572,13 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
             requires_universal_coordinator |= concrete_dataspaces.len() > 1;
             proposals.push(SameTransactionMultisigProposalTarget {
                 top_level_instruction_index,
                 account: propose.account,
-                instructions_hash: HashOf::new(&propose.instructions),
+                instructions_hash: proposal_instructions_hash(&propose.instructions)?,
                 instructions: propose.instructions,
                 dataspace_id,
                 concrete_dataspaces,
@@ -5489,7 +5591,7 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
             top_level_instruction_index,
             &proposals,
             world,
-        );
+        )?;
     }
     Ok(proposals)
 }
@@ -5497,19 +5599,24 @@ fn same_transaction_multisig_route_target<'a>(
     proposals: &'a [SameTransactionMultisigProposalTarget],
     instruction: &dyn Instruction,
     top_level_instruction_index: usize,
-) -> Option<&'a SameTransactionMultisigProposalTarget> {
-    let (account, instructions_hash, must_precede) = match multisig_instruction(instruction)? {
-        MultisigInstructionBox::Propose(propose) => {
-            (propose.account, HashOf::new(&propose.instructions), false)
-        }
+) -> Result<Option<&'a SameTransactionMultisigProposalTarget>, RoutingResolveError> {
+    let Some(multisig) = multisig_instruction(instruction)? else {
+        return Ok(None);
+    };
+    let (account, instructions_hash, must_precede) = match multisig {
+        MultisigInstructionBox::Propose(propose) => (
+            propose.account,
+            proposal_instructions_hash(&propose.instructions)?,
+            false,
+        ),
         MultisigInstructionBox::Approve(approve) => {
             (approve.account, approve.instructions_hash, true)
         }
         MultisigInstructionBox::Register(_)
         | MultisigInstructionBox::Cancel(_)
-        | MultisigInstructionBox::InvalidateOutstanding(_) => return None,
+        | MultisigInstructionBox::InvalidateOutstanding(_) => return Ok(None),
     };
-    proposals.iter().find(|proposal| {
+    Ok(proposals.iter().find(|proposal| {
         proposal.account == account
             && proposal.instructions_hash == instructions_hash
             && if must_precede {
@@ -5517,7 +5624,7 @@ fn same_transaction_multisig_route_target<'a>(
             } else {
                 proposal.top_level_instruction_index == top_level_instruction_index
             }
-    })
+    }))
 }
 fn observe_top_level_instruction_fx_effects<W: WorldReadOnly>(
     fx_overlay: &mut FxCorridorRoutingOverlay,
@@ -5525,16 +5632,15 @@ fn observe_top_level_instruction_fx_effects<W: WorldReadOnly>(
     top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
     world: &W,
-) {
-    let mut active_approvals = BTreeSet::new();
+) -> Result<(), RoutingResolveError> {
     observe_authenticated_instruction_fx_effects(
         fx_overlay,
         instruction,
         top_level_instruction_index,
         same_transaction_multisig_proposals,
         world,
-        &mut active_approvals,
-    );
+        &mut MultisigProposalRoutingStack::default(),
+    )
 }
 fn observe_authenticated_instruction_fx_effects<W: WorldReadOnly>(
     fx_overlay: &mut FxCorridorRoutingOverlay,
@@ -5542,63 +5648,52 @@ fn observe_authenticated_instruction_fx_effects<W: WorldReadOnly>(
     top_level_instruction_index: usize,
     same_transaction_multisig_proposals: &[SameTransactionMultisigProposalTarget],
     world: &W,
-    active_approvals: &mut BTreeSet<MultisigProposalRoutingKey>,
-) {
+    stack: &mut MultisigProposalRoutingStack,
+) -> Result<(), RoutingResolveError> {
     fx_overlay.observe(instruction);
-    let Some(multisig) = multisig_instruction(instruction) else {
-        return;
+    let Some(multisig) = multisig_instruction(instruction)? else {
+        return Ok(());
     };
     let approve = match multisig {
         MultisigInstructionBox::Propose(propose) => {
-            // Record only a proposal instruction that execution has actually reached. Its payload
-            // remains inert until a later matching approval executes it.
-            fx_overlay.record_executed_multisig_proposal(propose);
-            return;
+            // Only a proposal actually reached in the authenticated branch can affect later approval.
+            return fx_overlay.record_executed_multisig_proposal(propose);
         }
         MultisigInstructionBox::Approve(approve) => approve,
-        MultisigInstructionBox::Register(_)
-        | MultisigInstructionBox::Cancel(_)
-        | MultisigInstructionBox::InvalidateOutstanding(_) => return,
+        _ => return Ok(()),
     };
-    let approval_key = (approve.account.clone(), approve.instructions_hash);
-    if !active_approvals.insert(approval_key.clone()) {
-        return;
-    }
-    // Any valid approval can be the quorum-completing vote, so routing must cover the
-    // authenticated execution branch even when this particular vote may not reach quorum.
-    // Trigger and proposal payloads remain inert until their own authenticated execution path
-    // runs. Nested approvals are different: a quorum-completing approval executes them inline, so
-    // recursively project their authenticated effects. The active set mirrors the executor's
-    // recursion-stack guard and bounds malformed or cyclic proposal graphs deterministically.
-    let instructions = fx_overlay
-        .executed_multisig_proposals
-        .get(&approval_key)
-        .cloned()
-        .or_else(|| {
-            same_transaction_multisig_route_target(
-                same_transaction_multisig_proposals,
-                instruction,
-                top_level_instruction_index,
-            )
-            .map(|proposal| proposal.instructions.clone())
-        })
-        .or_else(|| {
-            multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)
-                .map(|proposal| proposal.instructions)
-        });
+    let key = (approve.account.clone(), approve.instructions_hash);
+    let instructions = if let Some(instructions) = fx_overlay.executed_multisig_proposals.get(&key)
+    {
+        Some(instructions.clone())
+    } else if let Some(proposal) = same_transaction_multisig_route_target(
+        same_transaction_multisig_proposals,
+        instruction,
+        top_level_instruction_index,
+    )? {
+        Some(proposal.instructions.clone())
+    } else {
+        multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)?
+            .map(|proposal| proposal.instructions)
+    };
+    // Any vote may complete quorum. Project its exact authenticated branch with the same
+    // cycle/depth bound as other routing walks, including otherwise non-settlement proposals.
     if let Some(instructions) = instructions {
-        for nested in &instructions {
-            observe_authenticated_instruction_fx_effects(
-                fx_overlay,
-                &**nested,
-                top_level_instruction_index,
-                same_transaction_multisig_proposals,
-                world,
-                active_approvals,
-            );
-        }
+        stack.with_proposal(&approve.account, &approve.instructions_hash, |stack| {
+            for nested in &instructions {
+                observe_authenticated_instruction_fx_effects(
+                    fx_overlay,
+                    &**nested,
+                    top_level_instruction_index,
+                    same_transaction_multisig_proposals,
+                    world,
+                    stack,
+                )?;
+            }
+            Ok(())
+        })?;
     }
-    active_approvals.remove(&approval_key);
+    Ok(())
 }
 fn multisig_propose_transaction_dataspace_target(
     propose: &MultisigPropose,
@@ -5632,7 +5727,7 @@ fn multisig_approve_transaction_dataspace_target(
     // The instruction-target entry point completes its guarded settlement pre-walk before this
     // helper is reached, so a cyclic graph cannot enter this unguarded result fold.
     let proposal_target =
-        match multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash) {
+        match multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)? {
             Some(proposal_state) => merge_instruction_dataspace_target_results(
                 proposal_state.instructions.iter().map(|instruction| {
                     instruction_transaction_dataspace_target(
@@ -5666,7 +5761,7 @@ fn multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay<W: Wo
         world,
         &approve.account,
         &approve.instructions_hash,
-    ) {
+    )? {
         Some(instructions) => {
             let mut nested_fx_overlay = fx_overlay.clone();
             merge_instruction_dataspace_targets_with_world_and_fx_overlay(
@@ -5928,7 +6023,7 @@ fn instruction_transaction_target_requires_universal_coordinator(
     {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
@@ -5938,7 +6033,7 @@ fn instruction_transaction_target_requires_universal_coordinator(
                     view.world(),
                     &approve.account,
                     &approve.instructions_hash,
-                )
+                )?
                 .map(|proposal| proposal.instructions),
                 None => None,
             },
@@ -6090,13 +6185,13 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
             MultisigInstructionBox::Approve(approve) => {
-                multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)
+                multisig_proposal_state_raw(world, &approve.account, &approve.instructions_hash)?
                     .map(|proposal| proposal.instructions)
             }
             MultisigInstructionBox::Register(_)
@@ -6260,7 +6355,7 @@ fn trigger_executable_requires_universal_coordinator_with_world_and_fx_overlay<W
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
         Executable::Batch(items) => {
@@ -6289,7 +6384,7 @@ fn trigger_executable_requires_universal_coordinator_with_world_and_fx_overlay<W
                             usize::MAX,
                             &[],
                             world,
-                        );
+                        )?;
                     }
                     ExecutableBatchItem::ContractCall(call) => {
                         let target = contract_address_dataspace_target(&call.contract_address);
@@ -6326,7 +6421,7 @@ fn trigger_executable_requires_universal_coordinator_with_world_and_fx_overlay<W
                     usize::MAX,
                     &[],
                     world,
-                );
+                )?;
             }
         }
     }
@@ -6345,7 +6440,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if let Some(multisig) = multisig_instruction(instruction)? {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
@@ -6355,7 +6450,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
                     world,
                     &approve.account,
                     &approve.instructions_hash,
-                ),
+                )?,
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
@@ -6389,7 +6484,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
                 usize::MAX,
                 &[],
                 world,
-            );
+            )?;
         }
         return Ok(requires_universal_coordinator || concrete_dataspaces.len() > 1);
     }
@@ -6551,6 +6646,7 @@ fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataS
     }
     if any.downcast_ref::<RegisterMusubiArchiveV1>().is_some()
         || any.downcast_ref::<AdvanceMusubiPinOutboxV1>().is_some()
+        || any.downcast_ref::<CheckMusubiPinOutboxV1>().is_some()
         || any
             .downcast_ref::<RegisterMusubiProviderBundleAttestationV1>()
             .is_some()
@@ -6674,11 +6770,9 @@ fn dataspace_alias_target_with_world<W: WorldReadOnly>(
     }
 }
 fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
-    state_view
-        .latest_block()
-        .as_ref()
-        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+    // The immutable view captured this committed ledger time with its original State cut.
+    // Routing only needs that fixed metadata, so it does not acquire a block body.
+    state_view.query_ledger_time_ms()
 }
 fn asset_definition_target_from_parts_with_state(
     asset_definition_id: &AssetDefinitionId,
@@ -6772,7 +6866,12 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     {
         return true;
     }
-    if let Some(multisig) = multisig_instruction(instruction) {
+    if any.is::<CustomInstruction>() {
+        // Classification needs the state-backed fallible route path. Never turn an unfinished
+        // custom decode into a claim that no authoritative state is required.
+        return true;
+    }
+    if let Ok(Some(multisig)) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
             MultisigInstructionBox::Register(_)
@@ -9107,7 +9206,7 @@ impl LaneRouter for ConfigLaneRouter {
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let matched_rule =
             first_matching_rule(&self.policy.rules, |rule| rule_matches(rule, tx, None))?;
-        if transaction_contains_fx_corridor_settlement(tx)
+        if transaction_contains_fx_corridor_settlement(tx)?
             && let Some(decision) = settlement_routing_decision(
                 tx,
                 self.lane_catalog.as_ref(),
@@ -9213,7 +9312,7 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
         // Participant dataspaces come from the governed corridor registry.
-        if transaction_contains_fx_corridor_settlement(tx) {
+        if transaction_contains_fx_corridor_settlement(tx)? {
             return Ok(None);
         }
         if dataspace_scoped_permission_routing_requires_state(tx)
@@ -12311,6 +12410,8 @@ mod tests {
     }
     #[path = "router_account_refusal_tests.rs"]
     mod account_refusal_tests;
+    #[path = "fx_scan_refusal_tests.rs"]
+    mod fx_scan_refusal_tests;
     include!("router_transfer_batch_tests.rs");
     include!("router_route_resolution_tests.rs"); // Preserve stable route-resolution test paths.
     #[test]
@@ -16155,6 +16256,113 @@ mod tests {
         );
     }
     #[test]
+    fn persisted_multisig_body_binding_and_local_refusal_reach_signed_queue_admission() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let (account, _) = gen_account_in("wonderland");
+        let instructions = vec![InstructionBox::from(iroha_data_model::isi::Log::new(
+            iroha_data_model::prelude::Level::INFO,
+            "reviewed queue proposal".into(),
+        ))];
+        let hash = HashOf::new(&instructions);
+        let approval = InstructionBox::from(MultisigApprove::new(account.clone(), hash));
+        let signed = sample_transaction(&authority, keypair.private_key(), vec![approval.clone()]);
+        let original = MultisigProposalState::new(
+            account.clone(),
+            hash,
+            instructions,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        let key = multisig_proposal_state_key(&account, &hash);
+        let bytes = encoded_multisig_proposal_state(&original);
+        let mut state = blank_state();
+        let route = |state: &State| {
+            evaluate_policy_plan_with_catalog_and_world(
+                &default_routing_policy(),
+                &catalog_with_lanes(&[LaneId::SINGLE]),
+                &DataSpaceCatalog::default(),
+                &signed,
+                state.view().world(),
+            )
+        };
+        state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(key.clone(), bytes.clone());
+        let expected_route = route(&state).expect("the exact signed approval routes successfully");
+        let expected_deferral = crate::execution_attempt::ExecutionDeferred::from(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        );
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || {
+                assert_eq!(
+                    multisig_proposal_state_raw(state.view().world(), &account, &hash),
+                    Err(RoutingResolveError::Deferred(expected_deferral.clone()))
+                );
+                assert_eq!(
+                    route(&state),
+                    Err(RoutingResolveError::Deferred(expected_deferral))
+                );
+            },
+        );
+        assert_eq!(
+            route(&state),
+            Ok(expected_route.clone()),
+            "same signed operation retries after the original local limit ends"
+        );
+        for malformed in [false, true] {
+            let mut altered = original.clone();
+            altered.instructions = Vec::new();
+            state.world.smart_contract_state_mut_for_testing().insert(
+                key.clone(),
+                if malformed {
+                    vec![1, 2, 3]
+                } else {
+                    encoded_multisig_proposal_state(&altered)
+                },
+            );
+            assert!(matches!(
+                route(&state),
+                Err(RoutingResolveError::InvalidMultisigProposal { .. })
+            ));
+            let view = state.view();
+            assert!(matches!(
+                instruction_transaction_target_requires_universal_coordinator_with_world(
+                    &*approval,
+                    None,
+                    view.world(),
+                    None,
+                ),
+                Err(RoutingResolveError::InvalidMultisigProposal { .. })
+            ));
+            let mut overlay = FxCorridorRoutingOverlay::default();
+            assert!(matches!(
+                observe_top_level_instruction_fx_effects(
+                    &mut overlay,
+                    &*approval,
+                    0,
+                    &[],
+                    view.world()
+                ),
+                Err(RoutingResolveError::InvalidMultisigProposal { .. })
+            ));
+            assert!(overlay.policies.is_empty());
+            assert!(overlay.executed_multisig_proposals.is_empty());
+        }
+        state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(key.clone(), bytes.clone());
+        assert_eq!(route(&state), Ok(expected_route));
+        assert_eq!(
+            state.view().world().smart_contract_state().get(&key),
+            Some(&bytes)
+        );
+    }
+    #[test]
     fn authenticated_multisig_approval_fx_effect_projection_breaks_cycles() {
         let (multisig_id, _) = gen_account_in("wonderland");
         let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
@@ -16176,7 +16384,16 @@ mod tests {
         );
         let view = state.view();
         let mut fx_overlay = FxCorridorRoutingOverlay::default();
-        observe_top_level_instruction_fx_effects(&mut fx_overlay, &*approval, 0, &[], view.world());
+        assert!(matches!(
+            observe_top_level_instruction_fx_effects(
+                &mut fx_overlay,
+                &*approval,
+                0,
+                &[],
+                view.world()
+            ),
+            Err(RoutingResolveError::InvalidMultisigProposal { .. })
+        ));
         assert!(fx_overlay.policies.is_empty());
     }
     #[test]
@@ -16199,11 +16416,26 @@ mod tests {
             multisig_proposal_state_key(&cyclic_account, &cyclic_hash),
             encoded_multisig_proposal_state(&cyclic_proposal),
         );
-        let expected = RoutingResolveError::MultisigProposalCycle {
+        let expected = RoutingResolveError::InvalidMultisigProposal {
             account: cyclic_account.clone(),
             instructions_hash: cyclic_hash,
+            reason: crate::smartcontracts::isi::multisig::read_proposal_state(
+                state.view().world(),
+                &cyclic_account,
+                &cyclic_hash,
+            )
+            .unwrap_err()
+            .to_string(),
         };
-        assert_eq!(expected.as_label(), "multisig_proposal_cycle");
+        assert_eq!(expected.as_label(), "invalid_multisig_proposal");
+        let mut cycle_stack = MultisigProposalRoutingStack::default();
+        assert!(matches!(
+            cycle_stack.with_proposal(&cyclic_account, &cyclic_hash, |stack| {
+                stack.with_proposal(&cyclic_account, &cyclic_hash, |_| Ok(()))
+            }),
+            Err(RoutingResolveError::MultisigProposalCycle { .. })
+        ));
+        assert!(cycle_stack.active.is_empty());
         {
             let view = state.view();
             assert_eq!(
@@ -16263,10 +16495,7 @@ mod tests {
         }
 
         let (leaf_account, _) = gen_account_in("wonderland");
-        let leaf_hash = HashOf::new(&vec![role_registration_instruction(
-            &leaf_account,
-            "cycle_guard_leaf",
-        )]);
+        let leaf_hash = HashOf::new(&Vec::<InstructionBox>::new());
         state.world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_key(&leaf_account, &leaf_hash),
             encoded_multisig_proposal_state(&MultisigProposalState::new(
@@ -16317,32 +16546,22 @@ mod tests {
     #[test]
     fn persisted_multisig_chain_is_checked_in_linear_expansions() {
         const NODE_COUNT: usize = 64;
-        let nodes: Vec<_> = (0..NODE_COUNT)
-            .map(|index| {
-                let (account, _) = gen_account_in("wonderland");
-                let marker = vec![role_registration_instruction(
-                    &account,
-                    &format!("cycle_guard_node_{index}"),
-                )];
-                (account, HashOf::new(&marker))
-            })
-            .collect();
         let mut state = blank_state();
-        for (index, (account, instructions_hash)) in nodes.iter().enumerate() {
-            let instructions = nodes
-                .get(index + 1)
-                .map(|(next_account, next_hash)| {
-                    vec![InstructionBox::from(MultisigApprove::new(
-                        next_account.clone(),
-                        *next_hash,
-                    ))]
-                })
-                .unwrap_or_default();
+        let mut child = None;
+        for _ in (0..NODE_COUNT).rev() {
+            let (account, _) = gen_account_in("wonderland");
+            let instructions = child.map_or_else(Vec::new, |(next_account, next_hash)| {
+                vec![InstructionBox::from(MultisigApprove::new(
+                    next_account,
+                    next_hash,
+                ))]
+            });
+            let hash = HashOf::new(&instructions);
             state.world.smart_contract_state_mut_for_testing().insert(
-                multisig_proposal_state_key(account, instructions_hash),
+                multisig_proposal_state_key(&account, &hash),
                 encoded_multisig_proposal_state(&MultisigProposalState::new(
                     account.clone(),
-                    *instructions_hash,
+                    hash,
                     instructions,
                     1,
                     10_000,
@@ -16350,9 +16569,11 @@ mod tests {
                     None,
                 )),
             );
+            child = Some((account, hash));
         }
+        let (root_account, root_hash) = child.unwrap();
         let root_approval =
-            InstructionBox::from(MultisigApprove::new(nodes[0].0.clone(), nodes[0].1));
+            InstructionBox::from(MultisigApprove::new(root_account.clone(), root_hash));
         let view = state.view();
         let mut stack = MultisigProposalRoutingStack::default();
         assert_eq!(
@@ -16365,6 +16586,34 @@ mod tests {
             Ok(None),
         );
         assert_eq!(stack.expansions, NODE_COUNT);
+        drop(view);
+        let (outer_account, _) = gen_account_in("wonderland");
+        let instructions = vec![root_approval];
+        let hash = HashOf::new(&instructions);
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&outer_account, &hash),
+            encoded_multisig_proposal_state(&MultisigProposalState::new(
+                outer_account.clone(),
+                hash,
+                instructions,
+                1,
+                10_000,
+                BTreeSet::new(),
+                None,
+            )),
+        );
+        let approval = InstructionBox::from(MultisigApprove::new(outer_account, hash));
+        let view = state.view();
+        assert!(matches!(
+            instruction_settlement_dataspace_target_with_stack(
+                &*approval,
+                None,
+                Some(&view),
+                &mut stack,
+            ),
+            Err(RoutingResolveError::OrdinaryRouteUnavailable { .. })
+        ));
+        assert!(stack.active.is_empty());
     }
     #[test]
     fn fx_escrow_operations_preserve_the_policy_destination_route() {

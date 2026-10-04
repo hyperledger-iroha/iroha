@@ -84,11 +84,14 @@ fn anchoring_block(
             code: "contract_deployment_state_unavailable",
             message: "no committed block anchors contract deployment state".to_owned(),
         })?;
-    let block = view.latest_block().ok_or_else(|| {
-        invariant_error(format!(
-            "committed block {observed_height} is unavailable from the authoritative ledger"
-        ))
-    })?;
+    let block = view
+        .latest_block()
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+        .ok_or_else(|| {
+            invariant_error(format!(
+                "committed block {observed_height} is unavailable from the authoritative ledger"
+            ))
+        })?;
     let header = block.header();
     if header.height().get() != observed_height || header.hash() != observed_hash {
         return Err(invariant_error(
@@ -379,7 +382,7 @@ mod tests {
     use iroha_data_model::{
         Registrable as _,
         account::{Account, AccountAddress, AccountId},
-        block::{BlockHeader, builder::BlockBuilder},
+        block::BlockHeader,
         smart_contract::{ContractAddress, ContractAlias},
         sns::{NameControllerV1, NameRecordV1},
     };

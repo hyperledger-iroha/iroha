@@ -8,7 +8,7 @@ use std::{
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::{
-        Arc, Mutex, PoisonError, Weak,
+        Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll, Waker},
@@ -18,7 +18,98 @@ use std::{
 struct State {
     sequence: u64,
     poisoned: bool,
-    waiters: Vec<Weak<Mutex<Option<Waker>>>>,
+    waiters: Waiters,
+}
+
+/// Nonowning links: every published node is retained by its unique registration.
+#[derive(Default)]
+struct Waiters {
+    first: Option<std::ptr::NonNull<WaiterNode>>,
+    last: Option<std::ptr::NonNull<WaiterNode>>,
+    count: usize,
+}
+
+// Linked nodes remain in their original charged allocations until their owner
+// unlinks under this State's mutex. Moving State transfers only those links.
+unsafe impl Send for Waiters {}
+
+#[derive(Default)]
+struct WaiterLinks {
+    previous: Option<std::ptr::NonNull<WaiterNode>>,
+    next: Option<std::ptr::NonNull<WaiterNode>>,
+    linked: bool,
+    sequence: u64,
+    waker: Option<Waker>,
+}
+
+struct WaiterNode {
+    links: std::cell::UnsafeCell<WaiterLinks>,
+}
+
+// Every linked access holds the original source's State mutex. Unlinked nodes
+// are accessible only through an exclusive registration borrow, and source
+// release never retains a node reference after unlocking that same mutex.
+unsafe impl Send for WaiterNode {}
+unsafe impl Sync for WaiterNode {}
+
+impl Waiters {
+    /// The original charged node remains live and unlinked during this call.
+    unsafe fn push(&mut self, node: std::ptr::NonNull<WaiterNode>, sequence: u64, waker: Waker) {
+        // SAFETY: caller holds this source's mutex and retains the unique shell.
+        let links = unsafe { &mut *node.as_ref().links.get() };
+        debug_assert!(!links.linked);
+        debug_assert!(links.waker.is_none());
+        links.previous = self.last;
+        links.next = None;
+        links.linked = true;
+        links.sequence = sequence;
+        links.waker = Some(waker);
+        if let Some(last) = self.last {
+            // SAFETY: every linked predecessor is retained through this lock.
+            unsafe { (*last.as_ref().links.get()).next = Some(node) };
+        } else {
+            self.first = Some(node);
+        }
+        self.last = Some(node);
+        self.count += 1;
+    }
+
+    /// The original node belongs to this source or was already popped by it.
+    unsafe fn unlink(&mut self, node: std::ptr::NonNull<WaiterNode>) -> Option<Waker> {
+        // SAFETY: caller retains this node and holds its original source mutex.
+        let links = unsafe { &mut *node.as_ref().links.get() };
+        if !links.linked {
+            debug_assert!(links.waker.is_none());
+            return None;
+        }
+        let previous = links.previous.take();
+        let next = links.next.take();
+        if let Some(previous) = previous {
+            // SAFETY: a predecessor is distinct and retained while linked.
+            unsafe { (*previous.as_ref().links.get()).next = next };
+        } else {
+            self.first = next;
+        }
+        if let Some(next) = next {
+            // SAFETY: a successor is distinct and retained while linked.
+            unsafe { (*next.as_ref().links.get()).previous = previous };
+        } else {
+            self.last = previous;
+        }
+        links.linked = false;
+        self.count -= 1;
+        links.waker.take()
+    }
+
+    fn pop_before(&mut self, cutoff: u64) -> Option<Waker> {
+        let first = self.first?;
+        // SAFETY: the source mutex retains all live intrusive links. A release
+        // takes only the Waker out; no node reference survives the unlock.
+        if unsafe { (*first.as_ref().links.get()).sequence } >= cutoff {
+            return None;
+        }
+        unsafe { self.unlink(first) }
+    }
 }
 
 /// Notification source belonging to one physical lock, not a State generation.
@@ -178,40 +269,45 @@ impl ReleaseNotification {
     }
 
     fn released(&self, poisoned: bool) {
-        struct WakeCohort {
-            waiters: std::vec::IntoIter<Weak<Mutex<Option<Waker>>>>,
+        struct WakeCohort<'a> {
+            source: &'a ReleaseNotification,
+            cutoff: u64,
         }
-        impl WakeCohort {
+        impl WakeCohort<'_> {
             fn drain(&mut self) {
-                for waiter in self.waiters.by_ref().filter_map(|waiter| waiter.upgrade()) {
-                    let waker = waiter.lock().unwrap_or_else(PoisonError::into_inner).take();
-                    // The registration guard is gone before either the wake
-                    // callback or its consumed waker's destructor can run.
-                    if let Some(waker) = waker {
-                        waker.wake();
-                    }
+                loop {
+                    let waker = {
+                        let mut state = self
+                            .source
+                            .state
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        state.waiters.pop_before(self.cutoff)
+                    };
+                    let Some(waker) = waker else { break };
+                    // Only this owned callback leaves the source lock. A
+                    // callback may cancel/rearm any node without invalidating
+                    // an outer release's pointers or joining its old cohort.
+                    waker.wake();
                 }
             }
         }
-        impl Drop for WakeCohort {
+        impl Drop for WakeCohort<'_> {
             fn drop(&mut self) {
-                // A failed callback must not strand the remaining original
-                // registrations after their sequence has already advanced.
-                // Preserve its panic while waking the unvisited cohort. A
+                // Preserve the original panic while notifying survivors. A
                 // second callback panic has ordinary double-panic semantics.
                 self.drain();
             }
         }
-        let waiters = {
+        let cutoff = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            // Exhaustion makes observations immediately ready, never silently
-            // aliases an old waiter. This counter is only a wake hint.
             state.sequence = state.sequence.saturating_add(1);
             state.poisoned |= poisoned;
-            std::mem::take(&mut state.waiters)
+            state.sequence
         };
         let mut cohort = WakeCohort {
-            waiters: waiters.into_iter(),
+            source: self,
+            cutoff,
         };
         cohort.drain();
     }
@@ -241,6 +337,143 @@ impl PartialEq for ReleaseWait {
 }
 impl Eq for ReleaseWait {}
 
+/// Reusable waiter storage admitted before an operation can encounter refusal.
+///
+/// One stable charged allocation is retained until this owner drops. Arming,
+/// polling, replacement, cancellation and release allocate no waiter storage.
+/// Arbitrary Waker callbacks remain owned by their callers. A registration is
+/// move-only and one exclusive borrow prevents overlapping borrowed futures.
+pub struct ReleaseRegistration {
+    node: crate::ChargedShared<WaiterNode>,
+    observation: Option<ReleaseWait>,
+}
+
+impl std::fmt::Debug for ReleaseRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReleaseRegistration")
+            .field("observing", &self.observation.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReleaseRegistration {
+    /// Exact original control, inline waiter links, callback slot and charge.
+    pub fn allocation_layout() -> std::alloc::Layout {
+        crate::ChargedShared::<WaiterNode>::allocation_layout()
+    }
+
+    /// Construct one reusable physical node from its original prepaid owner.
+    ///
+    /// # Errors
+    /// Returns exact reservation shortage or allocator refusal. No new pool,
+    /// release observation or successful registration is manufactured on error.
+    pub fn from_reservation(
+        reservation: &mut crate::AllocationReservation,
+    ) -> Result<Self, crate::PrepaidSharedError> {
+        let node = crate::ChargedShared::from_reservation(
+            WaiterNode {
+                links: std::cell::UnsafeCell::new(WaiterLinks::default()),
+            },
+            reservation,
+        )
+        .map_err(|(_, error)| error)?;
+        Ok(Self {
+            node,
+            observation: None,
+        })
+    }
+
+    /// Whether the physical waiter allocation retains this exact original pool.
+    pub fn belongs_to(&self, budget: &crate::AllocationBudget) -> bool {
+        self.node.belongs_to(budget)
+    }
+
+    fn pointer(&self) -> std::ptr::NonNull<WaiterNode> {
+        std::ptr::NonNull::from(&*self.node)
+    }
+
+    /// Detach the current wait while retaining its physical node for reuse.
+    /// Original callbacks and source retirement run only after source unlock.
+    pub fn cancel(&mut self) {
+        let Some(observation) = self.observation.take() else {
+            return;
+        };
+        let retired = {
+            let mut state = observation
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            // SAFETY: self owns the stable node; observation is its exact source.
+            unsafe { state.waiters.unlink(self.pointer()) }
+        };
+        drop(retired);
+        drop(observation);
+    }
+
+    /// Poll one exact pre-probe observation using this original reusable node.
+    ///
+    /// Changing source or sequence cancels the old wait first. A completed
+    /// release permits a new attempt; it grants neither lock nor capacity.
+    pub fn poll_wait(&mut self, observation: &ReleaseWait, cx: &mut Context<'_>) -> Poll<()> {
+        if self.observation.as_ref() != Some(observation) {
+            self.cancel();
+            self.observation = Some(observation.clone());
+        }
+        self.poll_current(cx)
+    }
+
+    fn poll_current(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        // Clone callbacks may reenter a source; no internal mutex is held.
+        let replacement = cx.waker().clone();
+        let original = self.observation.as_ref().expect("original release source");
+        let mut state = original
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.sequence != original.sequence || state.sequence == u64::MAX {
+            // SAFETY: this registration retains its exact node and source.
+            let retired = unsafe { state.waiters.unlink(self.pointer()) };
+            drop(state);
+            drop(retired);
+            drop(replacement);
+            return Poll::Ready(());
+        }
+        // SAFETY: this source's mutex excludes release and list mutation, while
+        // the exclusive registration borrow excludes concurrent rearming.
+        let links = unsafe { &mut *self.node.links.get() };
+        let retired = if links.linked {
+            if links
+                .waker
+                .as_ref()
+                .is_none_or(|old| !old.will_wake(cx.waker()))
+            {
+                links.waker.replace(replacement)
+            } else {
+                Some(replacement)
+            }
+        } else {
+            // SAFETY: this original node is live, unlinked, and retained by self.
+            unsafe {
+                state
+                    .waiters
+                    .push(self.pointer(), original.sequence, replacement)
+            };
+            None
+        };
+        drop(state);
+        drop(retired);
+        Poll::Pending
+    }
+}
+
+impl Drop for ReleaseRegistration {
+    fn drop(&mut self) {
+        // Unlink before ChargedShared frees the physical node or refunds credit.
+        // Retaining the source here also covers a forgotten borrowed future.
+        self.cancel();
+    }
+}
+
 impl ReleaseWait {
     /// Whether a released physical owner reported permanent mutex poison.
     pub fn is_poisoned(&self) -> bool {
@@ -250,85 +483,31 @@ impl ReleaseWait {
             .poisoned
     }
 
-    /// Wait for a release after the observation, including one before first poll.
-    ///
-    /// Dropping the future cancels its registration; it does not consume another
-    /// waiter's wake. Callers must bound/admit their retained pending futures.
-    pub fn wait_for_release(self) -> ReleaseFuture {
-        ReleaseFuture {
-            observation: self,
-            registration: None,
-        }
+    /// Borrow already admitted storage for this exact release observation.
+    /// Dropping the future cancels the wait but retains its reusable storage.
+    pub fn wait_for_release(self, registration: &mut ReleaseRegistration) -> ReleaseFuture<'_> {
+        registration.cancel();
+        registration.observation = Some(self);
+        ReleaseFuture { registration }
     }
 }
 
-/// Future for one opaque release observation. It retains no physical lock guard.
-pub struct ReleaseFuture {
-    observation: ReleaseWait,
-    registration: Option<Arc<Mutex<Option<Waker>>>>,
+/// One borrowed wait over the canonical reusable registration engine.
+pub struct ReleaseFuture<'registration> {
+    registration: &'registration mut ReleaseRegistration,
 }
 
-impl Future for ReleaseFuture {
+impl Future for ReleaseFuture<'_> {
     type Output = ();
-
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        // Raw waker callbacks may reenter this notification. Clone before any
-        // internal lock, and retain replaced wakers until both locks are gone.
-        let replacement = cx.waker().clone();
-        let mut state = this
-            .observation
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if state.sequence != this.observation.sequence || state.sequence == u64::MAX {
-            drop(state);
-            this.registration = None;
-            return Poll::Ready(());
-        }
-        let retired = if let Some(registration) = &this.registration {
-            let mut waker = registration.lock().unwrap_or_else(PoisonError::into_inner);
-            if waker.as_ref().is_none_or(|old| !old.will_wake(cx.waker())) {
-                waker.replace(replacement)
-            } else {
-                Some(replacement)
-            }
-        } else {
-            let registration = Arc::new(Mutex::new(Some(replacement)));
-            // Initialize native mutex storage before publishing this waiter.
-            // The first release must not allocate in order to take its waker;
-            // dropping this fresh guard invokes no waker callback.
-            drop(registration.lock().unwrap_or_else(PoisonError::into_inner));
-            state.waiters.retain(|waiter| waiter.strong_count() != 0);
-            state.waiters.push(Arc::downgrade(&registration));
-            this.registration = Some(registration);
-            None
-        };
-        drop(state);
-        drop(retired);
-        Poll::Pending
+        this.registration.poll_current(cx)
     }
 }
 
-impl Drop for ReleaseFuture {
+impl Drop for ReleaseFuture<'_> {
     fn drop(&mut self) {
-        let Some(registration) = self.registration.take() else {
-            return;
-        };
-        let weak = Arc::downgrade(&registration);
-        let mut state = self
-            .observation
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        state
-            .waiters
-            .retain(|waiter| !waiter.ptr_eq(&weak) && waiter.strong_count() != 0);
-        if state.waiters.is_empty() {
-            // A canceled cohort must release its registration allocation even
-            // when the physical lock will never be acquired or released again.
-            state.waiters = Vec::new();
-        }
+        self.registration.cancel();
     }
 }
 
@@ -817,3 +996,7 @@ impl<T> Drop for ReleaseGuard<'_, T> {
 #[cfg(test)]
 #[path = "release_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "release_registration_tests.rs"]
+mod registration_tests;

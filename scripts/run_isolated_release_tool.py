@@ -28,7 +28,7 @@ ALLOWED_TOOLS = frozenset(
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 MAX_TOOL_BYTES = 1024 * 1024
 RELEASE_ARTIFACT_CONTRACT_SHA256 = (
-    "030c6398c853a9953c48a37bb7b55a0b7cc8b93d59f31f60adbeff8d638ec571"
+    "36e7e3371ee2e50297d8ffcdc419956f95cf007bd574a9f40e51576ef95fe2d6"
 )
 REVIEWED_TOOL_SHA256 = {
     "verify_release_prebuilt_provenance.py": "4489ac72e4f087536e56d1dc349f6de8e397871b75df7a302fb4218ebb4f3893",

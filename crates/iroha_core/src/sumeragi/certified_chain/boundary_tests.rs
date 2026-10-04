@@ -187,7 +187,7 @@ fn outcome(
         after_next,
     }
 }
-fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
+fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
     let mut policy = SumeragiNposParameters::default();
@@ -263,7 +263,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         result.preimage().unwrap(),
         Vec::new(),
     )));
-    let mut history = vec![Arc::new(genesis)];
+    let mut history = vec![crate::block::reserve_block_for_tests().initialize(genesis)];
     let mut active_keys = original_keys;
     let mut active_beacon = crate::beacon::tests::HistoricalBeaconFixture::new(
         network,
@@ -292,16 +292,80 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         )
         .unwrap();
         let entry_hash = transaction.hash_as_entrypoint();
-        let mut block = payload::assemble(
-            &world,
-            Assembly {
-                parent: parent.block(),
-                view: 0,
-                cadence: Duration::from_millis(1),
-            },
-            &[transaction],
+        // This is a certificate transcript, not executed State. Retain the
+        // original proposal fields and signed-root routing through their normal
+        // owners without claiming a committed parent-service source.
+        let view = world.view();
+        let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
+        let route = routing
+            .inputs(view.world())
+            .execution_route(&transaction, height)
+            .unwrap()
+            .expect("signed-root transcript route");
+        let confidential =
+            crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
+        assert_eq!(
+            view.height(),
+            0,
+            "transcript authoring does not execute State"
+        );
+        drop(view);
+        let mut block = crate::block::BlockBuilder::new_with_time_source(
+            vec![transaction.clone()],
+            time_source,
         )
-        .unwrap();
+        .chain(0, Some(parent.block()))
+        .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+            &world.nexus_snapshot(),
+            height,
+        )))
+        .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+        .with_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+                iroha_data_model::block::ExternalExecutionContext::new(
+                    entry_hash,
+                    route.lane_id,
+                    route.dataspace_id,
+                ),
+            ]),
+        ))
+        .with_network_input_time_floor(block_time)
+        .expect("bounded transcript time")
+        .into_unsigned_proposal();
+        assert_eq!(
+            crate::block::ValidBlock::sumeragi_block_time(
+                &block,
+                parent.block().header().creation_time(),
+                Duration::from_millis(1),
+            )
+            .unwrap(),
+            block_time,
+        );
+        if height <= 3 {
+            let assembled = payload::assemble(
+                &world,
+                Assembly {
+                    parent: parent.block(),
+                    view: 0,
+                    cadence: Duration::from_millis(1),
+                },
+                &[transaction],
+            );
+            if height == 2 {
+                assert_eq!(
+                    block.encode_wire().unwrap(),
+                    assembled.unwrap().encode_wire().unwrap(),
+                    "the first transcript proposal preserves every original assembly field"
+                );
+            } else {
+                assert!(
+                    matches!(assembled, Err(payload::PayloadError::ParentService(message))
+                        if message.contains("Canonical history height 1")
+                            && message.contains("ending at `0`")),
+                    "production assembly must refuse the absent committed parent history"
+                );
+            }
+        }
         assert_eq!(
             block.execution_context().unwrap().external,
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -309,7 +373,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
                 crate::sumeragi::lanes::routing::GLOBAL_LANE,
                 metadata.sumeragi_context.root_scope.dataspace_id(),
             )],
-            "normal payload assembly commits the exact signed-root route",
+            "transcript proposal retains the exact original signed-root route",
         );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(
@@ -475,7 +539,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         block = block.with_commit_certificate(Some(
             commit_certificate(&header, &qc, preimage, availability).unwrap(),
         ));
-        history.push(Arc::new(block));
+        history.push(crate::block::reserve_block_for_tests().initialize(block));
         if let Some((next, keys, beacon)) = successor {
             current = next;
             active_keys = keys;
@@ -486,12 +550,12 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     }
     history
 }
-fn history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(false)).clone()
 }
-fn retained_history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn retained_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(true)).clone()
 }
 
@@ -613,7 +677,8 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
         ));
     }
     let mut missing = history;
-    missing[5] = Arc::new(missing[5].as_ref().clone().with_commit_certificate(None));
+    missing[5] = crate::block::reserve_block_for_tests()
+        .initialize(missing[5].as_ref().clone().with_commit_certificate(None));
     let state = state_with_history(&missing);
     let view = state.view();
     assert!(matches!(
@@ -731,10 +796,11 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
         result.preimage().unwrap(),
         certificate.availability().to_vec(),
     );
-    history[0] = Arc::new(original.clone().with_commit_certificate(Some(certificate)));
+    history[0] = crate::block::reserve_block_for_tests()
+        .initialize(original.clone().with_commit_certificate(Some(certificate)));
     let state = state_with_history(&history);
     let view = state.view();
-    assert!(read_frame(Arc::clone(&history[0]), 1).is_ok());
+    assert!(read_frame(Clone::clone(&history[0]), 1).is_ok());
     assert!(
         committed_block(&view, 1).is_err(),
         "stored frames and a hash index cannot replace original execution provenance"
@@ -806,14 +872,20 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
     let history = history();
     let kura = Kura::blank_kura_for_testing();
     for block in &history {
-        kura.store_block(Arc::clone(block)).unwrap();
+        kura.store_block(Clone::clone(block)).unwrap();
     }
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = NetworkId::from_genesis_hash(history[0].hash());
     let hashes = history.iter().map(|block| block.hash()).collect::<Vec<_>>();
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        &kura,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+    )
+    .unwrap()
+    .with_attestation_verifier(&TestAttestations);
     for (index, receipt) in reader.walk(1, 14).enumerate() {
         let receipt = receipt.unwrap();
         assert_eq!(receipt.block_hash(), hashes[index]);

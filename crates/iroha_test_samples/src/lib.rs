@@ -208,12 +208,7 @@ mod calibration_tests {
             worker.join().expect("parallel seed fixture assertions");
         }
     }
-    fn assert_derived_account(
-        account: &AccountId,
-        key_pair: &KeyPair,
-        seed: &str,
-        ordinal: u64,
-    ) {
+    fn assert_derived_account(account: &AccountId, key_pair: &KeyPair, seed: &str, ordinal: u64) {
         let hash_bytes: [u8; Hash::LENGTH] =
             Hash::new(format!("{seed}:wonderland:{ordinal}")).into();
         let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())

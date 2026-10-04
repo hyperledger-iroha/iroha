@@ -45,8 +45,13 @@ impl PreparedWorldEffects {
 
     /// Consume the exact deferred cache records after their World is published.
     /// The enclosing State publisher retains all authorization and writer gates.
-    pub(in crate::state) fn publish(self, state: &State, cache: &mut DaPinStore) {
-        state.publish_prepared_da_pins(self.da_pins, cache);
+    pub(in crate::state) fn publish(
+        self,
+        state: &State,
+        cache: &mut DaPinStore,
+        releases: &mut view_acquisition::WorldReadReleases,
+    ) {
+        state.publish_prepared_da_pins(self.da_pins, cache, releases);
     }
 }
 
@@ -195,9 +200,13 @@ impl<'state> PreparedWorldCommit<'state> {
     /// Consume the same prepared World after State's publication gates succeed.
     #[cfg(test)]
     pub(in crate::state) fn commit(self) {
+        let mut releases = view_acquisition::WorldReadReleases::new(&self.state.world);
         self.world.commit();
-        self.effects
-            .publish(self.state, &mut self.state.da_pin_intents.write());
+        self.effects.publish(
+            self.state,
+            &mut self.state.da_pin_intents.write(),
+            &mut releases,
+        );
     }
 
     fn prepare_pins(
@@ -306,7 +315,13 @@ impl<'state> PreparedWorldCommit<'state> {
 
 impl StateBlock<'_> {
     /// Project the four persisted pin indexes through the same pure admission plan as commit.
+    #[cfg(test)]
     pub(crate) fn json_serialize_committed_da_pin_indexes(&self) -> [Option<String>; 4] {
+        // Finalized snapshots borrow the exact already-applied tail. Recomputing this
+        // plan would require an executing block and could substitute its original effects.
+        if self.has_finalized_world_tail_for_snapshot() {
+            return Default::default();
+        }
         if self.pending_da_pin_intents.is_none() && self.pending_autoscale_lifecycle.is_none() {
             return Default::default();
         }
@@ -380,13 +395,22 @@ impl StateBlock<'_> {
 
 impl State {
     /// Reconstruct the derived pin cache, preserving explicitly unbound aliases.
-    pub(in crate::state) fn da_pin_cache_from_world(&self) -> DaPinStore {
-        let by_ticket = self.world.da_pin_intents_by_ticket.view();
+    pub(in crate::state) fn da_pin_cache_from_world(
+        &self,
+        releases: &mut view_acquisition::WorldReadReleases,
+    ) -> DaPinStore {
+        let by_ticket = self
+            .world
+            .da_pin_intents_by_ticket
+            .view_retaining(&mut releases.da_pin_intents_by_ticket);
         let mut canonical: Vec<_> = by_ticket.iter().map(|(_, value)| value.clone()).collect();
         canonical
             .sort_by_key(|entry| (entry.location.block_height, entry.location.index_in_bundle));
         let mut cache = DaPinStore::from_intents(&canonical);
-        let aliases = self.world.da_pin_intents_by_alias.view();
+        let aliases = self
+            .world
+            .da_pin_intents_by_alias
+            .view_retaining(&mut releases.da_pin_intents_by_alias);
         cache.replace_alias_bindings(
             aliases
                 .iter()
@@ -402,6 +426,7 @@ impl State {
         &self,
         records: Vec<DaPinIntentWithLocation>,
         cache: &mut DaPinStore,
+        releases: &mut view_acquisition::WorldReadReleases,
     ) {
         if records.is_empty() {
             return;
@@ -412,7 +437,7 @@ impl State {
                 // Ordinary publication only inserts its bounded prepared records.
                 // TODO: admit cold reconstruction memory with the complete State
                 // resource owner before qualifying restart/publication budgets.
-                *cache = self.da_pin_cache_from_world();
+                *cache = self.da_pin_cache_from_world(releases);
                 break;
             }
         }

@@ -138,12 +138,12 @@ impl KagemushaNativeCurrentWalletReadV1 {
             norito::encode_canonical(&raw)? == original,
             "Native current wallet original changed canonical bytes"
         );
-        self.authenticate_typed(raw)
+        self.authenticate_typed(&raw)
     }
 
     fn authenticate_typed(
         self,
-        raw: KagemushaOrdinaryNativeCurrentWalletOriginalV1,
+        raw: &KagemushaOrdinaryNativeCurrentWalletOriginalV1,
     ) -> Result<VerifiedEnrollmentWalletSignatoryV1> {
         self.challenge.remaining_native_budget()?;
         self.inventory.recheck()?;
@@ -293,8 +293,9 @@ impl KagemushaNativeAccountCustodyV1 {
         account: &AccountClient,
         current: &VerifiedEnrollmentWalletSignatoryV1,
     ) -> Result<()> {
+        let wallet_matches = account.authority() == current.wallet();
         ensure!(
-            account.authority() == current.wallet()
+            wallet_matches
                 && account.network_id() == current.network_id()
                 && account.signing_capability() == AccountSigningCapability::MultisigMember
                 && account.context.key_pair.public_key().algorithm()
@@ -514,7 +515,7 @@ impl KagemushaNativeAccountCustodyV1 {
     /// Quote and sign the sole actual Main-selected Node funding instruction through the
     /// existing Ed25519 signatory. A distinct one-member W witness uses the maintained canonical
     /// HTTP witness grammar; generic direct-account and multi-member quote APIs stay unchanged.
-    /// Main fsyncs both returned canonical SignedTransaction and exact wire before dispatch.
+    /// Main fsyncs both returned canonical `SignedTransaction` and exact wire before dispatch.
     /// # Errors
     /// Refuses another installed purpose/original/W, changed payload, fee substitution,
     /// expired Core decision/current FI or any failed transport/signing/current custody check.
@@ -957,6 +958,7 @@ impl KagemushaNativeAccountCustodyV1 {
         require_installed_request_clock(&inventory, &clock, Some(height))?;
         verified.recheck()?;
         self.recheck()?;
+        drop(inventory);
         Ok((signature, verified))
     }
 
@@ -1012,7 +1014,10 @@ impl KagemushaNativeAccountCustodyV1 {
         iroha_crypto::Signature,
         VerifiedParticipantEnrollmentRequestV1,
     )> {
-        self.sign_current_enrollment_request_originals(&prepared, current)
+        let result = self.sign_current_enrollment_request_originals(&prepared, current);
+        // This public operation consumes the original preparation even on refusal.
+        drop(prepared);
+        result
     }
 
     fn sign_current_enrollment_request_originals(
@@ -1249,7 +1254,7 @@ fn remaining_clock_budget(
 ///
 /// This selects no root from a reply and accepts no caller timestamp or transport callback.
 /// The independently admitted runtime owner supplies the four contexts and retains their
-/// authorization; the CoreZK clock owner supplies the exact current height, pins and nonce.
+/// authorization; the `CoreZK` clock owner supplies the exact current height, pins and nonce.
 /// Every response is reverified and fsynced by that same actual clock owner before any time loan.
 pub struct KagemushaNativeClockTransportV1 {
     nodes: ClockNodes,
@@ -1275,12 +1280,13 @@ impl KagemushaNativeClockTransportV1 {
             let mut held = clock
                 .lock()
                 .map_err(|_| eyre!("Native parent clock lock unavailable"))?;
-            let verified = held
+            let authenticated = held
                 .authenticate_received_historical_signed_original(original)
                 .map_err(|_| eyre!("Native parent original is outside the retained prefix"))?;
-            let data =
-                KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(verified.original())
-                    .map_err(|_| eyre!("Native parent original rejected"))?;
+            let data = KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(
+                authenticated.original(),
+            )
+            .map_err(|_| eyre!("Native parent original rejected"))?;
             let raw = &data.signed_observations()[0];
             let attestation: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
                 raw,

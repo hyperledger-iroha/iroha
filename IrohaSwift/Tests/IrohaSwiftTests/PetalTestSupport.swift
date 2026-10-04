@@ -53,6 +53,14 @@ enum PetalTestSupport {
         return number.intValue
     }
 
+    /// An integer field that may be JSON `null` (the key itself must exist).
+    static func optionalInteger(_ value: [String: Any], _ key: String) throws -> Int? {
+        guard let field = value[key] else { throw Failure.malformed(key) }
+        if field is NSNull { return nil }
+        guard let number = field as? NSNumber else { throw Failure.malformed(key) }
+        return number.intValue
+    }
+
     static func integers(_ value: [String: Any], _ key: String) throws -> [Int] {
         guard let numbers = value[key] as? [NSNumber] else { throw Failure.malformed(key) }
         return numbers.map(\.intValue)
@@ -113,11 +121,12 @@ enum PetalTestSupport {
         return Array(output.prefix(expectedLength))
     }
 
-    /// Decodes a capture or negative entry of `petal_captures_v1.json`.
-    static func luma(of entry: [String: Any]) throws -> PetalLuma {
+    /// Decodes a capture, tracking-pair or negative entry of
+    /// `petal_captures_v1.json` (`key` names the zlib + base64 plane).
+    static func luma(of entry: [String: Any], key: String = "luma_zlib_base64") throws -> PetalLuma {
         let width = try integer(entry, "width")
         let height = try integer(entry, "height")
-        guard let compressed = Data(base64Encoded: try string(entry, "luma_zlib_base64")) else {
+        guard let compressed = Data(base64Encoded: try string(entry, key)) else {
             throw Failure.malformed("base64")
         }
         let pixels = try inflate(compressed, expectedLength: width * height)

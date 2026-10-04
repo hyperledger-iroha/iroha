@@ -152,13 +152,15 @@ repayment.
 Other lifecycle commands are:
 
 ```bash
-iroha --config client.toml app repo query get --id daily_repo
-iroha --config client.toml app repo query list
+iroha --config client.toml app repo get --id daily_repo
+iroha --config client.toml app repo list
 iroha --config client.toml app repo margin --agreement-id daily_repo
 iroha --config client.toml app repo margin-call --agreement-id daily_repo
 ```
 
-`repo query list` returns both active agreements and settled tombstones.
+`repo list` returns both active agreements and settled tombstones; it takes the
+[collection query](../torii/collection_queries.md) flags, so `--filter` on
+`status` narrows it.
 
 ## SDK and Torii records
 

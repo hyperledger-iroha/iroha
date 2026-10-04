@@ -64,13 +64,17 @@ impl Wake for Reenter {
         }
     }
 }
-fn observe(budget: &AllocationBudget, probe: &Arc<Reenter>) -> impl Future<Output = ()> + Unpin {
+fn observe<'a>(
+    budget: &AllocationBudget,
+    probe: &Arc<Reenter>,
+    registration: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> impl Future<Output = ()> + Unpin + 'a {
     budget.set_limit_bytes(budget.reserved_bytes());
     let AllocationRefusal::Capacity { release, .. } = budget.try_reserve_bytes(1).unwrap_err()
     else {
         panic!("occupied pool must return original capacity observation");
     };
-    let mut wait = release.wait_for_release();
+    let mut wait = release.wait_for_release(registration);
     let waker = Waker::from(Arc::clone(probe));
     assert_eq!(
         Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)),
@@ -93,13 +97,16 @@ fn probe(ring: &Arc<RetryRing>) -> (Arc<Reenter>, AllocationBudget) {
 #[test]
 fn clear_refunds_after_unlock_and_retains_concurrent_new_owner() {
     let budget = AllocationBudget::new(64 * 1024);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ring = Arc::new(RetryRing::new(8, 2));
     assert!(ring.enqueue(task(&budget, 1)).is_ok());
     assert!(ring.enqueue(task(&budget, 2)).is_ok());
     let (probe, replacement_budget) = probe(&ring);
-    let _wait = observe(&budget, &probe);
+    let wait = observe(&budget, &probe, &mut registration);
     assert_eq!(ring.clear(), 2);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(ring.depth(), 1);
     let retained = replacement_budget.reserved_bytes();
@@ -117,16 +124,19 @@ fn clear_refunds_after_unlock_and_retains_concurrent_new_owner() {
 #[test]
 fn exhausted_retry_cohort_drops_after_unlock_without_aging_new_enqueue() {
     let budget = AllocationBudget::new(64 * 1024);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ring = Arc::new(RetryRing::new(8, 1));
     assert!(ring.enqueue(task(&budget, 1)).is_ok());
     assert!(ring.enqueue(task(&budget, 2)).is_ok());
     let (probe, replacement_budget) = probe(&ring);
-    let _wait = observe(&budget, &probe);
+    let wait = observe(&budget, &probe, &mut registration);
     let stats = ring.drain_into_pending(&mut Vec::new(), 0);
     assert_eq!(stats.exhausted, 2);
     assert_eq!(stats.replayed, 0);
     assert_eq!(stats.depth, 1);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
     {
         let queue = ring.inner.lock().unwrap();
@@ -140,13 +150,14 @@ fn exhausted_retry_cohort_drops_after_unlock_without_aging_new_enqueue() {
 #[test]
 fn replay_moves_original_owners_in_order_and_refunds_only_after_pending_drop() {
     let budget = AllocationBudget::new(64 * 1024);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ring = Arc::new(RetryRing::new(8, 2));
     for marker in 1..=3 {
         assert!(ring.enqueue(task(&budget, marker)).is_ok());
     }
     let reserved = budget.reserved_bytes();
     let (probe, replacement_budget) = probe(&ring);
-    let _wait = observe(&budget, &probe);
+    let wait = observe(&budget, &probe, &mut registration);
     let mut pending = Vec::new();
     let stats = ring.drain_into_pending(&mut pending, 2);
     assert_eq!(stats.replayed, 2);
@@ -162,6 +173,8 @@ fn replay_moves_original_owners_in_order_and_refunds_only_after_pending_drop() {
     assert_eq!(pending[0].snapshot.states()[0].pc, 3);
     assert_eq!(pending[1].snapshot.states()[0].pc, 9);
     drop(pending);
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(replacement_budget.reserved_bytes(), 0);
 }
@@ -169,6 +182,7 @@ fn replay_moves_original_owners_in_order_and_refunds_only_after_pending_drop() {
 #[test]
 fn full_retry_ring_returns_owner_before_any_original_refund() {
     let budget = AllocationBudget::new(64 * 1024);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ring = Arc::new(RetryRing::new(1, 2));
     assert!(ring.enqueue(task(&budget, 1)).is_ok());
     let rejected = task(&budget, 2);
@@ -177,7 +191,7 @@ fn full_retry_ring_returns_owner_before_any_original_refund() {
     // This control probes unlock only; a full queue deliberately has no replacement slot.
     drop(probe.replacement.lock().unwrap().take());
     assert_eq!(replacement_budget.reserved_bytes(), 0);
-    let _wait = observe(&budget, &probe);
+    let wait = observe(&budget, &probe, &mut registration);
     let returned = match ring.enqueue(rejected) {
         Err(task) => task,
         Ok(_) => panic!("full ring must return owner"),
@@ -188,6 +202,8 @@ fn full_retry_ring_returns_owner_before_any_original_refund() {
     drop(returned);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
     assert_eq!(ring.clear(), 1);
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

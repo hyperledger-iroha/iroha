@@ -114,14 +114,16 @@ where
     }
 }
 
-fn register<M>(
+fn register<'a, M>(
     target: &Arc<Storage<u64, u64, M>>,
     probe: &Arc<Probe<M>>,
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+    registration_2: &'a mut iroha_allocation::release::ReleaseRegistration,
 ) -> (
     crate::ReleaseWait,
     crate::ReleaseWait,
-    iroha_allocation::release::ReleaseFuture,
-    iroha_allocation::release::ReleaseFuture,
+    iroha_allocation::release::ReleaseFuture<'a>,
+    iroha_allocation::release::ReleaseFuture<'a>,
 )
 where
     M: StorageMode<u64, u64> + Send + Sync + 'static,
@@ -129,8 +131,8 @@ where
 {
     let undo = target.revert_released.observe();
     let current = target.blocks_released.observe();
-    let mut undo_future = undo.clone().wait_for_release();
-    let mut current_future = current.clone().wait_for_release();
+    let mut undo_future = undo.clone().wait_for_release(registration_1);
+    let mut current_future = current.clone().wait_for_release(registration_2);
     let waker = Waker::from(Arc::clone(probe));
     let mut context = Context::from_waker(&waker);
     assert!(Pin::new(&mut undo_future).poll(&mut context).is_pending());
@@ -142,7 +144,10 @@ where
     (undo, current, undo_future, current_future)
 }
 
-fn ready<M>(future: &mut iroha_allocation::release::ReleaseFuture, probe: &Arc<Probe<M>>) -> bool
+fn ready<M>(
+    future: &mut iroha_allocation::release::ReleaseFuture<'_>,
+    probe: &Arc<Probe<M>>,
+) -> bool
 where
     M: StorageMode<u64, u64> + Send + Sync + 'static,
     M::Charge: Send + Sync,
@@ -180,11 +185,19 @@ fn assert_original(target: &StartStorage, predecessor: &CapturedPublication) {
 fn refused_start(mode: u8) {
     for replacement in [false, true] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+
         let target = fixture(&budget);
         let predecessor = target.publication.capture();
         let before = budget.reserved_bytes();
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let callback_ran = Cell::new(false);
         let fault = StartFault::set(mode);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -254,6 +267,7 @@ fn refused_start(mode: u8) {
             probe,
             target,
         ));
+        drop((helper_release_registration_1, helper_release_registration_2));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -270,6 +284,14 @@ fn admitted_second_policy_panic_releases_both_before_callbacks() {
 
 #[test]
 fn ordinary_current_poison_releases_both_before_callbacks() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for replacement in [false, true] {
         let target = Arc::new(Storage::<u64, u64>::from_iter([(7, 71)]));
         let predecessor = target.publication.capture();
@@ -281,7 +303,12 @@ fn ordinary_current_poison_releases_both_before_callbacks() {
             .is_err()
         );
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let result = catch_unwind(AssertUnwindSafe(|| {
             if replacement {
                 drop(target.block_and_revert());
@@ -311,6 +338,9 @@ fn ordinary_current_poison_releases_both_before_callbacks() {
 fn current_busy_releases_only_acquired_undo() {
     for replacement in [false, true] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+
         let target = fixture(&budget);
         let before = budget.reserved_bytes();
         let predecessor = target.publication.capture();
@@ -318,7 +348,12 @@ fn current_busy_releases_only_acquired_undo() {
             .blocks_released
             .poisoning_guard(target.blocks.try_acquire_writer().unwrap());
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let _healthy = StartFault::set(0);
         let callback = |_: &mut Block<'_, u64, u64, Prepaid<StartPolicy>>| -> Result<(), ()> {
             panic!("busy current cannot execute")
@@ -365,6 +400,7 @@ fn current_busy_releases_only_acquired_undo() {
             probe,
             target,
         ));
+        drop((helper_release_registration_1, helper_release_registration_2));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -373,11 +409,19 @@ fn current_busy_releases_only_acquired_undo() {
 fn successful_pair_construction_emits_no_early_release() {
     for replacement in [false, true] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+
         let target = fixture(&budget);
         let before = budget.reserved_bytes();
         let predecessor = target.publication.capture();
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let callback = |block: &mut Block<'_, u64, u64, Prepaid<StartPolicy>>| {
             assert!(target.revert.try_acquire_writer().is_none());
             assert!(target.blocks.try_acquire_writer().is_none());
@@ -416,6 +460,7 @@ fn successful_pair_construction_emits_no_early_release() {
             probe,
             target,
         ));
+        drop((helper_release_registration_1, helper_release_registration_2));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -431,6 +476,10 @@ fn admitted_refusal_wake_panic_preserves_healthy_pair_and_surviving_waiters() {
         }
     }
     let budget = AllocationBudget::new(1 << 20);
+    let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+    let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+    let mut helper_release_registration_3 = crate::release_test_support::registration(&budget);
+
     let target = fixture(&budget);
     let before = budget.reserved_bytes();
     let predecessor = target.publication.capture();
@@ -438,13 +487,21 @@ fn admitted_refusal_wake_panic_preserves_healthy_pair_and_surviving_waiters() {
     let panic_waker = Waker::from(Arc::new(PanicWake {
         probe: Arc::clone(&probe),
     }));
-    let mut first_undo = target.revert_released.observe().wait_for_release();
+    let mut first_undo = target
+        .revert_released
+        .observe()
+        .wait_for_release(&mut helper_release_registration_3);
     assert!(
         Pin::new(&mut first_undo)
             .poll(&mut Context::from_waker(&panic_waker))
             .is_pending()
     );
-    let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+    let (undo, current, mut undo_future, mut current_future) = register(
+        &target,
+        &probe,
+        &mut helper_release_registration_1,
+        &mut helper_release_registration_2,
+    );
     let fault = StartFault::set(1);
     let callback_ran = Cell::new(false);
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -483,6 +540,11 @@ fn admitted_refusal_wake_panic_preserves_healthy_pair_and_surviving_waiters() {
         probe,
         target,
     ));
+    drop((
+        helper_release_registration_1,
+        helper_release_registration_2,
+        helper_release_registration_3,
+    ));
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -490,6 +552,9 @@ fn admitted_refusal_wake_panic_preserves_healthy_pair_and_surviving_waiters() {
 fn admitted_undo_poison_precedes_busy_current_without_policy() {
     for replacement in [false, true] {
         let budget = AllocationBudget::new(1 << 20);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
+
         let target = fixture(&budget);
         let predecessor = target.publication.capture();
         let before = budget.reserved_bytes();
@@ -504,7 +569,12 @@ fn admitted_undo_poison_precedes_busy_current_without_policy() {
             .blocks_released
             .poisoning_guard(target.blocks.try_acquire_writer().unwrap());
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let fault = StartFault::set(0);
         let callback = |_: &mut Block<'_, u64, u64, Prepaid<StartPolicy>>| -> Result<(), ()> {
             panic!("poisoned undo cannot execute");
@@ -548,12 +618,21 @@ fn admitted_undo_poison_precedes_busy_current_without_policy() {
             probe,
             target,
         ));
+        drop((helper_release_registration_1, helper_release_registration_2));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
 
 #[test]
 fn ordinary_undo_poison_does_not_wait_for_current() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     use std::{sync::mpsc, time::Duration};
 
     for replacement in [false, true] {
@@ -570,7 +649,12 @@ fn ordinary_undo_poison_does_not_wait_for_current() {
             .blocks_released
             .poisoning_guard(target.blocks.try_acquire_writer().unwrap());
         let probe = Probe::new(&target);
-        let (undo, current, mut undo_future, mut current_future) = register(&target, &probe);
+        let (undo, current, mut undo_future, mut current_future) = register(
+            &target,
+            &probe,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let (started_tx, started_rx) = mpsc::sync_channel(1);
         let (finished_tx, finished_rx) = mpsc::sync_channel(1);
         let worker_target = Arc::clone(&target);

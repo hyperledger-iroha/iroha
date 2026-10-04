@@ -491,8 +491,8 @@ public sealed class SignedQueryBuilder
         var exact = NormalizeRequiredValue(value, paramName);
         try
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(exact);
+            return exact;
         }
         catch (AccountAddressException exception)
         {

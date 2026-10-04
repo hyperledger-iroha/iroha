@@ -26,7 +26,7 @@ fn new_block() -> crate::block::CommittedBlock {
     ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
         h.set_height(NonZeroU64::new(1).unwrap());
     })
-    .commit_unchecked()
+    .commit_unchecked(crate::block::reserve_block_for_tests())
     .unpack(|_| {})
 }
 // Direct staking component fixtures retain a bounded ordinary invocation before
@@ -42,7 +42,7 @@ fn new_block_with_height(height: u64) -> crate::block::CommittedBlock {
     ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
         h.set_height(NonZeroU64::new(height).expect("non-zero height"));
     })
-    .commit_unchecked()
+    .commit_unchecked(crate::block::reserve_block_for_tests())
     .unpack(|_| {})
 }
 fn new_block_with_height_and_time(
@@ -54,7 +54,7 @@ fn new_block_with_height_and_time(
         h.set_height(NonZeroU64::new(height).expect("non-zero height"));
         h.creation_time_ms = creation_time_ms;
     })
-    .commit_unchecked()
+    .commit_unchecked(crate::block::reserve_block_for_tests())
     .unpack(|_| {})
 }
 
@@ -326,9 +326,10 @@ fn configure_reward_fixture(
         .xor_asset_definition_id;
     Register::asset_definition({
         let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(
+        AssetDefinition::new(
             __asset_definition_id.clone(),
             "XOR".to_owned(),
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -424,9 +425,10 @@ fn prepare_accounts(
         .xor_asset_definition_id;
     Register::asset_definition({
         let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(
+        AssetDefinition::new(
             __asset_definition_id.clone(),
             "XOR".to_owned(),
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -633,10 +635,11 @@ fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custo
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect_err("genesis cannot invent an absent network currency identity");
-    assert!(
-        error
-            .to_string()
-            .contains("committed network XOR asset identity")
+    assert_eq!(
+        error,
+        Error::InvariantViolation(
+            "staking and rewards require the committed network XOR identity".into()
+        )
     );
     assert_eq!(
         stx.world.assets.get(&source).unwrap().as_ref(),

@@ -1,92 +1,45 @@
 import Foundation
 
-public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
-  public var query: String?
-  public var filter: ToriiJSONValue?
-  public var select: [ToriiQuerySelectEntry]?
-  public var sort: [ToriiQuerySortKey]
-  public var pagination: ToriiQueryPagination
-  public var fetchSize: UInt64?
-  public var countMode: String?
-
-  private enum CodingKeys: String, CodingKey {
-    case query
-    case filter
-    case select
-    case sort
-    case pagination
-    case fetchSize = "fetch_size"
-    case countMode = "count_mode"
-  }
-
-  public init(
-    query: String? = nil,
-    filter: ToriiJSONValue? = nil,
-    select: [ToriiQuerySelectEntry]? = nil,
-    sort: [ToriiQuerySortKey] = [],
-    pagination: ToriiQueryPagination = ToriiQueryPagination(),
-    fetchSize: UInt64? = nil,
-    countMode: String? = nil
-  ) {
-    self.query = query
-    self.filter = filter
-    self.select = select
-    self.sort = sort
-    self.pagination = pagination
-    self.fetchSize = fetchSize
-    self.countMode = countMode
-  }
-
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    if let query {
-      let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty else {
-        throw EncodingError.invalidValue(
-          query,
-          EncodingError.Context(
-            codingPath: encoder.codingPath,
-            debugDescription: "query must be a non-empty string")
-        )
-      }
-      try container.encode(trimmed, forKey: .query)
-    }
-    try container.encodeIfPresent(filter, forKey: .filter)
-    try container.encodeIfPresent(select, forKey: .select)
-    try container.encode(sort, forKey: .sort)
-    try container.encode(pagination, forKey: .pagination)
-    try container.encodeIfPresent(fetchSize, forKey: .fetchSize)
-    if let countMode {
-      let normalized = countMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-      guard normalized == "bounded" || normalized == "exact" else {
-        throw EncodingError.invalidValue(
-          countMode,
-          EncodingError.Context(
-            codingPath: encoder.codingPath,
-            debugDescription: "countMode must be bounded or exact")
-        )
-      }
-      try container.encode(normalized, forKey: .countMode)
-    }
-  }
-}
-
+/// A reusable account credential for canonical request signatures.
+///
+/// The credential carries no timestamp or nonce: every signed request gets
+/// fresh values from the client's `ToriiCanonicalRequestFreshness`, so reusing
+/// one credential never replays a nonce.
 public struct ToriiCanonicalRequestAuth: Sendable, Equatable {
   public var accountId: String
   public var privateKey: Data
-  public var timestampMs: UInt64?
-  public var nonce: String?
 
-  public init(
-    accountId: String,
-    privateKey: Data,
-    timestampMs: UInt64? = nil,
-    nonce: String? = nil
-  ) {
+  public init(accountId: String, privateKey: Data) {
     self.accountId = accountId
     self.privateKey = privateKey
+  }
+}
+
+/// Source of the timestamp and single-use nonce bound into each canonical
+/// request signature.
+///
+/// Clients draw new values for every request. The default uses the client's
+/// clock and a random 128-bit nonce; inject a deterministic source only in tests.
+public struct ToriiCanonicalRequestFreshness: Sendable {
+  public let timestampMs: @Sendable () -> UInt64
+  public let nonce: @Sendable () -> String
+
+  public init(
+    timestampMs: @escaping @Sendable () -> UInt64,
+    nonce: @escaping @Sendable () -> String = ToriiCanonicalRequestFreshness.randomNonce
+  ) {
     self.timestampMs = timestampMs
     self.nonce = nonce
+  }
+
+  /// Wall-clock milliseconds and a random nonce for every request.
+  public static let system = ToriiCanonicalRequestFreshness(
+    timestampMs: { UInt64(max(0, Date().timeIntervalSince1970 * 1_000).rounded()) }
+  )
+
+  /// A random 128-bit nonce in hex.
+  @Sendable public static func randomNonce() -> String {
+    UUID().uuidString.replacingOccurrences(of: "-", with: "")
   }
 }
 

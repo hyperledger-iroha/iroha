@@ -250,6 +250,96 @@ pub fn policy_at(
         .effective_entry_at(height, now_ms)
         .map(|entry| entry.policy.clone()))
 }
+
+/// Decide whether the narrow native AMX transfer host can escrow this leg without inventing
+/// a customer assessment or treating its custody account as a retail merchant.
+///
+/// Enrolled wallet legs and every registered retail monetary asset return a business `No`.
+/// TODO(S6): admit the original signed assessment and frozen payment/fee obligations into the
+/// funded escrow before supporting these legs. A permissionless relayer supplies no assessment.
+pub(crate) fn native_amx_leg_supported(
+    world: &impl WorldReadOnly,
+    source: &AssetId,
+    destination: &AccountId,
+) -> Result<bool, FeeReadError> {
+    if account_state(world, source.account())?.is_some()
+        || account_state(world, destination)?.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(registry) = registry(world)? else {
+        return Ok(true);
+    };
+    registry.validate().map_err(|error| error.to_string())?;
+    Ok(!registry
+        .registered_policies
+        .iter()
+        .any(|entry| &entry.policy.ds_asset_id == source.definition()))
+}
+
+#[cfg(test)]
+#[test]
+fn native_amx_enrolled_leg_is_no_without_effects_and_original_decoder_refusal_stays_local() {
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    let state = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        1_793_451_600_000,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    let source = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("amx", "retail").unwrap(),
+            "currency".parse().unwrap(),
+        ),
+        iroha_test_samples::ALICE_ID.clone(),
+    );
+    let destination = iroha_test_samples::BOB_ID.clone();
+    let record =
+        RetailFeeAccountStateV1::enroll(destination.clone(), 1_793_451_600_000, 10_000).unwrap();
+    let original = norito::to_bytes(&record).unwrap();
+    transaction
+        .world
+        .smart_contract_state
+        .insert(key(&destination), original.clone());
+    assert!(!native_amx_leg_supported(&transaction.world, &source, &destination).unwrap());
+    assert_eq!(
+        transaction
+            .world
+            .smart_contract_state
+            .get(&key(&destination)),
+        Some(&original)
+    );
+    let refusal = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, usize::MAX),
+        || native_amx_leg_supported(&transaction.world, &source, &destination),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(refusal, ExecutionAttemptError::Deferred(_)),
+        "original account decoder refusal is never a business No: {refusal:?}"
+    );
+    assert_eq!(
+        transaction
+            .world
+            .smart_contract_state
+            .get(&key(&destination)),
+        Some(&original)
+    );
+    assert!(transaction.world.retail_fee_observed_payments.is_empty());
+    assert!(transaction.world.retail_fee_pending_credits.is_empty());
+}
 fn minor(value: &Quantity) -> Result<u64, InstructionExecutionError> {
     iroha_data_model::fastpq::normalized_numeric_to_u64(value.as_numeric(), 2)
         .ok_or_else(|| invalid("SBD balance must fit exact unsigned minor units"))
@@ -1128,7 +1218,14 @@ pub(crate) fn process_idle_accounts(
         Ok(())
     })();
     match result {
-        Ok(()) => stx.apply(),
+        Ok(()) => {
+            // Idle settlements always write protected account/receipt state or
+            // their cursor. This child journal excludes earlier applied siblings;
+            // an empty sweep must not manufacture a committed fragment.
+            if stx.world.smart_contract_state.touched_entries().len() != 0 {
+                stx.apply();
+            }
+        }
         Err(error) => {
             iroha_logger::warn!(%error,"retail fee idle settlement refused without partial collection");
             if let ExecutionAttemptError::Deferred(reason) = error {

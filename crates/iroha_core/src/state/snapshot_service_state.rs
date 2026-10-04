@@ -57,6 +57,7 @@ pub(crate) fn serialize(world: &World, out: &mut String) {
 }
 
 /// Append the exact maps/cells that consuming this World overlay would publish.
+#[cfg(test)]
 pub(crate) fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
     serialize_fields!(world, out, serialize_block);
 }

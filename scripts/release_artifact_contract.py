@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import ctypes
 import hashlib
 import json
 import os
@@ -277,9 +278,94 @@ def _absolute_without_symlink_components(path: Path, label: str) -> Path:
     return absolute
 
 
+@contextmanager
+def pin_path_ancestors(path: Path):
+    """Detect executable-parent substitutions throughout one consuming operation.
+
+    Hold every original ancestor, including its change timestamp: renaming a
+    directory away and back need not change any child file's inode or timestamps.
+    File bytes and permissions still require their own stable_open_relative
+    custody. This composes the canonical no-follow directory opener without a
+    second path walker or a new permission policy for system tool ancestors.
+    """
+    if not path.is_absolute() or str(path) != os.path.abspath(path):
+        _fail("ancestor custody requires an absolute canonical file path")
+    retained = []
+    fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_ctime_ns")
+    try:
+        for parent in reversed(path.parents):
+            descriptor, _, identity = _open_absolute_directory(parent, "executable ancestor")
+            retained.append((parent, descriptor, identity))
+        yield
+        for parent, descriptor, original in retained:
+            current_fd, _, named = _open_absolute_directory(parent, "executable ancestor")
+            try:
+                opened = os.fstat(descriptor)
+                if any(getattr(original, field) != getattr(info, field)
+                       for info in (opened, named) for field in fields):
+                    _fail("executable ancestor changed during operation")
+            finally:
+                os.close(current_fd)
+    finally:
+        for _, descriptor, _ in reversed(retained):
+            os.close(descriptor)
+
+
 def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
     """Create one fresh directory tree without following existing links."""
     return _create_directory_tree(path, mode=mode)
+
+
+def publish_directory_noreplace(
+    stage: Path, destination: Path, *, parent_fd: int, stage_fd: int,
+) -> None:
+    """Atomically publish a private sibling directory using its original custody.
+
+    Both descriptors must remain held from preparation through publication. No
+    existing destination, including an empty directory, is replaceable. Unsupported
+    hosts fail closed; a pathname check followed by ordinary rename is insufficient.
+    The caller owns content validation and retains incomplete work after failure.
+    """
+    if (not stage.is_absolute() or not destination.is_absolute()
+            or str(stage) != os.path.abspath(stage)
+            or str(destination) != os.path.abspath(destination)
+            or stage.parent != destination.parent or stage == destination):
+        _fail("exclusive directory publication requires canonical sibling paths")
+    parent = os.fstat(parent_fd)
+    original = os.fstat(stage_fd)
+
+    def require_custody(name: str) -> None:
+        opened_fd, _, named_parent = _open_absolute_directory(stage.parent, "publication parent")
+        try:
+            named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
+                    or parent.st_mode & 0o022
+                    or (parent.st_dev, parent.st_ino, parent.st_uid, parent.st_mode)
+                    != (named_parent.st_dev, named_parent.st_ino, named_parent.st_uid, named_parent.st_mode)
+                    or not stat.S_ISDIR(original.st_mode)
+                    or original.st_uid != os.geteuid()
+                    or stat.S_IMODE(original.st_mode) != 0o700
+                    or (original.st_dev, original.st_ino, original.st_uid, original.st_mode)
+                    != (named.st_dev, named.st_ino, named.st_uid, named.st_mode)):
+                _fail("exclusive directory publication custody changed")
+        finally:
+            os.close(opened_fd)
+
+    require_custody(stage.name)
+    libc = ctypes.CDLL(None, use_errno=True)
+    name, flag = {"linux": ("renameat2", 1), "darwin": ("renameatx_np", 4)}.get(
+        sys.platform, (None, None)
+    )
+    if name is None or not hasattr(libc, name):
+        _fail("exclusive directory publication requires Linux or macOS no-replace rename")
+    function = getattr(libc, name)
+    function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    os.fsync(stage_fd)
+    if function(parent_fd, os.fsencode(stage.name), parent_fd, os.fsencode(destination.name), flag) != 0:
+        _fail(f"exclusive directory publication failed: {os.strerror(ctypes.get_errno())}")
+    os.fsync(parent_fd)
+    require_custody(destination.name)
 
 
 def ensure_private_directory(path: Path, *, anchor: Path) -> Path:
@@ -460,8 +546,13 @@ def stable_read_relative(
     *,
     max_size: int | None = None,
     return_payload: bool,
+    allow_empty: bool = False,
 ) -> tuple[StableFile, bytes | None]:
-    """Hash/read one direct regular file and reject identity changes."""
+    """Hash/read one direct regular file and reject identity changes.
+
+    Empty release artifacts are rejected by default. Bounded producer stdout or
+    stderr records may explicitly admit zero bytes while retaining all custody checks.
+    """
 
     normalized = canonical_relative_path(relative_path)
     file_fd = -1
@@ -479,7 +570,7 @@ def stable_read_relative(
             _fail(
                 f"release artifact {normalized!r} must not be group- or world-writable"
             )
-        if before.st_size <= 0:
+        if before.st_size < 0 or (before.st_size == 0 and not allow_empty):
             _fail(f"release artifact {normalized!r} must not be empty")
         if max_size is not None and before.st_size > max_size:
             _fail(
@@ -565,12 +656,14 @@ def stable_hash_relative(
     relative_path: str,
     *,
     max_size: int | None = None,
+    allow_empty: bool = False,
 ) -> StableFile:
     info, _ = stable_read_relative(
         root,
         relative_path,
         max_size=max_size,
         return_payload=False,
+        allow_empty=allow_empty,
     )
     return info
 
@@ -698,6 +791,7 @@ def stable_hash_path(
     path: Path,
     *,
     max_size: int | None = None,
+    allow_empty: bool = False,
 ) -> StableFile:
     """Hash one absolute or working-directory-relative stable file."""
 
@@ -706,6 +800,7 @@ def stable_hash_path(
         absolute.parent,
         absolute.name,
         max_size=max_size,
+        allow_empty=allow_empty,
     )
 
 

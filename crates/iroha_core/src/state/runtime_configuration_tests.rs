@@ -754,8 +754,8 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
             }
             .into_state_from_json(snapshot)
         };
-        // A restored State retains scalar and native-tip owners in the same
-        // startup pool. Measure both retained owners and transient restore
+        // A restored State retains scalar, native-tip and AMX owners in the same
+        // startup pool. Measure the retained owners and transient restore
         // demand independently, preserving the original exact 137-byte window
         // above the real peak while the startup reservation remains held.
         let probe_budget = iroha_allocation::AllocationBudget::new(
@@ -768,19 +768,48 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let retained_layout_bytes = mv::cell::CellInitialization::<u64>::allocation_layouts()
             .into_iter()
             .chain(mv::cell::CellInitialization::<Option<NativeExecutionTip>>::allocation_layouts())
+            .chain(mv::cell::CellInitialization::<crate::sumeragi::amx::RetainedNativeAmx>::allocation_layouts())
             .map(|layout| layout.size())
             .sum::<usize>();
         let retired_ebr_bytes =
             Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts()
                 .into_iter()
                 .chain(native_execution_tip::TipCell::allocation_layouts())
+                .chain(Cell::<
+                    crate::sumeragi::amx::RetainedNativeAmx,
+                    iroha_allocation::AllocationCharge,
+                >::allocation_layouts())
                 .map(|layout| layout.size())
                 .sum::<usize>();
-        assert_eq!(retained_bytes, retained_layout_bytes);
+        let lock_releases = [
+            probe.latest_block_header.observe_release(),
+            probe.da_commitments.observe_release(),
+            probe.da_confidential_compute.observe_release(),
+            probe.da_receipt_cursors.observe_release(),
+            probe.da_shard_cursors.observe_release(),
+            probe.da_pin_intents.observe_release(),
+            probe.lane_manifests.observe_release(),
+            probe.lane_privacy_registry.observe_release(),
+            probe.da_indexes_hydrated.observe_release(),
+            probe.pipeline_ivm_prepared_cache.observe_release(),
+            probe.nexus.observe_release(),
+            probe.crypto.observe_release(),
+            probe.kagemusha_v1_runtime_verifier.observe_release(),
+            probe.state_write_lock.observe_release(),
+        ];
+        let notification_bytes = lock_releases.len()
+            * iroha_allocation::release::ReleaseNotification::allocation_layout::<
+                iroha_allocation::AllocationCharge,
+            >()
+            .size();
+        // Count every actual admitted lock control without retaining a release
+        // observation across State retirement.
+        drop(lock_releases);
+        assert_eq!(retained_bytes, retained_layout_bytes + notification_bytes);
         assert!(retired_ebr_bytes > 0);
         assert!(retired_ebr_bytes < retained_bytes);
         assert!(restore_peak >= retained_bytes);
-        // The scalar and native-tip EBR generations remain charged while this
+        // The scalar, native-tip and AMX EBR generations remain charged while this
         // reader pin prevents reclamation. Unborrowed publication identities
         // and notification owners free with State and refund their own charges.
         let retirement_pin = crossbeam_epoch::pin();

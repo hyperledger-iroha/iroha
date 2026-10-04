@@ -1,4 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
+#[cfg(test)]
+use crate::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -7,10 +9,11 @@ use crate::{
     query::store::LiveQueryStoreHandle,
     secure_file_metadata::{self, SecureMetadata},
     state::{
-        LaneIncarnationLineage, SnapshotNexusRuntime, State, StateBlock, ZkConfigInstallError,
+        LaneIncarnationLineage, SnapshotNexusRuntime, State, ZkConfigInstallError,
         deserialize::KuraSeed, lane_incarnation_lineage_root, snapshot_storage,
     },
 };
+#[cfg(test)]
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
@@ -92,40 +95,60 @@ mod state_snapshot_decode_error_tests {
 /// A finite snapshot observation failed before it acquired immutable bytes.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SnapshotCaptureError {
-    /// A State publisher already owns the generation.
-    #[error("State snapshot observation is busy")]
-    Busy,
+    /// Original nonblocking physical State reader failure.
+    #[error(transparent)]
+    Read(#[from] crate::state::StateViewError),
     /// The semantic State changed during the single capture attempt.
     #[error("State snapshot observation changed during capture")]
-    Changed,
+    Changed(iroha_allocation::release::ReleaseWait),
     /// A stable runtime/World projection is malformed.
     #[error("invalid State snapshot runtime projection: {0}")]
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
     /// Canonical snapshot encoding or projection was rejected.
     #[error("invalid canonical State snapshot encoding: {0}")]
+    #[cfg(test)]
     Encoding(#[source] Box<TryReadError>),
 }
 impl SnapshotCaptureError {
     /// Whether the caller should reacquire its observation rather than reject input.
     pub(crate) fn is_observation_changed(&self) -> bool {
-        matches!(self, Self::Busy | Self::Changed)
+        matches!(
+            self,
+            Self::Read(crate::state::StateViewError::Busy(_)) | Self::Changed(_)
+        )
     }
 }
 impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
     fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::ExecutionObservationChanged
-        } else {
-            Self::ExecutionStatePublication(error.to_string())
+        match error {
+            SnapshotCaptureError::Read(error) => Self::StateView(error),
+            SnapshotCaptureError::Changed(wait) => {
+                Self::StateView(crate::state::StateViewError::Busy(wait))
+            }
+            SnapshotCaptureError::Runtime(error) => {
+                Self::StateView(crate::state::StateViewError::Runtime(*error))
+            }
+            error => Self::ExecutionStatePublication(error.to_string()),
         }
     }
 }
 impl From<SnapshotCaptureError> for crate::state::storage_transactions::TransactionsBlockError {
     fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::SnapshotObservationChanged
-        } else {
-            Self::SnapshotProjection
+        match error {
+            SnapshotCaptureError::Read(crate::state::StateViewError::Busy(wait))
+            | SnapshotCaptureError::Changed(wait) => Self::PublicationBusy(wait),
+            SnapshotCaptureError::Read(crate::state::StateViewError::Runtime(
+                crate::state::LaneLifecycleError::NposPolicy(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ),
+            )) => Self::ExecutionDeferred(reason),
+            SnapshotCaptureError::Runtime(error) => match *error {
+                crate::state::LaneLifecycleError::NposPolicy(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ) => Self::ExecutionDeferred(reason),
+                _ => Self::SnapshotProjection,
+            },
+            _ => Self::SnapshotProjection,
         }
     }
 }
@@ -178,17 +201,21 @@ impl CapturedStateSnapshot {
         after_serialization: impl FnOnce(),
     ) -> Result<Self, SnapshotCaptureError> {
         let state = releases.state();
+        let publication = state.view_publication_release();
         let generation = state.state_view_generation();
         if generation % 2 != 0 {
-            return Err(SnapshotCaptureError::Busy);
+            return Err(crate::state::StateViewError::Busy(publication).into());
         }
         let view = releases.try_view_once();
         if state.state_view_generation() != generation {
-            return Err(SnapshotCaptureError::Changed);
+            return Err(SnapshotCaptureError::Changed(publication));
         }
-        let view = view
-            .map_err(|error| SnapshotCaptureError::Runtime(Box::new(error)))?
-            .ok_or(SnapshotCaptureError::Changed)?;
+        let view = view.map_err(|error| match error {
+            crate::state::StateViewError::Runtime(error) => {
+                SnapshotCaptureError::Runtime(Box::new(error))
+            }
+            error => SnapshotCaptureError::Read(error),
+        })?;
         // TODO: Bound the serializer's allocation while preserving the exact JSON
         // encoding. The existing writer resource limits run after this allocation.
         let mut json = String::new();
@@ -196,7 +223,7 @@ impl CapturedStateSnapshot {
         after_serialization();
         let after = state.state_view_generation();
         if generation != after || after % 2 != 0 {
-            return Err(SnapshotCaptureError::Changed);
+            return Err(SnapshotCaptureError::Changed(publication));
         }
         let identity = CapturedSnapshotIdentity {
             serialized_hash: Hash::new(json.as_bytes()),
@@ -220,6 +247,7 @@ impl CapturedStateSnapshot {
         Self::capture_with_observer(state, publication)
     }
     /// Canonical history height owned by this exact captured cut.
+    #[cfg(test)]
     pub(crate) fn height(&self) -> usize {
         self.identity.height
     }
@@ -228,6 +256,7 @@ impl CapturedStateSnapshot {
         &self.json
     }
     /// Hash the existing canonical WSV projection of these immutable bytes.
+    #[cfg(test)]
     pub(crate) fn canonical_hash(&self) -> Result<Hash, SnapshotCaptureError> {
         canonical_snapshot_wsv_hash(self.json.as_bytes())
             .map_err(|error| SnapshotCaptureError::Encoding(Box::new(error)))
@@ -321,6 +350,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
+#[cfg(test)]
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
     let block_hashes = state.block_hashes();
@@ -849,6 +879,8 @@ pub struct SnapshotMaker {
     resource_policy: SnapshotResourcePolicy,
     /// Original startup pool, shared by all authenticated payload read buffers.
     read_buffer_budget: AllocationBudget,
+    /// Original commit-evidence refusal retained until a snapshot is successfully published.
+    commit_evidence_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 impl SnapshotMaker {
     /// Start supervised storage maintenance after successful startup recovery.
@@ -967,6 +999,7 @@ impl SnapshotMaker {
             });
             match result {
                 Ok(published) => {
+                    self.commit_evidence_refusal = None;
                     iroha_logger::info!(
                         at_height = published.height,
                         "Successfully created a snapshot of state"
@@ -975,6 +1008,10 @@ impl SnapshotMaker {
                 }
                 Err(TryWriteError::Capture(error)) if error.is_observation_changed() => {
                     iroha_logger::debug!(%error, "Deferring snapshot until a stable State observation is available");
+                }
+                Err(TryWriteError::CommitEvidenceResourceDeferred { height, reason }) => {
+                    iroha_logger::debug!(height, %reason, "Deferring snapshot until original commit-evidence resources are available");
+                    self.commit_evidence_refusal = Some(reason);
                 }
                 Err(error @ TryWriteError::CommitEvidenceDeferred { .. }) => {
                     iroha_logger::debug!(%error, "Deferring snapshot until commit evidence is complete");
@@ -1009,6 +1046,7 @@ impl SnapshotMaker {
                 max_payload_bytes: config.max_payload_bytes,
                 resource_policy: config.resources,
                 read_buffer_budget,
+                commit_evidence_refusal: None,
             })
         } else {
             None
@@ -2238,6 +2276,7 @@ fn snapshot_object_field_raw<'a>(
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 enum CanonicalWsvPath {
     Root,
     World,
@@ -2246,17 +2285,20 @@ enum CanonicalWsvPath {
     Other,
 }
 #[derive(Clone, Copy, Default)]
+#[cfg(test)]
 struct CanonicalWsvOverrides<'a> {
     committed_external_event_buf: Option<&'a str>,
     committed_axt_replay_ledger: Option<&'a str>,
     committed_smart_contract_state: Option<&'a str>,
     committed_da_pin_indexes: [Option<&'a str>; 4],
 }
+#[cfg(test)]
 struct BorrowedJsonMember<'a> {
     key: String,
     encoded_key: &'a str,
     value: &'a str,
 }
+#[cfg(test)]
 fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_>>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'{').map_err(TryReadError::Serialization)?;
@@ -2293,6 +2335,7 @@ fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_
     }
     Ok(members)
 }
+#[cfg(test)]
 fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'[').map_err(TryReadError::Serialization)?;
@@ -2319,6 +2362,7 @@ fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     }
     Ok(items)
 }
+#[cfg(test)]
 fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
     match path {
         CanonicalWsvPath::Root => matches!(
@@ -2333,6 +2377,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
         }
     }
 }
+#[cfg(test)]
 fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPath {
     match (path, key) {
         (CanonicalWsvPath::Root, "world") => CanonicalWsvPath::World,
@@ -2341,6 +2386,7 @@ fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPa
         _ => CanonicalWsvPath::Other,
     }
 }
+#[cfg(test)]
 fn canonical_wsv_cell_value<'a>(
     path: CanonicalWsvPath,
     key: &str,
@@ -2375,11 +2421,13 @@ fn canonical_wsv_cell_value<'a>(
         .map_or(input, |member| member.value))
 }
 
+#[cfg(test)]
 fn canonical_json_fragment(input: &str) -> Result<String, TryReadError> {
     let value: json::Value = json::from_str(input).map_err(TryReadError::Serialization)?;
     json::to_json(&value).map_err(TryReadError::Serialization)
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2402,6 +2450,7 @@ fn update_snapshot_wsv_hash<'a>(
     }
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_object_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2477,6 +2526,7 @@ fn update_snapshot_wsv_object_hash<'a>(
     Ok(())
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_array_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2518,6 +2568,7 @@ fn update_snapshot_wsv_array_hash<'a>(
     Digest::update(hasher, b"]");
     Ok(())
 }
+#[cfg(test)]
 fn update_sorted_string_set_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2545,10 +2596,12 @@ fn update_sorted_string_set_hash(
     Digest::update(hasher, b"]");
     Ok(())
 }
+#[cfg(test)]
 fn canonical_snapshot_wsv_hash(bytes: &[u8]) -> Result<Hash, TryReadError> {
     canonical_snapshot_wsv_hash_with_overrides(bytes, CanonicalWsvOverrides::default())
 }
 
+#[cfg(test)]
 fn canonical_snapshot_wsv_hash_with_overrides<'a>(
     bytes: &'a [u8],
     overrides: CanonicalWsvOverrides<'a>,
@@ -4589,16 +4642,30 @@ fn ensure_snapshot_commit_evidence(
             "snapshot height/hash differs from its original native execution".into(),
         ));
     }
+    let attempt_failure = |error: crate::execution_attempt::ExecutionAttemptError<
+        crate::sumeragi::certified_chain::ChainReadError,
+    >| match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            failure(error.to_string())
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            TryWriteError::CommitEvidenceResourceDeferred {
+                height: checkpoint.height,
+                reason,
+            }
+        }
+    };
     let chain = crate::sumeragi::certified_chain::CertifiedChain::from_pinned(
         &identity.chain_id,
         &identity.network_id,
         &checkpoint.block_hashes,
         state.kura(),
+        &state.ivm_execution_budget(),
     )
-    .map_err(|error| failure(error.to_string()))?;
+    .map_err(&attempt_failure)?;
     let certified = chain
         .certified(checkpoint.height)
-        .map_err(|error| failure(error.to_string()))?;
+        .map_err(attempt_failure)?;
     if certified.block_hash() != tip.iroha_hash()
         || certified.core_hash() != tip.core_hash()
         || certified.result() != tip.result()
@@ -4814,10 +4881,12 @@ pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
         .into_bytes()
 }
 /// Canonical hash for the committed ledger WSV surface.
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> Result<Hash, SnapshotCaptureError> {
     CapturedStateSnapshot::capture(state)?.canonical_hash()
 }
 /// Retain the exact reader releases beyond all caller-owned State or snapshot fences.
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_hash_with_releases(
     releases: &mut crate::state::StateViewReleases<'_>,
 ) -> Result<Hash, SnapshotCaptureError> {
@@ -4886,6 +4955,7 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
 ///
 /// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
 /// durable checkpoint without mutating live state.
+#[cfg(test)]
 pub(crate) fn canonical_staged_state_snapshot_hash(
     state_block: &StateBlock<'_>,
 ) -> iroha_crypto::Hash {

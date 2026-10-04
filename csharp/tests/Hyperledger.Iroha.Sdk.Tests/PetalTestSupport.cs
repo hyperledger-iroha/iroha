@@ -33,10 +33,10 @@ internal static class PetalTestSupport
     public static long[] Numbers(JsonElement element, string key) =>
         element.GetProperty(key).EnumerateArray().Select(static value => value.GetInt64()).ToArray();
 
-    /// <summary>Inflates a <c>luma_zlib_base64</c> fixture entry.</summary>
-    public static PetalLuma LumaOf(JsonElement entry)
+    /// <summary>Inflates a <c>luma_zlib_base64</c> fixture entry (or the plane under <paramref name="key"/>).</summary>
+    public static PetalLuma LumaOf(JsonElement entry, string key = "luma_zlib_base64")
     {
-        var compressed = Convert.FromBase64String(entry.GetProperty("luma_zlib_base64").GetString()!);
+        var compressed = Convert.FromBase64String(entry.GetProperty(key).GetString()!);
         using var input = new MemoryStream(compressed);
         using var zlib = new ZLibStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream();
@@ -63,6 +63,57 @@ internal static class PetalTestSupport
         }
 
         return new PetalLuma(n, n, data);
+    }
+
+    /// <summary>
+    /// Paints the blossom of canonical corner <paramref name="corner"/> of a square render over with
+    /// background (a disc of 75 canvas units), as a thumb would cover it.
+    /// </summary>
+    public static PetalLuma HideBlossom(PetalLuma render, int corner)
+    {
+        var n = render.Width;
+        var data = (byte[])render.Data.Clone();
+        var scale = n / 1024.0;
+        var (cx, cy) = (PetalLayout.FinderCenters[corner].X * scale, PetalLayout.FinderCenters[corner].Y * scale);
+        var radius = 75.0 * scale;
+        for (var y = 0; y < n; y++)
+        {
+            for (var x = 0; x < n; x++)
+            {
+                var (dx, dy) = (x + 0.5 - cx, y + 0.5 - cy);
+                if (dx * dx + dy * dy <= radius * radius)
+                    data[y * n + x] = 0;
+            }
+        }
+
+        return new PetalLuma(n, n, data);
+    }
+
+    /// <summary>Shifts a luma image by whole pixels, filling with black.</summary>
+    public static PetalLuma Shifted(PetalLuma image, int dx, int dy)
+    {
+        var data = new byte[image.Data.Length];
+        for (var y = 0; y < image.Height; y++)
+        {
+            for (var x = 0; x < image.Width; x++)
+            {
+                var (sx, sy) = (x - dx, y - dy);
+                if (sx >= 0 && sy >= 0 && sx < image.Width && sy < image.Height)
+                    data[y * image.Width + x] = image.Data[sy * image.Width + sx];
+            }
+        }
+
+        return new PetalLuma(image.Width, image.Height, data);
+    }
+
+    /// <summary>Places a luma image in the middle of a larger black frame.</summary>
+    public static PetalLuma Padded(PetalLuma image, int pad)
+    {
+        var width = image.Width + 2 * pad;
+        var output = new PetalLuma(width, image.Height + 2 * pad);
+        for (var y = 0; y < image.Height; y++)
+            image.Data.AsSpan(y * image.Width, image.Width).CopyTo(output.Data.AsSpan((y + pad) * width + pad));
+        return output;
     }
 
     public static PetalLuma Mirror(PetalLuma image)

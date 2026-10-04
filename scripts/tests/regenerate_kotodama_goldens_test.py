@@ -29,7 +29,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertFalse(defaults.write)
         self.assertFalse(defaults.check)
         self.assertEqual(defaults.koto, Path("target/debug/koto"))
-        self.assertEqual(defaults.iroha, Path("target/debug/iroha"))
+        self.assertEqual(defaults.admission_tool, Path("target/debug/ivm_artifact_admit"))
         self.assertIsNone(defaults.output_root)
         self.assertIsNone(defaults.staging_root)
 
@@ -63,15 +63,16 @@ class CommandLineTests(unittest.TestCase):
             ("--output-root", "first", "--output-root", "second"),
             ("--staging-root", "first", "--staging-root", "second"),
             ("--koto", ""),
-            ("--iroha", ""),
+            ("--admission-tool", ""),
             ("--koto", "first", "--koto", "second"),
-            ("--iroha", "first", "--iroha", "second"),
+            ("--admission-tool", "first", "--admission-tool", "second"),
             ("--koto=-h",),
-            ("--iroha=--write",),
+            ("--admission-tool=--write",),
             ("--output-root=-h",),
             ("--staging-root=--write",),
             ("--skip-runtime-manifest-check",),
             ("--skip-contract-tests",),
+            ("--iroha", "retired-producer"),
             ("--unknown",),
         ):
             with self.subTest(arguments=arguments):
@@ -93,21 +94,90 @@ class CommandLineTests(unittest.TestCase):
 
 
 class DirectorySafetyTests(unittest.TestCase):
-    def test_output_root_must_be_outside_the_live_repository(self) -> None:
+    def test_output_root_cannot_be_a_source_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary).resolve(strict=True)
             source = parent / "source"
             source.mkdir()
-            with self.assertRaisesRegex(MODULE.GoldenError, "outside"):
-                MODULE._require_external_output_path(
+            with self.assertRaisesRegex(MODULE.GoldenError, "below ignored target"):
+                MODULE._require_output_path(
                     source,
                     source / "publication",
                 )
             publication = parent / "publication"
             self.assertEqual(
-                MODULE._require_external_output_path(source, publication),
+                MODULE._require_output_path(source, publication),
                 publication,
             )
+
+    def test_checkout_target_requires_exact_ignored_untracked_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve(strict=True)
+            (source / "target").mkdir()
+            publication = source / "target" / "publication"
+            with mock.patch.object(MODULE, "run", side_effect=["", "target/publication\0"]) as run:
+                self.assertEqual(MODULE._require_output_path(source, publication), publication)
+            self.assertEqual(run.call_args_list, [
+                mock.call(["git", "ls-files", "--cached", "-z", "--", "target/publication"], source),
+                mock.call(["git", "check-ignore", "--no-index", "-z", "--stdin"], source, input="target/publication\0"),
+            ])
+            self.assertFalse(publication.exists())
+            with mock.patch.object(MODULE, "run", return_value="target/publication/tracked\0"):
+                with self.assertRaisesRegex(MODULE.GoldenError, "tracked paths"):
+                    MODULE._require_output_path(source, publication)
+            for ignored in ("", "target/other\0", "target/publication\0target/other\0"):
+                with mock.patch.object(MODULE, "run", side_effect=["", ignored]):
+                    with self.assertRaisesRegex(MODULE.GoldenError, "Git-ignored"):
+                        MODULE._require_output_path(source, publication)
+            with self.assertRaisesRegex(MODULE.GoldenError, "below ignored target"):
+                MODULE._require_scratch_path(source, source / "target")
+
+    def test_target_symlink_and_parent_traversal_cannot_select_scratch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve(strict=True)
+            source = root / "source"
+            source.mkdir()
+            destination = root / "other"
+            destination.mkdir()
+            (source / "target").symlink_to(destination, target_is_directory=True)
+            for path in (source / "target" / "publication", source / ".." / "other" / "publication"):
+                with self.assertRaisesRegex(MODULE.GoldenError, "canonical non-symlink"):
+                    MODULE._require_scratch_path(source, path)
+
+    def test_staging_preparation_preserves_requested_path_and_rechecks_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve(strict=True)
+            requested = source / "target" / "scratch"
+            with mock.patch.object(MODULE, "run", side_effect=[
+                "", "target/scratch\0", "", "target/scratch\0"
+            ]) as run:
+                self.assertEqual(MODULE._prepare_staging_directory(source, requested), requested)
+            self.assertTrue(requested.is_dir())
+            self.assertEqual(run.call_count, 4)
+
+    def test_staging_ancestor_exchange_cannot_gain_external_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve(strict=True)
+            source = parent / "source"
+            source.mkdir()
+            target = source / "target"
+            target.mkdir()
+            external = parent / "external"
+            external.mkdir()
+            requested = target / "scratch"
+            original_prepare = MODULE._prepare_real_directory
+
+            def exchange(path: Path, *, context: str, create: bool) -> Path:
+                target.rename(source / "original-target")
+                target.symlink_to(external, target_is_directory=True)
+                return original_prepare(path, context=context, create=create)
+
+            with (
+                mock.patch.object(MODULE, "run", side_effect=["", "target/scratch\0"]),
+                mock.patch.object(MODULE, "_prepare_real_directory", side_effect=exchange),
+                self.assertRaisesRegex(MODULE.GoldenError, "path changed during preparation"),
+            ):
+                MODULE._prepare_staging_directory(source, requested)
 
     def test_external_publication_path_is_not_reserved_during_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -247,16 +317,16 @@ class SourcePolicyTests(unittest.TestCase):
             (root / MODULE.MAP_PATH).write_text("map\n", encoding="utf-8")
             source = root / "contract.ko"
             koto = root / "koto"
-            iroha = root / "iroha"
+            admission_tool = root / "ivm_artifact_admit"
             for path, payload in (
                 (source, b"contract"),
                 (koto, b"koto"),
-                (iroha, b"iroha"),
+                (admission_tool, b"ivm_artifact_admit"),
             ):
                 path.write_bytes(payload)
 
             before = MODULE.generation_input_seals(
-                root, (Path("contract.ko"),), koto, iroha
+                root, (Path("contract.ko"),), koto, admission_tool
             )
             attribute_seal = next(
                 seal for seal in before if seal.path == root / MODULE.ATTRIBUTES_PATH
@@ -270,7 +340,7 @@ class SourcePolicyTests(unittest.TestCase):
                 "fixtures/** whitespace\n", encoding="utf-8"
             )
             after = MODULE.generation_input_seals(
-                root, (Path("contract.ko"),), koto, iroha
+                root, (Path("contract.ko"),), koto, admission_tool
             )
             self.assertNotEqual(before, after)
 
@@ -318,14 +388,14 @@ class StagingModeTests(unittest.TestCase):
                     with self.assertRaisesRegex(MODULE.GoldenError, "mode 0600"):
                         MODULE.read_compiler_output(source)
 
-    def test_runtime_manifest_accepts_exact_bytes_under_both_safe_staging_modes(self) -> None:
+    def test_runtime_manifest_accepts_exact_bytes_under_private_staging_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "compiler.json"
             destination = Path(temporary) / "runtime.json"
             source.write_bytes(b'{"artifact":"same"}')
             source.chmod(0o600)
             destination.write_bytes(source.read_bytes())
-            for mode in (0o600, 0o644):
+            for mode in (0o600,):
                 with self.subTest(mode=oct(mode)):
                     destination.chmod(mode)
                     MODULE.compare_runtime_manifest(source, destination)
@@ -338,12 +408,12 @@ class StagingModeTests(unittest.TestCase):
             source.write_bytes(b"canonical")
             source.chmod(0o600)
             destination.write_bytes(source.read_bytes())
-            for mode in (0o400, 0o620, 0o666, 0o700):
+            for mode in (0o400, 0o620, 0o644, 0o666, 0o700):
                 with self.subTest(mode=oct(mode)):
                     destination.chmod(mode)
                     with self.assertRaisesRegex(MODULE.GoldenError, "runtime manifest must use mode"):
                         MODULE.compare_runtime_manifest(source, destination)
-            destination.chmod(0o644)
+            destination.chmod(0o600)
             destination.write_bytes(b"changed")
             with self.assertRaisesRegex(MODULE.GoldenError, "differs from compiler"):
                 MODULE.compare_runtime_manifest(source, destination)
@@ -402,11 +472,11 @@ class StagedPublicationTests(unittest.TestCase):
             ):
                 rendered = MODULE.rendered_files(stage, rows)
                 self.assertEqual(
-                    MODULE.publish_external_create_only(output_root, rendered),
+                    MODULE.publish_create_only(output_root, rendered),
                     1,
                 )
                 with self.assertRaisesRegex(MODULE.GoldenError, "create-only"):
-                    MODULE.publish_external_create_only(output_root, rendered)
+                    MODULE.publish_create_only(output_root, rendered)
                 self.assertEqual(
                     MODULE.verify_rendered_tree(output_root, rendered),
                     0,
@@ -426,7 +496,7 @@ class StagedPublicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve(strict=True)
             output_root = root / "output"
-            outside = root / "outside"
+            outside = root / "below ignored target"
             stage = root / "stage"
             output_root.mkdir()
             outside.mkdir()
@@ -453,7 +523,7 @@ class StagedPublicationTests(unittest.TestCase):
                 self.assertRaises(MODULE.GoldenError),
             ):
                 rendered = MODULE.rendered_files(stage, rows)
-                MODULE.publish_external_create_only(output_root, rendered)
+                MODULE.publish_create_only(output_root, rendered)
             self.assertEqual(list(outside.iterdir()), [])
 
     def test_forbidden_legacy_output_is_rejected_without_removal(self) -> None:
@@ -502,7 +572,7 @@ class StagedPublicationTests(unittest.TestCase):
                 raise MODULE.GoldenError("source drift")
 
             with self.assertRaisesRegex(MODULE.GoldenError, "source drift"):
-                MODULE.publish_external_create_only(
+                MODULE.publish_create_only(
                     publication,
                     rendered,
                     preseal=reject,

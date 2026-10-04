@@ -4,6 +4,164 @@ use super::*;
 use iroha_data_model::query::error::QueryExecutionFail;
 
 impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
+    /// Read an ascending interval from this view's original execution authority.
+    ///
+    /// The starting parent is acquired once through the reverse native ancestry. Each
+    /// following source frame is then read once and verified by the same native successor
+    /// relation as [`Self::certified_from_execution`]. Only the parent and current receipt
+    /// plus bounded fixed original coordinates are retained. Every yielded result matches
+    /// its own original coordinate; genesis also waits for H2 to authenticate its result.
+    /// The constructor and this entire lazy walk must share one source admission callback
+    /// and one inherited allocation scope; returning this iterator does not retain a scope.
+    ///
+    /// # Errors
+    /// Refuses non-State sources, reversed/out-of-view intervals, missing original execution
+    /// authority, unavailable or changed ancestry, invalid certificates and resource refusal.
+    /// The iterator stops after its first error and never emits a partially verified block.
+    pub(crate) fn walk_from_execution<'r>(
+        &'r self,
+        from: NonZeroUsize,
+        to: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail> + 'r,
+    ) -> impl Iterator<Item = Result<CertifiedBlock, QueryExecutionFail>> + 'r {
+        let mut next = Some(from.get());
+        let mut parent: Option<CommittedBlock> = None;
+        let mut successor: Option<CertifiedBlock> = None;
+        type Coordinate = (HashOf<IrohaHeader>, Hash32, Hash32, HeightContextId);
+        let mut originals: Vec<Coordinate> = Vec::new();
+        let mut initialized = false;
+        std::iter::from_fn(move || {
+            let height = next?;
+            let result = (|| {
+                let invalid = |message: &str| QueryExecutionFail::Conversion(message.into());
+                let ChainSource::State(view) = &self.source else {
+                    return Err(invalid(
+                        "certificate walk requires original State authority",
+                    ));
+                };
+                if from > to || to.get() > view.height() {
+                    return Err(invalid("certificate interval is outside original State"));
+                }
+                let source_error = crate::smartcontracts::isi::query::query_transport_error;
+                if !initialized {
+                    let count = to.get() - from.get() + 1;
+                    if count > iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_COUNT
+                    {
+                        return Err(QueryExecutionFail::GasBudgetExceeded);
+                    }
+                    let bytes = count
+                        .checked_mul(core::mem::size_of::<Coordinate>())
+                        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                    norito::core::reserve_decode_allocation(bytes)
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+                    originals
+                        .try_reserve_exact(count)
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+                    let parent_height = from.get().saturating_sub(1).max(1);
+                    view.canonical_history()
+                        .visit_executed_backwards(
+                            NonZeroUsize::new(parent_height).expect("nonzero parent"),
+                            to,
+                            &mut before_read,
+                            |receipt| {
+                                if receipt.height() >= from.get() as u64 {
+                                    originals.push((
+                                        receipt.block_hash(),
+                                        receipt.core_hash(),
+                                        receipt.result(),
+                                        receipt.id(),
+                                    ));
+                                }
+                                if receipt.height() == parent_height as u64 {
+                                    parent = Some(receipt);
+                                }
+                                Ok(())
+                            },
+                        )
+                        .map_err(source_error)?;
+                    if originals.len() != count {
+                        return Err(invalid("original certificate interval is incomplete"));
+                    }
+                    if from.get() == 1 {
+                        // A local signed genesis body cannot authenticate its result on its own.
+                        let block = view
+                            .canonical_history()
+                            .block_with_admission(
+                                NonZeroUsize::new(2).expect("successor is nonzero"),
+                                &mut before_read,
+                            )
+                            .map_err(source_error)?;
+                        let current = read_frame(block, 2)
+                            .map_err(|error| query_failure(VerificationReadError::from(error)))?;
+                        successor = Some(
+                            self.verify_executed_successor(parent.as_ref().unwrap(), current)
+                                .map_err(query_failure)?,
+                        );
+                    }
+                    initialized = true;
+                }
+                if height == 1 {
+                    let committed = parent.take().unwrap();
+                    let certificate_len = norito::canonical_frame_len(
+                        committed.block().commit_certificate().ok_or_else(|| {
+                            invalid("original genesis result certificate is absent")
+                        })?,
+                    )
+                    .map_err(|error| query_failure(verification_codec_error(1, error)))?;
+                    return Ok(CertifiedBlock {
+                        committed,
+                        commit_qc: None,
+                        verification: QcVerification::Genesis,
+                        certificate_len,
+                    });
+                }
+                let certified = if let Some(successor) = successor.take() {
+                    successor
+                } else {
+                    let block = view
+                        .canonical_history()
+                        .block_with_admission(
+                            NonZeroUsize::new(height).expect("nonzero successor"),
+                            &mut before_read,
+                        )
+                        .map_err(source_error)?;
+                    let current = read_frame(block, height as u64)
+                        .map_err(|error| query_failure(VerificationReadError::from(error)))?;
+                    self.verify_executed_successor(parent.as_ref().unwrap(), current)
+                        .map_err(query_failure)?
+                };
+                if originals.get(to.get() - height)
+                    != Some(&(
+                        certified.block_hash(),
+                        certified.core_hash(),
+                        certified.result(),
+                        certified.id(),
+                    ))
+                {
+                    return Err(invalid(
+                        "certificate differs from its original execution result",
+                    ));
+                }
+                if height < to.get() {
+                    // Retain through the existing bounded original codec, not an infallible
+                    // deep clone of its variable-size header/schedule. No source I/O or QC
+                    // verification is repeated, and the same cumulative scope funds it.
+                    parent = Some(
+                        read_frame(certified.block().clone(), height as u64)
+                            .map_err(|error| query_failure(VerificationReadError::from(error)))?,
+                    );
+                }
+                Ok(certified)
+            })();
+            next = if result.is_ok() && height < to.get() {
+                height.checked_add(1)
+            } else {
+                None
+            };
+            Some(result)
+        })
+    }
+
     /// Authenticate signed genesis after admitting its exact canonical source frame.
     ///
     /// Use the same admission callback and allocation scope for later certificate reads
@@ -244,6 +402,173 @@ fn query_failure(error: VerificationReadError) -> QueryExecutionFail {
 #[cfg(test)]
 mod allocation_tests {
     use super::*;
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    fn pair_chain() -> CertifiedTestChain {
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+            .expect("genuine State-tip fixture");
+        for _ in 0..4 {
+            chain.commit(Vec::new());
+        }
+        chain
+    }
+
+    fn pair_identity<V: StateReadOnly + ?Sized>(
+        reader: &CertifiedChain<'_, V>,
+        target: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<(Hash32, Hash32), ParentServiceError> {
+        reader
+            .executed_parent_pair(target, before_read)
+            .map(|(parent, current)| (parent.core_hash(), current.core_hash()))
+    }
+
+    #[test]
+    fn parent_pair_completion_preserves_full_tip_walk_and_value_reader_parity() {
+        let chain = pair_chain();
+        let view = chain.state().view();
+        let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+        let target = NonZeroUsize::new(3).unwrap();
+        let mut original_charges = Vec::new();
+        let (original, original_counts) = relation_counts::measure(|| {
+            pair_identity(&reader, target, |work, bytes| {
+                original_charges.push((work, bytes));
+                Ok(())
+            })
+        });
+        let mut completed_charges = Vec::new();
+        let (completed, completed_counts) = relation_counts::measure(|| {
+            reader.executed_parent_pair_with_finish(
+                target,
+                |work, bytes| {
+                    completed_charges.push((work, bytes));
+                    Ok(())
+                },
+                |parent, current| {
+                    assert_eq!((parent.height(), current.height()), (2, 3));
+                    Ok((parent.core_hash(), current.core_hash()))
+                },
+            )
+        });
+        assert_eq!(completed.unwrap(), original.unwrap());
+        assert_eq!(original_counts.frames, [5, 4, 3, 2]);
+        assert_eq!(completed_counts.frames, original_counts.frames);
+        assert!(original_counts.qcs.is_empty() && completed_counts.qcs.is_empty());
+        assert_eq!(completed_charges, original_charges);
+        assert_eq!(completed_charges.len(), 4);
+    }
+
+    #[test]
+    fn parent_pair_completion_preserves_each_source_refusal_without_invoking_finish() {
+        let chain = pair_chain();
+        let view = chain.state().view();
+        let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+        let target = NonZeroUsize::new(3).unwrap();
+        for refused_at in 0..4 {
+            let mut original_reads = 0;
+            let original = pair_identity(&reader, target, |_, _| {
+                let index = original_reads;
+                original_reads += 1;
+                if index == refused_at {
+                    Err(QueryExecutionFail::GasBudgetExceeded)
+                } else {
+                    Ok(())
+                }
+            });
+            let mut completed_reads = 0;
+            let mut invoked = false;
+            let (completed, counts) = relation_counts::measure(|| {
+                reader.executed_parent_pair_with_finish(
+                    target,
+                    |_, _| {
+                        let index = completed_reads;
+                        completed_reads += 1;
+                        if index == refused_at {
+                            Err(QueryExecutionFail::GasBudgetExceeded)
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    |_, _| {
+                        invoked = true;
+                        Ok(())
+                    },
+                )
+            });
+            assert_eq!(completed_reads, original_reads);
+            assert_eq!(completed_reads, refused_at + 1);
+            assert_eq!(counts.frames.len(), refused_at);
+            assert!(counts.qcs.is_empty());
+            assert!(!invoked);
+            let Err(ParentServiceError::Deferred(original)) = original else {
+                panic!("original source refusal")
+            };
+            let Err(ParentServiceError::Deferred(completed)) = completed else {
+                panic!("completion source refusal")
+            };
+            assert_eq!(completed, original);
+        }
+    }
+
+    #[test]
+    fn parent_pair_completion_releases_receipts_after_transferring_exact_source_owner() {
+        let chain = pair_chain();
+        let view = chain.state().view();
+        let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+        let budget = chain.state().ivm_execution_budget();
+        let baseline = budget.reserved_bytes();
+        let original = reader
+            .executed_parent_pair_with_finish(
+                NonZeroUsize::new(3).unwrap(),
+                |_, _| Ok(()),
+                |parent, current| {
+                    assert!(parent.block().belongs_to(&budget));
+                    let original = current.block().clone();
+                    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                        &original,
+                        current.block(),
+                    ));
+                    Ok(original)
+                },
+            )
+            .unwrap();
+        assert!(original.belongs_to(&budget));
+        assert_eq!(
+            budget.reserved_bytes(),
+            baseline + iroha_data_model::block::SharedSignedBlock::allocation_layout().size(),
+            "all source and receipt owners except the exact transferred current block retire"
+        );
+        drop(original);
+        assert_eq!(budget.reserved_bytes(), baseline);
+    }
+
+    #[test]
+    fn parent_proposal_completion_retries_original_decoder_refusal_and_copies_exact_qc() {
+        let chain = pair_chain();
+        let view = chain.state().view();
+        let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
+        let parent = chain
+            .kura()
+            .get_block(
+                NonZeroUsize::new(5).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .unwrap()
+            .unwrap();
+        let refused = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 128),
+            || reader.parent_service_proposal_original(&parent),
+        );
+        assert!(matches!(refused, Err(ParentServiceError::Deferred(_))));
+        let (original, counts) =
+            relation_counts::measure(|| reader.parent_service_proposal_original(&parent).unwrap());
+        assert_eq!(original, parent.commit_certificate().unwrap().commit_qc());
+        assert_eq!(counts.frames, [5, 4]);
+        assert_eq!(counts.qcs, [5]);
+    }
 
     #[test]
     fn parent_service_verification_retains_original_allocation_release_owner() {
@@ -255,9 +580,12 @@ mod allocation_tests {
         assert!(matches!(error, ParentServiceError::Deferred(actual) if actual == expected));
         assert_eq!(budget.reserved_bytes(), 1);
         drop(occupied);
-        budget
+        let retry = budget
             .try_reserve_bytes(1)
             .expect("the original pool admits a retry after release");
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(retry);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]
@@ -377,6 +705,19 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         target: NonZeroUsize,
         before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<(CommittedBlock, CommittedBlock), ParentServiceError> {
+        self.executed_parent_pair_with_finish(target, before_read, |parent, current| {
+            Ok((parent, current))
+        })
+    }
+
+    // Consume the same complete receipts only after the original State-tip walk returns.
+    // A small output keeps their value-returning caller slots off the active decoder stack.
+    fn executed_parent_pair_with_finish<Output>(
+        &self,
+        target: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        finish: impl FnOnce(CommittedBlock, CommittedBlock) -> Result<Output, ParentServiceError>,
+    ) -> Result<Output, ParentServiceError> {
         let predecessor = target
             .get()
             .checked_sub(1)
@@ -403,7 +744,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             parent.ok_or_else(|| parent_source_failure("authenticated predecessor absent"))?;
         let current =
             current.ok_or_else(|| parent_source_failure("authenticated parent absent"))?;
-        Ok((parent, current))
+        finish(parent, current)
     }
 
     /// Select one genuinely verified local certificate as a proposal input.
@@ -419,7 +760,23 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .ok_or_else(|| {
                 ParentServiceError::Invalid("parent height is not addressable".into())
             })?;
-        let (predecessor, original_parent) = self.executed_parent_pair(height, |_, _| Ok(()))?;
+        self.executed_parent_pair_with_finish(
+            height,
+            |_, _| Ok(()),
+            |predecessor, original_parent| {
+                self.finish_parent_service_proposal_original(parent, predecessor, original_parent)
+            },
+        )
+    }
+
+    // Full receipt verification and QC ownership begin after ancestry decoding returns.
+    // The predecessor, target, certificate and protocol-bound checks retain their order.
+    fn finish_parent_service_proposal_original(
+        &self,
+        parent: &SignedBlock,
+        predecessor: CommittedBlock,
+        original_parent: CommittedBlock,
+    ) -> Result<Vec<u8>, ParentServiceError> {
         let certified = self
             .verify_executed_successor(&predecessor, original_parent)
             .map_err(parent_verification_source)?;

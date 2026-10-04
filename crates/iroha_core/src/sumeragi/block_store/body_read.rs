@@ -5,8 +5,6 @@ use std::io;
 use std::sync::Arc;
 
 use iroha_allocation::AllocationBudget;
-#[cfg(test)]
-use iroha_data_model::block::SignedBlock;
 use iroha_data_model::sumeragi_finality::result_of_preimage;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
@@ -50,7 +48,7 @@ impl StoredBodyRead {
     #[cfg(test)]
     pub(super) fn new(
         source: AvailabilitySource,
-        block: Option<Arc<SignedBlock>>,
+        block: Option<iroha_data_model::block::SharedSignedBlock>,
         budget: AllocationBudget,
         crypto: SharedCrypto,
     ) -> Self {

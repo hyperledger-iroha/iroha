@@ -9,6 +9,68 @@ workflows.
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
 
+## Quickstart
+
+Every Torii collection is a property of the client with the same three
+methods: `list()` reads one page, `pages()` iterates pages and `iterate()`
+iterates every item, following `nextCursor` until it is `null`. Filters use one
+grammar for collections, event streams and the `iroha` CLI
+(`specs/torii/collection_queries.md`).
+
+```js
+import { ListQueryError, ToriiClient, ToriiHttpError, field } from "@iroha/iroha-js";
+
+const torii = new ToriiClient("https://torii.example");
+const accountId = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
+
+// One page, filtered and sorted (`-field` sorts descending).
+const page = await torii.assetDefinitions.list({
+  filter: field("owned_by").eq(accountId).and(field("alias_binding.status").eq("permanent")),
+  sort: "-alias_binding.bound_at_ms,id",
+  limit: 50,
+});
+console.log(page.items.map((definition) => definition.id), page.nextCursor);
+
+// Every matching item; a text filter is sent exactly as written.
+for await (const holding of torii.accountAssets(accountId).iterate({
+  filter: "quantity >= 10.5",
+  select: ["asset", "quantity"],
+})) {
+  console.log(holding.asset, holding.quantity); // quantities are exact decimal strings
+}
+
+// Errors carry Torii's stable `code`, its message and structured `details`.
+try {
+  await torii.domains.list({ filter: "owner = 'alice'" });
+} catch (error) {
+  if (error instanceof ToriiHttpError) {
+    // 400 invalid_filter: unknown field `owner`; details.hint suggests `owned_by`
+    console.error(error.status, error.code, error.errorMessage, error.details?.hint);
+  } else if (error instanceof ListQueryError) {
+    console.error(error.code, error.message); // rejected locally, nothing was sent
+  } else {
+    throw error;
+  }
+}
+
+// Event streams take the same filters; abort the signal or `break` to unsubscribe.
+const subscription = new AbortController();
+for await (const frame of torii.streamEvents({
+  filter: field("tx_status").in(["Approved", "Rejected"]),
+  signal: subscription.signal,
+})) {
+  if (frame.event === "stream_error") break; // the live stream lost events
+  const { data } = frame; // { category: "Pipeline", event: "Transaction", status, ... }
+  if (data.event === "Transaction" && data.status === "Rejected") {
+    console.log(data.hash, data.rejection_code, data.rejection_reason);
+  }
+}
+```
+
+`ToriiBrowserClient` (`@iroha/iroha-js/torii-browser`) exposes the same
+collections and `streamEvents`. See [Collection queries](#collection-queries)
+for the full reference.
+
 Public Taira metadata is available without copying runbook literals. Supply the
 current deployment's genesis-derived `NetworkId`; the stable chain UUID is not
 a signing identity and the profile never substitutes it:
@@ -41,8 +103,9 @@ evidence or permission to submit a transaction.
 These SDK calls omit configured credentials, reject redirects, accept only the
 exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
 through body consumption. The route accepts no query or request body. Standard
-Torii listener access controls still apply; permission-aware
-`GET /v1/node/capabilities` retains its existing account authentication.
+Torii listener access controls still apply. `GET /v1/node/capabilities` is public
+as well: `getNodeCapabilities()` reads it without credentials, and the
+transaction preflight caches only a successful, matching probe.
 
 From an Iroha source checkout, run the native build (wrapping
 `cargo build -p iroha_js_host`) before using native-backed APIs:
@@ -329,7 +392,8 @@ const stream = await navigator.mediaDevices.getUserMedia({
 });
 const scanner = new PetalCameraScanner({
   stream,
-  onProgress: ({ progress }) => render(progress.rank, progress.sourceAtoms),
+  // `stats.inferred` grows while a corner blossom is hidden (a thumb, a glare)
+  onProgress: ({ progress }, stats) => render(progress.rank, progress.sourceAtoms, stats),
   onComplete: ({ meta, payload }) => accept(meta.kind, payload),
 });
 await scanner.start();
@@ -338,12 +402,20 @@ await scanner.start();
 `PetalCameraScanner` grabs frames with `requestVideoFrameCallback` (falling back
 to `requestAnimationFrame`), downsizes them to at most 1280 pixels on the long
 side, converts them to Rec. 601 luma and feeds a `PetalScanSession`, which
-applies the reference idle (30 s) and absolute (180 s) timeouts. Apps with
-their own camera pipeline can call `session.push(luma, nowMs)` directly with a
-`PetalLuma` built by `PetalLuma.fromStrided` (a camera Y plane),
-`PetalLuma.fromRgba` or `PetalLuma.fromImageData`. Lower-level pieces are
-exported as well: `decodePetalFrame`/`decodePetalFrameAt`, the software
-`renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
+applies the reference idle (30 s) and absolute (180 s) timeouts. Once a frame
+decoded, the session reads the next ones by tracking the code from its pose
+(no finder search) while that pose is at most 500 ms old, and falls back to a
+full decode when tracking fails. A code whose corner blossom is hidden by a
+thumb, a glare or the edge of the frame still reads: the fourth corner is
+inferred from the other three and refined against the rings
+(`frame.inferredCorner` names it; `stats().tracked` and `stats().inferred`
+count both cases). Apps with their own camera pipeline can call
+`session.push(luma, nowMs)` directly with a `PetalLuma` built by
+`PetalLuma.fromStrided` (a camera Y plane), `PetalLuma.fromRgba` or
+`PetalLuma.fromImageData`. Lower-level pieces are exported as well:
+`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, the finder
+search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
+software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
 `petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
 (`encodeLane`, `decodeLane`, `PetalFrameCells`), `PetalReedSolomon`, the
 fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
@@ -375,7 +447,7 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v1.json` and the golden camera captures in
+(`petal_stream_v1.json`, and the golden camera captures and tracking pairs in
 `petal_captures_v1.json`) and ports the reference unit tests; run it on its own
 with `node --test test/petal.test.js`.
 
@@ -1445,17 +1517,13 @@ console.log(status?.status.kind); // e.g. "Applied"
 // response must decode successfully; missing native support, malformed bytes,
 // and invalid decoder JSON reject the submission promise instead of returning null.
 
-// Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
-const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
-console.log(typedStatus?.status?.kind); // e.g. "Applied"
-
 // Node submission accepts only the exact canonical VersionedSignedTransaction
 // V1 wire emitted by the native builders. Framed, bare, headerless, alternate-
 // layout, and opaque byte payloads are rejected before any network request.
 
-// The wait helpers also ship normalised variants if you prefer structured DTOs
-await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
-await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
+// `submitTransactionAndWait(signedTransaction, options)` submits and waits for
+// global Applied finality in one call. It derives the transaction hash from the
+// signed bytes; an optional `hashHex` is only checked against that hash.
 // Note: raw `getTransactionStatus` requires an exact lowercase 64-hex hash
 // whose final nibble is odd (the canonical Iroha hash marker);
 // its options support only { signal, scope }, where scope is the explicit read
@@ -1500,23 +1568,16 @@ if (recovery) {
 
 ### Iterating NFTs, RWAs, and account assets
 
-The iterable helpers accept `requirePermissions` to fail fast when credentials are missing. NFT
-and RWA Explorer lists use opaque seek cursors (`cursor` plus a `limit` from 1 through 100) and
-accept owner/domain filters, while account-asset queries allow quantity comparisons. Pass
-`pagination.nextCursor` unchanged to continue a list; a cursor is bound to its collection and
-filters.
+Torii collections iterate with opaque cursors (see
+[Collection queries](#collection-queries)); the Explorer NFT and RWA lists use
+their own seek cursors (`cursor` plus a `limit` from 1 through 100) and accept
+owner/domain filters.
 
 ```js
-const torii = new ToriiClient("https://torii.example", {
-  authToken: process.env.TORII_AUTH_TOKEN,
-});
+const torii = new ToriiClient("https://torii.example");
 
-const nftPage = await torii.listNfts({
-  requirePermissions: true,
-  limit: 3,
-  sort: [{ key: "id", order: "asc" }],
-});
-console.log("first nft page:", nftPage.items.map((it) => it.id));
+const nftPage = await torii.nfts.list({ sort: "id", limit: 3 });
+console.log("first nft page:", nftPage.items.map((nft) => nft.id));
 
 const rwaPage = await torii.listExplorerRwas({
   ownedBy: authority,
@@ -1531,13 +1592,12 @@ for await (const lot of torii.iterateAccountRwas(authority, {
   console.log(`${lot.id} => ${lot.quantity}`);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  requirePermissions: true,
-  pageSize: 2,
-  filter: { Gte: ["quantity", 1] },
-  sort: [{ key: "quantity", order: "desc" }],
+for await (const holding of torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").iterate({
+  filter: field("quantity").gte(1),
+  sort: "-quantity",
+  limit: 2,
 })) {
-  console.log(`${holding.asset_id} => ${holding.quantity}`);
+  console.log(`${holding.asset} => ${holding.quantity}`);
 }
 ```
 
@@ -4279,93 +4339,120 @@ With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
    `IROHA_TORII_INTEGRATION_STREAM_ENABLED=1`) to prove the streaming helpers stay in lockstep
    with Torii’s SSE payloads before the ISO/SoraFS/DA suites run.
 
-## Iterable Lists & Pagination
+## Collection queries
 
-`ToriiClient` now exposes helpers for the app-facing JSON list endpoints. They
-mirror the Python SDK ergonomics: each `list*` method accepts `limit`, `offset`,
-`filter`, and `sort` plus an optional `signal`, and returns `{ items, total }`.
-The `iterate*` variants automatically advance the offset so you can traverse the
-entire collection without manual bookkeeping. Every collection that also exposes
-`/query` endpoints has a matching `iterate*Query` helper so you can apply
-structured filters and projection rules without managing pagination cursors
-yourself.
+| Collection | Client member | Request |
+| --- | --- | --- |
+| domains | `torii.domains` | `POST /v1/domains/query` |
+| accounts | `torii.accounts` | `POST /v1/accounts/query` |
+| asset definitions | `torii.assetDefinitions` | `POST /v1/assets/definitions/query` |
+| NFTs | `torii.nfts` | `POST /v1/nfts/query` |
+| RWA lots | `torii.rwas` | `POST /v1/rwas/query` |
+| repo agreements | `torii.repoAgreements` | `POST /v1/repo/agreements/query` |
+| account assets | `torii.accountAssets(accountId)` | `POST /v1/accounts/{account_id}/assets/query` |
+| asset holders | `torii.assetHolders(definitionId)` | `POST /v1/assets/{definition_id}/holders/query` |
+| transactions | `torii.transactions` | `POST /v1/transactions/query` |
+| account transactions | `torii.accountTransactions(accountId)` | `POST /v1/accounts/{account_id}/transactions/query` |
 
-Alongside accounts/domains/asset definitions, the helpers now cover NFTs,
-per-account asset balances, asset-definition holder lists, account
-transaction history, and both list/query
-trigger surfaces so SDK consumers can reuse the same pagination ergonomics
-across Torii's JSON endpoints (including query projections via
-`iterateAccountsQuery`, `iterateDomainsQuery`, `iterateAssetDefinitionsQuery`,
-`iterateNftsQuery`, `iterateAccountAssetsQuery`,
-`iterateAccountTransactionsQuery`, `iterateAssetHoldersQuery`, and
-`iterateTriggersQuery`).
+Each member is a `ToriiCollection` with `list(query?, options?)`,
+`pages(query?, options?)` and `iterate(query?, options?)`. `ToriiClient` and
+`ToriiBrowserClient` share the implementation. A query has these optional
+members:
 
-The ten ledger-wide `/query` helpers require a fresh canonical account
-signature and an immutable `LocalSigningContext` derived from the deployment's
-exact genesis `NetworkId`. They sign the final method, substituted path, query,
-and JSON body, dispatch once with redirects and retries disabled, and reject
-aliases, precomputed signing headers, and inline secret option shapes. This
-applies to account transaction/assets, domains, accounts, transactions, repo agreements, asset holders/definitions, NFTs, and RWAs;
-ordinary `list*` reads and trigger queries keep their existing contracts.
+| Member | Value |
+| --- | --- |
+| `filter` | a `Filter` built with `field()`, a text filter (sent unchanged) or the JSON form `{op, args}` |
+| `sort` | `"-quantity,id"`, an array of keys, or `SortKey` values; at most 8 keys |
+| `select` | field paths such as `["id", "alias_binding.status"]`; items keep their row paths |
+| `aggregate` | `{groupBy, metrics: [{alias, fn, field?}], having?}`; cannot be combined with `select` |
+| `limit` | page size (`1..u32`); the server default applies when absent |
+| `cursor` | the previous page's `nextCursor` |
+| `includeTotal` | `true` adds the exact `total` (a full scan) |
 
-For FI wallet-style transaction explorers, use the account-scoped query helper.
-It posts to `/v1/accounts/{account_id}/transactions/query` with the exact signed
-account path and accepts convenience filters without hand-writing a QueryEnvelope:
+A page is `{ items, nextCursor, total }`. `total` is present only when
+`includeTotal` was requested, and is a `bigint` beyond
+`Number.MAX_SAFE_INTEGER`. Integers in items beyond that range are also `bigint`.
+Only the fields that identify a row are always present (`id`; `account_id`,
+`asset`, `scope` and `quantity` for balances; `entrypoint_hash`,
+`block_height` and `block_index` for transactions); treat every other field as
+possibly `null` or absent, as the row types do.
+
+Pass field paths raw (`field("metadata.ui-order")`, `select`, `groupBy`): the
+SDK backtick-quotes non-identifier segments wherever Torii parses text, so the
+filter renders as ``metadata.`ui-order` >= 2`` and the sort key as
+``"-metadata.`ui-order`"`` in both the JSON body and the `GET` form.
 
 ```js
-import { NetworkId } from "@iroha/iroha-js";
-import { LocalSigningContext, ToriiClient } from "@iroha/iroha-js/torii";
+import { Filter, ListQuery, field } from "@iroha/iroha-js";
 
-const canonicalAuth = {
-  accountId: canonicalI105AccountId,
-  privateKey: runtimeOnlyEd25519PrivateKey,
-};
+const active = field("status").in(["active", "paused"]).or(field("metadata.archived").exists().not());
+console.log(active.toString()); // status in ["active", "paused"] or not exists(metadata.archived)
+console.log(JSON.stringify(active)); // {"op":"or","args":[...]}
+// Parse text yourself to validate it early; bad input throws a FilterSyntaxError
+// (code `invalid_filter`) with `line` and `column`.
+const named = Filter.parse("metadata.`display-name` is not null");
 
-const torii = new ToriiClient("https://torii.example", {
-  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId), networkPrefix),
-  config: {
-    toriiClient: {
-      timeoutMs: 10_000,
-    },
+// Grouped metrics (POST only): items are aggregate rows. Torii computes them
+// where the rows live: a read whose visible rows span several dataspace routes
+// is rejected with 400 invalid_aggregate; page through the rows instead.
+const supply = await torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").list({
+  filter: "quantity > 0",
+  aggregate: {
+    groupBy: ["asset"],
+    metrics: [{ alias: "supply", fn: "sum", field: "quantity" }],
   },
+  sort: "-supply",
 });
 
-const { items } = await torii.queryAccountTransactions(canonicalI105AccountId, {
-  canonicalAuth,
-  assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
-  sort: "newest",
-  limit: 25,
-  queryName: "WalletTxExplorer",
-});
+// A validated query can be reused, inspected or continued.
+const query = ListQuery.from({ filter: active, limit: 100 });
+const first = await torii.rwas.list(query);
+const next = first.nextCursor && (await torii.rwas.list(query.withCursor(first.nextCursor)));
 ```
 
-When you need to pin iterator parity to specific Norito selectors, apply
-structured filters against the NFT definition (`id.definition_id`) or asset
-definition (`asset_id.definition_id`) fields and trim payloads with `select`
-projections; see `recipes/nft_account_iteration.mjs` for a runnable example
-that uses canonical account literals for downstream storage.
+Literals follow the Torii text rules: integers that fit `u64`/`i64` are numbers
+(pass `bigint` beyond `Number.MAX_SAFE_INTEGER`), and decimals are exact strings
+such as `"10.5"` or `KotodamaQuantity` values. Fractional JavaScript numbers
+are rejected because they are not exact; object and array literals are allowed
+only for `metadata.*` fields and travel in the JSON form.
+
+Transactions and account transactions are history collections: rows come
+newest first by `block_height`, then `block_index` (the position within the
+block), and `sort`, `includeTotal` and `aggregate` are rejected. Each page has
+a bounded scan budget, so a page may hold fewer than `limit` items, even none,
+together with a `nextCursor`; `pages()` and `iterate()` keep following it until
+it is `null`, and stop with an error only if Torii returns the cursor it was
+sent. Bounds on `block_height` in the filter's top-level `and` also bound the
+server's scan: `block_height >= 1200 and block_height <= 1500 and result_ok = true`
+reads only that range. The list fields `asset_ids` and
+`asset_definition_ids` match element-wise: `=` and `in` select rows where any
+element matches, `!=` and `not in` rows where none does; they cannot be sorted
+or range-compared.
 
 ```js
-const { items, total } = await torii.listAccounts({
-  limit: 5,
-  sort: [{ key: "id", order: "asc" }],
-});
-console.log("first five accounts", items.map((item) => item.id), "of", total);
-
-const i105Page = await torii.listAccounts({ limit: 3 });
-console.log("i105 literals", i105Page.items.map((item) => item.id));
+for await (const tx of torii.accountTransactions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").iterate({
+  filter: field("asset_definition_ids").eq(assetDefinitionId),
+  limit: 100,
+})) {
+  console.log(tx.block_height, tx.entrypoint_hash, tx.result_ok);
+}
 ```
 
-All iterable list/query helpers now require the `options` argument to be a
-plain object. Passing primitives, arrays, or class instances throws a
-`TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
-with the Rust/Python SDKs.
+Collection routes are public. When a client is configured with
+`canonicalRequestAuth` (`ToriiClient` also needs its `localSigningContext`),
+queries are signed over the exact method, path and body so that restricted
+dataspaces become visible; signed requests are sent once, without redirects or
+retries. On `ToriiClient`, a per-call `canonicalAuth` option overrides the
+configured credentials and `canonicalAuth: null` reads anonymously. Invalid queries throw a
+`ListQueryError` before any request; server rejections are `ToriiHttpError`s
+whose `code` is the same `invalid_filter`, `invalid_sort`, `invalid_select`,
+`invalid_aggregate`, `invalid_limit`, `invalid_cursor`, `invalid_include_total`
+or `invalid_query`, with `details.field`, `details.actual`, `details.expected`
+(a comma-separated string) and `details.hint`. Every error derives from
+`ToriiError`.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept
-`number`, `string`, or `bigint`. They are normalised via unsigned-integer validators before any request fires
-(integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
-exactly like `25` while still surfacing a `TypeError` when the value is negative,
-fractional, NaN, or otherwise invalid.
+Account-scoped collections accept canonical I105 account ids or on-chain
+account aliases (`name@dataspace` / `name@domain.dataspace`).
 
 Asset and RWA quantities use the stricter `QuantityInput` surface:
 `KotodamaQuantity`, an exact canonical quantity string, or `bigint`. JavaScript
@@ -4377,115 +4464,27 @@ cryptographic proof verifier, software prover, or fallback for device authority.
 Peer-transfer keys and state transitions remain hardware-bound; applications
 must obtain and verify transition proofs through a qualified wallet implementation.
 
-for await (const assetDef of torii.iterateAssetDefinitions({
-  pageSize: 50,
-  maxItems: 120,
-})) {
-  console.log("asset definition:", assetDef.id);
-}
+Account permissions are a separate offset-paged route:
 
-const defs = await torii.queryAssetDefinitions({
-  filter: { Eq: ["metadata.display_name", "Ticket"] },
-  sort: [{ key: "metadata.display_name", order: "desc" }],
-  fetch_size: 100,
-});
-console.log("filtered definitions", defs.items);
-
-const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  limit: 5,
-});
+```js
+const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", { limit: 5 });
 console.log("effective permissions", perms.items.map((item) => item.name));
 // The endpoint includes both direct grants and grants inherited from assigned roles.
-for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  pageSize: 2,
-})) {
+for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", { pageSize: 2 })) {
   console.log("paged permission", perm.name);
 }
-const nfts = await torii.listNfts({ limit: 10 });
-console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  limit: 3,
-  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-});
-console.log("alice balances", balances.items);
-const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
-  limit: 3,
-  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-});
-console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  limit: 2,
-  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-});
-console.log(
-  "recent hashes",
-  history.items.map((tx) => tx.entrypoint_hash),
-);
-
-for await (const account of torii.iterateAccountsQuery({
-  pageSize: 100,
-  filter: { Eq: ["id", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
-  select: [{ Fields: ["id", "metadata.display_name"] }],
-})) {
-  console.log("matching account", account.id);
-}
-
-for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  pageSize: 32,
-  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
-})) {
-  console.log("filtered holding", balance.asset_id, balance.quantity);
-}
-
-const governedContract = await torii.getGovernanceContract(
-  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-  { canonicalAuth },
-);
-console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
-
-for await (const trigger of torii.iterateTriggersQuery({
-  pageSize: 50,
-  filter: { Eq: ["object.authority", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
-})) {
-  console.log("trigger id:", trigger.id);
-}
-
-// Or mirror the same calls from the runnable recipe:
-//   node ./recipes/nft_account_iteration.mjs \
-//     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
-//     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
-//     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Account selectors:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before returning the result set.
-
-Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
+Read Sora Name Service state with `getSnsPolicy(suffixId)` and
+`getSnsRegistration("demo.domain")`; Torii serves them from the ledger-backed
+`/v1/sns/policies/{suffix_id}` and `/v1/sns/names/domain/{literal}` routes.
 
 ```js
 const policy = await torii.getSnsPolicy(0x1002);
 console.log(policy.suffix, policy.pricing.length);
-
-const registration = await torii.registerSnsName({
-  selector: { suffix_id: 0x1002, label: "demo" },
-  owner: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-  payment: {
-    asset_id: "<base58-asset-definition-id>",
-    gross_amount: "120",
-    net_amount: "120",
-    settlement_tx: { tx: "hash" },
-    payer: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-    signature: "sig-json",
-  },
-});
-console.log(registration.nameRecord.status.status);
+const record = await torii.getSnsRegistration("demo.domain");
+console.log(record.owner, record.status.status);
 ```
-
-Look up an existing domain-namespace name via `getSnsRegistration("demo.domain")`, renew with
-`renewSnsRegistration`, or transfer/freeze/unfreeze using the corresponding helpers. Torii serves
-them from the ledger-backed `/v1/sns/names/{namespace}/{literal}` routes.
-
-Governance evidence travels inline with the register/transfer/unfreeze request bodies.
 
 ## Torii Queries & Events
 
@@ -4500,9 +4499,10 @@ caller-precomputed canonical headers, and redirects are rejected.
 Pass the Torii root itself (for example, `https://torii.example`), not a `/v1`
 or `/v1/explorer` endpoint. The browser client accepts only an exact `string` or
 `URL` using HTTP(S), rejects embedded URL credentials, queries, and fragments,
-and snapshots its headers and timeout before any request. Browser code imports
-the canonical `ToriiBrowserClient` and `ToriiBrowserHttpError` names; the
-pre-release `ToriiClient` and `ToriiHttpError` browser aliases are not exposed.
+and snapshots its headers and timeout before any request. Both clients raise
+the same `ToriiHttpError` (and `ToriiStreamGapError` for stream gaps), all
+derived from `ToriiError`; the browser entry points do not alias
+`ToriiBrowserClient` as `ToriiClient`.
 
 ```js
 import { NetworkId } from "@iroha/iroha-js/browser";
@@ -4517,6 +4517,7 @@ const browserTorii = new ToriiBrowserClient("https://torii.example", {
 });
 
 const visibleNfts = await browserTorii.listExplorerNfts({ limit: 25 });
+const visibleDomains = await browserTorii.domains.list({ limit: 25 }); // signed with the read identity
 ```
 
 ```js
@@ -4534,8 +4535,9 @@ import { ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient("http://localhost:8080");
 
-const health = await torii.getHealth();
-console.log(health?.status); // e.g. "healthy"
+const health = await torii.getHealth(); // GET /health
+console.log(health.status); // e.g. "Healthy"
+const metricsText = await torii.getMetrics(); // GET /metrics, Prometheus text
 
 const explorerMetrics = await torii.getExplorerMetrics();
 if (explorerMetrics) {
@@ -4567,26 +4569,16 @@ for (const entry of recentBlocks.items) {
 // restricted visible dataspaces are included. Without it, reads stay anonymous
 // and public-only; invalid authentication never falls back to anonymous access.
 
-// NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
+// Collections follow next_cursor for you; see "Collection queries".
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  pageSize: 2,
-  maxItems: 5,
-  sort: [{ key: "quantity", order: "desc" }],
+for await (const holding of torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").iterate({
+  sort: "-quantity",
+  limit: 2,
 })) {
-  holdings.push(holding.asset_id);
+  holdings.push(holding.asset);
+  if (holdings.length === 5) break; // leaving the loop stops paging
 }
-console.log("first holdings page", holdings);
-
-const nftIds = [];
-for await (const nft of torii.iterateNftsQuery({
-  pageSize: 3,
-  maxItems: 4,
-  filter: { Contains: ["id", "ticket#"] },
-})) {
-  nftIds.push(nft.id);
-}
-console.log("matching NFTs", nftIds);
+console.log("largest holdings", holdings);
 
 const ownedNfts = [];
 for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
@@ -4597,19 +4589,9 @@ for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴ�
 }
 console.log("alice holds NFTs", ownedNfts);
 
-try {
-  await torii.listNfts({ limit: 1 });
-} catch (error) {
-  if (error.code === "permission_denied") {
-    console.warn("missing NFT read permission", error.errorMessage);
-  } else {
-    throw error;
-  }
-}
-
 // TypeScript users can pass a generic argument to shape `event.data`.
 for await (const event of torii.streamEvents({
-  filter: { Pipeline: { Block: {} } },
+  filter: 'block_status = "Committed"',
 })) {
   console.log(event.event, event.data);
   break; // stop after the first event in this example
@@ -4775,11 +4757,7 @@ if (!trigger) {
 
 await torii.deleteTrigger("apps::archived");
 await torii.deleteTriggerTyped("apps::archived");
-const pending = await torii.queryTriggers({
-  filter: { Eq: ["namespace", "apps"] },
-  sort: [{ key: "created_at", order: "desc" }],
-  limit: 10,
-});
+const pending = await torii.queryTriggers({ limit: 10 });
 console.log("latest triggers", pending.items.map((item) => item.id));
 
 // Helpers are available for building the Norito action payloads expected by
@@ -4821,12 +4799,35 @@ await torii.registerTrigger({
 The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
 live-only and have no replay log. Their helpers intentionally expose no
 `lastEventId` option; reconnecting starts a new subscription and can have a
-gap. A terminal `event: stream_error` frame is yielded before the iterator
-ends, so applications must handle it instead of treating closure as a lossless
-continuation point.
+gap. `ToriiClient` yields the terminal `event: stream_error` frame before the
+iterator ends; `ToriiBrowserClient` raises `ToriiStreamGapError` (with `code`
+and `droppedMessages`) for that frame or for an unexpected end of the stream.
+Either way, applications must handle the gap instead of treating closure as a
+lossless continuation point. Aborting `signal` or leaving the `for await`
+loop cancels the response body.
 
-`list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
-literals only; address-format hints are no longer supported.
+`streamEvents({ filter })` takes a `Filter`, a text filter or the JSON form.
+Torii accepts `=` and `in` on `tx_hash`, `tx_status`, `tx_block_height`,
+`tx_lane_id`, `tx_dataspace_id`, `block_status`, `block_height`,
+`proof_backend`, `proof_call_hash` and `proof_envelope_hash`, combined with
+`and`/`or`, plus `not tx_status = ...`, `not block_status = ...` and
+`tx_block_height is null`; anything else is rejected with `400 invalid_filter`.
+Transaction statuses are `Queued`, `Expired`, `Approved` and `Rejected`; block
+statuses are `Created`, `Approved`, `Rejected`, `Committed` and `Applied`.
+
+Each payload frame's `data` is one JSON object typed as `ToriiEventPayload`,
+discriminated on `category` (`Pipeline`, `Data`, `Other`) and `event`:
+`Transaction` (`hash`, `lane_id`, `dataspace_id`, `block_height`, `status`,
+and `rejection_code`/`rejection_reason` when rejected), `Block` (`status`, and
+the block rejection variant as `rejection_code`), `Warning`, `Witness`,
+`ProofVerified`/`ProofRejected`, `ProofPruned`, the other data-event kinds
+(`Asset`, `Domain`, ...) and `Time`/`ExecuteTrigger`/`TriggerCompleted`/`Other`
+with a diagnostic `summary` that has no stable format. Integers beyond
+`Number.MAX_SAFE_INTEGER` are `bigint`. Torii may add event kinds; the SDK
+delivers unrecognized payloads unchanged, so keep a `default` branch.
+
+Collection rows and explorer QR snapshots carry canonical I105 account
+literals only; address-format hints are not supported.
 
 ### Asset-lock cancellation
 

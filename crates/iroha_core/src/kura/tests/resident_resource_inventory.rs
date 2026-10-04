@@ -231,7 +231,7 @@ fn resident_live_kura_publication_matches_real_index_owners_without_partial_snap
     ));
     let mut generator = NativeBlocks::new();
     let first = generator.next();
-    kura.store_block(Arc::clone(&first)).unwrap();
+    kura.store_block((first).clone()).unwrap();
     assert_eq!(
         kura.resource_inventory
             .component_usage_for_tests(Family::ResidentCanonical)

@@ -65,7 +65,9 @@ fn native_carrier_refusal_never_projects_partial_transaction_results() {
                 max_bytes,
                 |_, _| visits += 1,
             ),
-            Err(QueryExecutionFail::GasBudgetExceeded)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                QueryExecutionFail::GasBudgetExceeded
+            ))
         ));
         assert_eq!(visits, 0);
     }
@@ -118,6 +120,7 @@ fn native_carrier_requires_actual_genesis_successor_and_configured_instance() {
             block.block_hash(),
             work,
             bytes,
+            &chain.state().ivm_execution_budget(),
         )
         .is_err()
     );

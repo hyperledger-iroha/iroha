@@ -6,7 +6,7 @@ pub(in crate::state) mod musubi_universal_policy;
 use super::{Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, schema};
 use crate::state::*;
 
-classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
+classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldReadReleases, {
     parameters: Cell<Parameters> => ("world.parameters",
         Role::Canonical(Canonical::Cell(schema::<Parameters>())));
     consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => ("world.consensus_schedule",
@@ -18,7 +18,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     domains: Storage<DomainId, Domain> => ("world.domains",
         Role::Canonical(Canonical::Table { key: schema::<DomainId>(), value: schema::<Domain>() }));
     domains_by_owner: Storage<AccountId, BTreeSet<DomainId>> => ("world.domains_by_owner",
-        Role::Derived { sources: &["world.domains"], check: DerivationCheck::Rebuild("World::rebuild_domain_owner_index") });
+        Role::Derived { sources: &["world.domains"], check: DerivationCheck::Rebuild("World::rebuild_domain_owner_index; state::authority_registry::domain_ownership::CheckedDomainOwnership::capture") });
     kaigi_relay_registry: Storage<AccountId, DomainId> => ("world.kaigi_relay_registry",
         Role::Derived { sources: &["world.domains", "world.accounts"], check: DerivationCheck::Rebuild("isi::kaigi::rebuild_kaigi_relay_registry; validate_rebuilt_kaigi_relay_registry") });
     kaigi_account_dependencies: Storage<AccountId, BTreeSet<(u8, DomainId, Name)>> => ("world.kaigi_account_dependencies",
@@ -26,17 +26,17 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     accounts: Storage<AccountId, AccountValue> => ("world.accounts",
         Role::Canonical(Canonical::Table { key: schema::<AccountId>(), value: schema::<AccountValue>() }));
     uaid_accounts: Storage<UniversalAccountId, AccountId> => ("world.uaid_accounts",
-        Role::Derived { sources: &["world.accounts"], check: DerivationCheck::Rebuild("state::account_identity_restore::rebuild") });
+        Role::Derived { sources: &["world.accounts"], check: DerivationCheck::Rebuild("state::account_identity_restore::rebuild; state::authority_registry::account_identity_ownership::CheckedAccountIdentities::capture") });
     account_aliases: Storage<AccountAlias, AccountId> => ("world.account_aliases",
         Role::Canonical(Canonical::Table { key: schema::<AccountAlias>(), value: schema::<AccountId>() }));
     account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>> => ("world.account_aliases_by_account",
-        Role::Derived { sources: &["world.account_aliases", "world.accounts"], check: DerivationCheck::Rebuild("World::rebuild_account_alias_index") });
+        Role::Derived { sources: &["world.account_aliases", "world.accounts"], check: DerivationCheck::Rebuild("World::rebuild_account_alias_index; state::authority_registry::account_alias_ownership::CheckedAccountAliases::capture") });
     account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry> => ("world.account_scope_directory",
         Role::Derived { sources: &["world.accounts", "world.account_aliases", "world.uaid_dataspaces"], check: DerivationCheck::Rebuild("state::account_scope_restore::rebuild") });
     account_scope_accounts: Storage<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>> => ("world.account_scope_accounts",
         Role::Derived { sources: &["world.account_scope_directory"], check: DerivationCheck::Rebuild("state::account_scope_restore::rebuild_accounts_index") });
     opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId> => ("world.opaque_uaids",
-        Role::Derived { sources: &["world.accounts"], check: DerivationCheck::Rebuild("state::account_identity_restore::rebuild") });
+        Role::Derived { sources: &["world.accounts"], check: DerivationCheck::Rebuild("state::account_identity_restore::rebuild; state::authority_registry::account_identity_ownership::CheckedAccountIdentities::capture") });
     ram_lfe_program_policies: Storage<RamLfeProgramId, RamLfeProgramPolicy> => ("world.ram_lfe_program_policies",
         Role::Canonical(Canonical::Table { key: schema::<RamLfeProgramId>(), value: schema::<RamLfeProgramPolicy>() }));
     identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy> => ("world.identifier_policies",
@@ -56,7 +56,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     account_rekey_records: Storage<AccountAlias, AccountRekeyRecord> => ("world.account_rekey_records",
         Role::Canonical(Canonical::Table { key: schema::<AccountAlias>(), value: schema::<AccountRekeyRecord>() }));
     account_rekey_records_by_account: Storage<AccountId, BTreeSet<AccountAlias>> => ("world.account_rekey_records_by_account",
-        Role::Derived { sources: &["world.account_rekey_records", "world.accounts"], check: DerivationCheck::Rebuild("World::rebuild_account_rekey_records") });
+        Role::Derived { sources: &["world.account_rekey_records", "world.accounts", "world.account_aliases"], check: DerivationCheck::Rebuild("World::rebuild_account_rekey_records; CheckedAccountRekeys::capture checks both native images") });
     account_recovery_policies: Storage<AccountAlias, AccountRecoveryPolicy> => ("world.account_recovery_policies",
         Role::Canonical(Canonical::Table { key: schema::<AccountAlias>(), value: schema::<AccountRecoveryPolicy>() }));
     account_recovery_requests: Storage<AccountAlias, AccountRecoveryRequest> => ("world.account_recovery_requests",
@@ -68,25 +68,25 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     asset_definition_alias_bindings: Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord> => ("world.asset_definition_alias_bindings",
         Role::Canonical(Canonical::Table { key: schema::<AssetDefinitionId>(), value: schema::<AssetDefinitionAliasBindingRecord>() }));
     contract_aliases: Storage<ContractAlias, ContractAddress> => ("world.contract_aliases",
-        Role::Derived { sources: &["world.contract_alias_bindings", "world.contract_instances"], check: DerivationCheck::Rebuild("state::alias_index_restore::contracts") });
+        Role::Derived { sources: &["world.contract_alias_bindings"], check: DerivationCheck::Rebuild("state::alias_index_restore::contracts; state::authority_registry::grouped_ownership::CheckedContractAliases::capture") });
     contract_alias_bindings: Storage<ContractAddress, ContractAliasBindingRecord> => ("world.contract_alias_bindings",
         Role::Canonical(Canonical::Table { key: schema::<ContractAddress>(), value: schema::<ContractAliasBindingRecord>() }));
     asset_definition_domains: Storage<AssetDefinitionId, DomainId> => ("world.asset_definition_domains",
-        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssetDefinitions::capture") });
     domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>> => ("world.domain_asset_definitions",
-        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssetDefinitions::capture") });
     asset_definitions_by_owner: Storage<AccountId, BTreeSet<AssetDefinitionId>> => ("world.asset_definitions_by_owner",
-        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.asset_definitions", "world.domains"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssetDefinitions::capture") });
     asset_definition_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>> => ("world.asset_definition_holders",
-        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssets::capture") });
     asset_definition_assets: Storage<AssetDefinitionId, BTreeSet<AssetId>> => ("world.asset_definition_assets",
-        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssets::capture") });
     assets_by_account: Storage<AccountId, BTreeSet<AssetId>> => ("world.assets_by_account",
-        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssets::capture") });
     assets_by_domain: Storage<DomainId, BTreeSet<AssetId>> => ("world.assets_by_domain",
-        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssets::capture") });
     asset_definition_nonzero_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>> => ("world.asset_definition_nonzero_holders",
-        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_asset_definition_indexes") });
+        Role::Derived { sources: &["world.assets", "world.asset_definitions"], check: DerivationCheck::Rebuild("state::asset_index_restore::assets; state::authority_registry::grouped_ownership::CheckedAssets::capture") });
     assets: Storage<AssetId, AssetValue> => ("world.assets",
         Role::Canonical(Canonical::Table { key: schema::<AssetId>(), value: schema::<AssetValue>() }));
     asset_metadata: Storage<AssetId, Metadata> => ("world.asset_metadata",
@@ -94,17 +94,17 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     nfts: Storage<NftId, NftValue> => ("world.nfts",
         Role::Canonical(Canonical::Table { key: schema::<NftId>(), value: schema::<NftValue>() }));
     nfts_by_owner: Storage<AccountId, BTreeSet<NftId>> => ("world.nfts_by_owner",
-        Role::Derived { sources: &["world.nfts"], check: DerivationCheck::Rebuild("World::rebuild_nft_owner_index") });
+        Role::Derived { sources: &["world.nfts"], check: DerivationCheck::Rebuild("World::rebuild_nft_owner_index; state::authority_registry::grouped_ownership::CheckedNfts::capture") });
     nfts_by_domain: Storage<DomainId, BTreeSet<NftId>> => ("world.nfts_by_domain",
-        Role::Derived { sources: &["world.nfts"], check: DerivationCheck::Rebuild("World::rebuild_nft_owner_index") });
+        Role::Derived { sources: &["world.nfts"], check: DerivationCheck::Rebuild("World::rebuild_nft_owner_index; state::authority_registry::grouped_ownership::CheckedNfts::capture") });
     rwas: Storage<RwaId, RwaValue> => ("world.rwas",
         Role::Canonical(Canonical::Table { key: schema::<RwaId>(), value: schema::<RwaValue>() }));
     rwas_by_owner: Storage<AccountId, BTreeSet<RwaId>> => ("world.rwas_by_owner",
-        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes") });
+        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes; state::authority_registry::grouped_ownership::CheckedRwas::capture") });
     rwas_by_status: Storage<Option<Name>, BTreeSet<RwaId>> => ("world.rwas_by_status",
-        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes") });
+        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes; state::authority_registry::grouped_ownership::CheckedRwas::capture") });
     rwas_by_frozen: Storage<bool, BTreeSet<RwaId>> => ("world.rwas_by_frozen",
-        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes") });
+        Role::Derived { sources: &["world.rwas"], check: DerivationCheck::Rebuild("World::rebuild_rwa_indexes; state::authority_registry::grouped_ownership::CheckedRwas::capture") });
     roles: Storage<RoleId, iroha_data_model::role::Role> => ("world.roles",
         Role::Canonical(Canonical::Table { key: schema::<RoleId>(), value: schema::<iroha_data_model::role::Role>() }));
     account_permissions: Storage<AccountId, Permissions> => ("world.account_permissions",
@@ -145,11 +145,11 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     asset_escrows: Storage<EscrowId, AssetEscrowRecord> => ("world.asset_escrows",
         Role::Canonical(Canonical::Table { key: schema::<EscrowId>(), value: schema::<AssetEscrowRecord>() }));
     asset_escrows_by_seller: Storage<AccountId, BTreeSet<EscrowId>> => ("world.asset_escrows_by_seller",
-        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes") });
+        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes; state::authority_registry::grouped_ownership::CheckedEscrows::capture") });
     asset_escrows_by_buyer: Storage<AccountId, BTreeSet<EscrowId>> => ("world.asset_escrows_by_buyer",
-        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes") });
+        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes; state::authority_registry::grouped_ownership::CheckedEscrows::capture") });
     asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>> => ("world.asset_escrows_by_status",
-        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes") });
+        Role::Derived { sources: &["world.asset_escrows"], check: DerivationCheck::Rebuild("World::rebuild_escrow_indexes; state::authority_registry::grouped_ownership::CheckedEscrows::capture") });
     execution_proof_profiles: Storage<Hash, ExecutionProofProfileV1> => ("world.execution_proof_profiles",
         Role::Canonical(Canonical::Table { key: schema::<Hash>(), value: schema::<ExecutionProofProfileV1>() }));
     execution_proof_verifications: Storage<Hash, ExecutionProofVerificationV1> => ("world.execution_proof_verifications",
@@ -461,11 +461,11 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
     repo_agreements: Storage<RepoAgreementId, RepoAgreement> => ("world.repo_agreements",
         Role::Canonical(Canonical::Table { key: schema::<RepoAgreementId>(), value: schema::<RepoAgreement>() }));
     repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_initiator",
-        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes") });
+        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") });
     repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_counterparty",
-        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes") });
+        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") });
     repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_custodian",
-        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes") });
+        Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") });
     settlement_receipts: Storage<SettlementId, SettlementReceipt> => ("world.settlement_receipts",
         Role::Canonical(Canonical::Table { key: schema::<SettlementId>(), value: schema::<SettlementReceipt>() }));
     kagemusha_reserve_pools: Storage<[u8; 32], KagemushaReservePoolV1> => ("world.kagemusha_reserve_pools",
@@ -576,6 +576,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_lanes::SumeragiLaneState>())));
     sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> => ("world.sumeragi_amx",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_amx::SumeragiAmxState>())));
+    sumeragi_amx_participant: Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge> => ("world.sumeragi_amx_participant",
+        Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::amx::RetainedNativeAmx>())));
     private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> => ("world.private_dataspaces",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>())));
     sccp_parameters: Cell<Option<iroha_data_model::sccp::params::SccpParametersV1>> => ("world.sccp_parameters",

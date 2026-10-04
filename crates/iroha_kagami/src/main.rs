@@ -1,5 +1,5 @@
-//! CLI for generating Iroha sample configuration, genesis, cryptographic key pairs and other. To be
-//! used with all compliant Iroha installations.
+//! Managed developer networks and contract deployment over shared Iroha services.
+//! Native operator tools also generate genesis, keys, configuration and schema references.
 #![allow(
     clippy::doc_markdown,
     clippy::uninlined_format_args,
@@ -48,6 +48,7 @@ const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet up\n",
+    "  kagami dataspace up acme --network taira\n",
     "  kagami contract deploy hello.ko\n",
     "  kagami context list\n",
     "  kagami wizard\n",
@@ -88,7 +89,7 @@ trait RunArgs<T: Write> {
     name = "kagami",
     version,
     author,
-    about = "Task-first Iroha operator tooling for guided setup, local devnets, genesis work, and diagnostics.",
+    about = "Start local networks, attach private dataspaces, and deploy Iroha contracts.",
     after_help = TOP_LEVEL_HELP
 )]
 struct Cli {
@@ -97,8 +98,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-/// Kagami is a task-first Iroha operator toolbox with guided flows for node setup and local
-/// devnets, plus advanced low-level helpers.
+/// Managed developer workflows and native operator tools for Iroha.
 #[derive(Subcommand)]
 enum Command {
     /// Guided onboarding flow for staging a Sora Nexus observer configuration

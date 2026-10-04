@@ -1,5 +1,94 @@
 # Iroha Torii client
 
+## Collection queries
+
+`iroha_torii_client.list_query` is the single Python implementation of the
+Torii collection-query language (`specs/torii/collection_queries.md`); the
+full `iroha_python` SDK re-exports it. Filters are built with `F` and Python
+operators (parenthesize each comparison), render to the canonical text form
+with `.to_text()` and to the JSON form with `.to_json()`, and are checked
+against the shared golden vectors in `fixtures/torii/list_query/vectors.json`.
+Raw text filters are sent unchanged; `parse_filter(text)` validates them
+locally with Torii's messages and columns. Collection queries send a `Filter`
+in the JSON form, which alone can carry object and array literals
+(`F.metadata.tags == ["a", "b"]`, valid only against `metadata.<key>`);
+`.to_text()`, `ListQuery.to_query_pairs()` and event-stream filters reject
+them with `FilterError`/`invalid_filter`.
+
+```python
+from decimal import Decimal
+
+from iroha_torii_client import F, ListQueryError, ToriiClient, ToriiError
+
+with ToriiClient("https://taira.sora.org", timeout=10.0) as client:
+    page = client.accounts.assets(account_id).list(
+        filter=F.quantity >= Decimal("10.5"), sort="-quantity", limit=50
+    )
+    for bucket in client.asset_definitions.holders(definition_id).iter():
+        print(bucket.account_id, bucket.scope, bucket.quantity)   # exact Decimal
+    try:
+        client.domains.list(filter="owned_by = alice")             # unquoted text value
+    except ListQueryError as error:                               # HTTP 400 invalid_* too
+        print(error.code, error.parameter, error)
+    except ToriiError as error:                                   # status, code, details
+        print(error.status, error.code, error.details)
+```
+
+Collections: `domains`, `accounts`, `asset_definitions`, `nfts`, `rwas`,
+`transactions`, `repo_agreements`, `accounts.assets(id)`,
+`accounts.transactions(id)` and `asset_definitions.holders(id)`; each has
+`list`, `iter`, `pages`, `rows`, `iter_rows` and `count`. Every request uses
+`POST <collection>/query`, is signed when `canonical_request_auth` is
+configured and is anonymous otherwise. The client applies `timeout` (default
+30 seconds) to every request, never follows redirects, and closes the HTTP
+session it created when used as a context manager or on `close()`. Rows
+decode the fields that identify them strictly (`id`; `account_id`, `asset`,
+`scope` and `quantity` for balances; `entrypoint_hash`, `block_height` and
+`block_index` for transactions); every other field may be null or absent and
+decodes as `None`.
+
+Aggregates (`rows(aggregate=AggregateSpec(...))`, `POST` only) are computed
+where the rows live: Torii rejects a read whose visible rows span several
+dataspace routes with `400 invalid_aggregate`, because overlapping routes
+cannot be summed exactly. Page through the rows without `aggregate` instead.
+
+### Transaction history
+
+`client.transactions` (every committed transaction; `POST
+/v1/transactions/query` only) and `client.accounts.transactions(account_id)`
+(transactions the account signed or that reference it) are history
+collections of `CommittedTransaction` rows: `entrypoint_hash`, `block_height`,
+`block_index`, `block_hash`, `authority`, `timestamp_ms`, `entrypoint_kind`,
+`result_ok`, `asset_ids`, `asset_definition_ids` and `metadata`.
+
+- Rows come newest first by (`block_height`, `block_index`), and each cursor
+  holds block coordinates, so transactions committed while paging never shift
+  later pages.
+- `sort`, `include_total` and `aggregate` would scan the whole history; the
+  client rejects them before any request with Torii's codes
+  (`invalid_sort`, `invalid_include_total`, `invalid_aggregate`).
+- Each page has a bounded history-scan budget, so a selective filter can
+  return a page with fewer than `limit` rows, even none, together with a
+  `next_cursor`. `iter`, `pages`, `iter_rows` and `count` keep following
+  `next_cursor` until it is null; never treat a short or empty page as the
+  end. `count()` pages through the matches because there is no total.
+- `asset_ids` and `asset_definition_ids` match element-wise:
+  `F.asset_definition_ids == definition_id` selects transactions touching that
+  definition, and `!=`/`not_in` select transactions touching none.
+- Bounds on `block_height` in the filter's top-level `and` also bound the
+  server's scan: `(F.block_height >= 1200) & (F.result_ok == True)` reads only
+  heights from 1200 up, and `F.block_height <= 1500` starts the walk at 1500.
+
+```python
+from iroha_torii_client import F
+
+recent = client.accounts.transactions(account_id).iter(
+    filter=(F.block_height >= 1200) & (F.asset_definition_ids == definition_id),
+)
+for tx in recent:                       # newest first; empty pages are skipped
+    print(tx.block_height, tx.block_index, tx.entrypoint_hash, tx.result_ok)
+```
+
 Anonymous HTTP operations do not require a native extension. Account construction,
 parsing, and governance identity checks require the matching `iroha-native` wheel
 on Python 3.10 or newer. Install `iroha-torii-client[native]` for those

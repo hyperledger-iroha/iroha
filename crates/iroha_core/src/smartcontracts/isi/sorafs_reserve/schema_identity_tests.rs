@@ -1,4 +1,4 @@
-// Explicit Core SoraFS state roots and actual persistence recovery.
+// Explicit canonical SoraFS state roots and actual persistence recovery.
 
 #[test]
 fn declared_finance_roots_have_explicit_nominal_and_frame_identity() {
@@ -12,11 +12,19 @@ fn declared_finance_roots_have_explicit_nominal_and_frame_identity() {
     );
     assert_eq!(
         <ReserveStateV1 as norito::NoritoSchema>::nominal_name(),
-        "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1"
+        "iroha_data_model::sorafs::reserve::history::ReserveStateV1"
     );
     assert_eq!(
         <ReserveStateV1 as norito::NoritoSchema>::frame_name(),
-        "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1"
+        "iroha_data_model::sorafs::reserve::history::ReserveStateV1"
+    );
+    assert_eq!(
+        <ReserveEventJournalHeadV1 as norito::NoritoSchema>::nominal_name(),
+        "iroha_data_model::sorafs::reserve::history::ReserveEventJournalHeadV1"
+    );
+    assert_eq!(
+        <ReserveEventJournalHeadV1 as norito::NoritoSchema>::frame_name(),
+        "iroha_data_model::sorafs::reserve::history::ReserveEventJournalHeadV1"
     );
 }
 
@@ -68,7 +76,7 @@ fn declared_reserve_roots_recover_actual_committed_policy_and_event() {
         .expect("retained reserve event");
     let state_bytes = declared_state_frame(
         &retained,
-        "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1",
+        "iroha_data_model::sorafs::reserve::history::ReserveStateV1",
     );
     let event_bytes = declared_state_frame(
         &event,

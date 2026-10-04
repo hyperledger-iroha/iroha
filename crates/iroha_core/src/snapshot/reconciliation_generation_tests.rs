@@ -93,10 +93,13 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.block_hash_at_height(nonzero!(2_usize)), None);
     assert!(
-        kura.get_block(nonzero!(2_usize)).is_none(),
+        kura.get_block(nonzero!(2_usize), &state.ivm_execution_budget())
+            .expect("canonical history read completes")
+            .is_none(),
         "rejected snapshot must not invent a block body"
     );
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
+    let history_budget = state.ivm_execution_budget();
     drop(state);
     drop(kura);
     let (reopened, BlockCount(reopened_count)) =
@@ -108,11 +111,17 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     );
     assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 1);
     assert!(
-        reopened.get_block(nonzero!(1_usize)).is_some(),
+        reopened
+            .get_block(nonzero!(1_usize), &history_budget)
+            .expect("canonical history read completes")
+            .is_some(),
         "rejected recovery must preserve retained block bodies"
     );
     assert!(
-        reopened.get_block(nonzero!(2_usize)).is_none(),
+        reopened
+            .get_block(nonzero!(2_usize), &history_budget)
+            .expect("canonical history read completes")
+            .is_none(),
         "rejected suffix must remain absent after restart"
     );
 }
@@ -165,7 +174,11 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let mut chain = native_snapshot_chain();
     chain.commit(Vec::new());
     let state = chain.state();
-    let block1 = chain.kura().get_block(nonzero!(1_usize)).unwrap();
+    let block1 = chain
+        .kura()
+        .get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+        .expect("original history read completes")
+        .expect("original genesis is retained");
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("snapshot write");
@@ -177,7 +190,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     assert_eq!(initial_height, 0);
     drop(state_factory_with_kura(Arc::clone(&tail_loss_kura)));
     tail_loss_kura
-        .store_block(Arc::clone(&block1))
+        .store_block(block1.clone())
         .expect("persist retained prefix block");
     let prefix_hash = block1.hash();
     let error = match try_read_snapshot(
@@ -281,8 +294,18 @@ async fn signed_native_snapshot_cannot_replace_missing_historical_bodies() {
     for height in 1..=3 {
         let height = NonZeroUsize::new(height).unwrap();
         assert!(target.block_hash_at_height(height).is_none());
-        assert!(target.get_block(height).is_none());
-        assert!(source.get_block(height).is_some());
+        assert!(
+            target
+                .get_block(height, &state.ivm_execution_budget())
+                .expect("canonical history read completes")
+                .is_none()
+        );
+        assert!(
+            source
+                .get_block(height, &state.ivm_execution_budget())
+                .expect("canonical history read completes")
+                .is_some()
+        );
     }
     for (name, bytes) in files.into_iter().zip(before) {
         assert_eq!(std::fs::read(canonical.join(name)).unwrap(), bytes);
@@ -421,7 +444,12 @@ async fn emergency_fast_rejects_native_snapshot_before_world_or_journal_restore(
     SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| assert_eq!(clones.get(), 0));
     assert_eq!(fast_kura.blocks_count(), 0);
     assert_eq!(fast_kura.exact_durable_blocks_count().unwrap(), 0);
-    assert!(fast_kura.get_block(nonzero!(1_usize)).is_none());
+    assert!(
+        fast_kura
+            .get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+            .expect("canonical history read completes")
+            .is_none()
+    );
     for path in journal_paths {
         assert_eq!(std::fs::read(path).unwrap(), deferred_bytes);
     }
@@ -440,13 +468,13 @@ async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
     let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura)
@@ -467,13 +495,13 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
         .expect("strict Kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     let canonical_tip = snapshot_hashes[2];
     let configured_catalog_hash = kura
@@ -541,10 +569,10 @@ async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
     let state_height_before = state.committed_height();
@@ -574,13 +602,13 @@ async fn audited_snapshot_hash_reconcile_rejects_every_divergent_existing_hash()
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; 32]));
     snapshot_hashes[2] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));

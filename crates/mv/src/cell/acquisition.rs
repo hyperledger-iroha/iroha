@@ -1,6 +1,7 @@
 //! Caller-owned EBR acquisition and exact retirement through enclosing aggregates.
 
 use super::*;
+use crate::storage::{AdmittedStorageError, StorageRole};
 use concread::ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError, ReservedEbrCell};
 use iroha_allocation::release::{DeferredRelease, DeferredReleaseBatch};
 
@@ -164,39 +165,55 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
         }
     }
 
-    fn initialize_writers(&mut self) {
+    fn initialize_writers(&mut self) -> Result<(), AdmittedStorageError> {
         assert!(!self.started, "original cell acquisition is one-shot");
         self.started = true;
         let target = self.target;
         let AcquisitionPhase::Pending(pending) = &mut self.phase else {
             panic!("original pending acquisition");
         };
+        let release = target.revert_released.observe();
         pending.revert = Some(
             target
                 .revert_released
-                .poisoning_guard(target.revert.acquire_writer()),
+                .poisoning_guard(target.revert.try_acquire_writer().ok_or(
+                    AdmittedStorageError::Busy {
+                        role: StorageRole::Undo,
+                        release,
+                    },
+                )?),
         );
-        assert!(
-            !pending
-                .revert
-                .as_ref()
-                .expect("original undo")
-                .is_poisoned(),
-            "original undo writer is poisoned",
-        );
+        if pending
+            .revert
+            .as_ref()
+            .expect("original undo")
+            .is_poisoned()
+        {
+            return Err(AdmittedStorageError::Poisoned {
+                role: StorageRole::Undo,
+            });
+        }
+        let release = target.blocks_released.observe();
         pending.blocks = Some(
             target
                 .blocks_released
-                .poisoning_guard(target.blocks.acquire_writer()),
+                .poisoning_guard(target.blocks.try_acquire_writer().ok_or(
+                    AdmittedStorageError::Busy {
+                        role: StorageRole::Current,
+                        release,
+                    },
+                )?),
         );
-        assert!(
-            !pending
-                .blocks
-                .as_ref()
-                .expect("original current")
-                .is_poisoned(),
-            "original current writer is poisoned",
-        );
+        if pending
+            .blocks
+            .as_ref()
+            .expect("original current")
+            .is_poisoned()
+        {
+            return Err(AdmittedStorageError::Poisoned {
+                role: StorageRole::Current,
+            });
+        }
         // The original slot owns both guards and both charges before either clone.
         let undo = pending.revert.take().expect("original undo");
         let undo_value = &mut pending.undo_value;
@@ -227,7 +244,9 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
                 pending.revert = Some(undo);
                 match error {
                     EbrCellWriterAdmissionError::Poisoned => {
-                        panic!("original undo writer is poisoned")
+                        return Err(AdmittedStorageError::Poisoned {
+                            role: StorageRole::Undo,
+                        });
                     }
                     EbrCellWriterAdmissionError::Refused(never) => match never {},
                 }
@@ -262,7 +281,9 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
                 pending.blocks = Some(current);
                 match error {
                     EbrCellWriterAdmissionError::Poisoned => {
-                        panic!("original current writer is poisoned")
+                        return Err(AdmittedStorageError::Poisoned {
+                            role: StorageRole::Current,
+                        });
                     }
                     EbrCellWriterAdmissionError::Refused(never) => match never {},
                 }
@@ -306,15 +327,17 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
             }
         });
         self.phase = AcquisitionPhase::Writers(CellWriters::new(undo, current));
+        Ok(())
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
-    for BlockAcquisitionSlot<'a, V, C>
-{
-    type Block = Block<'a, V, C>;
-
-    fn initialize(&mut self, mode: BlockMode) {
+impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
+    /// Acquire the original pair without blocking on another physical writer.
+    ///
+    /// # Errors
+    /// Returns the exact pre-probe Busy source or permanent poison. Earlier acquired
+    /// writers and prepaid generations stay in this one-shot slot until release/drop.
+    pub fn try_initialize(&mut self, mode: BlockMode) -> Result<(), AdmittedStorageError> {
         assert!(!self.started, "original cell acquisition is one-shot");
         // The existing outer-EBR-only APIs explicitly leave identity untracked.
         // Even that policy allocates before any physical writer or payload clone.
@@ -322,7 +345,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
         if matches!(self.next, SuccessorAcquisition::Untracked) {
             self.next = SuccessorAcquisition::Original(NextPublication::new());
         }
-        self.initialize_writers();
+        self.initialize_writers()?;
         let predecessor = self.target.publication.capture();
         let writers = self.take_writers();
         self.phase = AcquisitionPhase::Block(Block::new(
@@ -349,6 +372,18 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
             }
         }
         self.complete = true;
+        Ok(())
+    }
+}
+
+impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
+    for BlockAcquisitionSlot<'a, V, C>
+{
+    type Block = Block<'a, V, C>;
+
+    fn initialize(&mut self, mode: BlockMode) {
+        self.try_initialize(mode)
+            .expect("original Cell acquisition");
     }
 
     fn release(&mut self) {
@@ -444,7 +479,8 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
 
     pub(super) fn acquire(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
         let mut slot = BlockAcquisitionSlot::new(target, charges);
-        slot.initialize_writers();
+        slot.initialize_writers()
+            .expect("original Cell writer pair");
         slot.take_writers()
     }
 

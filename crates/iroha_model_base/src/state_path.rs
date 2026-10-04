@@ -59,19 +59,42 @@ impl StatePath {
         }
         Ok(())
     }
-    fn parse(candidate: &str) -> Result<Self, ParseError> {
+    /// Validate borrowed path text using the original syntax and exact NFC policy.
+    ///
+    /// No replacement string or `StatePath` is retained. A funded execution caller
+    /// must admit [`Self::canonical_validation_scratch_bytes`] before validation.
+    ///
+    /// # Errors
+    /// Returns the same syntax, profile and noncanonical-spelling errors as parsing.
+    pub fn validate_canonical(candidate: &str) -> Result<(), ParseError> {
         Self::validate_str(candidate)?;
-        let normalized = Name::normalize(candidate)?;
-        if normalized.as_ref() != candidate {
-            return Err(ParseError::new(
-                "StatePath must already use the exact NFC spelling",
-            ));
+        Name::require_exact_nfc(
+            candidate,
+            "StatePath must already use the exact NFC spelling",
+        )
+    }
+
+    /// Bound cumulative allocator requests for one borrowed NFC comparison.
+    ///
+    /// Syntax-invalid and ASCII inputs require no normalization scratch. Other
+    /// inputs include both ICU growth and long-run stable-sort storage under the
+    /// pinned profile/toolchain audit. Reserve before validation; this calculation
+    /// neither validates NFC nor grants allocation capacity.
+    #[must_use]
+    pub fn canonical_validation_scratch_bytes(candidate: &str) -> usize {
+        if Self::validate_str(candidate).is_err() || candidate.is_ascii() {
+            return 0;
         }
+        crate::name::nfc_scratch::request_bytes(candidate.chars().count())
+    }
+
+    fn parse(candidate: &str) -> Result<Self, ParseError> {
+        Self::validate_canonical(candidate)?;
         Ok(Self(ConstString::from(candidate)))
     }
 
-    /// Parse one canonical JSON object-key spelling with bounded decode accounting.
-    pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
+    /// Parse canonical JSON text with bounded NFC and final-owner accounting.
+    fn parse_for_json_decode(candidate: &str) -> Result<Self, norito::json::Error> {
         Self::validate_str(candidate)
             .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
         Name::ensure_nfc_for_json_decode(candidate)?;
@@ -80,25 +103,26 @@ impl StatePath {
         Ok(Self(value))
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
-        let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
-        if len > MAX_STATE_PATH_BYTES {
-            return Err(NoritoError::Message(
-                "`StatePath` exceeds the 16384-byte UTF-8 limit".into(),
-            ));
-        }
-        let end = header_len
-            .checked_add(len)
-            .ok_or(NoritoError::LengthMismatch)?;
-        let raw = bytes
-            .get(header_len..end)
-            .ok_or(NoritoError::LengthMismatch)?;
-        let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
+        let (value, end) = norito::core::borrow_text_payload(bytes, |len| {
+            if len > MAX_STATE_PATH_BYTES {
+                return Err(NoritoError::Message(
+                    "`StatePath` exceeds the 16384-byte UTF-8 limit".into(),
+                ));
+            }
+            Ok(())
+        })?;
+        let len = value.len();
         norito::core::reserve_decode_allocation(len)?;
+        norito::core::reserve_decode_allocation(Self::canonical_validation_scratch_bytes(value))?;
         let path =
             Self::parse(value).map_err(|error| NoritoError::Message(error.reason().into()))?;
         norito::core::note_payload_access(bytes, end);
         Ok((path, end))
     }
+}
+
+impl norito::core::NominalText for StatePath {
+    const MAX_TEXT_BYTES: usize = MAX_STATE_PATH_BYTES;
 }
 
 impl norito::core::SerializePayload for StatePath {
@@ -122,12 +146,8 @@ impl<'a> norito::core::DeserializePayload<'a> for StatePath {
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
-            return Self::decode_wire(payload).map(|(path, _)| path);
-        }
-        let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;
-        Self::from_str(string.as_str())
-            .map_err(|error| norito::core::Error::Message(error.reason().into()))
+        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        Self::decode_wire(payload).map(|(path, _)| path)
     }
 }
 impl AsRef<str> for StatePath {
@@ -185,7 +205,16 @@ impl norito::json::JsonDeserialize for StatePath {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        Self::from_str(&value).map_err(|error| norito::json::Error::Message(error.reason().into()))
+        Self::parse_for_json_decode(&value)
+    }
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let candidate = value.as_str().ok_or(norito::json::Error::WithPos {
+            msg: "StatePath must be a JSON string",
+            byte: 0,
+            line: 1,
+            col: 1,
+        })?;
+        Self::parse_for_json_decode(candidate)
     }
 }
 impl norito::json::JsonKeyCodec for StatePath {
@@ -193,9 +222,7 @@ impl norito::json::JsonKeyCodec for StatePath {
         norito::json::write_json_string(self.as_ref(), out);
     }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
-        encoded
-            .parse::<StatePath>()
-            .map_err(|err| norito::json::Error::Message(err.reason().into()))
+        Self::parse_for_json_decode(encoded)
     }
 }
 
@@ -210,7 +237,7 @@ impl norito::json::JsonObjectKey for StatePath {
 
 impl norito::json::JsonObjectKeyOwned for StatePath {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
-        StatePath::parse_json_object_key(key)
+        StatePath::parse_for_json_decode(key)
     }
 }
 

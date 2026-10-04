@@ -977,6 +977,8 @@ mod response_negotiation_middleware_tests {
         response::Response,
         routing::{get, post},
     };
+    #[cfg(not(feature = "app_api"))]
+    use http_body_util::BodyExt as _;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1458,6 +1460,8 @@ mod typed_error_contract_tests {
         response::Response,
         routing::get,
     };
+    #[cfg(not(feature = "app_api"))]
+    use http_body_util::BodyExt as _;
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
@@ -1675,7 +1679,7 @@ mod typed_error_contract_tests {
         assert_eq!(envelope.message(), "ordinary failure");
     }
     #[tokio::test]
-    async fn bare_error_defaults_to_canonical_norito_envelope() {
+    async fn bare_error_defaults_to_json_envelope() {
         let router = with_error_contract(
             Router::new().route("/bare", get(|| async { StatusCode::NOT_FOUND })),
         );
@@ -1689,9 +1693,15 @@ mod typed_error_contract_tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static(utils::NORITO_MIME_TYPE))
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            content_type.starts_with("application/json"),
+            "requests without Accept get JSON errors: {content_type}"
         );
         assert_eq!(
             response
@@ -1704,9 +1714,9 @@ mod typed_error_contract_tests {
             !response.headers().contains_key("x-iroha-reject-code"),
             "a bare router-style 404 must not masquerade as an application resource miss"
         );
-        let envelope: ErrorEnvelope =
-            norito::decode_from_bytes(&body_bytes(response).await).expect("decode canonical error");
-        assert_eq!(envelope.code(), "not_found");
+        let envelope: norito::json::Value =
+            norito::json::from_slice(&body_bytes(response).await).expect("decode JSON error");
+        assert_eq!(envelope["code"].as_str(), Some("not_found"));
     }
     #[tokio::test]
     async fn app_error_reject_codes_survive_json_and_norito_negotiation() {

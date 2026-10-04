@@ -70,7 +70,7 @@ mod tests {
     use iroha_core::{
         execution_attempt::ExecutionAttemptError,
         smartcontracts::isi::staking::preparation::prepare_public_lane_plan,
-        state::{World, WorldReadOnly as _, WorldStateSnapshot as _},
+        state::{World, WorldReadOnly as _},
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_crypto::{Algorithm, KeyPair};

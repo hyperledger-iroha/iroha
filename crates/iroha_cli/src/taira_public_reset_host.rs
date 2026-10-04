@@ -11968,7 +11968,13 @@ fn prepared_child_error_kind(output: &ProcessOutput) -> &'static str {
         let value: norito::json::Value = json::from_slice(&output.stderr).ok()?;
         let root = value.as_object()?;
         let error = root.get("error")?.as_object()?;
-        if root.len() != 1 || error.len() != 3 || error.get("message")?.as_str().is_none() {
+        // The CLI error document is exactly `{kind, message, causes, hints, exit_code}`.
+        if root.len() != 1
+            || error.len() != 5
+            || error.get("message")?.as_str().is_none()
+            || error.get("causes")?.as_array().is_none()
+            || error.get("hints")?.as_array().is_none()
+        {
             return None;
         }
         let (kind, expected_exit) = match error.get("kind")?.as_str()? {
@@ -19157,7 +19163,7 @@ pub(super) mod tests {
         ] {
             let rendered = crate::render_cli_error(
                 &error_stack::Report::new(context),
-                crate::CliOutputFormat::Json,
+                crate::OutputSelection::resolve(Some(crate::OutputFormatArg::Json), true, false),
             );
             assert_eq!(rendered.kind.exit_code(), exit_code);
             let stderr = rendered.output.into_bytes();
@@ -19183,11 +19189,13 @@ pub(super) mod tests {
     fn prepared_child_failure_does_not_trust_unknown_or_mismatched_error_kind() {
         use std::os::unix::process::ExitStatusExt as _;
         for stderr in [
-            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private"}}"#.as_slice(),
-            br#"{"error":{"kind":"config","exit_code":3,"message":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":4,"message":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":1,"message":"private","extra":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":1,"message":"private"},"extra":"private"}"#,
+            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private","causes":[],"hints":[]}}"#.as_slice(),
+            br#"{"error":{"kind":"config","exit_code":3,"message":"private","causes":[],"hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":4,"message":"private","causes":[],"hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":[],"hints":[],"extra":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":[],"hints":[]},"extra":"private"}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":"private","hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private"}}"#,
             b"startup banner\nprivate malformed error",
         ] {
             let error = parse_prepared_child_report(

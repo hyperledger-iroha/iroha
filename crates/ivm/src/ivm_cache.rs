@@ -9,6 +9,8 @@
 //! or byte budget overflow evicts from the front. Per-entry decoded-op limits
 //! affect cache retention only and never change whether valid code decodes.
 use crate::{cache_memory::SharedAllocation, decoder, metadata::ProgramMetadata};
+mod instruction_stream;
+pub use instruction_stream::ValidatedInstructions;
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use sha2::{Digest, Sha256};
 use std::{
@@ -170,14 +172,37 @@ impl IvmCache {
     }
     /// Decode the code buffer using the canonical decoder. Returns a shared slice of decoded ops.
     pub fn decode_stream(code: &[u8]) -> Result<DecodedStream, crate::VMError> {
+        Self::decode_stream_owned(code, None)
+    }
+    /// Decode with exact backing and shared-control custody in the original execution pool.
+    ///
+    /// State-funded arrays remain outside the process-global diagnostic caches.
+    /// Their State preparation/runtime owners retain and share them directly.
+    ///
+    /// # Errors
+    /// Returns the canonical decoder error or the original local allocation refusal.
+    pub fn decode_stream_with_memory_budget(
+        code: &[u8],
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<DecodedStream, crate::VMError> {
+        Self::decode_stream_owned(code, Some(budget))
+    }
+    fn decode_stream_owned(
+        code: &[u8],
+        budget: Option<&iroha_allocation::AllocationBudget>,
+    ) -> Result<DecodedStream, crate::VMError> {
         if (code.len() as u64) > crate::memory::Memory::HEAP_START {
             return Err(crate::VMError::MemoryOutOfBounds);
         }
         let start = Instant::now();
-        let result = SharedAllocation::try_from_iter((0..code.len().div_ceil(4)).map(|index| {
+        let values = (0..code.len().div_ceil(4)).map(|index| {
             let pc = (index as u64) * 4;
             decoder::decode_slice(code, pc).map(|inst| DecodedOp { pc, inst })
-        }));
+        });
+        let result = match budget {
+            Some(budget) => SharedAllocation::try_from_iter_with_memory_budget(values, budget),
+            None => SharedAllocation::try_from_iter(values),
+        };
         let elapsed_ns = start.elapsed().as_nanos();
         let elapsed_ns_u64 = if elapsed_ns > u64::MAX as u128 {
             u64::MAX
@@ -278,6 +303,16 @@ impl IvmCache {
     pub fn counters(&self) -> (u64, u64, u64) {
         (self.hits, self.misses, self.evictions)
     }
+}
+/// Validate and count canonical fixed-width instructions without allocating a decoded array.
+///
+/// Stateless transaction size admission owns no State execution pool. It uses this
+/// same canonical decoder directly and retains no operations after the scan.
+///
+/// # Errors
+/// Returns exactly the stream geometry or instruction error from ordinary decoding.
+pub fn validate_instruction_stream(code: &[u8]) -> Result<usize, crate::VMError> {
+    ValidatedInstructions::new(code).map(ValidatedInstructions::len)
 }
 fn validate_supported_artifact_metadata(meta: &ProgramMetadata) -> Result<(), crate::VMError> {
     if meta.version_major == 1 && meta.version_minor == 1 {
@@ -517,13 +552,15 @@ pub fn set_global_capacity(capacity: usize) {
     let _configuration = lock_cache_configuration();
     let cache = GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()));
     cache.set_capacity(capacity);
+    let mut limits = current_cache_limits_snapshot();
+    limits.capacity = capacity;
+    publish_cache_limits_snapshot(limits);
+    // Evictors may reenter ordinary configuration writers on this thread.
+    // Publish first, with no writes after a callback installs newer limits.
     if capacity == 0 {
         crate::ivm::clear_prepared_program_cache();
         crate::cache_memory::evict_registered_caches();
     }
-    let mut limits = current_cache_limits_snapshot();
-    limits.capacity = capacity;
-    publish_cache_limits_snapshot(limits);
 }
 fn normalize_limits(limits: CacheLimits) -> CacheLimits {
     CacheLimits {
@@ -548,10 +585,6 @@ fn configure_limits_locked(limits: CacheLimits) {
     let normalized = normalize_limits(limits);
     let previous_bytes = CACHE_MAX_BYTES.swap(normalized.max_bytes, Ordering::Relaxed);
     crate::cache_memory::set_retention_limit(normalized.max_bytes);
-    if normalized.max_bytes < previous_bytes || normalized.capacity == 0 {
-        crate::ivm::clear_prepared_program_cache();
-        crate::cache_memory::evict_registered_caches();
-    }
     CACHE_MAX_DECODED_OPS.store(normalized.max_decoded_ops, Ordering::Relaxed);
     if let Some(cache) = GLOBAL_CACHE.get() {
         let current = cache.total_capacity.load(Ordering::Relaxed);
@@ -568,6 +601,12 @@ fn configure_limits_locked(limits: CacheLimits) {
         max_bytes: normalized.max_bytes,
         max_decoded_ops: denormalize(normalized.max_decoded_ops),
     });
+    // Callbacks observe all published limits and shard geometry. A callback
+    // panic or reentrant update must not leave a partially applied profile.
+    if normalized.max_bytes < previous_bytes || normalized.capacity == 0 {
+        crate::ivm::clear_prepared_program_cache();
+        crate::cache_memory::evict_registered_caches();
+    }
 }
 /// Snapshot of cache limits. Zero bytes disables retention; zero ops is unlimited.
 pub fn cache_limits() -> CacheLimits {
@@ -619,6 +658,10 @@ impl Drop for CacheLimitsGuard {
         configure_limits_locked(self.previous);
     }
 }
+
+#[cfg(test)]
+#[path = "ivm_cache/configuration_tests.rs"]
+mod configuration_tests;
 
 #[cfg(test)]
 mod tests {

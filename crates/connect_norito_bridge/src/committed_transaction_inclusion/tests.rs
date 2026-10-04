@@ -12,18 +12,18 @@ use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, SharedSignedBlock,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
     },
     isi::{InstructionBox, Log, Unregister},
     query::{QueryOutput, QueryOutputBatchBoxTuple},
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 struct Fixture {
     chain: CertifiedTestChain,
-    block: Arc<SignedBlock>,
+    block: SharedSignedBlock,
     selected: CommittedTransaction,
     checkpoint: SumeragiFinalityCheckpoint,
     proofs: Vec<SumeragiFinalityProof>,

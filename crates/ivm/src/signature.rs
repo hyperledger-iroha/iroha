@@ -99,7 +99,7 @@ pub(crate) fn ed25519_public_key_bytes_are_invalid(public_key: &[u8; 32]) -> boo
     parse_ed25519_public_key_for_verification(public_key).is_none()
 }
 /// Ed25519 batch verification input.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Ed25519BatchItem<'a> {
     /// Message to verify.
     pub message: &'a [u8],
@@ -107,6 +107,15 @@ pub struct Ed25519BatchItem<'a> {
     pub signature: [u8; 64],
     /// 32-byte public key.
     pub public_key: [u8; 32],
+}
+impl Default for Ed25519BatchItem<'_> {
+    fn default() -> Self {
+        Self {
+            message: &[],
+            signature: [0; 64],
+            public_key: [0; 32],
+        }
+    }
 }
 /// Compute the reduced Ed25519 challenge scalar bytes `H(R || A || M)` used by
 /// the GPU verification kernels.
@@ -232,6 +241,10 @@ pub fn verify_ed25519_batch(
     Ok(())
 }
 mod batch;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use batch::cpu_batch_into;
+#[cfg(any(test, all(target_os = "macos", feature = "metal")))]
+pub(crate) mod ed25519_geometry;
 #[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal")))]
 pub(crate) use batch::BatchInput;
 pub use batch::verify_ed25519_batch_items_into;

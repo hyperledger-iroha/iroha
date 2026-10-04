@@ -16,6 +16,9 @@ pub use ordinary_native::{
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
 mod capability_test_support;
+mod collections;
+#[cfg(test)]
+mod collections_http_tests;
 pub mod configuration;
 #[cfg(test)]
 mod configuration_http_tests;
@@ -7070,7 +7073,7 @@ impl norito::json::JsonDeserialize for SumeragiEvidenceClass {
 /// Canonical raw lowercase 32-byte digest used by the evidence audit projection.
 ///
 /// This API representation intentionally differs from the tagged, checksummed
-/// JSON spelling of [`Hash`]: Torii's evidence audit contract uses exactly 64
+/// JSON spelling of [`struct@Hash`]: Torii's evidence audit contract uses exactly 64
 /// lowercase hexadecimal characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SumeragiEvidenceHash([u8; Hash::LENGTH]);
@@ -12409,6 +12412,7 @@ mod evidence_http_tests {
     include!("client/validator_committee_tests.rs");
     include!("client/consensus_keys_tests.rs");
     include!("client/activation_attestation_tests.rs");
+    include!("client/reserve_policy_tests.rs");
     include!("client/sns_lease_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
@@ -14444,9 +14448,6 @@ pub enum AuthorityContextError {
     /// Query and fragment components do not belong in a reusable API base URL.
     #[error("Torii endpoint must not contain a query or fragment")]
     EndpointHasQueryOrFragment,
-    /// The request router requires a directory-form base path.
-    #[error("Torii endpoint path must end with `/`")]
-    EndpointPathMissingTrailingSlash,
     /// The configured signing key must control the configured account.
     #[error("account authority does not match the configured signing key")]
     AccountSigningKeyMismatch,
@@ -14711,6 +14712,7 @@ include!("client/canonical_request_auth.rs");
 include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
 include!("client/sumeragi_finality.rs");
+include!("client/reserve_policy.rs");
 include!("client/sns_lease.rs");
 /// Representation of `Iroha` client.
 impl Client {
@@ -15515,7 +15517,7 @@ impl AccountClient {
     ) -> Result<RetailFeeStatusResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("status");
@@ -15605,7 +15607,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("receipts");
@@ -15644,7 +15646,7 @@ impl AccountClient {
     ) -> Result<RetailFeeCurrentHeadResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement")
@@ -15676,7 +15678,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement");
@@ -16180,7 +16182,9 @@ impl Client {
             Err(
                 error @ (QueryError::Http { .. }
                 | QueryError::Validation(_)
-                | QueryError::ResponseShape(_)),
+                | QueryError::ResponseShape(_)
+                | QueryError::UnexpectedOutput(_)
+                | QueryError::Truncated { .. }),
             ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
@@ -23912,8 +23916,14 @@ mod tests {
 
         client.torii_url = "https://example.test/api".parse().expect("URL fixture");
         assert_eq!(
-            client.clone().build().expect_err("directory-form base URL"),
-            SdkError::Context(AuthorityContextError::EndpointPathMissingTrailingSlash)
+            client
+                .clone()
+                .build()
+                .expect("a base path is a directory")
+                .endpoint()
+                .as_str(),
+            "https://example.test/api/",
+            "the builder normalizes the base path exactly as configuration files do"
         );
 
         client.torii_url = base_url();
@@ -28563,7 +28573,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "72fff8fd63bb7a8660839062f9a03800d978cf36df92d21ff140ba5e991f0431",
+            "ce3b2db09db97871a76cf1e2318ccfb51931ec71a9917af74270128ca510c913",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

@@ -8,6 +8,9 @@ use iroha_crypto::{
 /// Exact domain of the fixed-width finalized pulse signing preimage.
 pub const GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1: &[u8] =
     b"iroha.global-threshold-beacon.pulse-payload.v1\0";
+/// Exact byte length of the canonical fixed-width beacon signing payload.
+pub const GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1: usize =
+    GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 9 + 8 * 4;
 const GLOBAL_BEACON_PULSE_ID_DOMAIN_V1: &[u8] = b"iroha.global-threshold-beacon.pulse-id.v1\0";
 const GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1: u64 = 0;
 
@@ -88,24 +91,31 @@ pub fn validate_beacon_pulse_shape(
 #[must_use]
 pub fn global_threshold_beacon_pulse_payload_v1(
     pulse: &FinalizedGlobalThresholdBeaconPulseV1,
-) -> Vec<u8> {
-    let mut payload =
-        Vec::with_capacity(GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 9 + 8 * 4);
-    payload.extend_from_slice(GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1);
-    payload.extend_from_slice(&pulse.version.to_be_bytes());
-    payload.extend_from_slice(pulse.network_id.as_bytes());
-    payload.extend_from_slice(&pulse.session_id);
-    payload.extend_from_slice(&pulse.roster_hash);
-    payload.extend_from_slice(&pulse.transcript_hash);
-    payload.extend_from_slice(&pulse.context.instance);
-    payload.extend_from_slice(&pulse.context.epoch.to_be_bytes());
-    payload.extend_from_slice(&pulse.context.epoch_context_id);
-    payload.extend_from_slice(&pulse.context.parent_consensus_hash);
-    payload.extend_from_slice(&pulse.context.parent_result);
-    payload.extend_from_slice(&pulse.height.to_be_bytes());
-    payload.extend_from_slice(&pulse.round.to_be_bytes());
-    payload.extend_from_slice(&pulse.finalized_chain_anchor.height.to_be_bytes());
-    payload.extend_from_slice(pulse.finalized_chain_anchor.block_hash.as_ref());
+) -> [u8; GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1] {
+    let mut payload = [0; GLOBAL_BEACON_PULSE_PAYLOAD_LEN_V1];
+    let mut offset = 0;
+    for field in [
+        GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1,
+        &pulse.version.to_be_bytes(),
+        pulse.network_id.as_bytes(),
+        &pulse.session_id,
+        &pulse.roster_hash,
+        &pulse.transcript_hash,
+        &pulse.context.instance,
+        &pulse.context.epoch.to_be_bytes(),
+        &pulse.context.epoch_context_id,
+        &pulse.context.parent_consensus_hash,
+        &pulse.context.parent_result,
+        &pulse.height.to_be_bytes(),
+        &pulse.round.to_be_bytes(),
+        &pulse.finalized_chain_anchor.height.to_be_bytes(),
+        pulse.finalized_chain_anchor.block_hash.as_ref(),
+    ] {
+        let end = offset + field.len();
+        payload[offset..end].copy_from_slice(field);
+        offset = end;
+    }
+    debug_assert_eq!(offset, payload.len());
     payload
 }
 
@@ -116,19 +126,16 @@ pub fn global_threshold_beacon_pulse_id_v1(
     verified_seed: [u8; 32],
 ) -> [u8; 32] {
     let payload = global_threshold_beacon_pulse_payload_v1(pulse);
-    let mut preimage = Vec::with_capacity(
-        GLOBAL_BEACON_PULSE_ID_DOMAIN_V1.len() + 4 + payload.len() + pulse.signature.len() + 32,
-    );
-    preimage.extend_from_slice(GLOBAL_BEACON_PULSE_ID_DOMAIN_V1);
-    preimage.extend_from_slice(
+    *Hash::new_from_chunks(&[
+        GLOBAL_BEACON_PULSE_ID_DOMAIN_V1,
         &u32::try_from(payload.len())
             .expect("fixed-size beacon pulse payload")
             .to_be_bytes(),
-    );
-    preimage.extend_from_slice(&payload);
-    preimage.extend_from_slice(&pulse.signature);
-    preimage.extend_from_slice(&verified_seed);
-    *Hash::new(&preimage).as_ref()
+        &payload,
+        &pulse.signature,
+        &verified_seed,
+    ])
+    .as_ref()
 }
 
 const GLOBAL_BEACON_NPOS_SUCCESSOR_SEED_DOMAIN_V1: &[u8] =

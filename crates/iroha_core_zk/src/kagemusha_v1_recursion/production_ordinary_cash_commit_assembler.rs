@@ -1,7 +1,7 @@
 //! Production facade over the neutral ordinary Commit verification/original-custody kernel.
 //! Cold Native replay uses that kernel directly without production proving features.
 use super::*;
-pub(crate) use crate::kagemusha_v1_recursion::ordinary_cash_commit_originals::GeneratedOrdinaryCashCommitOriginalsV1;
+use crate::kagemusha_v1_recursion::ordinary_cash_commit_originals::GeneratedOrdinaryCashCommitOriginalsV1;
 use crate::kagemusha_v1_recursion::ordinary_cash_commit_originals::assemble_ordinary_cash_commit_v1;
 use crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1;
 impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {

@@ -178,6 +178,10 @@ impl_direct_instruction_box!(
     crate::isi::sumeragi_amx::BeginAmxV1,
     crate::isi::sumeragi_amx::RelayAmxPreparedV1,
     crate::isi::sumeragi_amx::RelayAmxHandoffV1,
+    crate::isi::sumeragi_amx::RegisterAmxParticipantV1,
+    crate::isi::sumeragi_amx::PrepareAmxV1,
+    crate::isi::sumeragi_amx::SettleAmxV1,
+    crate::isi::sumeragi_amx::RelayGlobalAmxHandoffV1,
 );
 impl_direct_instruction_box!(
     crate::isi::private_dataspace::RegisterPrivateDataspace,
@@ -465,6 +469,7 @@ impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
     AdvanceMusubiPinOutboxV1,
+    CheckMusubiPinOutboxV1,
     RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,

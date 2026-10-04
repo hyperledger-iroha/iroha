@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_343;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_381;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "0743402196a2d2e15426d464c3e584ebfebe4d552851a21087b767e77e38a9ba";
+    "85dcd54fb03cb7f478c4a8130d65044443e9667b6778001f88afd79251e46f93";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -32,7 +32,7 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "app.page.required",
     "app.page.properties",
     "repo.agreement.fields",
-    "repo.query.fields",
+    "collection.query.fields",
     "contract.alias.request.required",
     "contract.alias.binding.required",
     "contract.alias.binding.optional",

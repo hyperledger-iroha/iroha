@@ -591,7 +591,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let mut world = World::default();
+    let world = World::default();
     let (chain, local_key) = manifest_fixture_chain(world, None);
     cfg.common.key_pair = local_key;
     let kura = chain.kura().clone();

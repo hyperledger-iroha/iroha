@@ -18,6 +18,11 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 use thiserror::Error;
+
+/// Canonical native reserve singleton layout and structural validation.
+pub mod history;
+/// Independently authenticated policy presence or absence at one certified World cut.
+pub mod proof;
 /// Schema version for [`ReservePolicyV1`].
 pub const RESERVE_POLICY_VERSION_V1: u8 = 1;
 /// First-release chain authority-policy version.

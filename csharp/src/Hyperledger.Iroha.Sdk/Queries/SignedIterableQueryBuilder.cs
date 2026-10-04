@@ -204,6 +204,11 @@ public sealed class SignedIterableQueryBuilder
         return this;
     }
 
+    /// <summary>Selects a continuation of an earlier iterable query.</summary>
+    /// <remarks>
+    /// A continuation carries only the query id, cursor and optional gas budget; the limit,
+    /// offset, fetch size and sorting of the original start request stay in effect on the server.
+    /// </remarks>
     public SignedIterableQueryBuilder Continue(string queryId, ulong cursor, ulong? gasBudget = null)
     {
         if (cursor == 0)
@@ -462,6 +467,10 @@ public sealed class SignedIterableQueryBuilder
         return value ?? throw new InvalidOperationException($"{field} must be selected before encoding.");
     }
 
+    /// <summary>
+    /// Clears the selected request (query kind, its arguments and any continuation) while keeping
+    /// limit, offset, fetch size and sorting, so they apply regardless of call order.
+    /// </summary>
     private void Reset()
     {
         requestMode = null;
@@ -471,11 +480,6 @@ public sealed class SignedIterableQueryBuilder
         continueQueryId = null;
         continueCursor = 0;
         continueGasBudget = null;
-        limit = null;
-        offset = 0;
-        fetchSize = null;
-        sortByMetadataKey = null;
-        descendingSort = false;
         entrypointHashHex = null;
     }
 
@@ -517,8 +521,8 @@ public sealed class SignedIterableQueryBuilder
         var exact = NormalizeRequiredValue(value, paramName);
         try
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(exact);
+            return exact;
         }
         catch (AccountAddressException exception)
         {

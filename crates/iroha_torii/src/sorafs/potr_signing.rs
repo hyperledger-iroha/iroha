@@ -299,10 +299,9 @@ impl PotrFinalizedPolicySourceV1 for PotrStateFinalizedPolicySourceV1 {
         provider_id: [u8; 32],
     ) -> Result<PotrFinalizedPolicySnapshotV1, PotrAdmissionReaderError> {
         let view = self.state.query_view();
-        let finalized_block = view
-            .latest_block()
+        let finalized_at_unix_ms = view
+            .authenticated_query_ledger_time_ms()
             .ok_or(PotrAdmissionReaderError::Unavailable)?;
-        let finalized_at_unix_ms = finalized_block.header().creation_time_ms;
         if finalized_at_unix_ms == 0 {
             return Err(PotrAdmissionReaderError::Refused);
         }
@@ -311,8 +310,9 @@ impl PotrFinalizedPolicySourceV1 for PotrStateFinalizedPolicySourceV1 {
             ProviderId::new(provider_id),
         )
         .map_err(|_| PotrAdmissionReaderError::Refused)?;
-        if finalized_block.header().height().get() != finalized_cursor.height
-            || finalized_block.hash().as_ref() != &finalized_cursor.block_hash
+        if u64::try_from(view.height()).ok() != Some(finalized_cursor.height)
+            || view.latest_block_hash().map(|hash| *hash.as_ref())
+                != Some(finalized_cursor.block_hash)
         {
             return Err(PotrAdmissionReaderError::Refused);
         }

@@ -10,6 +10,53 @@ const ARTIFACT: PtxArtifact = PtxArtifact::new(c"qualified PTX bytes");
 const OTHER: PtxArtifact = PtxArtifact::new(c"different PTX bytes");
 
 #[test]
+fn compound_completion_requires_both_original_artifacts_and_distinct_kernel_owners() {
+    let pairs = KernelAdmission::default();
+    let leaves = KernelAdmission::default();
+    assert!(pairs.admit(ARTIFACT, || Ok(true)));
+    assert!(!pairs.record_completed_with(ARTIFACT, &leaves, OTHER, true));
+    assert_eq!((pairs.completed(), leaves.completed()), (0, 0));
+    assert!(leaves.admit(OTHER, || Ok(true)));
+    assert!(!pairs.record_completed_with(ARTIFACT, &leaves, OTHER, false));
+    assert!(!pairs.record_completed_with(ARTIFACT, &leaves, ARTIFACT, true));
+    assert!(!pairs.record_completed_with(ARTIFACT, &pairs, ARTIFACT, true));
+    assert_eq!((pairs.completed(), leaves.completed()), (0, 0));
+    assert!(pairs.record_completed_with(ARTIFACT, &leaves, OTHER, true));
+    assert_eq!((pairs.completed(), leaves.completed()), (1, 1));
+    leaves.quarantine();
+    assert!(!pairs.record_completed_with(ARTIFACT, &leaves, OTHER, true));
+    assert_eq!((pairs.completed(), leaves.completed()), (1, 1));
+}
+
+#[test]
+fn completion_credit_requires_the_exact_admitted_artifact_and_production_work() {
+    let first = KernelAdmission::default();
+    let other_kernel = KernelAdmission::default();
+    let other_device = KernelAdmission::default();
+    assert!(!first.record_completed(ARTIFACT, true));
+    assert!(!first.admit(ARTIFACT, || Err(CudaFailure::Capacity)));
+    assert!(!first.record_completed(ARTIFACT, true));
+    assert!(first.admit(ARTIFACT, || {
+        assert!(!first.record_completed(ARTIFACT, false));
+        assert!(!first.record_completed(ARTIFACT, true));
+        Ok(true)
+    }));
+    assert!(!first.record_completed(ARTIFACT, false));
+    assert!(!first.record_completed(OTHER, true));
+    assert_eq!(first.completed(), 0);
+    assert!(first.record_completed(ARTIFACT, true));
+    assert_eq!(first.completed(), 1);
+    assert_eq!(other_kernel.completed(), 0);
+    assert_eq!(other_device.completed(), 0);
+    assert!(first.admit(ARTIFACT, || panic!("admission remains sticky")));
+    assert_eq!(first.completed(), 1);
+    first.quarantine();
+    assert!(!first.record_completed(ARTIFACT, true));
+    assert!(!first.admit(ARTIFACT, || panic!("quarantine cannot reset credit")));
+    assert_eq!(first.completed(), 1);
+}
+
+#[test]
 fn only_the_same_exact_artifact_reuses_a_successful_qualification() {
     let entry = KernelAdmission::default();
     assert!(entry.admit(ARTIFACT, || Ok(true)));

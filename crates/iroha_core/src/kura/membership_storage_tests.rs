@@ -549,10 +549,7 @@ fn post_write_metadata_failure_recovers_only_its_exact_original_pending_request(
 #[test]
 fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{
-        future::Future,
-        task::{Context, Poll, Wake, Waker},
-    };
+    use std::task::{Context, Poll, Wake, Waker};
     struct Probe {
         kura: Arc<Kura>,
         calls: AtomicUsize,
@@ -570,6 +567,8 @@ fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
     }
     for abandon in [false, true] {
         let kura = kura_with_limit(2);
+        let mut registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let mut range = kura.reserve_membership_range(1).expect("original range");
         let wait = match kura
             .reserve_membership_range(1)
@@ -595,9 +594,8 @@ fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
             locked: AtomicUsize::new(0),
         });
         let waker = Waker::from(Arc::clone(&probe));
-        let mut pending = Box::pin(wait.clone().wait_for_release());
         assert_eq!(
-            pending.as_mut().poll(&mut Context::from_waker(&waker)),
+            registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
             Poll::Pending
         );
         if abandon {
@@ -625,16 +623,25 @@ fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         assert_eq!(probe.locked.load(Ordering::SeqCst), 0);
         assert_eq!(
-            pending.as_mut().poll(&mut Context::from_waker(&waker)),
+            registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
             Poll::Ready(())
         );
+        registration.cancel();
         // No polling registration was needed to observe this actual earlier release.
         assert_eq!(
-            Box::pin(wait.wait_for_release())
-                .as_mut()
-                .poll(&mut Context::from_waker(&waker)),
+            registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
             Poll::Ready(())
         );
+        let budget = kura.transaction_history_budget();
+        let reserved = budget.reserved_bytes();
+        let bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+        assert!(registration.belongs_to(&budget));
+        assert!(
+            reserved >= bytes,
+            "completed registration retains its physical charge"
+        );
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), reserved - bytes);
     }
 }
 

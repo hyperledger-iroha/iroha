@@ -4,6 +4,54 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Unified Torii collection queries (`specs/torii/collection_queries.md`). Every
+  collection is a `ToriiCollection` on both `ToriiClient` and
+  `ToriiBrowserClient` (`domains`, `accounts`, `assetDefinitions`, `nfts`,
+  `rwas`, `repoAgreements`, `transactions`, `accountAssets(id)`,
+  `assetHolders(id)`, `accountTransactions(id)`) with `list()`, `pages()` and
+  `iterate()` over `POST <collection>/query`. The shared query core exports the
+  `field()` builder, `Filter` (canonical text and JSON forms, checked against
+  `fixtures/torii/list_query/vectors.json`), `SortKey`, `ListQuery` and
+  `decodePage`; pages are `{ items, nextCursor, total }`. Transaction
+  collections are history collections that reject `sort`, `includeTotal` and
+  `aggregate`. The `list*`/`query*`/`iterate*`/`iterate*Query` collection
+  helpers, `queryTransactions`/`iterateTransactionsQuery`, the
+  `*TransactionStatusTyped` and `submitTransactionAndWaitTyped` duplicates, the
+  offset/`count_mode`/`fetch_size` options and the `{Eq: ...}` filter
+  validators are removed.
+- One error hierarchy for both clients: `ToriiError` (`code`, `details`), with
+  `ToriiHttpError` (`status`, envelope `code`/`message`/`details`,
+  `x-iroha-reject-code`), `ListQueryError`, `FilterSyntaxError` (`line`,
+  `column`) and `ToriiStreamGapError`. `ToriiBrowserHttpError` and
+  `ToriiBrowserStreamGapError` are removed.
+- `streamEvents({ filter })` takes the collection-query text grammar (a
+  `Filter`, text or the JSON form) on both clients; the retired
+  `{Pipeline: ...}`/`{VerifyingKey: ...}` filter objects are rejected. Aborting
+  the signal or leaving the loop cancels the response body. Payload frames are
+  typed as `ToriiEventFrame<ToriiEventPayload>`, a union discriminated on
+  `category`, `event` and `status` (transaction rejections carry
+  `rejection_code` and `rejection_reason`); unrecognized kinds pass through
+  unchanged, u64 values beyond `Number.MAX_SAFE_INTEGER` decode as `bigint`,
+  and a payload that is not a JSON object fails with `invalid_response`. The
+  stale `MergeLedger` event and `status: string` typings are removed.
+- Collection row types mark only the identifying fields as always present;
+  every other field is optional and nullable, and u64 fields are `ToriiU64`.
+  Transaction rows carry `block_height`, `block_index`, `block_hash`,
+  `asset_ids` and `asset_definition_ids` (no `asset_id`).
+- Fixed: base URL path prefixes are kept; `getHealth()`/`getMetrics()` read
+  `/health` and `/metrics`; the public capability preflight sends no
+  credentials and no longer caches a failed or mismatched probe;
+  `fetchImpl` is never called with a client receiver; the browser client no
+  longer lowercases sort keys; `submitTransactionAndWait` derives the
+  transaction hash from the signed bytes and only verifies an asserted
+  `hashHex`; body reads honour abort signals.
+
+- Corrected retail-fee quote and assessment framing to use the declared 16-byte
+  Norito schema identities. Canonical markers and payment-intent hashes now use
+  the same header layout as the native codecs.
+- Validation-fee proof projections accept their exact declared fields regardless
+  of declaration order; missing and unexpected policy fields remain rejected.
+
 - Added the browser-safe `@iroha/iroha-js/petal` entry point: a pure
   JavaScript port of the `iroha_petal` Petal Stream optical transport (encoder
   bit-exact with the shared fixtures, decoder step by step). It
@@ -16,11 +64,17 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   no DOM globals at import time. The tile lanes are read against the finder
   light and dark levels first, and any lane that does not decode is re-read with
   a per-tile normalised read, so over-exposure, veiling light and shadows no
-  longer cost lane `K`. The shared `fixtures/petal` stream vectors and golden
-  camera captures (nine, including over-exposed, veiled and shadowed frames) are
-  part of the unit suite; the `PetalCameraScanner` documentation lists the
-  camera setup the decoder is calibrated for (about 1280×720, exposure
-  compensation of about -1 EV).
+  longer cost lane `K`. Three corner blossoms that form a corner are enough: the
+  hidden fourth is inferred, refined against the rings and reported as
+  `inferredCorner`, and orientations are ranked by the ring gates plus the `天`.
+  `PetalScanSession` follows a decoded code into the next frames by tracking its
+  pose (`trackPetalFrame`, 500 ms window) and counts `tracked` and `inferred`
+  frames; `PetalCameraScanner` passes those counters to `onProgress`. The shared
+  `fixtures/petal` stream vectors, golden camera captures (eleven, including
+  over-exposed, veiled, shadowed, covered-corner and cut-corner frames) and
+  tracking pairs are part of the unit suite; the `PetalCameraScanner`
+  documentation lists the camera setup the decoder is calibrated for (about
+  1280×720, exposure compensation of about -1 EV).
 
 - `getPipelinePreflight()` parses exactly the served `GET /v1/pipeline/preflight`
   body, checked against the Rust-generated `fixtures/torii/pipeline_preflight.json`:

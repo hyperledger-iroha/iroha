@@ -182,6 +182,8 @@ export interface PetalResolvedScanLimits {
 
 /** Default scan-session limits. */
 export const PETAL_DEFAULT_SCAN_LIMITS: PetalResolvedScanLimits;
+/** How long (in milliseconds) a scan session tracks a code from its last decoded pose (500). */
+export const PETAL_TRACK_WINDOW_MS: number;
 
 // ------------------------------------------------------------------ primitives
 
@@ -520,6 +522,14 @@ export interface PetalComponent {
 /** Four finders, clockwise from the top-left. */
 export type PetalFinderQuad = [PetalFinder, PetalFinder, PetalFinder, PetalFinder];
 
+/** One plausible set of corner finders for a frame. */
+export interface PetalFinderSet {
+  /** The four corners, clockwise from the one nearest the top-left of the image. */
+  readonly corners: PetalFinderQuad;
+  /** Index into `corners` of a corner that was not seen but inferred from the other three. */
+  readonly inferred: number | null;
+}
+
 /** Marks pixels clearly brighter than their neighbourhood (local mean via an integral image). */
 export function adaptiveBinarize(image: PetalLumaLike, sensitivity: number): Uint8Array;
 /** Labels 4-connected components, ordered by first appearance in raster order. */
@@ -528,9 +538,28 @@ export function labelComponents(mask: ArrayLike<number | boolean>, width: number
 export function blossoms(components: readonly PetalComponent[]): PetalFinder[];
 /** Chooses the four finders that look like the corners of one code, combining candidates largest first. */
 export function selectQuad(finders: readonly PetalFinder[]): PetalFinderQuad | null;
+/**
+ * Chooses three finders that look like three corners of one code (similar sizes, two similar legs
+ * at a roughly right angle) and completes the fourth corner as a parallelogram: the clockwise
+ * quad and the index of the inferred corner in it.
+ */
+export function selectTriple(
+  finders: readonly PetalFinder[],
+): { readonly corners: PetalFinderQuad; readonly inferred: number } | null;
 /** Sharpens a finder centre with an intensity-weighted centroid. */
 export function refineCenter(image: PetalLumaLike, finder: PetalFinder): PetalFinder;
-/** Locates the four corner finders, trying progressively stricter thresholds. */
+/**
+ * Re-finds a finder near where it is expected (from the previous frame's pose); `null` when
+ * nothing bright is there or it moved more than 0.75 diameters.
+ */
+export function followFinder(image: PetalLumaLike, expected: PetalFinder): PetalFinder | null;
+/**
+ * All candidate finder sets of a frame in the order the decoder tries them: for each threshold
+ * the quad of the large blobs, then three large blobs forming a corner completed by a smaller
+ * blob, the quad of smaller blobs, and last the corner with its fourth finder inferred.
+ */
+export function locateCandidates(image: PetalLumaLike): PetalFinderSet[];
+/** Locates four seen corner finders (the first candidate without an inferred corner). */
 export function locate(image: PetalLumaLike): PetalFinderQuad | null;
 
 // ------------------------------------------------------------------ decoder
@@ -561,6 +590,12 @@ export class PetalDecodedFrame {
   readonly p: PetalLaneResult | null;
   readonly k: PetalLaneResult | null;
   readonly d: PetalLaneResult | null;
+  /**
+   * The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
+   * inferred from the other three, as its canonical index: 0 top-left, 1 top-right,
+   * 2 bottom-right, 3 bottom-left of the upright code; `null` when all four were seen.
+   */
+  readonly inferredCorner: number | null;
   /** Number of lanes that decoded. */
   lanesOk(): number;
   /** What lane `D` carried, when it decoded. */
@@ -576,6 +611,8 @@ export class PetalDecodedFrame {
 /**
  * Decodes one camera frame.
  *
+ * Four corner blossoms are looked for, or three that form a corner with the fourth inferred
+ * (reported in `inferredCorner`); orientations are ranked by the ring gates plus the `天`.
  * Lanes `P` and `K` are read against the light and dark levels measured at the
  * finders first; a lane that does not decode that way is re-read with a
  * normalised read that rescales every tile by its own contrast (over-exposure,
@@ -597,17 +634,31 @@ export function decodePetalFrameAt(
   options?: PetalDecodeOptions,
 ): PetalDecodedFrame | null;
 
+/**
+ * Follows a code from the previous frame that decoded without searching the whole image for
+ * finders: each corner is re-found near where the previous pose puts it (a previously hidden
+ * blossom counts again once it is back where the others predict it), one lost corner is
+ * inferred, and the orientation is kept. `null` for a broken previous pose, when two corners are
+ * lost or when no lane decodes (run {@link decodePetalFrame} then). {@link PetalScanSession}
+ * does this by itself.
+ */
+export function trackPetalFrame(
+  image: PetalLumaLike,
+  previous: PetalDecodedFrame,
+  options?: PetalDecodeOptions,
+): PetalDecodedFrame | null;
+
 /** The cells the decoder believes it saw, for diagnostics. */
 export function observedCells(
   image: PetalLumaLike,
-  frame: { readonly homography: PetalHomography },
+  frame: { readonly homography: PetalHomography; readonly inferredCorner?: number | null },
   options?: PetalDecodeOptions,
 ): PetalFrameCells | null;
 
 /** Mean squared tile-match error, a quick image-quality indicator. */
 export function tileMatchError(
   image: PetalLumaLike,
-  frame: { readonly homography: PetalHomography },
+  frame: { readonly homography: PetalHomography; readonly inferredCorner?: number | null },
   options?: PetalDecodeOptions,
 ): number | null;
 
@@ -700,6 +751,10 @@ export interface PetalScanStats {
   readonly laneP: number;
   readonly laneK: number;
   readonly laneD: number;
+  /** Frames read by tracking the previous pose instead of a full search. */
+  readonly tracked: number;
+  /** Frames read with one corner finder hidden and inferred. */
+  readonly inferred: number;
 }
 
 /** The result of offering one camera frame. */
@@ -722,9 +777,12 @@ export class PetalScanSession {
   readonly limits: PetalResolvedScanLimits;
   stats(): PetalScanStats;
   progress(): PetalProgress;
-  /** Drops all partial state. */
+  /** Drops all partial state, including the pose used for tracking. */
   reset(): void;
-  /** Offers one camera luma plane captured at monotonic time `nowMs`. */
+  /**
+   * Offers one camera luma plane captured at monotonic time `nowMs`. While the last decoded pose
+   * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it.
+   */
   push(image: PetalLumaLike, nowMs: number): PetalScanOutcome;
 }
 
@@ -809,7 +867,11 @@ export interface PetalCameraScannerOptions {
   readonly maxSide?: number;
   /** Stop once a payload completed (default `true`). */
   readonly stopOnComplete?: boolean;
-  readonly onProgress?: (outcome: PetalScanOutcome) => void;
+  /**
+   * Called after every analysed frame with its outcome and the session's counters
+   * (`stats.inferred` grows while a corner blossom is hidden).
+   */
+  readonly onProgress?: (outcome: PetalScanOutcome, stats: PetalScanStats) => void;
   readonly onComplete?: (completed: PetalCompleted) => void;
   readonly onError?: (error: unknown) => void;
   readonly createCanvas?: (width: number, height: number) => PetalScanCanvas;
@@ -822,7 +884,8 @@ export interface PetalCameraScannerOptions {
 /**
  * Reads a stream from a camera: frames come from `requestVideoFrameCallback`
  * (or `requestAnimationFrame`), are downsized on an offscreen canvas,
- * converted to Rec. 601 luma and fed to a {@link PetalScanSession}.
+ * converted to Rec. 601 luma and fed to a {@link PetalScanSession} (which tracks the code from
+ * frame to frame and reads it with one corner blossom hidden).
  *
  * The scanner does not change the camera's settings; set the stream up like
  * this (evidence: `specs/petal_stream.md` section 8, "Scanner guidance"):

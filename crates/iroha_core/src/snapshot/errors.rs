@@ -22,6 +22,8 @@ pub enum TryReadError {
     StateNativeLaneCustody(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local original-pool admission of the restored native schedule failed: {0}
     StateNativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
+    /// Local original-pool admission of the restored native participant failed: {0}
+    StateNativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
@@ -164,6 +166,9 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             crate::state::deserialize::StateRestoreError::NativeSchedule(error) => {
                 Self::StateNativeSchedule(error)
             }
+            crate::state::deserialize::StateRestoreError::NativeAmx(error) => {
+                Self::StateNativeAmx(error)
+            }
         }
     }
 }
@@ -222,6 +227,14 @@ pub(super) enum TryWriteError {
         height: u64,
         /// Exact fail-closed evidence violation.
         reason: String,
+    },
+    /// Snapshot at height `{height}` could not read commit evidence under its original local resources: {reason}
+    CommitEvidenceResourceDeferred {
+        /// Height encoded by the serialized snapshot itself.
+        height: u64,
+        /// Exact original local retry owner; this is not evidence of an invalid snapshot.
+        #[source]
+        reason: crate::execution_attempt::ExecutionDeferred,
     },
     /// Snapshot at height `{height}` is waiting for its in-flight durable commit tuple: {reason}
     CommitEvidenceDeferred {

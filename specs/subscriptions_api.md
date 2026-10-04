@@ -255,8 +255,12 @@ Response:
 ```
 
 ### GET /v1/subscriptions/plans
+Account filters accept exact canonical I105 ids. Resolve an account alias separately
+through its authenticated alias route with the exact `CanResolveAccountAlias` grant,
+then supply the returned canonical id. Public subscription reads do not resolve aliases.
+
 Query params:
-- `provider` (optional) - filter by provider account id.
+- `provider` (optional) - filter by exact canonical I105 provider account id.
 - `limit`, `offset` (optional) - pagination.
 Response:
 ```json
@@ -323,8 +327,8 @@ state, reconstruct a transaction with exactly `tx_instructions`, sign it locally
 
 ### GET /v1/subscriptions
 Query params:
-- `owned_by` (optional) - filter by subscriber account id.
-- `provider` (optional) - filter by provider account id.
+- `owned_by` (optional) - filter by exact canonical I105 subscriber account id.
+- `provider` (optional) - filter by exact canonical I105 provider account id.
 - `status` (optional) - one of `active`, `paused`, `past_due`, `canceled`, `suspended`.
 - `limit`, `offset` (optional) - pagination.
 Response:
@@ -460,7 +464,7 @@ typed unsigned drafts, and do not accept account or private-key overrides:
 iroha --config client.toml subscriptions plan prepare \
   --plan-id '<canonical-asset-definition-id>' --plan-json plan.json
 iroha --config client.toml subscriptions plan list \
-  --provider '<canonical-account-id-or-alias>' --limit 10 --count-mode exact
+  --provider '<canonical-account-id>' --limit 10 --count-mode exact
 iroha --config client.toml subscriptions subscription prepare \
   --subscription-id 'sub-001$subscriptions.universal' \
   --plan-id '<canonical-asset-definition-id>'

@@ -95,7 +95,16 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
     });
     match result {
         Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+            // Fault probes retain the exact status, but a rejected or incomplete
+            // state never receives a successful-dispatch receipt. Production
+            // callers quarantine invalid results before publishing any value.
+            super::output_validation::poseidon(
+                output.status,
+                output.state.as_deref(),
+                input.width(),
+                input.len(),
+                || super::imp::record_completed_cuda_dispatch(input.kernel(), ARTIFACT),
+            );
             Ok(output)
         }
         Err(error) => {
@@ -111,18 +120,13 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
 }
 
 fn valid_output(output: &launch::Output, input: Input<'_>) -> bool {
-    let Some(state) = output.state.as_ref() else {
-        return false;
-    };
-    output.status == [0, 0]
-        && state.len() == input.len() * input.width() * 4
-        && state.chunks_exact(4).all(|field| {
-            field
-                .iter()
-                .rev()
-                .cmp(crate::bn254_vec::MODULUS.iter().rev())
-                .is_lt()
-        })
+    super::output_validation::poseidon(
+        output.status,
+        output.state.as_deref(),
+        input.width(),
+        input.len(),
+        || {},
+    )
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {

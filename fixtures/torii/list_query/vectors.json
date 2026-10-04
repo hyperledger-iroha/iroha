@@ -1,0 +1,840 @@
+{
+  "filter_errors": [
+    {
+      "column": 1,
+      "line": 1,
+      "message": "expected a filter expression",
+      "text": ""
+    },
+    {
+      "column": 17,
+      "line": 1,
+      "message": "use the keyword `and` instead of `&` or `&&`",
+      "text": "owned_by == \"x\" && quantity > 1"
+    },
+    {
+      "column": 7,
+      "line": 1,
+      "message": "use the keyword `or` instead of `|` or `||`",
+      "text": "a = 1 || b = 2"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "use the keyword `not` instead of `!`",
+      "text": "!a = 1"
+    },
+    {
+      "column": 11,
+      "line": 1,
+      "message": "expected a literal value, found the end of the input",
+      "text": "quantity >"
+    },
+    {
+      "column": 10,
+      "line": 1,
+      "message": "expected a literal value, found `active`; quote text values, e.g. \"active\"",
+      "text": "status = active"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "expected a field name on the left-hand side, e.g. `quantity > 5`",
+      "text": "5 < quantity"
+    },
+    {
+      "column": 11,
+      "line": 1,
+      "message": "expected `]` to close the `[` at column 6, found the end of the input",
+      "text": "a in [1, 2"
+    },
+    {
+      "column": 7,
+      "line": 1,
+      "message": "unexpected `b` after a complete filter; combine conditions with `and` or `or`",
+      "text": "a = 1 b = 2"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "wrap field names containing `-` in backticks, e.g. `display-name`",
+      "text": "display-name = 1"
+    },
+    {
+      "column": 5,
+      "line": 1,
+      "message": "exponent notation is not supported; write the full decimal value",
+      "text": "a = 1e5"
+    },
+    {
+      "column": 5,
+      "line": 1,
+      "message": "numbers must not have leading zeros",
+      "text": "a = 007"
+    },
+    {
+      "column": 5,
+      "line": 1,
+      "message": "decimal literals need a leading digit, e.g. `0.5`",
+      "text": "a = .5"
+    },
+    {
+      "column": 5,
+      "line": 1,
+      "message": "unterminated string literal",
+      "text": "a = \"open"
+    },
+    {
+      "column": 7,
+      "line": 1,
+      "message": "unexpected `:`; compare values with `=`, e.g. `status = \"active\"`",
+      "text": "status:active"
+    },
+    {
+      "column": 7,
+      "line": 1,
+      "message": "value lists must not be empty",
+      "text": "a in []"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "invalid operand for `a`: membership list values must be unique",
+      "text": "a in [1, 1]"
+    },
+    {
+      "column": 6,
+      "line": 1,
+      "message": "expected `null` or `not null` after `is`; compare values with `=`",
+      "text": "a is 1"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "expected a field name, found the keyword `and`; quote a field with this name as `and` in backticks",
+      "text": "and = 1"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "invalid operand for `a`: range comparisons need a number, decimal or string literal",
+      "text": "a <= null"
+    },
+    {
+      "column": 7,
+      "line": 2,
+      "message": "unexpected character `~`",
+      "text": "a = 1\nand b ~ 2"
+    }
+  ],
+  "filters": [
+    {
+      "canonical": "owned_by = \"alice\"",
+      "json": {
+        "args": [
+          "owned_by",
+          "alice"
+        ],
+        "op": "eq"
+      },
+      "text": "owned_by = \"alice\""
+    },
+    {
+      "canonical": "owned_by = \"alice\" and quantity >= \"10.5\"",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "owned_by",
+              "alice"
+            ],
+            "op": "eq"
+          },
+          {
+            "args": [
+              "quantity",
+              "10.5"
+            ],
+            "op": "gte"
+          }
+        ],
+        "op": "and"
+      },
+      "text": "owned_by = 'alice'   AND quantity>=10.5"
+    },
+    {
+      "canonical": "a = 1",
+      "json": {
+        "args": [
+          "a",
+          1
+        ],
+        "op": "eq"
+      },
+      "text": "a == 1"
+    },
+    {
+      "canonical": "a != -2",
+      "json": {
+        "args": [
+          "a",
+          -2
+        ],
+        "op": "ne"
+      },
+      "text": "a <> -2"
+    },
+    {
+      "canonical": "a < \"340282366920938463463374607431768211455\"",
+      "json": {
+        "args": [
+          "a",
+          "340282366920938463463374607431768211455"
+        ],
+        "op": "lt"
+      },
+      "text": "a < 340282366920938463463374607431768211455"
+    },
+    {
+      "canonical": "a <= 0 or b > \"1.25\"",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "a",
+              0
+            ],
+            "op": "lte"
+          },
+          {
+            "args": [
+              "b",
+              "1.25"
+            ],
+            "op": "gt"
+          }
+        ],
+        "op": "or"
+      },
+      "text": "a <= 0 or b > 1.25"
+    },
+    {
+      "canonical": "flag = true and other = false and gone = null",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "flag",
+              true
+            ],
+            "op": "eq"
+          },
+          {
+            "args": [
+              "other",
+              false
+            ],
+            "op": "eq"
+          },
+          {
+            "args": [
+              "gone",
+              null
+            ],
+            "op": "eq"
+          }
+        ],
+        "op": "and"
+      },
+      "text": "flag = true and other = false and gone = null"
+    },
+    {
+      "canonical": "status in [\"active\", \"paused\"]",
+      "json": {
+        "args": [
+          "status",
+          [
+            "active",
+            "paused"
+          ]
+        ],
+        "op": "in"
+      },
+      "text": "status in [\"active\", \"paused\",]"
+    },
+    {
+      "canonical": "tier not in [1, 2, 3]",
+      "json": {
+        "args": [
+          "tier",
+          [
+            1,
+            2,
+            3
+          ]
+        ],
+        "op": "nin"
+      },
+      "text": "tier NOT IN (1, 2, 3)"
+    },
+    {
+      "canonical": "exists(metadata.tier)",
+      "json": {
+        "args": [
+          "metadata.tier"
+        ],
+        "op": "exists"
+      },
+      "text": "exists(metadata.tier)"
+    },
+    {
+      "canonical": "note is null",
+      "json": {
+        "args": [
+          "note"
+        ],
+        "op": "is_null"
+      },
+      "text": "note is null"
+    },
+    {
+      "canonical": "note is not null",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "note"
+            ],
+            "op": "is_null"
+          }
+        ],
+        "op": "not"
+      },
+      "text": "note IS NOT NULL"
+    },
+    {
+      "canonical": "not exists(metadata.archived)",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "metadata.archived"
+            ],
+            "op": "exists"
+          }
+        ],
+        "op": "not"
+      },
+      "text": "not exists(metadata.archived)"
+    },
+    {
+      "canonical": "a = 1 or not b = 2 and c = 3",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "a",
+              1
+            ],
+            "op": "eq"
+          },
+          {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "b",
+                      2
+                    ],
+                    "op": "eq"
+                  }
+                ],
+                "op": "not"
+              },
+              {
+                "args": [
+                  "c",
+                  3
+                ],
+                "op": "eq"
+              }
+            ],
+            "op": "and"
+          }
+        ],
+        "op": "or"
+      },
+      "text": "a = 1 or not b = 2 and c = 3"
+    },
+    {
+      "canonical": "(a = 1 or b = 2) and c = 3",
+      "json": {
+        "args": [
+          {
+            "args": [
+              {
+                "args": [
+                  "a",
+                  1
+                ],
+                "op": "eq"
+              },
+              {
+                "args": [
+                  "b",
+                  2
+                ],
+                "op": "eq"
+              }
+            ],
+            "op": "or"
+          },
+          {
+            "args": [
+              "c",
+              3
+            ],
+            "op": "eq"
+          }
+        ],
+        "op": "and"
+      },
+      "text": "(a = 1 or b = 2) and c = 3"
+    },
+    {
+      "canonical": "not (a = 1 and b = 2)",
+      "json": {
+        "args": [
+          {
+            "args": [
+              {
+                "args": [
+                  "a",
+                  1
+                ],
+                "op": "eq"
+              },
+              {
+                "args": [
+                  "b",
+                  2
+                ],
+                "op": "eq"
+              }
+            ],
+            "op": "and"
+          }
+        ],
+        "op": "not"
+      },
+      "text": "not (a = 1 and b = 2)"
+    },
+    {
+      "canonical": "not not a = 1",
+      "json": {
+        "args": [
+          {
+            "args": [
+              {
+                "args": [
+                  "a",
+                  1
+                ],
+                "op": "eq"
+              }
+            ],
+            "op": "not"
+          }
+        ],
+        "op": "not"
+      },
+      "text": "not not a = 1"
+    },
+    {
+      "canonical": "metadata.`display-name` = \"x\"",
+      "json": {
+        "args": [
+          "metadata.display-name",
+          "x"
+        ],
+        "op": "eq"
+      },
+      "text": "metadata.`display-name` = \"x\""
+    },
+    {
+      "canonical": "`and` = 1",
+      "json": {
+        "args": [
+          "and",
+          1
+        ],
+        "op": "eq"
+      },
+      "text": "`and` = 1"
+    },
+    {
+      "canonical": "metadata.null = 1",
+      "json": {
+        "args": [
+          "metadata.null",
+          1
+        ],
+        "op": "eq"
+      },
+      "text": "metadata.null = 1"
+    },
+    {
+      "canonical": "text = \"quote \\\" backslash \\\\ newline \\n unicode é\"",
+      "json": {
+        "args": [
+          "text",
+          "quote \" backslash \\ newline \n unicode é"
+        ],
+        "op": "eq"
+      },
+      "text": "text = \"quote \\\" backslash \\\\ newline \\n unicode é\""
+    },
+    {
+      "canonical": "tx_hash = \"hash\" and tx_status in [\"Approved\", \"Rejected\"]",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "tx_hash",
+              "hash"
+            ],
+            "op": "eq"
+          },
+          {
+            "args": [
+              "tx_status",
+              [
+                "Approved",
+                "Rejected"
+              ]
+            ],
+            "op": "in"
+          }
+        ],
+        "op": "and"
+      },
+      "text": "tx_hash = \"hash\" and tx_status in [\"Approved\", \"Rejected\"]"
+    }
+  ],
+  "pages": [
+    {
+      "has_more": true,
+      "json": {
+        "items": [
+          {
+            "id": "a"
+          }
+        ],
+        "next_cursor": "q1_next",
+        "total": 3
+      }
+    },
+    {
+      "has_more": false,
+      "json": {
+        "items": [],
+        "next_cursor": null
+      }
+    }
+  ],
+  "queries": [
+    {
+      "body": {},
+      "query_pairs": []
+    },
+    {
+      "body": {
+        "filter": {
+          "args": [
+            {
+              "args": [
+                "owned_by",
+                "alice"
+              ],
+              "op": "eq"
+            },
+            {
+              "args": [
+                "quantity",
+                1
+              ],
+              "op": "gt"
+            }
+          ],
+          "op": "and"
+        },
+        "include_total": true,
+        "limit": 25,
+        "select": [
+          "id",
+          "quantity"
+        ],
+        "sort": [
+          "-quantity",
+          "id"
+        ]
+      },
+      "query_pairs": [
+        [
+          "filter",
+          "owned_by = \"alice\" and quantity > 1"
+        ],
+        [
+          "sort",
+          "-quantity,id"
+        ],
+        [
+          "select",
+          "id,quantity"
+        ],
+        [
+          "limit",
+          "25"
+        ],
+        [
+          "include_total",
+          "true"
+        ]
+      ]
+    },
+    {
+      "body": {
+        "cursor": "q1_abc-DEF",
+        "limit": 10
+      },
+      "query_pairs": [
+        [
+          "limit",
+          "10"
+        ],
+        [
+          "cursor",
+          "q1_abc-DEF"
+        ]
+      ]
+    }
+  ],
+  "query_body_errors": [
+    {
+      "body": {
+        "pagination": {
+          "limit": 1
+        }
+      },
+      "code": "invalid_query",
+      "parameter": "query"
+    },
+    {
+      "body": {
+        "filter": "a ="
+      },
+      "code": "invalid_filter",
+      "parameter": "filter"
+    },
+    {
+      "body": {
+        "filter": {
+          "op": "eq"
+        }
+      },
+      "code": "invalid_filter",
+      "parameter": "filter"
+    },
+    {
+      "body": {
+        "sort": "id"
+      },
+      "code": "invalid_sort",
+      "parameter": "sort"
+    },
+    {
+      "body": {
+        "sort": [
+          "id:desc"
+        ]
+      },
+      "code": "invalid_sort",
+      "parameter": "sort"
+    },
+    {
+      "body": {
+        "select": []
+      },
+      "code": "invalid_select",
+      "parameter": "select"
+    },
+    {
+      "body": {
+        "aggregate": {
+          "metrics": [
+            {
+              "alias": "n",
+              "fn": "count"
+            }
+          ]
+        },
+        "select": [
+          "id"
+        ]
+      },
+      "code": "invalid_select",
+      "parameter": "select"
+    },
+    {
+      "body": {
+        "limit": 0
+      },
+      "code": "invalid_limit",
+      "parameter": "limit"
+    },
+    {
+      "body": {
+        "cursor": "has space"
+      },
+      "code": "invalid_cursor",
+      "parameter": "cursor"
+    },
+    {
+      "body": {
+        "include_total": "yes"
+      },
+      "code": "invalid_include_total",
+      "parameter": "include_total"
+    },
+    {
+      "body": [],
+      "code": "invalid_query",
+      "parameter": "query"
+    }
+  ],
+  "query_pair_errors": [
+    {
+      "code": "invalid_query",
+      "parameter": "query",
+      "query_pairs": [
+        [
+          "offset",
+          "10"
+        ]
+      ]
+    },
+    {
+      "code": "invalid_limit",
+      "parameter": "limit",
+      "query_pairs": [
+        [
+          "limit",
+          "ten"
+        ]
+      ]
+    },
+    {
+      "code": "invalid_limit",
+      "parameter": "limit",
+      "query_pairs": [
+        [
+          "limit",
+          "1"
+        ],
+        [
+          "limit",
+          "2"
+        ]
+      ]
+    },
+    {
+      "code": "invalid_sort",
+      "parameter": "sort",
+      "query_pairs": [
+        [
+          "sort",
+          "id:asc"
+        ]
+      ]
+    },
+    {
+      "code": "invalid_include_total",
+      "parameter": "include_total",
+      "query_pairs": [
+        [
+          "include_total",
+          "1"
+        ]
+      ]
+    },
+    {
+      "code": "invalid_select",
+      "parameter": "select",
+      "query_pairs": [
+        [
+          "select",
+          "id,,name"
+        ]
+      ]
+    }
+  ],
+  "sort_errors": [
+    {
+      "column": 3,
+      "line": 1,
+      "message": "unexpected `:`; write `field` for ascending and `-field` for descending order",
+      "text": "id:desc"
+    },
+    {
+      "column": 4,
+      "line": 1,
+      "message": "write `field` for ascending and `-field` for descending order",
+      "text": "id desc"
+    },
+    {
+      "column": 4,
+      "line": 1,
+      "message": "sort key `id` appears more than once",
+      "text": "id,-id"
+    },
+    {
+      "column": 1,
+      "line": 1,
+      "message": "expected at least one sort key",
+      "text": ""
+    },
+    {
+      "column": 4,
+      "line": 1,
+      "message": "expected a field name, found the end of the input",
+      "text": "id,"
+    }
+  ],
+  "sorts": [
+    {
+      "canonical": "-quantity,id,metadata.`ui-order`",
+      "json": [
+        "-quantity",
+        "id",
+        "metadata.`ui-order`"
+      ],
+      "text": "-quantity, id ,metadata.`ui-order`"
+    },
+    {
+      "canonical": "id",
+      "json": [
+        "id"
+      ],
+      "text": "id"
+    },
+    {
+      "canonical": "-alias_binding.bound_at_ms",
+      "json": [
+        "-alias_binding.bound_at_ms"
+      ],
+      "text": "-alias_binding.bound_at_ms"
+    }
+  ],
+  "version": 1
+}

@@ -295,6 +295,7 @@ fn trigger_component_block(state: &State, height: u64) -> ValidBlock {
     let parent = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("original trigger genesis");
     let time_ms = u64::try_from(parent.header().creation_time().as_millis())
         .expect("trigger fixture timestamp fits")
@@ -320,7 +321,7 @@ state_test! { sync trigger_fixture_retains_original_genesis_and_refuses_a_pristi
     assert!(crate::sumeragi::lanes::routing::committed_root_scope(view.world()).is_some());
     let carrier = trigger_component_block(&original, 2);
     assert_eq!(carrier.as_ref().header().prev_block_hash(), view.latest_block_hash());
-    assert!(carrier.as_ref().header().creation_time() > view.latest_block().unwrap().header().creation_time());
+    assert!(carrier.as_ref().header().creation_time() > view.latest_block().expect("completed original State read").unwrap().header().creation_time());
     let pristine = blank_state();
     assert!(crate::sumeragi::lanes::routing::committed_root_scope(pristine.view().world()).is_none());
 }
@@ -516,22 +517,6 @@ fn fixture_updated_storage_identity(
     }
 }
 
-fn fixture_pending_autoscale_storage_identity(
-    state: &State,
-    block: &StateBlock<'_>,
-    lane_id: LaneId,
-) -> crate::kura::LaneStorageIdentity {
-    fixture_updated_storage_identity(
-        state,
-        &block
-            .pending_autoscale_lifecycle
-            .as_ref()
-            .expect("actual staged autoscale lifecycle")
-            .catalog_update,
-        lane_id,
-    )
-}
-
 fn fixture_manual_lifecycle_storage_identity(
     state: &State,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -717,7 +702,7 @@ state_test! { sync musubi_v1_world_defaults_and_domain_generation_are_determinis
 }
 state_test! { sync musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_safe
     let state = blank_test_state();
-    let genesis = Arc::new(empty_signed_block_after(None, 1));
+    let genesis = crate::block::reserve_block_for_tests().initialize(empty_signed_block_after(None, 1));
     store_block_for_state_commit(&state.kura, &genesis);
     {
         let mut block = state.block(genesis.as_ref().header());
@@ -735,7 +720,7 @@ state_test! { sync musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_
             *genesis.as_ref().hash().as_ref()
         );
     }
-    let unchanged = Arc::new(empty_signed_block_after(Some(&genesis), 2));
+    let unchanged = crate::block::reserve_block_for_tests().initialize(empty_signed_block_after(Some(&genesis), 2));
     store_block_for_state_commit(&state.kura, &unchanged);
     {
         let mut block = state.block(unchanged.as_ref().header());
@@ -752,7 +737,7 @@ state_test! { sync musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_
         1,
         "unchanged blocks must not duplicate resolver checkpoints"
     );
-    let jumped = Arc::new(empty_signed_block_after(Some(&unchanged), 3));
+    let jumped = crate::block::reserve_block_for_tests().initialize(empty_signed_block_after(Some(&unchanged), 3));
     store_block_for_state_commit(&state.kura, &jumped);
     {
         let mut block = state.block(jumped.as_ref().header());
@@ -780,7 +765,7 @@ state_test! { sync musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_
             *jumped.as_ref().hash().as_ref()
         );
     }
-    let replacement = Arc::new(empty_signed_block_after(Some(&unchanged), 30));
+    let replacement = crate::block::reserve_block_for_tests().initialize(empty_signed_block_after(Some(&unchanged), 30));
     assert_ne!(jumped.as_ref().hash(), replacement.as_ref().hash());
     {
         let mut block = state.block_and_revert(replacement.as_ref().header());
@@ -6086,7 +6071,7 @@ Default::default(),
 Default::default(),
 &crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hashes should match payload");
-    let_row! { committed = crate::block::ValidBlock::new_unverified_for_tests(block) .commit_unchecked() .unpack(|_| {}) };
+    let_row! { committed = crate::block::ValidBlock::new_unverified_for_tests(block) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     let state_block = state.block(committed.as_ref().header());
     assert!(state_block.verify_execution_output_seal(committed.as_ref()).is_err(),
         "a fabricated committed rejection must not bypass actual source execution");
@@ -6231,7 +6216,7 @@ state_test! { sync query_view_matches_basic_read_only_snapshot_fields
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
     let block_hash = block.hash();
-    kura.store_block(Arc::new(block))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(block))
         .expect("store block in kura");
     {
         let mut block_hashes = state.block_hashes.block();
@@ -6296,7 +6281,7 @@ state_test! { sync latest_block_header_fast_reads_latest_committed_header
     let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
     let header = block.header();
     let block_hash = block.hash();
-    kura.store_block(Arc::new(block))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(block))
         .expect("store block in kura");
     {
         let mut block_hashes = state.block_hashes.block();
@@ -7495,11 +7480,11 @@ fn apply_empty_test_block_metadata(
     state_block: &mut StateBlock<'_>,
     block: &SignedBlock,
 ) {
-    let_row! { committed = ValidBlock::new_unverified_for_tests(block.clone()) .commit_unchecked() .unpack(|_| {}) };
+    let_row! { committed = ValidBlock::new_unverified_for_tests(block.clone()) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed, state.commit_topology_snapshot());
 }
 fn store_block_for_state_commit(kura: &Arc<Kura>, block: &SignedBlock) {
-    kura.store_block(Arc::new(block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(block.clone()))
         .expect("store block before committing its StateBlock");
 }
 fn store_committed_autoscale_history_block_for_test(
@@ -7507,7 +7492,7 @@ fn store_committed_autoscale_history_block_for_test(
     kura: &Arc<Kura>,
     block: &SignedBlock,
 ) {
-    kura.store_block(Arc::new(block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(block.clone()))
         .expect("store committed autoscale history block");
     seed_committed_autoscale_history_block_for_test(state, block);
 }
@@ -7523,15 +7508,6 @@ fn seed_committed_autoscale_history_block_for_test(state: &State, block: &Signed
             &samples,
         )
         .expect("stage explicit committed autoscale history fixture");
-}
-fn insert_empty_transaction_block_for_state_commit(
-    state_block: &mut StateBlock<'_>,
-    block: &SignedBlock,
-) {
-    let_row! { block_height = block .header() .height() .try_into() .expect("test block height must fit transaction storage height") };
-    state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), block_height);
 }
 fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
     let expected_catalog = LaneCatalog::default();
@@ -7683,12 +7659,12 @@ state_test! { sync normal_validation_requires_can_set_parameters_for_lane_lifecy
         let state = chain.state();
         let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( manual_lane_lifecycle_payload().into_custom_parameter(), ))]) .sign(signer.private_key()) };
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-        let parent = state.view().latest_block().expect("original native predecessor");
+        let parent = state.view().latest_block().expect("completed original State read").expect("original native predecessor");
         let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
         let source: SignedBlock = unverified.into();
         let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
-        let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
-        let signed: SignedBlock = committed.into();
+        let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
+        let signed = committed.into_shared();
         if authorized {
             assert!(
                 signed.output_error(0).is_none(),
@@ -7718,15 +7694,15 @@ state_test! { sync signed_lane_lifecycle_transaction_rejects_duplicate_transitio
     );
     let chain = manual_lane_lifecycle_test_chain(world);
     let state = chain.state();
-    let parent = state.view().latest_block().expect("explicit fixture predecessor");
+    let parent = state.view().latest_block().expect("completed original State read").expect("explicit fixture predecessor");
     let_row! { instruction = || { iroha_data_model::isi::SetParameter::new(Parameter::Custom( manual_lane_lifecycle_payload().into_custom_parameter(), )) } };
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([instruction(), instruction()]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
     let source: SignedBlock = unverified.into();
     let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
-    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
-    let signed: SignedBlock = committed.into();
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
+    let signed = committed.into_shared();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("duplicate signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("already staged"), "{rejection}");
     assert_eq!(state_block.nexus.lane_catalog, LaneCatalog::default());
@@ -7756,8 +7732,8 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(first.block().as_ref())) .sign(signer.private_key()) .unpack(|_| {}) };
     let source: SignedBlock = unverified.into();
     let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
-    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
-    let signed: SignedBlock = committed.into();
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
+    let signed = committed.into_shared();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("stale signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("expected catalog hash"), "{rejection}");
     assert_eq!(state_block.nexus.lane_catalog, before);
@@ -7784,38 +7760,6 @@ state_test! { sync signed_lane_lifecycle_rejects_physical_replacement_without_mu
 }
 include!("ordinary_common_tail_tests.rs");
 include!("pipeline_outcome_ownership_tests.rs");
-fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
-    let_row! { block_height = state_block ._curr_block .height() .try_into() .expect("test block height fits storage height") };
-    state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), block_height);
-    // These commit fixtures stage metadata without apply_without_execution.
-    // Complete the one original prepaid hash tip with this exact carrier header.
-    // has_pending excludes the hidden reservation, but detects a prior push.
-    assert!(
-        !state_block.block_hashes.has_pending(),
-        "the fixture must stage its original carrier hash exactly once"
-    );
-    let block_hash = state_block._curr_block.hash();
-    state_block.block_hashes.push(block_hash);
-    assert_eq!(state_block.block_hashes.len(), block_height.get());
-    let pending = state_block.block_hashes.pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending.get(0), Some(&block_hash));
-}
-fn commit_and_store_autoscale_previous_block_for_test(
-    state: &mut State,
-    kura: &Arc<Kura>,
-    block: &SignedBlock,
-) {
-    store_block_for_state_commit(kura, block);
-    let mut state_block = state.block(block.header());
-    let_row! { committed = ValidBlock::new_unverified_for_tests(block.clone()) .commit_unchecked() .unpack(|_| {}) };
-    let _events = state_block.apply_without_execution(&committed, Vec::new());
-    state_block
-        .commit()
-        .expect("commit previous autoscale block");
-}
 fn autoscale_transition_test_nexus(
     lanes: Vec<LaneConfig>,
     min_lane_id: u32,
@@ -7862,42 +7806,6 @@ fn autoscale_drain_keypairs_for_test(count: usize) -> Vec<KeyPair> {
         PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
     });
     keypairs
-}
-fn seed_autoscale_transport_peers_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
-    let_row! { keypairs: Vec<_> = (0..peer_count) .map(|index| { let seed = u8::try_from(index) .expect("autoscale committee test index must fit u8") .saturating_add(0x41); KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal) .expect("deterministic autoscale committee BLS key") }) .collect() };
-    seed_consensus_keys_with_pops(state, &keypairs);
-    let mut topology = state.commit_topology.block();
-    topology.clear();
-    for keypair in &keypairs {
-        topology.push(PeerId::new(keypair.public_key().clone()));
-    }
-    topology.commit();
-    keypairs
-}
-fn seed_governed_autoscale_committee_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
-    let keypairs = seed_autoscale_transport_peers_for_test(state, peer_count);
-    seed_committee_consensus_keys_with_pops(state, &keypairs);
-    let nexus = state.nexus_snapshot();
-    install_lane_manifest_registry(
-        state,
-        &[(
-            nexus.routing_policy.default_lane,
-            nexus.routing_policy.default_dataspace,
-            keypairs
-                .iter()
-                .map(|keypair| AccountId::new(keypair.public_key().clone()))
-                .collect(),
-        )],
-    );
-    keypairs
-}
-fn autoscale_committee_guard_test_state() -> State {
-    let mut state = blank_test_state();
-    install_default_autoscale_test_nexus(
-        &mut state,
-        "apply autoscale committee-guard test nexus config",
-    );
-    state
 }
 #[test]
 fn exact_autoscale_committee_needs_no_beacon_but_selection_and_duplicates_fail_closed() {
@@ -8160,23 +8068,6 @@ fn seed_autoscale_sample_history_for_snapshot_test(state: &State) {
     *runtime.get_mut() = current;
     runtime.commit();
 }
-fn seed_predecessor_height_for_state_commit(state: &State, block: &SignedBlock) {
-    let predecessor_height = block.header().height().get().saturating_sub(1);
-    seed_committed_height_for_state_test(state, predecessor_height);
-    seed_empty_transaction_height_for_state_test(state, predecessor_height);
-}
-fn seed_empty_transaction_height_for_state_test(state: &State, height: u64) {
-    let target = usize::try_from(height).expect("test block height must fit usize");
-    let current = state.transactions.latest_height();
-    for next in current.saturating_add(1)..=target {
-        let_row! { Some(block_height) = NonZeroUsize::new(next) else { continue; } };
-        let mut transactions = state.transactions.block();
-        transactions.insert_block(std::collections::HashSet::new(), block_height);
-        transactions
-            .commit()
-            .expect("seed predecessor transaction block");
-    }
-}
 fn dataspace_catalog_with_extra(dataspace_id: DataSpaceId) -> DataSpaceCatalog {
     DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -8202,7 +8093,7 @@ state_test! { sync collect_autoscale_samples_reads_canonical_runtime_fragment_co
     let mut state_block = state.block(third.header());
     let maintenance_fragments = state_block.committed_fragment_count();
     state_block.add_committed_fragments(29);
-    let_row! { committed_third = ValidBlock::new_unverified_for_tests(third) .commit_unchecked() .unpack(|_| {}) };
+    let_row! { committed_third = ValidBlock::new_unverified_for_tests(third) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     assert!(state_block.stage_autoscale_sample_record(&committed_third));
     let samples = state_block.collect_autoscale_samples(2, 1);
     assert_eq!(samples.len(), 2);
@@ -8217,7 +8108,7 @@ state_test! { sync autoscale_rejects_sample_from_mismatched_state_block_header
     let state = blank_test_state_from_kura(&kura);
     let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
     let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    let_row! { committed_first = ValidBlock::new_unverified_for_tests(first) .commit_unchecked() .unpack(|_| {}) };
+    let_row! { committed_first = ValidBlock::new_unverified_for_tests(first) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     let mut state_block = state.block(second.header());
     assert!(!state_block.stage_autoscale_sample_record(&committed_first));
     assert!(state_block.autoscale_sample_history.is_empty());
@@ -9156,13 +9047,6 @@ fn record_public_lane_staking_status_for_test(lane_id: LaneId, bonded: &Quantity
     crate::status::record_public_lane_bonded_delta(lane_id, bonded, true);
     crate::status::record_public_lane_pending_unbond_delta(lane_id, &Quantity::from(1_u32), true);
     crate::status::record_public_lane_slash(lane_id);
-}
-fn assert_public_lane_staking_status_absent(lane_id: LaneId, context: &str) {
-    let status = crate::status::nexus_staking_snapshot();
-    assert!(
-        status.lanes.iter().all(|lane| lane.lane_id != lane_id),
-        "{context}"
-    );
 }
 fn assert_public_lane_staking_status_bonded(
     lane_id: LaneId,
@@ -11132,7 +11016,7 @@ state_test! { sync configured_lane_catalog_baseline_survives_durable_restart
         let keypair = crate::state::checked_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
-        kura.store_block(Arc::new(block))
+        kura.store_block(crate::block::reserve_block_for_tests().initialize(block))
             .expect("store first block after configured baseline");
     }
     let (kura, mut restarted) = authenticated_startup_state_for_testing(store_root, &configured);
@@ -11253,7 +11137,7 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
         assert_eq!(original.commit(vec![transaction]), vec![true]);
         assert_eq!(original.height(), parent_height + 1);
         assert_eq!(
-            original.state().view().latest_block().unwrap().external_entrypoints_cloned()
+            original.state().view().latest_block().expect("completed original State read").unwrap().external_entrypoints_cloned()
                 .next().unwrap().hash(),
             input_hash,
         );
@@ -13373,14 +13257,6 @@ fn stale_lane_manifest_registry_for_test(
         .collect();
     Arc::new(LaneManifestRegistry::from_statuses(statuses))
 }
-fn install_lane_privacy_commitment_fixture(state: &State, private_lane: LaneId) {
-    use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
-    let nexus = state.nexus_snapshot();
-    let_row! { statuses = nexus .lane_catalog .lanes() .iter() .map(|lane| { let is_private = lane.id == private_lane; let status = LaneManifestStatus { lane: lane.id, alias: lane.alias.clone(), dataspace: lane.dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: is_private .then(|| std::path::PathBuf::from("/tmp/lane-privacy.manifest.json")), governance_rules: None, privacy_commitments: is_private .then(|| { vec![LanePrivacyCommitment::merkle( LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0xA5; 32], 12), )] }) .unwrap_or_default(), }; (lane.id, status) }) .collect() };
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        statuses,
-    )));
-}
 fn install_lane_manifest_registry_for_keypairs(
     state: &State,
     lane_ids: &[LaneId],
@@ -13679,29 +13555,6 @@ fn sample_da_commitment_record(
         checked_da_ack_signature(tag),
     )
 }
-fn seed_da_runtime_record_for_lane(
-    state: &State,
-    lane_id: LaneId,
-    alias: &str,
-    tag: u8,
-) -> DaCommitmentRecord {
-    let record = sample_da_commitment_record(lane_id, 1, 0, tag);
-    let_row! { location = DaCommitmentLocation { block_height: 3, index_in_bundle: u32::from(tag), } };
-    state.da_commitments.write().insert(&record, location);
-    state.da_confidential_compute.write().insert(
-        &record,
-        location,
-        &ConfidentialComputePolicy::new(
-            ConfidentialComputeMechanism::Encryption,
-            NonZeroU32::new(u32::from(tag)).expect("non-zero key version tag"),
-            BTreeSet::new(),
-        ),
-    );
-    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane_id, 1, 1, StorageTicketId::new([tag.wrapping_add(4); 32]), ManifestDigest::new([tag.wrapping_add(5); 32]), ) };
-    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(alias.to_owned()));
-    state.da_pin_intents.write().insert(intent, location);
-    record
-}
 fn insert_da_pin_intent_world_block_indexes(
     world: &mut WorldBlock<'_>,
     intent: DaPinIntent,
@@ -13737,68 +13590,6 @@ fn seed_da_pin_intent_world_indexes_for_test(
         },
     );
     block.commit();
-}
-fn seed_stale_da_cursors_for_lane_recreation(
-    state: &State,
-    lane_config: &RuntimeLaneConfig,
-    lane_id: LaneId,
-) {
-    state
-        .ensure_da_indexes_hydrated()
-        .expect("hydrate DA indexes before seeding stale cursors");
-    let stale = sample_da_commitment_record(lane_id, 2, 5, 0xA0);
-    state
-        .da_shard_cursors
-        .write()
-        .record_records(lane_config, std::slice::from_ref(&stale), 10)
-        .expect("seed stale DA shard cursor");
-    state
-        .da_receipt_cursors
-        .write()
-        .record_bundle(10, std::slice::from_ref(&stale))
-        .expect("seed stale DA receipt cursor");
-    assert!(
-        state
-            .da_shard_cursors
-            .read()
-            .get(lane_config.shard_id(lane_id), lane_id)
-            .is_some(),
-        "test setup must install stale shard cursor"
-    );
-    assert_eq!(
-        state
-            .da_receipt_cursors
-            .read()
-            .highest(LaneEpoch::new(lane_id, 2)),
-        Some(5),
-        "test setup must install stale receipt cursor"
-    );
-}
-fn assert_recreated_lane_da_cursors_accept_fresh_sequence(state: &State, lane_id: LaneId) {
-    let fresh = sample_da_commitment_record(lane_id, 2, 1, 0xB0);
-    state
-        .advance_da_shard_cursors_from_bundle(11, std::slice::from_ref(&fresh))
-        .expect("recreated lane shard cursor must accept a fresh lower sequence");
-    state
-        .advance_da_receipt_cursors_from_bundle(11, std::slice::from_ref(&fresh))
-        .expect("recreated lane receipt cursor must accept a fresh lower sequence");
-    let nexus = state.nexus_snapshot();
-    let shard_id = nexus.lane_config.shard_id(lane_id);
-    {
-        let cursors = state.da_shard_cursor_index();
-        let cursor = cursors
-            .get(shard_id, lane_id)
-            .expect("fresh shard cursor present");
-        assert_eq!((cursor.epoch, cursor.sequence), (2, 1));
-        assert_eq!(cursor.last_block_height, 11);
-    }
-    assert_eq!(
-        state
-            .da_receipt_cursors()
-            .highest(LaneEpoch::new(lane_id, 2)),
-        Some(1),
-        "fresh receipt cursor should replace stale incarnation history"
-    );
 }
 fn peer_id_for_account(account: &AccountId) -> PeerId {
     PeerId::from(
@@ -16345,12 +16136,12 @@ state_test! { sync da_pin_intents_kura_replay_rejects_future_created_autoscale_l
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_block: SignedBlock = new_block.into();
     assert!(signed_block.header().height().get() < 7);
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store future-created pin-intent block");
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
     block_hashes.commit_for_tests();
-    let store = state.da_pin_intents();
+    let store = state.da_pin_intents().expect("completed DA history read");
     assert!(
         store.get_by_alias("future-replay-pin").is_none(),
         "Kura replay must not hydrate pin intents before autoscale lane creation height"
@@ -16382,12 +16173,12 @@ state_test! { sync da_commitments_kura_replay_rejects_future_created_autoscale_l
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_block: SignedBlock = new_block.into();
     assert!(signed_block.header().height().get() < 7);
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store future-created DA commitment block");
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
     block_hashes.commit_for_tests();
-    let store = state.da_commitments();
+    let store = state.da_commitments().expect("completed DA history read");
     assert!(
         store
             .get_by_lane_epoch_sequence(future_created_lane.as_u32(), record.epoch, record.sequence)
@@ -16460,7 +16251,7 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_block: SignedBlock = new_block.into();
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store block");
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
@@ -16469,7 +16260,7 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
         &state, signed_block.header().height().get(), vec![intent.clone()],
     );
     {
-        let store = state.da_pin_intents();
+        let store = state.da_pin_intents().expect("completed DA history read");
         let_row! { stored = store .get_by_ticket(&intent.storage_ticket) .expect("owned pin intent hydrated while owner exists") };
         assert_eq!(stored.intent, intent);
     }
@@ -16485,7 +16276,7 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
     state
         .rewind_da_indexes_to_height(signed_block.header().height().get())
         .expect("replay committed DA pin intents");
-    let store = state.da_pin_intents();
+    let store = state.da_pin_intents().expect("completed DA history read");
     let_row! { replayed = store .get_by_ticket(&intent.storage_ticket) .expect("committed owned pin intent must survive Kura replay") };
     assert_eq!(replayed.intent, intent);
     assert_eq!(
@@ -16513,7 +16304,7 @@ state_test! { sync da_shard_cursors_guard_regressions
         .advance_da_shard_cursors_from_bundle(3, std::slice::from_ref(&advance))
         .expect("initial advance should succeed");
     {
-        let cursors = state.da_shard_cursor_index();
+        let cursors = state.da_shard_cursor_index().expect("completed DA history read");
         let cursor = cursors
             .get(0, LaneId::new(0))
             .expect("cursor present");
@@ -16524,7 +16315,7 @@ state_test! { sync da_shard_cursors_guard_regressions
     // Regression should be ignored and leave cursor unchanged.
     let_row! { err = state .advance_da_shard_cursors_from_bundle(4, std::slice::from_ref(&regress)) .expect_err("regression should be rejected") };
     assert!(matches!(err, DaShardCursorError::Regression { shard_id, .. } if shard_id == 0));
-    let cursors = state.da_shard_cursor_index();
+    let cursors = state.da_shard_cursor_index().expect("completed DA history read");
     let cursor = cursors
         .get(0, LaneId::new(0))
         .expect("cursor present after regression");
@@ -16543,7 +16334,7 @@ state_test! { sync da_receipt_cursors_guard_regressions
         .advance_da_receipt_cursors_from_bundle(5, std::slice::from_ref(&advance))
         .expect("receipt cursor advance should succeed");
     {
-        let cursors = state.da_receipt_cursors();
+        let cursors = state.da_receipt_cursors().expect("completed DA history read");
         let_row! { cursor = cursors .highest(LaneEpoch::new(LaneId::new(1), 2)) .expect("cursor present") };
         assert_eq!(cursor, 3);
     }
@@ -16553,7 +16344,7 @@ state_test! { sync da_receipt_cursors_guard_regressions
         DaReceiptCursorError::Regression { lane, epoch, .. }
             if lane == LaneId::new(1) && epoch == 2
     ));
-    let cursors = state.da_receipt_cursors();
+    let cursors = state.da_receipt_cursors().expect("completed DA history read");
     let_row! { cursor = cursors .highest(LaneEpoch::new(LaneId::new(1), 2)) .expect("cursor present after regression") };
     assert_eq!(cursor, 3);
 }
@@ -16637,7 +16428,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_manifest_reuse
     let keypair = crate::state::checked_keypair();
     let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB1; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC1; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD1; 32]), checked_da_ack_signature(0xE1), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first.clone()]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
-    kura.store_block(Arc::new(first_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16676,7 +16467,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_storage_ticket_re
     let keypair = crate::state::checked_keypair();
     let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x11; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x31; 32]), None, RetentionClass::default(), StorageTicketId::new([0x41; 32]), checked_da_ack_signature(0x51), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first.clone()]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
-    kura.store_block(Arc::new(first_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16715,7 +16506,7 @@ state_test! { sync validate_da_shard_cursors_rejects_da_receipt_sequence_gap
     let keypair = crate::state::checked_keypair();
     let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x81; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x83; 32]), None, RetentionClass::default(), StorageTicketId::new([0x84; 32]), checked_da_ack_signature(0x85), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
-    kura.store_block(Arc::new(first_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16745,7 +16536,7 @@ state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_block: SignedBlock = block.into();
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16756,7 +16547,7 @@ state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active
         .ensure_da_indexes_hydrated()
         .expect("unknown historical lane should not poison DA hydration");
     {
-        let commitments = state.da_commitments();
+        let commitments = state.da_commitments().expect("completed DA history read");
         let_row! { stored_bundle = commitments .bundle_at(signed_block.header().height().get()) .expect("committed bundle retained") };
         assert_eq!(stored_bundle.commitments, vec![record.clone()]);
         assert!(
@@ -16775,12 +16566,12 @@ state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active
         );
     }
     assert!(
-        state.da_shard_cursor_index().is_empty(),
+        state.da_shard_cursor_index().expect("completed DA history read").is_empty(),
         "unknown-lane commitment should not advance shard cursors"
     );
     assert_eq!(
         state
-            .da_receipt_cursors()
+            .da_receipt_cursors().expect("completed DA history read")
             .highest(LaneEpoch::new(LaneId::new(9), 0)),
         None,
         "unknown-lane commitment should not advance receipt cursors"
@@ -16810,7 +16601,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let_row! { first_bundle = DaCommitmentBundle::new(vec![ DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ), DaCommitmentRecord::new( LaneId::new(1), 1, 2, BlobDigest::new([0xAB; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEF; 32]), checked_da_ack_signature(0x12), ), ]) };
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
-    kura.store_block(Arc::new(signed_first.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_first.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16820,7 +16611,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let_row! { second_bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( LaneId::new(1), 2, 0, BlobDigest::new([0xAC; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBD; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCE; 32]), None, RetentionClass::default(), StorageTicketId::new([0xF0; 32]), checked_da_ack_signature(0x13), )]) };
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
-    kura.store_block(Arc::new(signed_second.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_second.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16830,7 +16621,9 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     state
         .ensure_da_indexes_hydrated()
         .expect("hydration should succeed");
-    let cursors = state.da_shard_cursor_index();
+    let cursors = state
+        .da_shard_cursor_index()
+        .expect("completed DA history read");
     let shard_zero = cursors
         .get(0, LaneId::new(0))
         .expect("shard 0 cursor present");
@@ -16868,7 +16661,7 @@ fn hydrate_da_indexes_replays_multi_shard_bundle() {
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed: SignedBlock = block.into();
-    kura.store_block(Arc::new(signed.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16878,7 +16671,9 @@ fn hydrate_da_indexes_replays_multi_shard_bundle() {
     state
         .ensure_da_indexes_hydrated()
         .expect("hydration should succeed");
-    let cursors = state.da_shard_cursor_index();
+    let cursors = state
+        .da_shard_cursor_index()
+        .expect("completed DA history read");
     let shard_zero = lane_config.shard_id(LaneId::new(0));
     let shard_one = lane_config.shard_id(LaneId::new(1));
     let zero_cursor = cursors
@@ -16916,7 +16711,7 @@ state_test! { sync hydrate_da_indexes_replaces_stale_snapshot_state
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed: SignedBlock = block.into();
-    kura.store_block(Arc::new(signed.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16934,14 +16729,14 @@ state_test! { sync hydrate_da_indexes_replaces_stale_snapshot_state
     state
         .ensure_da_indexes_hydrated()
         .expect("hydration should succeed");
-    let cursors = state.da_shard_cursor_index();
+    let cursors = state.da_shard_cursor_index().expect("completed DA history read");
     let_row! { cursor = cursors .get(lane_config.shard_id(LaneId::new(0)), LaneId::new(0)) .expect("cursor after hydration") };
     assert_eq!(
         (cursor.epoch, cursor.sequence, cursor.last_block_height),
         (committed_record.epoch, committed_record.sequence, 1)
     );
     assert!(
-        state.da_commitments().bundle_at(42).is_none(),
+        state.da_commitments().expect("completed DA history read").bundle_at(42).is_none(),
         "stale commitment bundle should be dropped after replay"
     );
 }
@@ -16965,7 +16760,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed: SignedBlock = block.into();
-    kura.store_block(Arc::new(signed.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -16973,7 +16768,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
         hashes.commit_for_tests();
     }
     assert_eq!(
-        state.find_da_commitment_by_manifest(&record.manifest_hash),
+        state.find_da_commitment_by_manifest(&record.manifest_hash).expect("completed DA history read"),
         Some(record.clone()),
         "pre-restart lookup should hydrate from the committed block"
     );
@@ -17000,16 +16795,16 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
         "fresh state should start with an empty in-memory commitment index"
     );
     assert_eq!(
-        restarted.find_da_commitment_by_manifest(&record.manifest_hash),
+        restarted.find_da_commitment_by_manifest(&record.manifest_hash).expect("completed DA history read"),
         Some(record.clone()),
         "manifest lookup should hydrate from Kura after restart"
     );
     assert_eq!(
-        restarted.find_da_commitment_by_lane_epoch_sequence(0, record.epoch, record.sequence),
+        restarted.find_da_commitment_by_lane_epoch_sequence(0, record.epoch, record.sequence).expect("completed DA history read"),
         Some(record.clone()),
         "lane/epoch/sequence lookup should hydrate from Kura after restart"
     );
-    let commitments = restarted.da_commitments();
+    let commitments = restarted.da_commitments().expect("completed DA history read");
     let_row! { stored_bundle = commitments .bundle_at(signed.header().height().get()) .expect("replayed commitment bundle should be retained by block height") };
     assert_eq!(stored_bundle.commitments, vec![record]);
 }
@@ -17035,7 +16830,7 @@ state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
     let first_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(0), 1)]);
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
-    kura.store_block(Arc::new(signed_first.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_first.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -17045,7 +16840,7 @@ state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
     let second_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(1), 1)]);
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
-    kura.store_block(Arc::new(signed_second.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_second.clone()))
         .expect("store block");
     {
         let mut hashes = state.block_hashes.block();
@@ -17149,7 +16944,7 @@ state_test! { sync apply_without_execution_persists_da_shard_cursor_journal_in_b
         .expect("result-bearing DA materialization fixture");
     let mut state_block = state.block(signed.header());
     let committed = ValidBlock::new_unverified_for_tests(signed)
-        .commit_unchecked()
+        .commit_unchecked(crate::block::reserve_block_for_tests())
         .unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit state block");
@@ -17210,20 +17005,20 @@ Default::default(),
 &crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach canonical results and required AXT policy to the height-mismatch fixture");
     let mut state_block = state.block(signed_second.header());
-    let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
+    let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed_second, Vec::new());
     assert!(state_block.pending_da_commitments.is_some());
     assert!(state_block.pending_da_pin_intents.is_some());
-    assert!(state.da_commitments().bundle_at(2).is_none());
+    assert!(state.da_commitments().expect("completed DA history read").bundle_at(2).is_none());
     assert!(
         state
-            .da_receipt_cursors()
+            .da_receipt_cursors().expect("completed DA history read")
             .highest(LaneEpoch::new(LaneId::new(0), 1))
             .is_none()
     );
     assert!(
         state
-            .da_pin_intents()
+            .da_pin_intents().expect("completed DA history read")
             .get_by_alias("height-mismatch-pin")
             .is_none()
     );
@@ -17235,16 +17030,16 @@ Default::default(),
             actual_current_height: 2
         }
     ));
-    assert!(state.da_commitments().bundle_at(2).is_none());
+    assert!(state.da_commitments().expect("completed DA history read").bundle_at(2).is_none());
     assert!(
         state
-            .da_receipt_cursors()
+            .da_receipt_cursors().expect("completed DA history read")
             .highest(LaneEpoch::new(LaneId::new(0), 1))
             .is_none()
     );
     assert!(
         state
-            .da_pin_intents()
+            .da_pin_intents().expect("completed DA history read")
             .get_by_alias("height-mismatch-pin")
             .is_none()
     );
@@ -17645,7 +17440,7 @@ state_test! { sync hydrate_da_indexes_restore_from_journal_without_blocks
     restored_state
         .ensure_da_indexes_hydrated()
         .expect("hydrate from journal");
-    let cursors = restored_state.da_shard_cursor_index();
+    let cursors = restored_state.da_shard_cursor_index().expect("completed DA history read");
     assert!(
         cursors.get(0, record.lane_id).is_none(),
         "journal cursors ahead of the canonical replay height must remain inert"
@@ -17674,7 +17469,7 @@ state_test! { sync hydrate_da_indexes_skip_ahead_journal_entries
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed: SignedBlock = block.into();
-    kura.store_block(Arc::new(signed.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed.clone()))
         .expect("store block");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -17694,7 +17489,7 @@ state_test! { sync hydrate_da_indexes_skip_ahead_journal_entries
         .ensure_da_indexes_hydrated()
         .expect("hydration should skip ahead cursor");
     assert!(
-        state.da_shard_cursor_index().is_empty(),
+        state.da_shard_cursor_index().expect("completed DA history read").is_empty(),
         "ahead-of-height journal entry should be ignored"
     );
 }
@@ -17741,7 +17536,7 @@ state_test! { sync apply_without_execution_retains_filtered_da_bundle_without_un
         .expect("result-bearing DA cursor-error fixture");
     let mut state_block = state.block(block.header());
     let committed = ValidBlock::new_unverified_for_tests(block)
-        .commit_unchecked()
+        .commit_unchecked(crate::block::reserve_block_for_tests())
         .unpack(|_| {});
     let _events = state_block.apply_without_execution(&committed, Vec::new());
     state_block
@@ -17982,7 +17777,7 @@ crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { signed_block: SignedBlock = BlockBuilder::new(Vec::new()) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store block");
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
@@ -17990,7 +17785,7 @@ crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline
     state
         .ensure_da_indexes_hydrated()
         .expect("hydrate from kura should succeed");
-    let receipts = state.da_confidential_compute();
+    let receipts = state.da_confidential_compute().expect("completed DA history read");
     let_row! { stored = receipts .get_by_lane_epoch_sequence(0, 1, 0) .expect("receipt present") };
     assert_eq!(stored.receipt.key_version.get(), 7);
     assert_eq!(
@@ -18026,14 +17821,14 @@ state_test! { sync da_pin_intents_replay_sanitizes_invalid_entries
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_block: SignedBlock = new_block.into();
-    kura.store_block(Arc::new(signed_block.clone()))
+    kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_block.clone()))
         .expect("store block");
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
     block_hashes.commit_for_tests();
     state.rewind_da_indexes_to_height(signed_block.header().height().get())
         .expect("replay pin sanitizer from the exact committed Kura prefix");
-    let store = state.da_pin_intents();
+    let store = state.da_pin_intents().expect("completed DA history read");
     let collected: Vec<_> = store.all_sorted().cloned().collect();
     drop(store);
     assert_eq!(collected.len(), 2);
@@ -18049,7 +17844,7 @@ state_test! { sync da_pin_intents_replay_sanitizes_invalid_entries
     );
     assert_eq!(
         state
-            .da_pin_intents()
+            .da_pin_intents().expect("completed DA history read")
             .get_by_alias("alias-one")
             .map(|(ticket, _)| ticket),
         Some(&winner.storage_ticket)
@@ -18223,7 +18018,7 @@ state_test! { sync da_pin_intent_ingest_rejects_future_created_autoscale_lane
     );
     assert!(
         state
-            .da_pin_intents()
+            .da_pin_intents().expect("completed DA history read")
             .get_by_alias("future-created-autoscale-pin")
             .is_none()
     );
@@ -18239,7 +18034,7 @@ state_test! { sync da_pin_intent_ingest_rejects_future_created_autoscale_lane
     assert_eq!(inserted[0].location.block_height, 7);
     assert!(
         state
-            .da_pin_intents()
+            .da_pin_intents().expect("completed DA history read")
             .get_by_alias("active-autoscale-pin")
             .is_some()
     );
@@ -20369,7 +20164,7 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     }
     state_block.commit_world_overlay_for_testing()?;
     let state = authenticate_trigger_fixture(state);
-    let parent = state.view().latest_block().expect("original trigger genesis");
+    let parent = state.view().latest_block().expect("completed original State read").expect("original trigger genesis");
     assert!(parent.header().creation_time() < Duration::from_millis(1_000));
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent.hash()), None, 1_001, 0);
     let source = iroha_data_model::block::builder::BlockBuilder::new(header)
@@ -23042,7 +22837,7 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
         )
         .expect("authenticate the Fast-boundary lane geometry");
     strict_kura
-        .store_block(block)
+        .store_block(block.into_shared())
         .expect("persist committed Fast-boundary block");
     drop(strict_kura);
 
@@ -24445,10 +24240,7 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
     let world_with_receipt = |receipt: SoraRuntimeReceiptV1| {
         let mut world = World::default();
         let stake_asset = AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("mailboxreserve", "universal").expect("reserve domain"),
-                "stake".parse().expect("reserve asset name"),
-            ),
+            SumeragiNposParameters::default().xor_asset_definition_id,
             ALICE_ID.clone(),
         );
         let (account_id, account) = Account::new(ALICE_ID.clone())
@@ -26283,7 +26075,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
     let missing_domain = DomainId::try_new("dummy", "universal").unwrap();
     let_row! { asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap(), ) };
     // Retain the account, leased asset-owning domain and by-call trigger.
-    let_row! { block = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
+    let_row! { block = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -26370,7 +26162,7 @@ state_test! { sync self_calling_trigger_stops_at_synchronous_execution_depth
         parameters.commit();
     }
     let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
-    let header = state.view().latest_block().expect("original trigger parent").header();
+    let header = state.view().latest_block().expect("completed original State read").expect("original trigger parent").header();
     let mut block = state.block(header);
     let mut transaction = block.transaction_for_callback_testing();
     Register::account(new_sample_account(&ALICE_ID))
@@ -26436,7 +26228,7 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
     }
     let trigger_id: TriggerId = "max_depth_data_trigger".parse().expect("valid trigger id");
     let flag_key: Name = "max_depth_flag".parse().expect("valid metadata key");
-    let header = state.view().latest_block().expect("original trigger parent").header();
+    let header = state.view().latest_block().expect("completed original State read").expect("original trigger parent").header();
     let mut block = state.block(header);
     {
         let mut transaction = block.transaction_for_callback_testing();
@@ -27018,7 +26810,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     let_row! { mut program = ivm::ProgramMetadata { max_cycles: 100, ..ivm::ProgramMetadata::default() } .encode() };
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let generic_code_hash = ivm::contract_code_hash(&program);
-    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut transaction = state_block.transaction_for_callback_testing();
@@ -27153,7 +26945,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let_row! { contract_address = ContractAddress::derive( state.network_id_ref(), &ALICE_ID, 77, DataSpaceId::UNIVERSAL, ) .expect("derive raw trigger contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27626,7 +27418,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27912,7 +27704,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let_row! { contract_address = ContractAddress::derive( state.network_id_ref(), &ALICE_ID, 95, DataSpaceId::UNIVERSAL, ) .expect("derive alias-transfer callback contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -28149,7 +27941,7 @@ state_test! { sync execute_called_trigger_respects_executor_validation
     executor_block.commit();
     let trigger_id: TriggerId = "executor_guarded_trigger".parse().unwrap();
     let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( vec![InstructionBox::from(Log::new( Level::INFO, "trigger log".to_owned(), ))], Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
-    let header = state.view().latest_block().expect("original trigger parent").header();
+    let header = state.view().latest_block().expect("completed original State read").expect("original trigger parent").header();
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction_for_callback_testing();

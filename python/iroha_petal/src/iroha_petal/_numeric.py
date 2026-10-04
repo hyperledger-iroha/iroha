@@ -24,6 +24,24 @@ def total_key(value: float) -> int:
     return bits
 
 
+def f64_min(a: float, b: float) -> float:
+    """Rust's ``f64::min``: a NaN operand yields the other operand."""
+    if a != a:
+        return b
+    if b != b:
+        return a
+    return a if a < b else b
+
+
+def f64_max(a: float, b: float) -> float:
+    """Rust's ``f64::max``: a NaN operand yields the other operand."""
+    if a != a:
+        return b
+    if b != b:
+        return a
+    return a if a > b else b
+
+
 def ieee_div(numerator: float, denominator: float) -> float:
     """``numerator / denominator`` with IEEE semantics for a zero denominator.
 

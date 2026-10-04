@@ -1085,9 +1085,10 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
     Register::account(Account::new(slash_sink))
         .execute(&escrow, &mut transaction)
         .expect("register penalty slash sink account");
-    Register::asset_definition(AssetDefinition::numeric(
+    Register::asset_definition(AssetDefinition::new(
         asset_definition,
-        "Penalty stake".to_owned(),
+        "XOR",
+        iroha_primitives::numeric::NumericSpec::fractional(9),
         AssetBalancePolicy::Global,
         None,
     ))
@@ -2752,7 +2753,7 @@ mod tests {
             transaction::{FeePaymentIntent, TransactionBuilder},
         };
         use iroha_primitives::time::TimeSource;
-        use std::{future::Future, pin::pin, task::Context, time::Duration};
+        use std::{task::Context, time::Duration};
 
         for state_admission in [false, true] {
             let state = native_penalty_state();
@@ -2766,7 +2767,10 @@ mod tests {
                 .cloned()
                 .unwrap();
             let view = state.view();
-            let parent = view.latest_block().unwrap();
+            let parent = view
+                .latest_block()
+                .expect("completed original State read")
+                .unwrap();
             let key = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519).unwrap();
             let mut builder = TransactionBuilder::new(
                 *state.network_id_ref(),
@@ -2803,11 +2807,13 @@ mod tests {
             } else {
                 state.evidence_preparation_budget().clone()
             };
+            let mut registration = crate::unit_test_support::release_registration(&budget);
+            let observer_bytes = budget.reserved_bytes();
             let requested_bytes = std::mem::size_of::<PendingPenaltyEvidence>();
             let occupied_bytes = if state_admission {
                 budget.limit_bytes() - budget.reserved_bytes()
             } else {
-                budget.limit_bytes() - requested_bytes + 1
+                budget.limit_bytes() - observer_bytes - requested_bytes + 1
             };
             let blocking_owner = budget.try_reserve_bytes(occupied_bytes).unwrap();
             let original_error = PenaltyApplier::new(&state, None)
@@ -2816,13 +2822,21 @@ mod tests {
             let error = payload::assemble(&state, assembly, &transactions)
                 .expect_err("the actual original pool cannot fund this staking preparation");
             let release = if state_admission {
-                let original_refusal = original_error
-                    .downcast_ref::<crate::state::StateAdmissionError>()
+                let original_error = original_error
+                    .downcast_ref::<crate::state::MergeLedgerCommitError>()
                     .expect("actual scratch State acquisition preserves its history owner");
+                let crate::state::MergeLedgerCommitError::BlockHashAdmission(original_refusal) =
+                    original_error
+                else {
+                    panic!("scratch State lost its original history refusal: {original_error:?}");
+                };
                 let refusal = std::error::Error::source(&error)
                     .and_then(|source| source.downcast_ref::<crate::state::StateAdmissionError>())
                     .unwrap_or_else(|| panic!("payload loses original State admission: {error:?}"));
-                assert_eq!(refusal, original_refusal);
+                assert_eq!(
+                    refusal,
+                    &crate::state::StateAdmissionError::History(original_refusal.clone())
+                );
                 assert!(matches!(
                     refusal,
                     crate::state::StateAdmissionError::History(
@@ -2845,13 +2859,13 @@ mod tests {
                 assert!(
                     matches!(refusal, EvidencePreparationError::Admission(AllocationRefusal::Capacity {
                 requested_bytes: actual, reserved_bytes, limit_bytes, ..
-            }) if *actual == requested_bytes && *reserved_bytes == occupied_bytes && *limit_bytes == budget.limit_bytes())
+            }) if *actual == requested_bytes && *reserved_bytes == occupied_bytes + observer_bytes && *limit_bytes == budget.limit_bytes())
                 );
                 refusal.release_wait().unwrap().clone()
             };
-            let mut release = pin!(release.wait_for_release());
+
             let mut context = Context::from_waker(std::task::Waker::noop());
-            assert!(release.as_mut().poll(&mut context).is_pending());
+            assert!(registration.poll_wait(&release, &mut context).is_pending());
             assert!(budget.reserved_bytes() >= occupied_bytes);
             assert_eq!(
                 state.world.consensus_evidence.view().get(&due),
@@ -2861,7 +2875,7 @@ mod tests {
             assert_eq!(transactions[0].hash(), original_transaction);
             assert_eq!(parent.hash(), original_parent);
             drop(blocking_owner);
-            assert!(release.as_mut().poll(&mut context).is_ready());
+            assert!(registration.poll_wait(&release, &mut context).is_ready());
             let proposal = payload::assemble(&state, assembly, &transactions)
                 .expect("the exact parent, transactions and evidence retry after original release");
             assert!(
@@ -2875,6 +2889,7 @@ mod tests {
             assert_eq!(state.view().height(), 1);
             assert_eq!(transactions[0].hash(), original_transaction);
             assert_eq!(parent.hash(), original_parent);
+            drop(registration);
             if !state_admission {
                 assert_eq!(budget.reserved_bytes(), 0);
             }
@@ -3081,15 +3096,17 @@ mod tests {
     }
     #[test]
     fn penalty_derivation_fails_closed_on_missing_staking_custody_definition() {
+        use iroha_data_model::{isi::error::InstructionExecutionError, query::error::FindError};
+
         let state = native_penalty_state();
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
-        insert_evidence(&state, fixture_vote_evidence(1, 37), 1);
+        let key = insert_evidence(&state, fixture_vote_evidence(1, 37), 1);
         let (asset_definition, _, _) = penalty_staking_ids();
         let mut definitions = state.world.asset_definitions.block();
         definitions
-            .remove(asset_definition)
+            .remove(asset_definition.clone())
             .expect("remove fixture staking definition");
         definitions.commit();
 
@@ -3102,9 +3119,23 @@ mod tests {
         )
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect_err("invalid custody must abort rather than silently terminalize evidence");
-        assert!(
-            format!("{error:#}").contains("stake asset definition missing"),
-            "unexpected rejection: {error:#}"
+        assert_eq!(
+            error.downcast_ref::<InstructionExecutionError>(),
+            Some(&InstructionExecutionError::Find(
+                FindError::AssetDefinition(asset_definition)
+            )),
+            "the canonical XOR check must reject the exact missing custody definition: {error:#}"
+        );
+        assert_eq!(
+            state
+                .world
+                .consensus_evidence
+                .view()
+                .get(&key)
+                .expect("rejected derivation retains its evidence")
+                .penalty_status,
+            EvidencePenaltyStatus::Pending,
+            "failed custody validation cannot terminalize evidence"
         );
     }
     #[test]

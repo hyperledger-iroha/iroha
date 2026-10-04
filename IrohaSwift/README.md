@@ -13,6 +13,7 @@ let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
 ```
 
 Features:
+- Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA V1 aggregate-balance wallet orchestration, payment models, proof binding helpers, and universal capability discovery through `/v1/kagemusha/readiness`
 - Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
@@ -25,6 +26,100 @@ Features:
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
+
+### Collection queries
+
+Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
+account assets, asset holders, account transactions, repo agreements) is read
+with one query language and returns one page envelope; see
+[`specs/torii/collection_queries.md`](../specs/torii/collection_queries.md).
+
+```swift
+import IrohaSwift
+
+let torii = ToriiClient(
+    baseURL: URL(string: "https://taira.sora.org")!,
+    localSigningContext: ToriiLocalSigningContext(networkId: networkId),
+    canonicalRequestAuth: canonicalAuth // optional; a signature only widens visibility
+)
+
+// One page, filtered and sorted. The filter renders to the canonical text
+// `owned_by = "<account>" and quantity >= "10.5"`.
+let minimum = try KotodamaQuantity("10.5")
+let query = ToriiListQuery(
+    filter: ToriiRwa.Fields.ownedBy == accountId && ToriiRwa.Fields.quantity >= minimum,
+    sort: [ToriiRwa.Fields.quantity.descending, ToriiRwa.Fields.id.ascending],
+    limit: 50,
+    includeTotal: true
+)
+let page = try await torii.rwas.page(query)
+print(page.items.map(\.id), page.total ?? 0, page.hasMore)
+
+// Every row: each page is requested only when iteration reaches it, by
+// following `nextCursor`. Breaking out or cancelling the task stops paging.
+for try await balance in torii.accountAssets(of: accountId).items(ToriiListQuery(limit: 100)) {
+    print(balance.asset, balance.quantity)
+}
+
+// Torii rejections carry the standard error envelope; invalid controls are
+// rejected locally with the same codes before anything is sent.
+do {
+    _ = try await torii.assetDefinitions.page(ToriiListQuery(filterText: #"colour = "red""#))
+} catch let ToriiClientError.api(error) where error.code == "invalid_filter" {
+    print(error.message, error.details?.field ?? "", error.details?.hint ?? "")
+} catch let ToriiClientError.invalidQuery(error) {
+    print(error.code, error.message)
+}
+
+// Transaction history, newest first. History pages may hold fewer rows than
+// `limit` (even none) while `nextCursor` is set; `items` keeps following it.
+let recent = ToriiListQuery(
+    filter: ToriiTransaction.Fields.blockHeight >= 1_200 && ToriiTransaction.Fields.resultOk == false,
+    limit: 50
+)
+for try await transaction in torii.accountTransactions(of: accountId).items(recent) {
+    print(transaction.blockHeight, transaction.blockIndex, transaction.entrypointHash)
+}
+
+// Event streams take the same text grammar; this one is filtered on Torii
+// with `tx_hash = "<hash>"`.
+for try await message in torii.streamTransactionStatusEvents(hashHex: envelope.hashHex) {
+    print(message.event.status, message.event.rejectionCode?.rawValue ?? "")
+}
+```
+
+- Collections: `domains`, `accounts` (with `get(_:)`), `assetDefinitions`, `nfts`,
+  `rwas`, `repoAgreements`, `accountAssets(of:)`, `assetHolders(of:)`,
+  `transactions` and `accountTransactions(of:)`. Each has `page(_:)`, `pages(_:)`
+  and `items(_:)`. Rows are typed (`ToriiDomain`, `ToriiAccount`,
+  `ToriiAssetDefinition`, `ToriiTransaction`, …) with quantities as exact
+  `KotodamaQuantity` values. Only the fields that identify a row (`id`; account,
+  asset, scope and quantity for balances; entrypoint hash and block coordinates
+  for transactions) are guaranteed; every other field is optional, and unknown
+  fields are ignored. Read `select` projections and aggregates with
+  `page(_:as: ToriiJSONObject.self)`.
+- Transaction history (`transactions`, `accountTransactions(of:)`) is read newest
+  first by block height and index. `sort`, `includeTotal` and `aggregate` are
+  rejected locally with Torii's codes. Bounds on `blockHeight` in the filter's
+  top-level `&&` also bound Torii's history scan. `assetIds` and
+  `assetDefinitionIds` are lists that match element-wise: `==`/`in` keep rows
+  where any element matches, `!=`/`notIn` rows where none does.
+- Aggregates are `POST`-only and computed where the rows live: a read whose visible
+  rows span several dataspace routes is rejected with `invalid_aggregate`; page
+  through the rows without `aggregate` instead.
+- Filters: `ToriiField` operators (`==`, `!=`, `<`, `<=`, `>`, `>=`), `in`, `notIn`,
+  `exists`, `isNull`, `isNotNull`, combined with `&&`, `||`, `!` or
+  `ToriiFilter.all { ... }`; or pass text verbatim with `ToriiListQuery(filterText:)`.
+  `description` is the canonical text form and `jsonData()` the canonical JSON form.
+  Integers that fit `u64`/`i64` are numbers; decimals and wider integers are exact
+  decimal strings (`KotodamaDecimal`, `KotodamaQuantity`, `ToriiFilterValue.decimal`).
+  `Double` is deliberately not a filter literal. Object and array literals (only
+  against `metadata.<key>`) exist only in the JSON form: they are sent with
+  `POST /query`, and `queryItems()` and event streams reject them.
+  `ToriiEventFields` lists the event-stream fields.
+- Every read is `POST <collection>/query` with the canonical body
+  (`ToriiListQuery.requestBody()`); `queryItems()` gives the equivalent `GET`
+  parameters. Only the first page of an iteration asks for `include_total`.
 
 ### KAGEMUSHA V1 wallet
 
@@ -126,7 +221,7 @@ is an error. On exact absence, retry only the retained signed transaction and
 original operation ID; never reserve or sign a replacement top-up.
 Submission accepts a pending 202 only with the exact operation `Location` and
 `Retry-After: 1`. Other HTTP failures retain Torii's `X-Iroha-Reject-Code`
-header in `ToriiClientError.httpStatus`; JSON body fields cannot supply it.
+header as `ToriiAPIError.rejectCode` in `ToriiClientError.api`; JSON body fields cannot supply it.
 Pending, ambiguous and unverified applied responses do not authorize intent
 cleanup, credit issuance or retirement. Native artifact qualification, retained
 hardware ownership and trusted finality checkpoints remain caller prerequisites.
@@ -410,7 +505,7 @@ let gostSDK = IrohaSDK(baseURL: toriiURL, defaultSigningAlgorithm: .gost2012_256
 
 // Generate a signing key using the SDK default (Ed25519 unless overridden)
 let signingKey = try sdk.generateSigningKey()
-let accountId = AccountId.make(publicKey: try signingKey.publicKey())
+let accountId = try AccountId.make(publicKey: try signingKey.publicKey())
 let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
 let walletToken = "<wallet-session-token>"
@@ -541,10 +636,11 @@ try await sdk.submitAliasSetupPlan(
 let pqSigningKey = try pqSDK.generateSigningKey()
 let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
 
-// Fetch balances through the credentialed Torii client
-torii.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
-    print(result)
-}
+// Read the account's balance of one asset (see "Collection queries")
+let balances = try await torii.accountAssets(of: accountId).page(
+    ToriiListQuery(filter: ToriiAccountAsset.Fields.asset == asset)
+)
+print(balances.items.map(\.quantity))
 
 // List attachments published via the Torii app API
 torii.listAttachments(canonicalAuth: canonicalAuth) { result in
@@ -552,19 +648,18 @@ torii.listAttachments(canonicalAuth: canonicalAuth) { result in
 }
 
 // Build and submit a signed transfer.
+// `description` is not encoded yet; a non-empty one is rejected rather than dropped.
 let transfer = TransferRequest(
     networkId: networkId,
     authority: accountId,
     assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
     destination: "<destination_account_i105>",
-    description: "demo",
+    feePayment: feePayment,
     ttlMs: 60_000
 )
 let envelope = try sdk.buildSignedTransfer(transfer: transfer, signingKey: signingKey)
-sdk.submit(envelope: envelope) { err in
-    print(err as Any)
-}
+try await sdk.submit(envelope: envelope)
 
 // Interleave canonical instruction frames and deployed-contract calls in one
 // atomic transaction. All items share the signed gas limit.
@@ -712,6 +807,14 @@ analyzer.attach(to: videoDataOutput)
   read against the light and dark levels of the finders; a lane that stays
   unreadable is read again with every patch normalised by its own contrast, so
   over-exposure, veiling light, glare and shadows cancel out.
+- When a thumb, a glare or the edge of the frame hides one corner blossom,
+  three blossoms that form a corner still locate the code: the fourth corner is
+  inferred, refined against the dotted rings and reported as
+  `PetalDecodedFrame.inferredCorner` (0 top-left, 1 top-right, 2 bottom-right,
+  3 bottom-left of the upright code). After a frame decodes, the session reads
+  the next frames with `PetalDecoder.track(_:previous:)`, which follows the
+  blossoms from the last pose (at most 500 ms old) instead of searching the
+  whole image; `PetalScanStats.tracked` and `.inferred` count both.
 - `PetalRenderer` is the pixel-exact reference software renderer;
   `PetalDrawList` describes a frame for vector backends and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
@@ -878,7 +981,7 @@ The submission status is exactly `settlement_pending` until that instruction
 commits; only a receipt read from committed WSV state uses `settled`. Exact
 `disconnected`, `expired`, and `replaced` lifecycle statuses remain valid.
 
-> **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
+> **Account selectors:** Account-scoped collections (`ToriiClient.accountAssets(of:)` and `accountTransactions(of:)`) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response. `accounts.get(_:)` requires the canonical I105 id.
 
 ### UAID portfolio and Space Directory
 
@@ -992,7 +1095,7 @@ throwing `ToriiContractStateQuery` with one typed target (`.address` or
 `queryContractState(_:)`. Responses reject unknown fields, duplicate JSON keys,
 non-canonical base64, selector/target substitution, invalid pagination, and the
 retired per-entry `decode_error` shape. A Torii JSON decode failure is instead a
-top-level `ToriiClientError.httpStatus` carrying Torii's stable error envelope.
+top-level `ToriiClientError.api` carrying Torii's stable error envelope.
 
 Wallets must use the two-step detached call flow when the signing key is held by
 the client. Build the invocation from a trusted contract artifact and argument
@@ -1188,18 +1291,17 @@ if #available(iOS 15.0, macOS 12.0, *) {
         print(detail.quantity, detail.heldQuantity, detail.primaryReference)
     }
 
-    let rwaIds = try await torii.listRwas(options: ToriiListOptions(limit: 10))
-    print(rwaIds.items.map(\.id))
+    let lotsOnChain = try await torii.rwas.page(ToriiListQuery(limit: 10))
+    print(lotsOnChain.items.map(\.id))
 }
 ```
 
-The body-based `queryRwas` helper is account-authenticated. Configure the
-client with an immutable `ToriiLocalSigningContext` for the deployment's exact
-genesis `NetworkId`, then pass `ToriiCanonicalRequestAuth` per call or install
-it as `canonicalRequestAuth` on the client. The helper signs the final method,
-path, and encoded envelope locally and dispatches once without redirects.
-Missing auth, aliases, foreign-genesis signatures, and precomputed canonical
-headers fail closed.
+Chain-state RWA lots are a collection like any other (see "Collection queries").
+Reads are public; when the client has `canonicalRequestAuth` (with an immutable
+`ToriiLocalSigningContext` for the deployment's exact genesis `NetworkId`), the
+SDK signs the final method, path and canonical body locally and dispatches once
+without redirects, which adds the restricted dataspaces visible to that account.
+Aliases as signers and precomputed canonical headers fail closed.
 
 For local instruction composition, `RwaInstructionBuilders` and the matching
 `IrohaSDK` convenience methods now cover the dedicated RWA instruction family.
@@ -1327,8 +1429,8 @@ Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 ```swift
 if #available(iOS 15, macOS 12, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId, asset: asset, scope: "global")
-        print("balances:", balances)
+        let balances = try await torii.accountAssets(of: accountId).page()
+        print("balances:", balances.items)
 
         try await sdk.submit(transfer: transfer, keypair: kp)
 
@@ -1885,86 +1987,82 @@ draft type.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let stream = torii.streamVerifyingKeyEvents(
-        filter: ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: "vk_main")
-    )
-
+    // Every event, narrowed on Torii: rejected transactions and committed blocks.
+    let filter = ToriiEventFields.txStatus == "Rejected"
+        || ToriiEventFields.blockStatus == "Committed"
     Task.detached {
         do {
-            for try await message in stream {
+            for try await message in torii.streamEvents(filter: filter) {
                 switch message.event {
-                case .registered(let id, _):
-                    print("registered:", id)
-                case .updated(_, let record):
-                    print("updated to version", record.version)
-                @unknown default:
+                case let .transaction(transaction):
+                    print(transaction.hash, transaction.status, transaction.rejectionCode?.rawValue ?? "")
+                case let .block(block):
+                    print("block", block.status.name)
+                case let .data(notice), let .other(notice):
+                    print(notice.event, notice.summary ?? "") // diagnostic text only
+                default:
                     break
                 }
             }
         } catch {
-            print("stream error:", error)
+            print("event stream error:", error)
         }
     }
-}
-```
 
-If you need to observe proof verification outcomes, reuse the same streaming helpers:
-
-```swift
-if #available(iOS 15, macOS 12, *) {
+    // Proof outcomes, narrowed on Torii by backend and matched locally by proof hash.
     let proofs = torii.streamProofEvents(
         filter: ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: String(repeating: "a", count: 64))
     )
-
     Task.detached {
         do {
             for try await message in proofs {
                 switch message.event {
                 case .verified(let body):
-                    print("verified:", body.id.proofHashHex)
+                    print("verified:", body.id.proofHashHex, body.verifyingKeyId?.name ?? "")
                 case .rejected(let body):
                     print("rejected:", body.id.proofHashHex)
+                case .pruned(let pruned):
+                    print("pruned", pruned.removedCount, "at height", pruned.prunedAtHeight)
                 }
             }
         } catch {
             print("proof stream error:", error)
         }
     }
-}
-```
 
-Trigger lifecycle events expose the same async sequence shape:
-
-```swift
-if #available(iOS 15, macOS 12, *) {
-    let triggers = torii.streamTriggerEvents(
-        filter: ToriiTriggerEventFilter(triggerId: "nightly-tick")
-    )
-
+    // Verifying-key and trigger events carry only their kind and a diagnostic summary.
     Task.detached {
-        for try await message in triggers {
-            switch message.event {
-            case .created(let id):
-                print("trigger created:", id)
-            case .deleted(let id):
-                print("trigger deleted:", id)
-            case .extended(let details):
-                print("extended by", details.delta)
-            case .shortened(let details):
-                print("shortened by", details.delta)
-            case .metadataInserted(let change):
-                print("metadata inserted:", change.key)
-            case .metadataRemoved(let change):
-                print("metadata removed:", change.key)
+        do {
+            for try await message in torii.streamVerifyingKeyEvents() {
+                print("verifying key changed:", message.event.summary ?? "")
             }
+        } catch {
+            print("verifying-key stream error:", error)
         }
     }
 }
 ```
 
-Adjust the event set by toggling the `includeCreated`, `includeDeleted`, `includeExtended`,
-`includeShortened`, `includeMetadataInserted`, and `includeMetadataRemoved` flags on
-`ToriiTriggerEventFilter`. The canonical `/v1/events/sse` feed is live-only: its
+Every SSE `data` object carries `category` and `event`. `ToriiEvent` models the
+pipeline events (`transaction`, `block`, `warning`, `witness`) and proof events and
+keeps every other event as a `.data` or `.other` notice, so new event kinds never
+fail a stream. Statuses are typed from their variant names
+(`PipelineTransactionState`, `ToriiPipelineBlockEvent.Status`); a rejected
+transaction carries a `ToriiTransactionRejectionCode` and a fixed public
+`rejectionReason`. Event filters use the same builder over `ToriiEventFields`,
+restricted to what subscriptions can match: `==` and `in` combined with `&&` and
+`||`, `!` only over a status equality, and `txBlockHeight.isNull`. Other built
+filters are rejected locally with `invalid_filter`; `streamEvents(filterText:)`
+passes text through unchanged. Verifying-key and trigger events have no stable
+fields, so `streamVerifyingKeyEvents()` and `streamTriggerEvents()` recognise them
+by kind on an unfiltered stream; read the current record (for example with
+`getVerifyingKey`) before acting on one. Trigger executions arrive as `.other`
+(`ExecuteTrigger`, `TriggerCompleted`) on `streamEvents()`. `ToriiProofEventFilter`
+narrows the stream on Torii with `serverFilter()` (`proof_backend`,
+`proof_call_hash`, `proof_envelope_hash`) and matches the event kind and
+`proofHashHex` locally; a pruning event matches when it removed that proof.
+
+The canonical `/v1/events/sse` feed is live-only: its
 Swift helpers expose no resume argument and never emit `Last-Event-ID`. A reconnect
 can therefore have a gap. If Torii emits terminal `event: stream_error`, the typed
 helpers fail with `ToriiClientError.stream(ToriiStreamError)`, preserving the stable
@@ -2528,7 +2626,9 @@ canonical Swift package always requires the real ABI25 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, and peer rebinding. Its Rust-authored fixture is
+monetary plans, bounded reward claims with an explicit optional fee-custody
+payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records and noncanonical quantity decimals. This structural codec
+truncated records, retired reward-plan layouts, invalid fee custody and
+noncanonical quantity decimals. This structural codec
 does not verify signatures, custody, or committee activation.

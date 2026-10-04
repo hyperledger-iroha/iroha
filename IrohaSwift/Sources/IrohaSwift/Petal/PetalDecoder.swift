@@ -48,6 +48,11 @@ public struct PetalDecodedFrame: Equatable, Sendable {
     public let k: PetalLaneResult?
     /// Lane `D` result.
     public let d: PetalLaneResult?
+    /// The corner finder that was hidden (by a finger, a glare or the edge of
+    /// the frame) and inferred from the other three, as its canonical index:
+    /// 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright
+    /// code.
+    public let inferredCorner: Int?
 
     /// Number of lanes that decoded.
     public var lanesOK: Int {
@@ -117,12 +122,13 @@ public enum PetalDecodeError: Error, Equatable, LocalizedError, Sendable {
 /// From a camera luma plane to lane data (port of
 /// `crates/iroha_petal/src/decode.rs`).
 ///
-/// The decoder locates the four finders, derives a homography for each
-/// orientation hypothesis (four rotations, optionally mirrored), picks the
-/// orientation whose ring gates line up (and whose lane `D` codeword checks
-/// out), then reads the tiles and dots. Every tile is classified jointly: the
-/// 8×8 sample patch is compared against the 32 hypotheses (polarity × glyph)
-/// and the best match wins. Cells the decoder is unsure about become
+/// The decoder locates the four finders (or three, inferring the fourth),
+/// derives a homography for each orientation hypothesis (four rotations,
+/// optionally mirrored), ranks the orientations by their ring gates and the
+/// `天` silhouette, picks the one whose lane `D` codeword (or a tile lane)
+/// checks out, then reads the tiles and dots. Every tile is classified
+/// jointly: the 8×8 sample patch is compared against the 32 hypotheses
+/// (polarity × glyph) and the best match wins. Cells the decoder is unsure about become
 /// Reed–Solomon erasures. A lane is only reported when its codeword checks
 /// out; the payload CRC-32C of the stream catches the rare miscorrection.
 ///
@@ -148,6 +154,12 @@ public enum PetalDecoder {
 
     /// Decodes one camera frame.
     ///
+    /// Tries the finder candidates of ``PetalLocator/candidates(_:)`` in order
+    /// and returns the first that reads. For each, the orientation hypotheses
+    /// (four quarter turns, optionally mirrored) are ranked by the ring gates
+    /// plus the `天`; lane `D` is tried under the best three whose gate score is
+    /// at least 0.2, then the tile lanes under the best four.
+    ///
     /// - Throws: ``PetalDecodeError/unsupportedImage`` for unusable sizes,
     ///   ``PetalDecodeError/noFinders`` when no code is visible and
     ///   ``PetalDecodeError/noOrientation`` when no orientation yields a
@@ -166,58 +178,134 @@ public enum PetalDecoder {
     ) -> Result<PetalDecodedFrame, PetalDecodeError> {
         guard isSupported(image, options: options) else { return .failure(.unsupportedImage) }
         return image.withView { view in
-            guard let finders = PetalLocator.locate(view) else { return .failure(.noFinders) }
-            var scored: [Candidate] = []
-            for hypothesis in hypotheses(finders, tryMirrored: options.tryMirrored) {
-                guard let reference = referenceLevels(view, hypothesis.homography) else { continue }
-                let score = gateScore(view, hypothesis.homography, reference)
-                scored.append(Candidate(
-                    score: score,
-                    rotation: hypothesis.rotation,
-                    mirrored: hypothesis.mirrored,
-                    homography: hypothesis.homography,
-                    reference: reference
-                ))
+            var candidates = PetalCandidateSearch()
+            var located = false
+            while let set = candidates.next(view) {
+                located = true
+                if let frame = decodeCandidate(view, options, set) { return .success(frame) }
             }
-            // Stable descending sort under total order (Rust `sort_by`).
-            let order = scored.indices.sorted { left, right in
-                let a = PetalNumeric.totalOrderKey(scored[left].score)
-                let b = PetalNumeric.totalOrderKey(scored[right].score)
-                return a != b ? a > b : left < right
-            }
-            let ranked = order.map { scored[$0] }
-            // 1. the ring beacon is the cheapest and strongest orientation check
-            for candidate in ranked.prefix(3) {
-                if candidate.score < 0.2 { break }
-                if let d = readLaneD(view, candidate.homography, candidate.reference) {
-                    return .success(finish(view, options, candidate, d: d))
-                }
-            }
-            // 2. fall back to the tile lanes under the most promising orientations
-            for candidate in ranked.prefix(4) {
-                let patches = samplePatches(view, candidate.homography)
-                let lanes = readTileLanes(patches, candidate.reference, options.templateSigmas)
-                if lanes.p != nil || lanes.k != nil {
-                    return .success(PetalDecodedFrame(
-                        homography: candidate.homography,
-                        rotation: candidate.rotation,
-                        mirrored: candidate.mirrored,
-                        p: lanes.p,
-                        k: lanes.k,
-                        d: readLaneD(view, candidate.homography, candidate.reference)
-                    ))
-                }
-            }
-            return .failure(.noOrientation)
+            return .failure(located ? .noOrientation : .noFinders)
         }
+    }
+
+    /// Follows a code from the previous frame that decoded, without searching
+    /// the whole image for finders (the most expensive part of
+    /// ``decode(_:options:)``).
+    ///
+    /// Each corner finder seen in the previous frame is re-found near where the
+    /// previous pose puts it (see ``PetalLocator/follow(_:expected:)``); the
+    /// mean movement of those predicts the rest. A corner inferred in the
+    /// previous frame counts as seen again only when its blossom is re-found
+    /// within a quarter diameter of that prediction (so a thumb beside it does
+    /// not count). When exactly one corner is missing it is placed at the
+    /// prediction and refined against the rings like an inferred corner. The
+    /// orientation is kept from the previous frame. Returns `nil` for a broken
+    /// previous pose (non-finite, or finders larger than the image), when two
+    /// corners are lost or when no lane decodes; the caller then runs
+    /// ``decode(_:options:)``.
+    public static func track(
+        _ image: PetalLuma,
+        previous: PetalDecodedFrame,
+        options: PetalDecodeOptions = PetalDecodeOptions()
+    ) -> PetalDecodedFrame? {
+        // a frame built by the caller may name a corner that does not exist
+        guard isSupported(image, options: options),
+              previous.inferredCorner.map({ (0...3).contains($0) }) ?? true else { return nil }
+        return image.withView { view in track(view, previous: previous, options: options) }
+    }
+
+    static func track(
+        _ image: PetalLumaView,
+        previous: PetalDecodedFrame,
+        options: PetalDecodeOptions
+    ) -> PetalDecodedFrame? {
+        let h0 = previous.homography
+        func span(_ a: (Double, Double), _ b: (Double, Double)) -> Double {
+            let dx = a.0 - b.0
+            let dy = a.1 - b.1
+            return (dx * dx + dy * dy).squareRoot()
+        }
+        let expected = PetalLayout.finderCenters.map { center -> PetalFinder in
+            let cx = center.x
+            let cy = center.y
+            let (x, y) = h0.apply(cx, cy)
+            let size = Double.maximum(
+                span(h0.apply(cx - 60.0, cy), h0.apply(cx + 60.0, cy)),
+                span(h0.apply(cx, cy - 60.0), h0.apply(cx, cy + 60.0))
+            )
+            return PetalFinder(x: x, y: y, size: size)
+        }
+        let short = Double(min(image.width, image.height))
+        for finder in expected
+        where !(finder.x.isFinite && finder.y.isFinite && finder.size.isFinite) || finder.size > short {
+            return nil
+        }
+        let previouslyInferred = previous.inferredCorner
+        var found: [PetalFinder?] = (0..<4).map { index in
+            previouslyInferred == index ? nil : PetalLocator.follow(image, expected: expected[index])
+        }
+        // the mean movement of the corners that were followed predicts the others
+        var moved: [(x: Double, y: Double)] = []
+        for index in 0..<4 {
+            if let f = found[index] { moved.append((f.x - expected[index].x, f.y - expected[index].y)) }
+        }
+        if moved.count < 3 { return nil }
+        var sumX = -0.0
+        for m in moved { sumX += m.x }
+        var sumY = -0.0
+        for m in moved { sumY += m.y }
+        let shift = (x: sumX / Double(moved.count), y: sumY / Double(moved.count))
+        func predicted(_ index: Int) -> PetalFinder {
+            PetalFinder(x: expected[index].x + shift.x, y: expected[index].y + shift.y, size: expected[index].size)
+        }
+        // a corner that was hidden is seen again only when its blossom is found right where
+        // the others say it is (a bright thumb beside it must not count)
+        if let m = previouslyInferred, (0..<4).contains(m) {
+            let at = predicted(m)
+            found[m] = PetalLocator.follow(image, expected: at).flatMap { f in
+                let dx = f.x - at.x
+                let dy = f.y - at.y
+                return (dx * dx + dy * dy).squareRoot() <= 0.25 * at.size ? f : nil
+            }
+        }
+        let lost = (0..<4).filter { found[$0] == nil }
+        let inferred: Int?
+        switch lost.count {
+        case 0:
+            inferred = nil
+        case 1:
+            found[lost[0]] = predicted(lost[0])
+            inferred = lost[0]
+        default:
+            return nil
+        }
+        var corners = found.map { $0 ?? expected[0] }
+        if let m = inferred { corners = refineInferredCorner(image, corners, inferred: m) }
+        let points = corners.map { PetalPoint(x: $0.x, y: $0.y) }
+        guard let h = PetalHomography.fit(from: PetalLayout.finderCenters, to: points),
+              let reference = referenceLevels(image, h, inferred: inferred) else { return nil }
+        let d = readLaneD(image, h, reference)
+        let patches = samplePatches(image, h)
+        let lanes = readTileLanes(patches, reference, options.templateSigmas)
+        if lanes.p == nil && lanes.k == nil && d == nil { return nil }
+        return PetalDecodedFrame(
+            homography: h,
+            rotation: previous.rotation,
+            mirrored: previous.mirrored,
+            p: lanes.p,
+            k: lanes.k,
+            d: d,
+            inferredCorner: inferred
+        )
     }
 
     /// Reads all lanes with a known canvas-to-pixel homography (no finder
     /// search).
     ///
     /// Returns `nil` when the image is unusable or the finder reference
-    /// levels are too weak. Used by trackers that already know the pose and
-    /// by qualification tooling with a ground-truth pose.
+    /// levels are too weak. Used by trackers that already know the pose, by
+    /// refinement passes and by qualification tooling with a ground-truth
+    /// pose.
     public static func decode(
         _ image: PetalLuma,
         homography: PetalHomography,
@@ -225,15 +313,17 @@ public enum PetalDecoder {
     ) -> PetalDecodedFrame? {
         guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, homography) else { return nil }
-            let candidate = Candidate(
-                score: 0,
+            guard let reference = referenceLevels(view, homography, inferred: nil) else { return nil }
+            return finish(
+                view,
+                options,
                 rotation: 0,
                 mirrored: false,
                 homography: homography,
-                reference: reference
+                reference: reference,
+                d: nil,
+                inferredCorner: nil
             )
-            return finish(view, options, candidate, d: nil)
         }
     }
 
@@ -250,7 +340,9 @@ public enum PetalDecoder {
     ) -> PetalFrameCells? {
         guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, frame.homography) else { return nil }
+            guard let reference = referenceLevels(view, frame.homography, inferred: frame.inferredCorner) else {
+                return nil
+            }
             let patches = samplePatches(view, frame.homography)
             let reads = readTiles(patches, reference, options.templateSigmas)
             let words = tileWords(reads)
@@ -272,7 +364,9 @@ public enum PetalDecoder {
     ) -> Double? {
         guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
-            guard let reference = referenceLevels(view, frame.homography) else { return nil }
+            guard let reference = referenceLevels(view, frame.homography, inferred: frame.inferredCorner) else {
+                return nil
+            }
             let patches = samplePatches(view, frame.homography)
             let reads = readTiles(patches, reference, options.templateSigmas)
             var total = -0.0
@@ -290,12 +384,88 @@ public enum PetalDecoder {
 
     // MARK: - Orientation
 
-    struct Candidate {
-        let score: Double
+    /// One hypothesis: gate score, `天` score, orientation, pose and levels.
+    struct Scored {
+        let gate: Double
+        let mask: Double
         let rotation: Int
         let mirrored: Bool
         let homography: PetalHomography
         let reference: Reference
+    }
+
+    /// Reads one finder candidate: ranks its orientation hypotheses by gate
+    /// score plus `天` score, tries lane `D` under the best three whose gate
+    /// score is at least 0.2, then the tile lanes under the best four.
+    static func decodeCandidate(
+        _ image: PetalLumaView,
+        _ options: PetalDecodeOptions,
+        _ set: PetalFinderSet
+    ) -> PetalDecodedFrame? {
+        let corners = set.inferred.map { refineInferredCorner(image, set.corners, inferred: $0) } ?? set.corners
+        var scored: [Scored] = []
+        for hypothesis in hypotheses(corners, tryMirrored: options.tryMirrored) {
+            let inferred = set.inferred.map {
+                canonicalCorner($0, rotation: hypothesis.rotation, mirrored: hypothesis.mirrored)
+            }
+            let h = hypothesis.homography
+            guard let reference = referenceLevels(image, h, inferred: inferred) else { continue }
+            scored.append(Scored(
+                gate: gateScore(image, h, reference),
+                mask: maskScore(image, h, reference),
+                rotation: hypothesis.rotation,
+                mirrored: hypothesis.mirrored,
+                homography: h,
+                reference: reference
+            ))
+        }
+        // Stable descending sort under total order (Rust `sort_by`).
+        let keys = scored.map { PetalNumeric.totalOrderKey($0.gate + $0.mask) }
+        let ranked = scored.indices.sorted { left, right in
+            keys[left] != keys[right] ? keys[left] > keys[right] : left < right
+        }.map { scored[$0] }
+        func inferredCorner(_ candidate: Scored) -> Int? {
+            set.inferred.map { canonicalCorner($0, rotation: candidate.rotation, mirrored: candidate.mirrored) }
+        }
+        // 1. the ring beacon is the cheapest and strongest orientation check
+        for candidate in ranked.prefix(3) {
+            if candidate.gate < 0.2 { continue }
+            if let d = readLaneD(image, candidate.homography, candidate.reference) {
+                return finish(
+                    image,
+                    options,
+                    rotation: candidate.rotation,
+                    mirrored: candidate.mirrored,
+                    homography: candidate.homography,
+                    reference: candidate.reference,
+                    d: d,
+                    inferredCorner: inferredCorner(candidate)
+                )
+            }
+        }
+        // 2. fall back to the tile lanes under the most promising orientations
+        for candidate in ranked.prefix(4) {
+            let patches = samplePatches(image, candidate.homography)
+            let lanes = readTileLanes(patches, candidate.reference, options.templateSigmas)
+            if lanes.p != nil || lanes.k != nil {
+                return PetalDecodedFrame(
+                    homography: candidate.homography,
+                    rotation: candidate.rotation,
+                    mirrored: candidate.mirrored,
+                    p: lanes.p,
+                    k: lanes.k,
+                    d: readLaneD(image, candidate.homography, candidate.reference),
+                    inferredCorner: inferredCorner(candidate)
+                )
+            }
+        }
+        return nil
+    }
+
+    /// Canonical index of the corner at index `index` of a finder quad under
+    /// one orientation hypothesis.
+    static func canonicalCorner(_ index: Int, rotation: Int, mirrored: Bool) -> Int {
+        mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4
     }
 
     struct Hypothesis {
@@ -365,11 +535,15 @@ public enum PetalDecoder {
         return sum / 5.0
     }
 
-    static func referenceLevels(_ image: PetalLumaView, _ h: PetalHomography) -> Reference? {
+    /// Light and dark levels at the four corners: the solid blossom core, and
+    /// the black canvas 100 units inward of it. An `inferred` corner
+    /// (canonical index) was not seen, so its levels are extrapolated from the
+    /// other three by the parallelogram rule and kept within their range.
+    static func referenceLevels(_ image: PetalLumaView, _ h: PetalHomography, inferred: Int?) -> Reference? {
         var lit = [Double](repeating: 0, count: 4)
         var dark = [Double](repeating: 0, count: 4)
         let tau = 2 * Double.pi
-        for (i, center) in PetalLayout.finderCenters.enumerated() {
+        for (i, center) in PetalLayout.finderCenters.enumerated() where i != inferred {
             let cx = center.x
             let cy = center.y
             // the blossom is solid out to radius 24 around its centre
@@ -386,9 +560,113 @@ public enum PetalDecoder {
             let a = dotSamples(image, h, cx + sx * 100.0, cy, 5.0)
             let b = dotSamples(image, h, cx, cy + sy * 100.0, 5.0)
             dark[i] = 0.5 * (a + b)
-            if lit[i] - dark[i] < 12.0 { return nil }
+            // a NaN contrast (from a broken pose) refuses as well
+            if !(lit[i] - dark[i]).isFinite || lit[i] - dark[i] < 12.0 { return nil }
+        }
+        if let m = inferred {
+            let n1 = (m + 1) % 4
+            let opposite = (m + 2) % 4
+            let n2 = (m + 3) % 4
+            func extrapolate(_ v: [Double]) -> Double {
+                let low = Double.minimum(Double.minimum(v[n1], v[opposite]), v[n2])
+                let high = Double.maximum(Double.maximum(v[n1], v[opposite]), v[n2])
+                return PetalNumeric.clamp(v[n1] + v[n2] - v[opposite], low, high)
+            }
+            lit[m] = extrapolate(lit)
+            dark[m] = extrapolate(dark)
+            // uneven light can push the estimates past each other; an inferred
+            // corner needs the same contrast as a seen one
+            if lit[m] - dark[m] < 12.0 { return nil }
         }
         return Reference(lit: lit, dark: dark)
+    }
+
+    /// Centres of the lattice cells outside the `天` mask (no tile is ever
+    /// drawn there), row-major.
+    static let emptyCells: [PetalPoint] = {
+        var cells: [PetalPoint] = []
+        for (row, line) in PetalLayout.mask.enumerated() {
+            for (column, mark) in line.enumerated() where mark != "#" {
+                cells.append(PetalPoint(
+                    x: PetalLayout.tileOrigin + PetalLayout.tilePitch * (Double(column) + 0.5),
+                    y: PetalLayout.tileOrigin + PetalLayout.tilePitch * (Double(row) + 0.5)
+                ))
+            }
+        }
+        return cells
+    }()
+
+    /// How well the `天` lines up: the mean normalised level over the tiles
+    /// (each sampled at five points across the tile, so a glyph stroke at the
+    /// centre does not decide it) minus the mean over the empty lattice cells.
+    /// The mask is symmetric left to right but not top to bottom, so this
+    /// tells the four quarter turns apart even when the ring gates are
+    /// damaged.
+    static func maskScore(_ image: PetalLumaView, _ h: PetalHomography, _ reference: Reference) -> Double {
+        @inline(__always)
+        func level(_ x: Double, _ y: Double) -> Double {
+            let (lit, dark) = reference.at(x, y)
+            return (dotSamples(image, h, x, y, 8.0) - dark) / (lit - dark)
+        }
+        var tiles = -0.0
+        for tile in 0..<PetalLayout.tileCount {
+            let center = PetalLayout.tileCenter(tile)
+            tiles += level(center.x, center.y)
+        }
+        var empty = -0.0
+        for cell in emptyCells { empty += level(cell.x, cell.y) }
+        return tiles / Double(PetalLayout.tileCount) - empty / Double(emptyCells.count)
+    }
+
+    /// The brightness summed over all ring slots under the pose that maps the
+    /// canonical corners onto `corners` (in quad order). The slots form the
+    /// same set of points under every quarter turn and mirror of the canvas
+    /// (80, 92 and 104 are multiples of four), so the value does not depend on
+    /// the orientation.
+    static func ringBrightness(_ image: PetalLumaView, _ corners: [PetalPoint]) -> Double? {
+        guard let h = PetalHomography.fit(from: PetalLayout.finderCenters, to: corners) else { return nil }
+        var sum = -0.0
+        for center in PetalLayout.flatSlotCenters {
+            sum += dotSamples(image, h, center.x, center.y, 3.5)
+        }
+        return sum
+    }
+
+    /// Moves an inferred corner to where the three dotted rings line up best:
+    /// a 13 × 13 search in steps of 2 % of the mean leg around the
+    /// parallelogram estimate, then a 9 × 9 search in steps of 0.5 % around the
+    /// best point. The rings fix the geometry only; the orientation is decided
+    /// afterwards by the gates and the `天`.
+    static func refineInferredCorner(
+        _ image: PetalLumaView,
+        _ corners: [PetalFinder],
+        inferred: Int
+    ) -> [PetalFinder] {
+        var points = corners.map { PetalPoint(x: $0.x, y: $0.y) }
+        let start = points[inferred]
+        func distance(_ other: Int) -> Double {
+            let dx = points[other].x - start.x
+            let dy = points[other].y - start.y
+            return (dx * dx + dy * dy).squareRoot()
+        }
+        let leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4))
+        var best = (brightness: -Double.greatestFiniteMagnitude, point: start)
+        func search(_ centre: PetalPoint, step: Double, reach: Int) {
+            for dy in -reach...reach {
+                for dx in -reach...reach {
+                    let candidate = PetalPoint(x: centre.x + Double(dx) * step, y: centre.y + Double(dy) * step)
+                    points[inferred] = candidate
+                    if let brightness = ringBrightness(image, points), brightness > best.brightness {
+                        best = (brightness, candidate)
+                    }
+                }
+            }
+        }
+        search(start, step: 0.02 * leg, reach: 6)
+        search(best.point, step: 0.005 * leg, reach: 4)
+        var refined = corners
+        refined[inferred] = PetalFinder(x: best.point.x, y: best.point.y, size: corners[inferred].size)
+        return refined
     }
 
     @inline(__always)
@@ -790,20 +1068,24 @@ public enum PetalDecoder {
     static func finish(
         _ image: PetalLumaView,
         _ options: PetalDecodeOptions,
-        _ candidate: Candidate,
-        d: PetalLaneResult?
+        rotation: Int,
+        mirrored: Bool,
+        homography h: PetalHomography,
+        reference: Reference,
+        d: PetalLaneResult?,
+        inferredCorner: Int?
     ) -> PetalDecodedFrame {
-        let h = candidate.homography
-        let d = d ?? readLaneD(image, h, candidate.reference)
+        let d = d ?? readLaneD(image, h, reference)
         let patches = samplePatches(image, h)
-        let lanes = readTileLanes(patches, candidate.reference, options.templateSigmas)
+        let lanes = readTileLanes(patches, reference, options.templateSigmas)
         return PetalDecodedFrame(
             homography: h,
-            rotation: candidate.rotation,
-            mirrored: candidate.mirrored,
+            rotation: rotation,
+            mirrored: mirrored,
             p: lanes.p,
             k: lanes.k,
-            d: d
+            d: d,
+            inferredCorner: inferredCorner
         )
     }
 }

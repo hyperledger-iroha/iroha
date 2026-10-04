@@ -1,10 +1,7 @@
 //! Actual owner capture, rollback and explicit refusal of incomplete quantity coverage.
 
 use super::*;
-use crate::{
-    execution_attempt::ExecutionAttemptError, kura::Kura, query::store::LiveQueryStore,
-    smartcontracts::Execute,
-};
+use crate::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute};
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
@@ -118,7 +115,10 @@ fn authenticate_quantity_state(component: State) -> State {
 
 fn quantity_successor_header(state: &State) -> BlockHeader {
     let view = state.view();
-    let parent = view.latest_block().expect("original quantity genesis");
+    let parent = view
+        .latest_block()
+        .expect("completed original State read")
+        .expect("original quantity genesis");
     let time_ms = u64::try_from(parent.header().creation_time().as_millis())
         .expect("quantity fixture timestamp fits")
         + 2;
@@ -145,7 +145,12 @@ fn quantity_fixture_preserves_balances_and_original_authenticated_network_root()
     );
     assert!(
         quantity_successor_header(&state).creation_time()
-            > view.latest_block().unwrap().header().creation_time()
+            > view
+                .latest_block()
+                .expect("completed original State read")
+                .unwrap()
+                .header()
+                .creation_time()
     );
     assert_eq!(
         view.world.assets.get(&alice).unwrap().as_ref(),
@@ -2788,10 +2793,8 @@ fn signed_account_removal_rolls_back_balance_supply_account_and_capture_on_later
 fn direct_account_removal_preserves_business_result_without_original_quantity_source() {
     let (state, alice, bob) = account_removal_fixture(Some(Quantity::from(3_u32)));
     let mut block = state.block(quantity_successor_header(&state));
-    // The callback fixture explicitly admits a component E owner; this control
-    // must retain the absence of every original invocation instead.
     let mut transaction = block.transaction();
-    assert_eq!(transaction.tx_call_hash, None);
+    assert!(transaction.tx_call_hash.is_none());
     Unregister::account(BOB_ID.clone())
         .execute(&BOB_ID, &mut transaction)
         .unwrap();

@@ -282,7 +282,21 @@ fn ensure_private_instruction(
         // bootstrap initializes its own alias registry, never a foreign dataspace or parent registry.
         return Ok(());
     }
-    if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
+    let multisig = match MultisigInstructionBox::try_from(instruction) {
+        Ok(multisig) => Some(multisig),
+        Err(error) => {
+            match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                error,
+                |_| (),
+            ) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(()) => None,
+            }
+        }
+    };
+    if let Some(multisig) = multisig {
         match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 for nested in &propose.instructions {
@@ -294,6 +308,7 @@ fn ensure_private_instruction(
                     crate::smartcontracts::isi::multisig::live_proposal_instructions_for_approval(
                         state, &approve,
                     )
+                    .map_err(|error| state.attempt_error_to_validation_fail(error))?
                 {
                     for nested in &instructions {
                         ensure_private_instruction(nested, state, dataspace, depth + 1)?;

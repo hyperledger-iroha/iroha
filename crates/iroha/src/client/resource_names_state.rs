@@ -260,7 +260,7 @@ mod tests {
         let token = "synthetic-native-listener-token";
         let config = Config {
             chain: fixture.chain.clone(),
-            network_id: fixture.network_id.clone(),
+            network_id: fixture.network_id,
             key_pair: fixture.key_pair.clone(),
             account: fixture.account.clone(),
             account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
@@ -412,7 +412,7 @@ mod tests {
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
             },
             finality_proof: proof,
         };

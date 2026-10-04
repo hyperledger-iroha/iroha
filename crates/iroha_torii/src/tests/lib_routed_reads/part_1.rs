@@ -75,68 +75,8 @@ pub(super) fn configure_corrupt_inactive_autoscale_range_route_for_test(
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     let app_state = Arc::get_mut(app).expect("unique app state");
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-    {
-        let mut current = state.nexus.write();
-        *current = nexus;
-    }
+    state.install_synthetic_routing_snapshot_for_testing(nexus);
     (inactive_lane, inactive_dataspace)
-}
-pub(super) fn configure_future_created_autoscale_route_for_test(
-    app: &mut SharedAppState,
-) -> (LaneId, DataSpaceId) {
-    let future_lane = LaneId::new(1);
-    let future_dataspace = DataSpaceId::UNIVERSAL;
-    let mut lane = iroha_data_model::nexus::LaneConfig {
-        id: future_lane,
-        dataspace_id: future_dataspace,
-        alias: "elastic-lane-1".to_owned(),
-        visibility: iroha_data_model::nexus::LaneVisibility::Public,
-        ..iroha_data_model::nexus::LaneConfig::default()
-    };
-    lane.metadata.insert(
-        iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
-        "true".to_owned(),
-    );
-    lane.metadata.insert(
-        iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-        "7".to_owned(),
-    );
-    assert!(
-        lane.is_autoscale_managed_elastic(),
-        "fixture must be a valid-looking autoscale elastic lane"
-    );
-    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-        NonZeroU32::new(2).expect("nonzero lane count"),
-        vec![iroha_data_model::nexus::LaneConfig::default(), lane],
-    )
-    .expect("future-created lane catalog");
-    let mut nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
-    nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-    nexus.lane_config =
-        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-    let app_state = Arc::get_mut(app).expect("unique app state");
-    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-    {
-        let mut current = state.nexus.write();
-        *current = nexus;
-    }
-    state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-        NonZeroU64::new(1).expect("nonzero authority height"),
-        None,
-        None,
-        0,
-        0,
-    ));
-    assert!(
-        !state.is_lane_active_for_authority(future_lane),
-        "future-created autoscale fixture must be inactive before creation height"
-    );
-    (future_lane, future_dataspace)
 }
 #[test]
 fn torii_route_resolution_rejects_inactive_autoscale_range_lane() {
@@ -815,11 +755,9 @@ async fn collect_torii_account_history_json_payloads_fails_on_mid_route_not_foun
 #[tokio::test]
 async fn execute_account_history_single_route_preserves_index_metadata() {
     let authority = routed_read_test_account(0x91);
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(
         world_with_account(&authority),
-        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
     assert!(
@@ -1241,11 +1179,9 @@ async fn routed_contract_views_require_bound_caller() {
 #[tokio::test]
 async fn protected_contract_views_ignore_unsigned_public_upstream() {
     let authority = routed_read_test_account(0xb7);
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(
         world_with_account(&authority),
-        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .public_dataspace_upstreams = Arc::new(BTreeMap::from([(
@@ -1570,16 +1506,12 @@ async fn routed_contract_alias_sanitizer_rejects_forged_subject_payload() {
 #[tokio::test]
 async fn protected_alias_reads_ignore_unsigned_public_upstream() {
     let authority = routed_read_test_account(0x97);
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(
         world_with_account(&authority),
-        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+        app.state.network_id_ref(),
         &authority,
         1,
         DataSpaceId::UNIVERSAL,
@@ -3308,17 +3240,37 @@ async fn contract_state_read_refuses_known_dataspace_without_active_lane_before_
         path: Some("Counter".to_owned()),
         ..Default::default()
     };
-    // The local storage reader deliberately owns no lane routing decision.
-    // Its successful empty read proves why the outer target barrier must refuse first.
+    // Seed the original scoped storage owner. Exact-path reads require an existing value;
+    // the successful component response proves the outer route barrier must refuse first.
+    let stored_path = format!(
+        "sc/{}/Counter",
+        hex::encode(Hash::new(address_literal.as_bytes()).as_ref())
+    );
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1_001, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            stored_path.parse().expect("valid scoped Counter path"),
+            norito::codec::Encode::encode(&7_u64),
+        );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("seed isolated scoped Counter data");
     let JsonBody(local) =
         routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(query()))
             .await
-            .expect("local component can read the scoped absent key without choosing a lane");
+            .expect("local component can read the original scoped value without choosing a lane");
     assert_eq!(
         local.contract_address.as_deref(),
         Some(address_literal.as_str())
     );
     assert_eq!(local.path.as_deref(), Some("Counter"));
+    assert_eq!(local.entries.len(), 1);
+    assert!(local.entries[0].found);
+    assert_eq!(local.entries[0].value_len, Some(8));
     let route_error = torii_contract_target_read_route(app.as_ref(), Some(&address), None)
         .expect_err("known unavailable target cannot become absent/default target");
     assert!(matches!(

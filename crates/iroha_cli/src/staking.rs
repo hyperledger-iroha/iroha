@@ -14,7 +14,7 @@ use iroha::data_model::{
     },
     nexus::{
         PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
-        PublicLaneRewardClaimPlanV1,
+        PublicLanePreparationRequestV1, PublicLaneRewardClaimPlanV1,
     },
     prelude::AccountId,
 };
@@ -39,6 +39,8 @@ const STAKING_PLAN_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::n
 );
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Observe an exact monetary plan, reported finalized tip and custody reserves before signing
+    Prepare(PrepareArgs),
     /// Register a stake-elected validator on a public lane
     Register(RegisterArgs),
     /// Admit a consented validator on a stake-elected lane; fresh global admission requires an epoch key transition
@@ -63,6 +65,7 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Command::Prepare(args) => args.run(context),
             Command::Register(args) => args.run(context),
             Command::RegisterCandidate(args) => args.run(context),
             Command::Rebind(args) => args.run(context),
@@ -74,6 +77,24 @@ impl Run for Command {
             Command::ClaimRewards(args) => args.run(context),
             Command::RecordRewards(args) => args.run(context),
         }
+    }
+}
+/// Read-only exact staking intent supplied as canonical Norito JSON.
+#[derive(clap::Args, Debug)]
+pub struct PrepareArgs {
+    /// PublicLanePreparationRequestV1 with explicit operation, amount and expiry offset
+    #[arg(long, value_name = "PATH")]
+    pub request: PathBuf,
+}
+impl Run for PrepareArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request: PublicLanePreparationRequestV1 =
+            load_staking_json(&self.request, "--request")?;
+        let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
+        let observation = client.nexus().prepare_public_lane_plan(&request)?;
+        // Preserve every binding and reserve alongside the exact plan. This read
+        // does not authenticate the reported tip or authorize a transaction.
+        context.print_data(&observation)
     }
 }
 #[derive(clap::Args, Debug)]
@@ -123,7 +144,7 @@ impl RegisterArgs {
             "--stake-account must equal --validator"
         );
         let monetary_plan: PublicLaneMonetaryPlanV1 =
-            load_staking_plan(&self.monetary_plan, "--monetary-plan")?;
+            load_staking_json(&self.monetary_plan, "--monetary-plan")?;
         validate_monetary_plan(context, &monetary_plan)?;
         eyre::ensure!(
             monetary_plan.source_asset.account() == &stake_account
@@ -327,7 +348,7 @@ impl Run for BondArgs {
         let validator = parse_account_id(context, &self.validator, "--validator")?;
         let staker = parse_account_or_authority(context, self.staker.as_deref(), "--staker")?;
         let monetary_plan: PublicLaneMonetaryPlanV1 =
-            load_staking_plan(&self.monetary_plan, "--monetary-plan")?;
+            load_staking_json(&self.monetary_plan, "--monetary-plan")?;
         validate_monetary_plan(context, &monetary_plan)?;
         eyre::ensure!(
             monetary_plan.source_asset.account() == &staker
@@ -412,7 +433,7 @@ impl Run for FinalizeUnbondArgs {
         let validator = parse_account_id(context, &self.validator, "--validator")?;
         let staker = parse_account_or_authority(context, self.staker.as_deref(), "--staker")?;
         let monetary_plan: PublicLaneMonetaryPlanV1 =
-            load_staking_plan(&self.monetary_plan, "--monetary-plan")?;
+            load_staking_json(&self.monetary_plan, "--monetary-plan")?;
         validate_monetary_plan(context, &monetary_plan)?;
         eyre::ensure!(
             monetary_plan.destination_asset.account() == &staker
@@ -443,7 +464,7 @@ pub struct ClaimRewardsArgs {
     /// Reward recipient (defaults to the configured transaction authority)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub account: Option<String>,
-    /// Norito JSON PublicLaneRewardClaimPlanV1 with bounded records and exact custody payouts
+    /// Norito JSON PublicLaneRewardClaimPlanV1 with bounded records and explicit fee-reward consent
     #[arg(long, value_name = "PATH")]
     pub claim_plan: PathBuf,
 }
@@ -451,7 +472,7 @@ impl Run for ClaimRewardsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let account = parse_account_or_authority(context, self.account.as_deref(), "--account")?;
         let claim_plan: PublicLaneRewardClaimPlanV1 =
-            load_staking_plan(&self.claim_plan, "--claim-plan")?;
+            load_staking_json(&self.claim_plan, "--claim-plan")?;
         validate_plan_network(context, &claim_plan.network_scope, "--claim-plan")?;
         eyre::ensure!(
             claim_plan.has_canonical_shape(&account),
@@ -485,7 +506,36 @@ impl Run for RecordRewardsArgs {
         context.finish(vec![InstructionBox::from(instruction)])
     }
 }
-fn load_staking_plan<T: norito::json::JsonDeserialize>(path: &Path, flag: &str) -> Result<T> {
+/// Decode one exact staking request or monetary plan within fixed resource bounds.
+pub(crate) fn load_staking_json<T: norito::json::JsonDeserialize>(
+    path: &Path,
+    flag: &str,
+) -> Result<T> {
+    load_bounded_staking_json(path, flag, STAKING_PLAN_DECODE_LIMITS)
+}
+
+/// Read committee evidence with its exact largest fixed proof field admitted.
+pub(crate) fn load_committee_json(
+    path: &Path,
+    flag: &str,
+) -> Result<iroha::data_model::nexus::ValidatorCommitteeOperationV1> {
+    // The adaptive beacon proof's compressed G2 commitment is a 96-byte JSON
+    // array. Reward-list limits stay at 64; committee rosters contain at most 31.
+    let limits = norito::DecodeLimits::new(
+        iroha_crypto::threshold_bls::THRESHOLD_BLS_PUBLIC_KEY_BYTES,
+        STAKING_PLAN_DECODE_LIMITS.max_field_bytes(),
+        STAKING_PLAN_DECODE_LIMITS.max_total_elements(),
+        STAKING_PLAN_DECODE_LIMITS.max_total_allocated_bytes(),
+        STAKING_PLAN_DECODE_LIMITS.max_nesting_depth(),
+    );
+    load_bounded_staking_json(path, flag, limits)
+}
+
+fn load_bounded_staking_json<T: norito::json::JsonDeserialize>(
+    path: &Path,
+    flag: &str,
+    limits: norito::DecodeLimits,
+) -> Result<T> {
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {flag} {}", path.display()))?;
     let before = file.metadata().wrap_err("inspect staking plan")?;
@@ -501,16 +551,11 @@ fn load_staking_plan<T: norito::json::JsonDeserialize>(path: &Path, flag: &str) 
     );
     norito::json::preflight_slice(
         &bytes,
-        norito::json::JsonPreflightLimits::from_decode_limits(
-            MAX_STAKING_PLAN_BYTES,
-            STAKING_PLAN_DECODE_LIMITS,
-        ),
+        norito::json::JsonPreflightLimits::from_decode_limits(MAX_STAKING_PLAN_BYTES, limits),
     )
     .map_err(|error| eyre!("{flag} exceeds JSON resource bounds: {error}"))?;
-    norito::with_decode_limits_scope(STAKING_PLAN_DECODE_LIMITS, || {
-        norito::json::from_slice(&bytes)
-    })
-    .wrap_err_with(|| format!("{flag} must contain a valid Norito JSON staking plan"))
+    norito::with_decode_limits_scope(limits, || norito::json::from_slice(&bytes))
+        .wrap_err_with(|| format!("{flag} must contain a valid Norito JSON staking object"))
 }
 fn validate_plan_network<C: RunContext>(
     context: &C,
@@ -649,10 +694,8 @@ mod tests {
         file
     }
     fn plan_asset(account: AccountId) -> iroha::data_model::asset::AssetId {
-        let definition = iroha::data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
-        ])
-        .unwrap();
+        let definition = iroha::data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id;
         iroha::data_model::asset::AssetId::of(definition, account)
     }
     fn registration_plan(amount: &str, activation_height: u64) -> PublicLaneMonetaryPlanV1 {
@@ -732,6 +775,7 @@ mod tests {
                 expected_accrued: None,
                 payout: 1_u64.into(),
             }],
+            fee_claim: None,
         }
     }
     #[test]
@@ -1063,8 +1107,17 @@ mod tests {
         assert_eq!(context.submitted, Some(vec![expected]));
     }
     #[test]
-    fn claim_rewards_preserves_account_and_exact_record_selection() {
-        let plan = reward_claim_plan(ALICE_ID.clone(), LaneId::new(4));
+    fn claim_rewards_preserves_account_exact_records_and_fee_reward_consent() {
+        let mut plan = reward_claim_plan(ALICE_ID.clone(), LaneId::new(4));
+        plan.fee_claim = Some(iroha::data_model::nexus::PublicLaneFeeRewardClaimV1 {
+            lifecycle_seal: [1; 32],
+            beneficiary_id: ALICE_ID.clone(),
+            beneficiary_revision: 2,
+            source_asset: plan_asset(BOB_ID.clone()),
+            destination_asset: plan_asset(ALICE_ID.clone()),
+            amount: 3_u64.into(),
+            expected_claim_sequence: 4,
+        });
         let file = plan_file(&plan);
         let command = parse_command(&[
             "claim-rewards",
@@ -1559,7 +1612,7 @@ mod tests {
         file.as_file()
             .set_len(MAX_STAKING_PLAN_BYTES as u64 + 1)
             .unwrap();
-        let error = load_staking_plan::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan")
+        let error = load_staking_json::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan")
             .unwrap_err();
         assert!(error.to_string().contains("regular file within"));
         for bytes in [
@@ -1569,13 +1622,13 @@ mod tests {
         ] {
             fs::write(file.path(), bytes).unwrap();
             assert!(
-                load_staking_plan::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan")
+                load_staking_json::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan")
                     .is_err()
             );
         }
         let directory = tempfile::tempdir().unwrap();
         assert!(
-            load_staking_plan::<PublicLaneMonetaryPlanV1>(directory.path(), "--monetary-plan")
+            load_staking_json::<PublicLaneMonetaryPlanV1>(directory.path(), "--monetary-plan")
                 .is_err()
         );
     }
@@ -1590,7 +1643,7 @@ mod tests {
             .insert("retired_transfer".into(), norito::json::Value::Null);
         let file = plan_file(&monetary);
         assert!(
-            load_staking_plan::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan").is_err()
+            load_staking_json::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan").is_err()
         );
 
         let mut claim =
@@ -1602,8 +1655,24 @@ mod tests {
             .insert("upto_epoch".into(), norito::json::Value::Null);
         let file = plan_file(&claim);
         assert!(
-            load_staking_plan::<PublicLaneRewardClaimPlanV1>(file.path(), "--claim-plan").is_err()
+            load_staking_json::<PublicLaneRewardClaimPlanV1>(file.path(), "--claim-plan").is_err()
         );
+    }
+
+    #[test]
+    fn claim_rejects_missing_explicit_fee_reward_consent_before_submission() {
+        let mut plan =
+            norito::json::to_value(&reward_claim_plan(ALICE_ID.clone(), LaneId::SINGLE)).unwrap();
+        plan.as_object_mut().unwrap().remove("fee_claim");
+        let file = plan_file(&plan);
+        let mut context = TestContext::new();
+        let args = ClaimRewardsArgs {
+            lane_id: 0,
+            account: Some(alice_literal()),
+            claim_plan: file.path().to_path_buf(),
+        };
+        assert!(args.run(&mut context).is_err());
+        assert!(context.submitted.is_none());
     }
 
     #[test]
@@ -1867,8 +1936,17 @@ mod tests {
         assert!(plan.has_canonical_shape(&ALICE_ID));
         let file = plan_file(&plan);
         assert_eq!(
-            load_staking_plan::<PublicLaneRewardClaimPlanV1>(file.path(), "--claim-plan").unwrap(),
+            load_staking_json::<PublicLaneRewardClaimPlanV1>(file.path(), "--claim-plan").unwrap(),
             plan
+        );
+        plan.records.push(plan.records[0].clone());
+        let oversized = plan_file(&plan);
+        let error =
+            load_staking_json::<PublicLaneRewardClaimPlanV1>(oversized.path(), "--claim-plan")
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("JSON resource bounds"),
+            "committee proof admission must not enlarge the reward record bound"
         );
     }
 }

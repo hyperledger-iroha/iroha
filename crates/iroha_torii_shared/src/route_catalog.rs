@@ -3403,6 +3403,13 @@ pub mod sorafs {
         RouteProjections::SDK,
     )
     .with_private_no_store();
+    /// Read exact native custody presence or absence independently of provider admission.
+    pub const STREAM_TOKEN_CUSTODY: RouteDescriptor = public_get(
+        "sorafs.stream_token_custody.read",
+        "/v1/sorafs/providers/{provider_id}/custody/{height}",
+        RouteProjections::SDK,
+    )
+    .with_private_no_store();
     /// Submit a `SoraFS` provider advertisement.
     pub const PROVIDER_ADVERT: RouteDescriptor = documented_post(
         "sorafs.provider_advert.submit",
@@ -3822,6 +3829,7 @@ pub mod sorafs {
         PROVIDERS,
         PROVIDER_ADVERT,
         PROVIDER_DISCOVERY,
+        STREAM_TOKEN_CUSTODY,
         ROUTING_PROVIDERS,
         ROUTING_PEERS,
         CAPACITY_STATE,
@@ -4501,6 +4509,7 @@ pub mod contracts_and_verification_keys {
         SORAFS_ORDERBOOK_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_stream_get", "/v1/sorafs/orderbook/events/stream");
         SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_websocket_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
         SORAFS_RESERVE_POLICY_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_get", "/v1/sorafs/reserve/policy");
+        SORAFS_RESERVE_POLICY_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_proof_get", "/v1/sorafs/reserve/policy/{height}");
         SORAFS_RESERVE_PROVIDERS_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
         SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");
         SORAFS_RESERVE_TOP_UP_POST => app_signed_body_mutation_sdk_post("contracts.sorafs_reserve_top_up_post", "/v1/sorafs/reserve/top-up");

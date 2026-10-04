@@ -171,7 +171,7 @@ impl NativeExecutionTipSnapshot {
             // Nonempty export recovery remains disabled until S9 authenticates full World.
             return Err(TipRestoreError::GenesisReplayRequired);
         }
-        let chain = CertifiedChain::from_pinned(chain_id, network, hashes, kura)
+        let chain = CertifiedChain::from_pinned(chain_id, network, hashes, kura, budget)
             .map_err(|error| error.to_string())?;
         let current = chain
             .authenticated_execution(height)

@@ -24,12 +24,12 @@ use iroha_data_model::{
     nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, UniversalAccountId},
     permission::Permission,
     prelude::{Parameter, Quantity},
-    proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofId, ProofRecord, ProofStatus},
     ram_lfe::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
     },
     role::{Role, RoleId},
-    transaction::{IvmBytecode, IvmProved, signed::TransactionBuilder},
+    transaction::signed::TransactionBuilder,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
@@ -1492,24 +1492,7 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
         "unexpected construction error: {error}"
     );
 }
-fn proof_json_headers() -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        axum::http::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers
-}
-fn query_conversion_message(error: &Error) -> Option<&str> {
-    match error {
-        Error::Query(ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) => Some(message),
-        _ => None,
-    }
-}
-#[cfg(feature = "push")]
-use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
+
 #[cfg(feature = "telemetry")]
 use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
 #[cfg(feature = "app_api")]
@@ -1999,12 +1982,10 @@ fn seed_proof_record_at_height(
     };
     stx.world.proofs_mut_for_testing().insert(id.clone(), rec);
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
+    // This is a synthetic index fixture, not finalized chain evidence. Retain the
+    // actual header hash as well as empty membership through the existing owner.
     block
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("seed proof block commit should succeed");
     id.to_string()
 }
@@ -2020,23 +2001,7 @@ fn current_block_height(app: &SharedAppState) -> u64 {
 fn next_block_height(app: &SharedAppState) -> u64 {
     current_block_height(app).saturating_add(1).max(1)
 }
-#[cfg(feature = "zk-stark")]
-fn sample_stark_vk_box(
-    backend: &str,
-    circuit_id: &str,
-) -> iroha_data_model::proof::VerifyingKeyBox {
-    let vk_payload = iroha_core_zk::stark::StarkFriVerifyingKeyV1 {
-        version: 1,
-        circuit_id: circuit_id.to_owned(),
-        n_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-        blowup_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-        fold_arity: 2,
-        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-        merkle_arity: 2,
-    };
-    let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
-    iroha_data_model::proof::VerifyingKeyBox::new(backend.to_owned(), bytes)
-}
+
 fn set_latest_block_height(app: &SharedAppState, height: u64) {
     let mut current_height = current_block_height(app);
     while current_height < height {
@@ -2048,16 +2013,69 @@ fn set_latest_block_height(app: &SharedAppState, height: u64) {
             0,
             0,
         );
-        let mut block = app.state.block(header);
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(next_height as usize).expect("block count should be non-zero"),
-        );
-        block
-            .commit()
+        app.state
+            .block(header)
+            .commit_empty_block_for_testing()
             .expect("set latest block height commit should succeed");
         current_height = next_height;
     }
+}
+#[tokio::test]
+async fn proof_record_fixture_retains_exact_hash_and_membership_while_unfilled_tip_refuses() {
+    // The old membership-only setup must still refuse; a test helper must not
+    // weaken the production requirement to fill the original reserved hash tip.
+    let app = mk_app_state_for_tests();
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("height>0"), None, None, 0, 0);
+    let mut unfinished = app.state.block(header);
+    unfinished
+        .transactions
+        .insert_block(HashSet::new(), NonZeroUsize::new(1).expect("height>0"));
+    let error = unfinished
+        .commit()
+        .expect_err("membership without the original header hash must refuse");
+    assert_eq!(format!("{error:?}"), "SnapshotObservationChanged");
+    assert_eq!(current_block_height(&app), 0);
+    assert_eq!(app.state.block_hashes.committed_height(), 0);
+    assert_eq!(app.state.latest_block_hash_fast(), None);
+
+    let proof_hash = [0xE1; 32];
+    let id = seed_proof_record_at_height(&app, "halo2/ipa", proof_hash, 3);
+    assert_eq!(current_block_height(&app), 3);
+    assert_eq!(app.state.block_hashes.committed_height(), 3);
+    let expected_hash =
+        BlockHeader::new(NonZeroU64::new(3).expect("height>0"), None, None, 0, 0).hash();
+    assert_eq!(app.state.latest_block_hash_fast(), Some(expected_hash));
+    let proof_id = ProofId {
+        backend: "halo2/ipa".to_owned(),
+        proof_hash,
+    };
+    assert_eq!(id, proof_id.to_string());
+    {
+        let view = app.state.view();
+        let record = view
+            .world()
+            .proofs()
+            .get(&proof_id)
+            .expect("retained proof record");
+        assert_eq!(record.id, proof_id);
+        assert_eq!(record.status, ProofStatus::Verified);
+        assert_eq!(record.verified_at_height, Some(3));
+    }
+    set_latest_block_height(&app, 5);
+    assert_eq!(current_block_height(&app), 5);
+    assert_eq!(app.state.block_hashes.committed_height(), 5);
+    let expected_hash =
+        BlockHeader::new(NonZeroU64::new(5).expect("height>0"), None, None, 0, 0).hash();
+    assert_eq!(app.state.latest_block_hash_fast(), Some(expected_hash));
+    let view = app.state.view();
+    let record = view
+        .world()
+        .proofs()
+        .get(&proof_id)
+        .expect("proof survives synthetic index advance");
+    assert_eq!(record.id, proof_id);
+    assert_eq!(record.status, ProofStatus::Verified);
+    assert_eq!(record.verified_at_height, Some(3));
 }
 // Seed canonical identity before adding its independently owned primary alias.
 fn bind_primary_account_alias_for_test(

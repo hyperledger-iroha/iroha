@@ -82,13 +82,10 @@ use incoming_state_commit::{
     IncomingStateAdvanceAcknowledgment, IncomingStateAdvanceOriginals,
     RetainedFinancialStateAdvance, RetainedIncomingCommit,
 };
-pub(crate) use received_source::KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1;
 use received_source::{ReceivedSourceAdmission, ReceivedSourceOriginals};
 use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
 pub(crate) use receiver_request::{
-    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
-    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 use state_commit::{

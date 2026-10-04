@@ -275,11 +275,11 @@ fn validate_app_routed_read_form(
                     "Every query parameter must use key=value framing.",
                 ));
             };
-            if separator == 0 || separator + 1 == sequence.len() || separators.next().is_some() {
+            if separator == 0 || separator + 1 == sequence.len() {
                 return Err(torii_proxy_error_response(
                     StatusCode::BAD_REQUEST,
                     "request_query_invalid",
-                    "Query parameter names and values must be non-empty and contain one separator.",
+                    "Query parameter names and values must be non-empty.",
                 ));
             }
         }
@@ -321,61 +321,32 @@ fn validate_app_routed_read_form(
     Ok(())
 }
 fn validate_app_routed_read_form_component(raw: &[u8]) -> Result<(), Response> {
+    // Ordinary RFC 3986 / HTML-form spelling; see `utils::decode_component`.
     let mut index = 0;
     while index < raw.len() {
         match raw[index] {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b'+' => {
-                index += 1
-            }
             b'%' => {
-                let (Some(high), Some(low)) = (raw.get(index + 1), raw.get(index + 2)) else {
+                let escape = raw.get(index + 1..index + 3);
+                if !escape.is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit)) {
                     return Err(torii_proxy_error_response(
                         StatusCode::BAD_REQUEST,
                         "request_query_invalid",
-                        "Query parameters contain invalid percent-encoding.",
-                    ));
-                };
-                let (Some(high), Some(low)) = (torii_upper_hex(*high), torii_upper_hex(*low))
-                else {
-                    return Err(torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "request_query_invalid",
-                        "Query percent-encoding must use uppercase hexadecimal digits.",
-                    ));
-                };
-                let decoded = (high << 4) | low;
-                if torii_form_literal(decoded) || decoded == b' ' {
-                    return Err(torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "request_query_invalid",
-                        "Query parameters contain a non-canonical percent escape.",
+                        "Query parameters contain an incomplete percent escape; write a literal `%` as `%25`.",
                     ));
                 }
                 index += 3;
             }
+            byte if byte.is_ascii_graphic() => index += 1,
             _ => {
                 return Err(torii_proxy_error_response(
                     StatusCode::BAD_REQUEST,
                     "request_query_invalid",
-                    "Query components must percent-encode bytes outside the canonical form literal set.",
+                    "Query parameters must percent-encode spaces, control characters and non-ASCII bytes.",
                 ));
             }
         }
     }
     Ok(())
-}
-const fn torii_form_literal(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_'
-    )
-}
-const fn torii_upper_hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 fn decode_app_routed_read_typed_json<T>(
     plan: ToriiRoutedReadRequestDecodePlan,
@@ -454,6 +425,7 @@ fn app_routed_read_form_encode_response(
             limit,
         ),
         norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::ScopedDecodeResource(_)
         | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -547,6 +519,7 @@ fn torii_routed_read_form_encode_response(
             )
         }
         norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::ScopedDecodeResource(_)
         | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -871,7 +844,7 @@ mod torii_routed_read_request_tests {
         }
     }
     #[test]
-    fn routed_queries_require_one_canonical_form_spelling() {
+    fn routed_queries_decode_rfc3986_spellings_and_reject_bad_framing() {
         let phase = 64 * 1024;
         let plan =
             ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
@@ -884,30 +857,36 @@ mod torii_routed_read_request_tests {
             "limit",
             "=7",
             "limit=",
-            "limit=7=8",
             "limit=7&",
             "&limit=7",
             "limit=7&&offset=0",
-            "%6Cimit=7",
-            "limit=%37",
-            "label=raw/value",
-            "label=raw~value",
-            "label=%20",
             "label=%0A",
         ] {
             let response = decode_torii_proxy_query::<norito::json::Value>(plan, Some(query))
-                .expect_err("noncanonical query must fail");
+                .expect_err("malformed query must fail");
             assert_eq!(
                 response.status(),
                 StatusCode::BAD_REQUEST,
                 "query={query:?}"
             );
         }
+        for (query, key, expected) in [
+            ("%6Cimit=x", "limit", "x"),
+            ("label=%41bc", "label", "Abc"),
+            ("label=raw/value", "label", "raw/value"),
+            ("label=raw~value", "label", "raw~value"),
+            ("label=a=b", "label", "a=b"),
+            ("label=one%20two", "label", "one two"),
+        ] {
+            let decoded = decode_torii_proxy_query::<norito::json::Value>(plan, Some(query))
+                .unwrap_or_else(|_| panic!("{query:?} decodes"));
+            assert_eq!(decoded[key].as_str(), Some(expected), "query={query:?}");
+        }
         let decoded = decode_torii_proxy_query::<norito::json::Value>(
             plan,
             Some("label=raw%2Fvalue%7Eok&space=one+two&star=one*two"),
         )
-        .expect("canonical form spellings decode");
+        .expect("form spellings decode");
         assert_eq!(decoded["label"].as_str(), Some("raw/value~ok"));
         assert_eq!(decoded["space"].as_str(), Some("one two"));
         assert_eq!(decoded["star"].as_str(), Some("one*two"));

@@ -161,7 +161,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
     link(
         out,
         &dispatch[CARRY + ADDRESS..CARRY + ADDRESS + 4],
-        &decoded.store_address,
+        &core::array::from_fn::<_, 4, _>(|i| decoded.store.mul(decoded.memory_address[i])),
     );
     out.push(dispatch[CARRY + STORE].sub(decoded.store));
     // Only a complete STORE success or canonical inactive padding belongs here.

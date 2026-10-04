@@ -167,6 +167,7 @@ fn semantic_source_work_is_explicit_and_failure_releases_aggregate_backing() {
 fn semantic_memory_refusal_preserves_original_pool_release_owner() {
     let state = state();
     let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let before = budget.reserved_bytes();
     let outer = 3 * std::mem::size_of::<CanonicalTablePairedSnapshot>();
     budget.set_limit_bytes(before + outer + 1024);
@@ -185,7 +186,7 @@ fn semantic_memory_refusal_preserves_original_pool_release_owner() {
             panic!("original memory pool release")
         };
         assert_eq!(budget.reserved_bytes(), before + 1024);
-        let mut waiter = pin!(release.clone().wait_for_release());
+        let mut waiter = pin!(release.clone().wait_for_release(&mut registration));
         let mut context = Context::from_waker(Waker::noop());
         // Aggregate cleanup actually refunds this original pool, but its
         // notification remains retained by the original scope until it exits.
@@ -195,11 +196,17 @@ fn semantic_memory_refusal_preserves_original_pool_release_owner() {
         assert_eq!(waiter.as_mut().poll(&mut context), Poll::Pending);
         release.clone()
     });
-    let mut waiter = pin!(release.wait_for_release());
+    let mut waiter = Box::pin(release.wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(waiter.as_mut().poll(&mut context), Poll::Ready(()));
     drop(held);
     assert_eq!(budget.reserved_bytes(), before);
+    drop(waiter);
+    drop(registration);
+    assert_eq!(
+        budget.reserved_bytes(),
+        before - iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]

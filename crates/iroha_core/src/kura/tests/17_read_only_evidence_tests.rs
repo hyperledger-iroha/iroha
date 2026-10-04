@@ -7,12 +7,13 @@ mod canonical_evidence_reader_tests {
     struct Fixture {
         _directory: tempfile::TempDir,
         root: PathBuf,
-        blocks: Vec<Arc<SignedBlock>>,
+        blocks: Vec<iroha_data_model::block::SharedSignedBlock>,
     }
     impl Fixture {
         fn new() -> Self {
             // Native originals execute once; individual tests retain only immutable block images.
-            static BLOCKS: std::sync::OnceLock<Vec<Arc<SignedBlock>>> = std::sync::OnceLock::new();
+            static BLOCKS: std::sync::OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> =
+                std::sync::OnceLock::new();
             let blocks = BLOCKS
                 .get_or_init(|| {
                     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
@@ -27,7 +28,11 @@ mod canonical_evidence_reader_tests {
                         .map(|height| {
                             chain
                                 .kura()
-                                .get_block(NonZeroUsize::new(height).unwrap())
+                                .get_block(
+                                    NonZeroUsize::new(height).unwrap(),
+                                    &chain.state().view().execution_budget(),
+                                )
+                                .expect("completed structural storage read")
                                 .unwrap()
                         })
                         .collect()
@@ -430,7 +435,7 @@ mod canonical_evidence_reader_tests {
                 fs::write(path, bytes).expect("wrong first hash, same marker tip");
             }
             if variant == 2 {
-                fixture.blocks[1] = Arc::clone(&fixture.blocks[0]);
+                fixture.blocks[1] = (fixture.blocks[0]).clone();
                 fixture.write_store();
             }
             let mut reader = fixture.open();
@@ -484,7 +489,7 @@ mod canonical_evidence_reader_tests {
                 )),
             };
             block.set_commit_certificate(replacement);
-            fixture.blocks[at] = Arc::new(block);
+            fixture.blocks[at] = share_storage_fixture(block);
             fixture.write_store();
             let mut reader = fixture.open();
             if at > 0 {
@@ -514,7 +519,7 @@ mod canonical_evidence_reader_tests {
             original.result_preimage().to_vec(),
             Vec::new(),
         )));
-        fixture.blocks[1] = Arc::new(block);
+        fixture.blocks[1] = share_storage_fixture(block);
         fixture.write_store();
         let before = fixture.snapshot();
         let mut reader = fixture.open();
@@ -569,7 +574,7 @@ mod canonical_evidence_reader_tests {
             original.result_preimage().to_vec(),
             availability,
         )));
-        fixture.blocks[0] = Arc::new(block);
+        fixture.blocks[0] = share_storage_fixture(block);
         fixture.write_store();
         let before = fixture.snapshot();
         let mut reader = fixture.open();
@@ -610,7 +615,7 @@ mod canonical_evidence_reader_tests {
             availability.clone(),
         );
         block.set_commit_certificate(Some(changed));
-        fixture.blocks[1] = Arc::new(block);
+        fixture.blocks[1] = share_storage_fixture(block);
         fixture.write_store();
         let mut reader = fixture.open();
         reader.read_carrier(1).unwrap();

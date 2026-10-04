@@ -42,7 +42,7 @@ from urllib import request as urllib_request
 _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
-    "release_artifact_contract": "030c6398c853a9953c48a37bb7b55a0b7cc8b93d59f31f60adbeff8d638ec571",
+    "release_artifact_contract": "36e7e3371ee2e50297d8ffcdc419956f95cf007bd574a9f40e51576ef95fe2d6",
     "release_manifest_signing": "4966d0b408f7d67d154b578875a1b0cb77584de77b4b1561e8704043b99b60fd",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is

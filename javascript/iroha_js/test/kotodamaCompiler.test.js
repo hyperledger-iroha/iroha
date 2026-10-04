@@ -277,15 +277,15 @@ function crc64(payload) {
 function callableFixture({
   entryPc = 0,
   frameBytes = 0,
-  argumentRoles = [],
-  resultRoles = [u32Le(0)],
+  argumentNodes = [],
+  resultNodes = [u32Le(6)],
 } = {}) {
-  const roles = (items) => concatBytes(u64Le(items.length), ...items.map(field));
+  const schema = (items) => field(concatBytes(u64Le(items.length), ...items.map(field)));
   return concatBytes(
     field(u64Le(entryPc)),
     field(u32Le(frameBytes)),
-    field(roles(argumentRoles)),
-    field(roles(resultRoles)),
+    field(schema(argumentNodes)),
+    field(schema(resultNodes)),
   );
 }
 
@@ -687,6 +687,8 @@ test("JavaScript ships only adapters to the canonical Rust compiler", () => {
   const expectedFiles = [
     "browser.js",
     "client.js",
+    "embeddedCallSchema.js",
+    "embeddedNorito.js",
     "index.js",
     "nativeBridge.js",
     "normalize.js",
@@ -1307,6 +1309,8 @@ test("compiler manifest dynamic hints resolve declared StateMaps per list", asyn
 
 test("compiler artifact boundary requires bounded canonical V1 callable descriptors", async () => {
   const pointer = (kind, id) => concatBytes(u32Le(kind), field(Uint8Array.from([id, 0])));
+  const leaf = (kind) => concatBytes(u32Le(5), field(u32Le(kind)));
+  const tuple = (arity) => concatBytes(u32Le(1), field(u32Le(arity)));
   const cases = [
     ["retired interface layout", { omitCallables: true }],
     ["missing callable root", { callables: [] }],
@@ -1315,11 +1319,11 @@ test("compiler artifact boundary requires bounded canonical V1 callable descript
     ["duplicate roots", { callables: [callableFixture(), callableFixture()] }],
     ["unaligned frame", { callables: [callableFixture({ frameBytes: 8 })] }],
     ["oversized frame", { callables: [callableFixture({ frameBytes: 4 * 1024 * 1024 + 16 })] }],
-    ["empty result", { callables: [callableFixture({ resultRoles: [] })] }],
-    ["oversized arguments", { callables: [callableFixture({ argumentRoles: Array.from({ length: 8193 }, () => u32Le(1)) })] }],
-    ["unknown role", { callables: [callableFixture({ resultRoles: [u32Le(9)] })] }],
-    ["unknown pointer type", { callables: [callableFixture({ resultRoles: [pointer(3, 0x13)] })] }],
-    ["private role without ZK", { callables: [callableFixture({ argumentRoles: [pointer(8, 0x11)] })] }],
+    ["empty result", { callables: [callableFixture({ resultNodes: [] })] }],
+    ["oversized arguments", { callables: [callableFixture({ argumentNodes: Array.from({ length: 8193 }, () => leaf(3)) })] }],
+    ["unknown node", { callables: [callableFixture({ resultNodes: [u32Le(12)] })] }],
+    ["unknown pointer type", { callables: [callableFixture({ resultNodes: [pointer(10, 0x14)] })] }],
+    ["private role without ZK", { callables: [callableFixture({ argumentNodes: [pointer(11, 0x11)] })] }],
     ["trailing descriptor fields", { callables: [concatBytes(callableFixture(), field(u32Le(0)))] }],
   ];
   for (const [label, options] of cases) {
@@ -1337,8 +1341,8 @@ test("compiler artifact boundary requires bounded canonical V1 callable descript
     callables: [callableFixture(), callableFixture({
       entryPc: 4,
       frameBytes: 16,
-      argumentRoles: [u32Le(0), u32Le(1), u32Le(2), pointer(3, 0x11), u32Le(4), u32Le(5), u32Le(6), u32Le(7), pointer(8, 0x12)],
-      resultRoles: Array.from({ length: 8192 }, () => u32Le(1)),
+      argumentNodes: [u32Le(6), leaf(0), leaf(3), pointer(10, 0x0d), u32Le(9), concatBytes(u32Le(8), field(u32Le(3))), pointer(11, 0x12)],
+      resultNodes: [tuple(8192), ...Array.from({ length: 8192 }, () => leaf(3))],
     })],
   });
   const accepted = await compileKotodamaWithNativeBinding(

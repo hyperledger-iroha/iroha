@@ -16,11 +16,7 @@ fn rounds_in_place(states: &mut [[u8; 16]], keys: &[[u8; 16]], decrypt: bool, fu
             (true, true) => MetalBatchWork::AesDecRounds(keys.len()),
         };
         if crate::vector::select_metal_batch(work, states.len())
-            .and_then(|selected| {
-                selected
-                    .run(|| crate::vector::metal_aes_batch_in_place(states, keys, decrypt, fused))
-            })
-            .unwrap_or(false)
+            .is_some_and(|selected| selected.run(states, keys))
         {
             return;
         }
@@ -50,6 +46,11 @@ fn rounds_in_place(states: &mut [[u8; 16]], keys: &[[u8; 16]], decrypt: bool, fu
     }
     #[cfg(not(any(feature = "cuda", all(target_os = "macos", feature = "metal"))))]
     let _ = fused;
+    rounds_cpu_in_place(states, keys, decrypt);
+}
+
+/// Allocation-free block-major traversal shared by fallback and its cost baseline.
+pub(crate) fn rounds_cpu_in_place(states: &mut [[u8; 16]], keys: &[[u8; 16]], decrypt: bool) {
     let round = if decrypt { aesdec } else { aesenc };
     // A refused or failed native attempt leaves all input blocks untouched.
     // Each scalar/SIMD fold begins from the original phase input.
@@ -145,6 +146,27 @@ pub fn aes128_decrypt_many_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_cpu_traversal_preserves_order_and_empty_geometry() {
+        let states = [[0x53; 16], [0xa7; 16]];
+        let keys = [[0x12; 16], [0xef; 16], [0x57; 16]];
+        for decrypt in [false, true] {
+            let scalar = if decrypt {
+                super::super::aesdec_impl
+            } else {
+                super::super::aesenc_impl
+            };
+            for rounds in 0..=keys.len() {
+                let mut output = states;
+                rounds_cpu_in_place(&mut output, &keys[..rounds], decrypt);
+                let expected =
+                    states.map(|state| keys[..rounds].iter().copied().fold(state, scalar));
+                assert_eq!(output, expected);
+            }
+            rounds_cpu_in_place(&mut [], &keys, decrypt);
+        }
+    }
 
     #[test]
     fn malformed_destinations_never_publish_and_empty_rounds_copy() {

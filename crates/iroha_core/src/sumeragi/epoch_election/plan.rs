@@ -5,12 +5,9 @@
 //! its immutable funded guard before releasing these borrows and beginning execution.
 
 use super::*;
-use iroha_data_model::{
-    isi::kagemusha_v1::{
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1,
-    },
-    nexus::ValidatorCommitteeTransitionV1,
+use iroha_data_model::isi::kagemusha_v1::{
+    KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+    KagemushaMintFinalityEpochDecisionV1,
 };
 
 /// A complete checked boundary decision that still borrows its selecting prestate.
@@ -20,7 +17,6 @@ pub(super) struct BoundaryInputs<'a> {
     pub(super) authorization: KagemushaMintFinalityEpochAuthorizationV1,
     pub(super) authority: &'a KagemushaMintFinalityAuthorityGenerationV1,
     pub(super) committee: &'a [iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
-    pub(super) completed: Option<&'a ValidatorCommitteeTransitionV1>,
     pub(super) entropy: BoundaryEntropy,
     pub(super) future: SelectedCommittee<'a>,
     pub(super) policy: &'a ValidatorElectionPolicyV1,
@@ -228,7 +224,6 @@ pub(super) fn boundary_inputs<'a>(
         authorization,
         authority,
         committee,
-        completed,
         entropy,
         future,
         policy,

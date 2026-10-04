@@ -188,7 +188,13 @@ fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is
     block
         .commit_world_overlay_for_testing()
         .expect("install mismatched policy without finalizing a block");
-    assert!(app.state.view().latest_block().is_none());
+    assert!(
+        app.state
+            .view()
+            .latest_block()
+            .expect("funded canonical history read")
+            .is_none()
+    );
     assert!(app.state.world_view().accounts().iter().next().is_none());
     assert!(matches!(
         iroha_core::sns::ensure_namespace_policy_payment_asset_matches_configured(
@@ -1816,6 +1822,7 @@ async fn alias_setup_plan_after_idle_keeps_ledger_quote_and_fresh_request_deadli
         app.state
             .view()
             .latest_block()
+            .expect("funded canonical history read")
             .unwrap()
             .header()
             .creation_time()
@@ -1901,6 +1908,7 @@ async fn alias_auto_renew_plan_after_idle_keeps_anchor_and_fresh_request_deadlin
         app.state
             .view()
             .latest_block()
+            .expect("funded canonical history read")
             .unwrap()
             .header()
             .creation_time()
@@ -2453,7 +2461,9 @@ async fn public_exact_alias_reads_use_independent_route_rate_limits() {
         "derive public exact alias rate-limit fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(
+        world_with_account(&authority),
+    );
     bind_account_alias_for_test(&app, &authority, "banking@universal");
     let alias_label = AccountAlias::new(
         "banking".parse().expect("label"),
@@ -2470,7 +2480,8 @@ async fn public_exact_alias_reads_use_independent_route_rate_limits() {
     })
     .expect("encode resolve request");
     let resolve_uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
-    let first_resolve_headers = signed_app_headers(
+    let first_resolve_headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
         &authority,
         &authority_keypair,
         &axum::http::Method::POST,
@@ -2489,7 +2500,18 @@ async fn public_exact_alias_reads_use_independent_route_rate_limits() {
     .expect("first exact resolve should be admitted")
     .into_response();
     assert_eq!(first.status(), StatusCode::OK);
-    let second_resolve_headers = signed_app_headers(
+    let body = http_body_util::BodyExt::collect(first.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let resolved: norito::json::Value = norito::json::from_slice(&body).unwrap();
+    assert_eq!(resolved["alias"].as_str(), Some("banking@universal"));
+    assert_eq!(
+        resolved["account_id"].as_str(),
+        Some(authority.to_string().as_str())
+    );
+    let second_resolve_headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
         &authority,
         &authority_keypair,
         &axum::http::Method::POST,
@@ -2517,7 +2539,8 @@ async fn public_exact_alias_reads_use_independent_route_rate_limits() {
     let lookup_uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let lookup_headers = signed_app_headers(
+    let lookup_headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
         &authority,
         &authority_keypair,
         &axum::http::Method::POST,
@@ -2536,6 +2559,18 @@ async fn public_exact_alias_reads_use_independent_route_rate_limits() {
     .expect("reverse lookup must use an independent route bucket")
     .into_response();
     assert_eq!(lookup.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(lookup.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let aliases: norito::json::Value = norito::json::from_slice(&body).unwrap();
+    assert_eq!(
+        aliases["account_id"].as_str(),
+        Some(authority.to_string().as_str())
+    );
+    let items = aliases["items"].as_array().expect("original alias rows");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["alias"].as_str(), Some("banking@universal"));
 }
 #[tokio::test]
 async fn alias_resolve_returns_not_found_for_unknown_alias() {

@@ -16,9 +16,7 @@ final class RuntimeGovernanceCanonicalAuthTests: XCTestCase {
         ToriiCanonicalRequestAuth(
             accountId: try! Keypair(privateKeyBytes: seed)
                 .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
-            privateKey: seed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "runtime-governance-auth-test"
+            privateKey: seed
         )
     }
 

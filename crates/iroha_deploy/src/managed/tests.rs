@@ -201,6 +201,7 @@ fn incomplete_managed_preparation_never_creates_a_replacement_generation() {
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "private".into();
     assert!(store.up_private_root(&request, &private_spec()).is_err());
+    assert!(store.create_localnet(&request).is_err());
     assert_eq!(
         &*generation.read("original-owner.key", MAX_METADATA).unwrap(),
         b"retained owner custody"
@@ -321,6 +322,140 @@ fn stopped_context_selection_retains_identity_and_never_exposes_keys() {
     assert!(!receipt.contains("token"));
     let restored = ManagedStore::open(store.root()).unwrap();
     assert_eq!(restored.context(None).unwrap(), selected);
+}
+
+#[test]
+fn explicit_deployment_startup_preserves_absent_and_existing_workspace_selection() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("managed");
+    let (store, _, a) = fixture(&root, "a");
+    let (_, _, b) = fixture(&root, "b");
+    let private = PrivateDirectory::open(store.root()).unwrap();
+
+    // Exercise the actual selection owner used after either startup Ready exit. These
+    // retained contexts do not claim live validators or substitute a readiness proof.
+    let target = store::StartupSelection::for_requested_context(Some("b"));
+    target.apply(&store, "b").unwrap();
+    assert!(matches!(store.context(None), Err(Error::NoSelection)));
+    assert!(!store.root().join("active.json").exists());
+
+    store.select("a").unwrap();
+    let original = private.read("active.json", MAX_METADATA).unwrap();
+    for _ in 0..2 {
+        // A fresh deployment and exact-journal resume use the same explicit-target policy.
+        target.apply(&store, "b").unwrap();
+        assert_eq!(private.read("active.json", MAX_METADATA).unwrap(), original);
+        assert_eq!(store.context(None).unwrap(), a.context);
+    }
+    assert_eq!(store.prepared("a").unwrap(), a);
+    assert_eq!(store.prepared("b").unwrap(), b);
+    assert_eq!(
+        ManagedStore::open(&root).unwrap().context(None).unwrap(),
+        a.context
+    );
+
+    // Selection can change after target resolution. Preserve never restores a stale value.
+    let target = store::StartupSelection::for_requested_context(Some("a"));
+    store.select("b").unwrap();
+    let current = private.read("active.json", MAX_METADATA).unwrap();
+    target.apply(&store, "a").unwrap();
+    assert_eq!(private.read("active.json", MAX_METADATA).unwrap(), current);
+    assert_eq!(store.context(None).unwrap(), b.context);
+}
+
+#[test]
+fn ordinary_and_default_startup_still_select_the_ready_environment() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("managed");
+    let (store, _, a) = fixture(&root, "a");
+    let (_, _, b) = fixture(&root, "b");
+    // Default auto-creation has no previous selection and must persist its ready context.
+    store::StartupSelection::for_requested_context(None)
+        .apply(&store, "a")
+        .unwrap();
+    assert_eq!(store.context(None).unwrap(), a.context);
+    // Ordinary local/private up and explicit up_retained use Select, independently of the
+    // deployment override. These checks concern selection, not native startup qualification.
+    store::StartupSelection::Select.apply(&store, "b").unwrap();
+    assert_eq!(store.context(None).unwrap(), b.context);
+    store::StartupSelection::for_requested_context(None)
+        .apply(&store, "a")
+        .unwrap();
+    assert_eq!(store.context(None).unwrap(), a.context);
+}
+
+#[test]
+fn create_only_rejects_retained_global_and_private_names_under_the_operation_lock() {
+    let _resources = super::native_test_guard();
+    for private_root in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("managed");
+        let (store, selected_directory, selected) = fixture(&root, "selected");
+        store.select("selected").unwrap();
+        let owner = PrivateDirectory::open(store.root()).unwrap();
+        let active = owner.read("active.json", MAX_METADATA).unwrap();
+        // A frontend's snapshot predates a second frontend publishing the same requested name.
+        assert_eq!(store.contexts().unwrap(), [selected.context.clone()]);
+        let directory = if private_root {
+            let networks = PrivateDirectory::open(root.join("networks")).unwrap();
+            let directory = networks.create_child("concurrent").unwrap();
+            let binary = selected_directory.path().join("fixture-executable");
+            let mut request = LocalnetRequest::new(binary.clone(), binary);
+            request.name = "concurrent".into();
+            let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
+            let ports = LocalnetPorts::reserve().unwrap();
+            generation::prepare(
+                &directory,
+                &request,
+                RootKind::Private {
+                    spec: private_spec(),
+                },
+                store::pin_binary(&request.launcher).unwrap(),
+                store::pin_binary(&request.daemon).unwrap(),
+                &ports,
+            )
+            .unwrap();
+            drop(_operation);
+            directory
+        } else {
+            fixture(&root, "concurrent").1
+        };
+        let retained = generation::read(&directory).unwrap();
+        let original = encode(&retained).unwrap();
+        let config =
+            iroha_fs::read_private(&retained.prepared.context.client_config, MAX_METADATA).unwrap();
+        let mut request =
+            LocalnetRequest::new(retained.launcher.path.clone(), retained.daemon.path.clone());
+        request.name = "concurrent".into();
+        let operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
+        assert!(
+            matches!(store.create_localnet(&request), Err(Error::Busy(name)) if name == request.name)
+        );
+        drop(operation);
+        assert!(matches!(
+            store.create_localnet(&request),
+            Err(Error::Invalid(message)) if message.contains("already exists")
+        ));
+        assert_eq!(
+            encode(&generation::read(&directory).unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(store.prepared(&request.name).unwrap(), retained.prepared);
+        assert_eq!(
+            &*iroha_fs::read_private(&retained.prepared.context.client_config, MAX_METADATA)
+                .unwrap(),
+            &*config
+        );
+        assert_eq!(owner.read("active.json", MAX_METADATA).unwrap(), active);
+        assert_eq!(store.context(None).unwrap(), selected.context);
+        // No control record, status, log or worker was created by either refusal.
+        for name in [WORKER, STATUS, "runtime.lock", "supervisor.log"] {
+            assert!(!directory.path().join(name).exists(), "unexpected {name}");
+        }
+        assert!(!directory.path().join(".preparing").exists());
+    }
 }
 
 #[test]

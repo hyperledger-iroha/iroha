@@ -17,7 +17,7 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-iroha ledger multisig register \
+iroha --fee-payer authority ledger multisig register \
 --account <canonical-i105-controller> \
 --signatories \
 <canonical-i105-signatory-1> \
@@ -53,8 +53,7 @@ After submitting the registration, query for accounts whose metadata contains th
 `multisig/spec` to discover the multisig account ID:
 
 ```bash
-iroha ledger query account list \
-  filter '{"Atom":{"Metadata":{"Atom":{"Contains":{"key":"multisig/spec"}}}}}'
+iroha account list --all --filter 'exists(metadata.`multisig/spec`)'
 ```
 
 The resulting account ID, along with the stored specification, uniquely identifies the multisig
@@ -71,10 +70,10 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-echo '"congratulations"' | iroha -o account meta set \
+echo '"congratulations"' | iroha --emit-instructions account meta set \
 --id <canonical-i105-multisig> \
 --key success_marker \
-| iroha ledger multisig propose \
+| iroha --fee-payer authority ledger multisig propose \
 --account <canonical-i105-multisig>
 ```
 
@@ -94,7 +93,7 @@ __Assumptions:__
 __Usage:__
 
 ```bash
-iroha ledger multisig list all
+iroha ledger multisig list all --multisig-selector <canonical-i105-multisig>
 ```
 
 __Example text output (`--output-format text`):__
@@ -125,7 +124,7 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-iroha ledger multisig approve \
+iroha --fee-payer authority ledger multisig approve \
 --account <canonical-i105-multisig> \
 --instructions-hash FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989
 ```

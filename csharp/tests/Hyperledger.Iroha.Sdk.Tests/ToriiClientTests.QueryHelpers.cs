@@ -11,11 +11,6 @@ public sealed partial class ToriiClientTests
         }
     }
 
-    private static string EventFilterQuery(string filterJson)
-    {
-        return "filter=" + Uri.EscapeDataString(filterJson);
-    }
-
     private static string QueryParameter(string query, string name)
     {
         var queryText = query.StartsWith("?", StringComparison.Ordinal) ? query[1..] : query;

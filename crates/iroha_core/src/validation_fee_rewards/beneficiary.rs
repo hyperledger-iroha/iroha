@@ -23,11 +23,19 @@ pub(super) fn root(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     account: &AccountId,
 ) -> Result<AccountId, Error> {
+    root_in_world(&stx.world, binding, account)
+        .map_err(|error| stx.world.attempt_error_to_instruction_error(error))
+}
+pub(super) fn root_in_world(
+    world: &impl WorldReadOnly,
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    account: &AccountId,
+) -> Result<AccountId, ExecutionAttemptError<Error>> {
     let key = alias_key(binding, account).map_err(fail)?;
-    match read::<Alias>(stx, &key)? {
+    match read_from_world::<Alias>(world, &key)? {
         None => Ok(account.clone()),
         Some(alias) if &alias.account_id == account => Ok(alias.beneficiary_id),
-        _ => Err(fail("malformed immutable reward beneficiary alias")),
+        _ => Err(fail("malformed immutable reward beneficiary alias").into()),
     }
 }
 pub(super) fn owner(
@@ -35,18 +43,24 @@ pub(super) fn owner(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     original: &AccountId,
 ) -> Result<Option<Revision>, Error> {
-    let Some(revision) = read::<u64>(stx, &current_key(binding, original)?)? else {
+    owner_in_world(&stx.world, binding, original)
+        .map_err(|error| stx.world.attempt_error_to_instruction_error(error))
+}
+pub(super) fn owner_in_world(
+    world: &impl WorldReadOnly,
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    original: &AccountId,
+) -> Result<Option<Revision>, ExecutionAttemptError<Error>> {
+    let Some(revision) = read_from_world::<u64>(world, &current_key(binding, original)?)? else {
         return Ok(None);
     };
-    let value = read::<Revision>(
-        stx,
+    let value = read_from_world::<Revision>(
+        world,
         &revision_key(binding, original, revision).map_err(fail)?,
     )?
     .ok_or_else(|| fail("reward beneficiary owner revision is absent"))?;
     if value.beneficiary_id != *original || value.revision != revision {
-        return Err(fail(
-            "reward beneficiary owner revision has mismatched identity",
-        ));
+        return Err(fail("reward beneficiary owner revision has mismatched identity").into());
     }
     Ok(Some(value))
 }
@@ -172,8 +186,9 @@ pub(super) fn append_evidence_sources(
         .iter()
         .map(|r| r.key.clone())
         .collect::<BTreeSet<_>>();
-    for binding in crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
-        .map_err(|error| error.map_rejection(|error| error.to_string()))?
+    if let Some(binding) =
+        crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
     {
         for account in &aliases {
             let key = alias_key(&binding, account)?;

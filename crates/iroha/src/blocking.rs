@@ -4,6 +4,7 @@
 // of `client::Client`, then expose their canonical forms only through this facade.
 
 pub mod account_bootstrap;
+mod collections;
 pub mod configuration;
 pub mod consensus;
 pub mod data_availability;
@@ -14,6 +15,7 @@ pub mod sccp;
 pub mod status;
 pub mod streams;
 mod subscriptions;
+pub use collections::CollectionIter;
 pub use subscriptions::{AccountSubscriptions, Subscriptions};
 
 use std::{future::Future, sync::Arc};

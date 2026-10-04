@@ -42,7 +42,7 @@ fn account_fixture() -> &'static (
                 .clone(),
         );
         let account_value = Owned::new(AccountDetails::new(
-            Default::default(),
+            iroha_model_base::metadata::Metadata::default(),
             Some(alias.clone()),
             None,
             vec![],
@@ -104,7 +104,7 @@ fn account_fixture() -> &'static (
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
             },
             finality_proof: proof,
         };

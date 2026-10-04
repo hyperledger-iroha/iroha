@@ -266,7 +266,7 @@ fn structural_equality_handles_only_results_on_executed_paths() {
 
 #[test]
 fn call_tables_flatten_large_products_and_bind_all_callable_signatures() {
-    use ivm_abi::call::CallWordV1;
+    use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1};
     let fields = (0..32)
         .map(|index| format!("bool f{index}"))
         .collect::<Vec<_>>()
@@ -287,8 +287,16 @@ fn call_tables_flatten_large_products_and_bind_all_callable_signatures() {
             .all(|pair| pair[0].entry_pc < pair[1].entry_pc)
     );
     for callable in &interface.callables {
-        assert_eq!(callable.argument_words, vec![CallWordV1::Bool; 32]);
-        assert_eq!(callable.result_words, vec![CallWordV1::Bool; 32]);
+        assert_eq!(callable.argument_word_count(), Some(32));
+        assert_eq!(callable.result_word_count(), Some(32));
+        assert_eq!(callable.arguments, callable.results);
+        assert!(
+            matches!(&callable.arguments.nodes[0], CallTypeNodeV1::Struct { fields, .. } if fields.len() == 32)
+        );
+        assert_eq!(
+            callable.arguments.nodes[1..],
+            vec![CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool); 32]
+        );
         assert!(callable.validate());
         assert!(callable.frame_bytes >= 16);
     }
@@ -354,13 +362,13 @@ fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
         interface
             .callables
             .iter()
-            .any(|callable| callable.argument_words.is_empty())
+            .any(|callable| callable.arguments.nodes.is_empty())
     );
     assert!(
         interface
             .callables
             .iter()
-            .any(|callable| callable.argument_words.len() == 1)
+            .any(|callable| callable.argument_word_count() == Some(1))
     );
 }
 

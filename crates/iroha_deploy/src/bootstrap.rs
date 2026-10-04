@@ -9,7 +9,7 @@
 //! checkpoint with an older tip. Changing the installed authority fails closed against retained
 //! releases and requires an independently authenticated key-rotation migration.
 // TODO(DX5): publish release-signed Taira checkpoints and install the independently selected
-// release key/floor in native runtime bundles, then connect this owner to dataspace provisioning.
+// release key/floor in native runtime bundles, then qualify the connected dataspace provisioning flow.
 
 use std::{fs::File, path::Path, sync::Mutex};
 

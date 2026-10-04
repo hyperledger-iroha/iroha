@@ -273,7 +273,7 @@ impl ReadinessNode {
             assert_eq!(chain.genesis(), &genesis, "exact original replay source");
             chain.commit_at(20_000, Vec::new());
             for height in 1..=chain.height() {
-                kura.store_block(Arc::clone(chain.committed(height).block()))
+                kura.store_block(chain.committed(height).block().clone())
                     .expect("retain original certified wire for startup replay");
             }
         }
@@ -345,6 +345,41 @@ impl Drop for ReadinessNode {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+#[tokio::test]
+async fn readyz_rejects_absent_consensus_driver() {
+    let app = mk_app_state_for_tests();
+    assert!(app.sumeragi.is_none(), "the refusal fixture has no driver");
+    let response = axum::Router::new()
+        .route("/readyz", axum::routing::get(handler_readyz))
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(app)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/readyz")
+                .header(axum::http::header::ACCEPT, "text/plain, application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("ordinary readiness HTTP response");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let envelope: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        envelope.get("code").and_then(norito::json::Value::as_str),
+        Some("service_unavailable")
+    );
 }
 
 #[tokio::test]
@@ -447,18 +482,6 @@ pub fn mk_app_state_for_tests_with_world_and_push(
     push: iroha_config::parameters::actual::Push,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, Some(push))
-}
-#[cfg(feature = "app_api")]
-pub fn reconfigure_sorafs_runtime_for_tests(
-    app: SharedAppState,
-    sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
-    sorafs_node: sorafs_node::NodeHandle,
-) -> SharedAppState {
-    let mut inner =
-        Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state for reconfigure"));
-    inner.sorafs_cache = sorafs_cache;
-    inner.sorafs_node = sorafs_node;
-    Arc::new(inner)
 }
 pub(crate) fn app_auth_test_guard(
     config: crate::app_auth::CanonicalRequestAuthConfig,
@@ -592,6 +615,18 @@ fn seed_asset_definition_for_test(
         } else {
             AssetBalancePolicy::Global
         };
+    if let Some(domain_id) = owning_domain
+        && tx.world().domain(domain_id).is_err()
+    {
+        if tx.world().account(&ALICE_ID).is_err() {
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut tx)
+                .expect("seed canonical domain-owner account");
+        }
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register the separate owning domain");
+    }
     let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
         asset_definition_id.clone(),
         "asset-definition".to_owned(),
@@ -955,6 +990,103 @@ pub(crate) fn configure_private_ingress_routes_for_test(
     app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     (restricted_lane, restricted_dataspace)
 }
+/// Execute the original local four-validator committee before decorating offline foreign routes.
+#[cfg(feature = "app_api")]
+pub(crate) fn native_ingress_with_offline_foreign_app_for_test(world: World) -> SharedAppState {
+    let local_seeds = [0xb8, 0xc0, 0xc2, 0xc4];
+    let foreign_seeds = [0xba, 0xc6, 0xc8, 0xca];
+    let members = local_seeds
+        .into_iter()
+        .chain(foreign_seeds)
+        .map(|seed| {
+            let account =
+                checked_torii_test_ed25519_keypair(seed, "original offline-foreign account");
+            let peer =
+                checked_torii_test_bls_keypair(seed + 1, "original offline-foreign BLS peer");
+            (AccountId::new(account.public_key().clone()), peer)
+        })
+        .collect::<Vec<_>>();
+    let labels = (0..members.len())
+        .map(|index| format!("route-fixture-{index}"))
+        .collect::<Vec<_>>();
+    let mut app = native_ingress_with_registered_route_peers_for_test(
+        world,
+        private_ingress_with_offline_foreign_nexus_for_test(),
+        &members,
+        &labels,
+    );
+    let local_peer = PeerId::new(members[0].1.public_key().clone());
+    let app_mut = Arc::get_mut(&mut app).expect("unique executed fixture");
+    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+    online_tx
+        .send(std::collections::HashSet::from([Peer::new(
+            "127.0.0.1:12001".parse().expect("original local address"),
+            members[0].1.public_key().clone(),
+        )]))
+        .expect("original online peer");
+    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+    app_mut.local_peer_id = Some(local_peer.clone());
+    app_mut.torii_proxy_bridge_signer = members[0].1.clone();
+    let bindings = |members: &[(AccountId, KeyPair)]| {
+        members
+            .iter()
+            .map(|(id, key)| (id.clone(), PeerId::new(key.public_key().clone())))
+            .collect::<Vec<_>>()
+    };
+    install_lane_manifest_registry_for_test(
+        &app_mut.state,
+        &[
+            (LaneId::SINGLE, bindings(&members[..4])),
+            (LaneId::new(1), bindings(&members[..4])),
+            (LaneId::new(2), bindings(&members[4..])),
+        ],
+    );
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_route_authority(super::lane_authority_route(route))
+        .expect("actual executed genesis owns the global route");
+    assert_eq!(committee.authority_height(), 3);
+    let mut original = bindings(&members[..4])
+        .into_iter()
+        .map(|(_, peer)| peer)
+        .collect::<Vec<_>>();
+    original.sort();
+    assert_eq!(
+        committee.into_validators(),
+        original,
+        "exact original four BLS voters"
+    );
+    assert!(super::is_local_authoritative_for_route(app.as_ref(), route));
+    for (lane, members) in [
+        (LaneId::new(1), &members[..4]),
+        (LaneId::new(2), &members[4..]),
+    ] {
+        let mut expected = bindings(members)
+            .into_iter()
+            .map(|(_, peer)| peer)
+            .collect::<Vec<_>>();
+        expected.sort();
+        let dataspace = if lane == LaneId::new(1) {
+            DataSpaceId::new(10)
+        } else {
+            DataSpaceId::new(12)
+        };
+        let committee = app
+            .state
+            .resolve_lane_committee(super::lane_authority_route(RoutingDecision::new(
+                lane, dataspace,
+            )))
+            .expect("original authenticated lane committee");
+        assert_eq!(
+            committee.into_validators(),
+            expected,
+            "original exact four-seat lane committee"
+        );
+    }
+    app
+}
+
 pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     app: &mut SharedAppState,
 ) -> (RoutingDecision, RoutingDecision) {
@@ -1722,11 +1854,9 @@ pub(crate) fn bind_contract_alias_for_test(
         .commit_world_overlay_for_testing()
         .expect("commit contract alias for test");
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn bind_domain_name_for_test(app: &SharedAppState, literal: &str) {
     bind_domain_name_for_test_with_status(app, literal, iroha_data_model::sns::NameStatus::Active);
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn bind_domain_name_for_test_with_status(
     app: &SharedAppState,
     literal: &str,
@@ -2032,14 +2162,13 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     // These synthetic routing fixtures model a Global root unless their caller explicitly
     // supplied another root (or malformed metadata for a rejection test). An absent root
     // must never gain Global authority in production routing.
-    #[cfg(feature = "app_api")]
     if !world
         .view()
         .parameters()
         .custom()
         .contains_key(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
     {
-        crate::private_account_routing_tests::bind_fixture_root(
+        crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
@@ -2421,6 +2550,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         tx_history_access_policy: Arc::new(TxHistoryAccessPolicy::default()),
         telemetry,
         soracloud_public_inflight,
+        #[cfg(feature = "app_api")]
         sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
         ivm_tooling_inflight,
         ivm_tooling_timeout: Duration::from_millis(defaults::torii::IVM_TOOLING_TIMEOUT_MS),
@@ -3430,7 +3560,9 @@ async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue(
 
 /// The production alias mounts must bind index enumeration to canonical signature authentication.
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() {
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -3482,7 +3614,10 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let (router, manifest) = builder
         .finish()
         .expect("every production alias route must match its authenticated catalog");
-    assert_eq!(manifest.explicit_routes().len(), route_catalog::aliases::ROUTES.len());
+    assert_eq!(
+        manifest.explicit_routes().len(),
+        route_catalog::aliases::ROUTES.len()
+    );
     let index = manifest
         .explicit_routes()
         .iter()

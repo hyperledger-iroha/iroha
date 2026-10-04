@@ -130,6 +130,14 @@ pub(super) fn prepare_reward_claim(
         ))
         .into());
     }
+    for source in &plan.sources {
+        ensure_committed_xor_asset(&state_transaction.world, source.source_asset.definition())?;
+        crate::state::validate_xor_custody_shape(&state_transaction.world, &source.source_asset)?;
+        crate::state::validate_xor_custody_shape(
+            &state_transaction.world,
+            &source.destination_asset,
+        )?;
+    }
     let prepared = evaluate_reward_claim(
         &state_transaction.world,
         &state_transaction.nexus.staking.reward_dust_threshold,

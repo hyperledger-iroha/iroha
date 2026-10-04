@@ -27,8 +27,8 @@ pub(super) struct DiagnosticDeviceV1<'a> {
     pub(super) recursive_verifier: DiagnosticVerifier<'a>,
     pub(super) device_key: SigningKey,
     pub(super) journal_key: SigningKey,
-    pub(super) _coordinator: KagemushaCoordinatorOperationStoreV1,
-    pub(super) _responses: KagemushaResponseEvidenceArchiveV1,
+    pub(super) coordinator: KagemushaCoordinatorOperationStoreV1,
+    pub(super) responses: KagemushaResponseEvidenceArchiveV1,
     // Fields drop in declaration order: close both journal owners before removing their directory.
     _bootstrap_storage: tempfile::TempDir,
 }
@@ -196,7 +196,7 @@ impl<'a> DiagnosticDeviceV1<'a> {
             machine.state() == &preview.state,
             "genuine admitted bootstrap must equal Core's exact original preview",
         )?;
-        Ok(Self {
+        let device = Self {
             context,
             device_index,
             material,
@@ -207,10 +207,28 @@ impl<'a> DiagnosticDeviceV1<'a> {
             recursive_verifier: shared_verifier,
             device_key,
             journal_key,
-            _coordinator: coordinator,
-            _responses: responses,
+            coordinator,
+            responses,
             _bootstrap_storage: bootstrap_storage,
-        })
+        };
+        let snapshot = device
+            .machine
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        ensure(
+            device
+                .coordinator
+                .recovery_prefix()
+                .map_err(|error| error.to_string())?
+                == snapshot.recovery_metadata.journals.coordinator
+                && device
+                    .responses
+                    .recovery_prefix()
+                    .map_err(|error| error.to_string())?
+                    == snapshot.recovery_metadata.journals.responses,
+            "returned diagnostic device must retain the exact published bootstrap journal owners",
+        )?;
+        Ok(device)
     }
 
     /// Apply the original device-zero finalized credit through actual reservation and MintFold.

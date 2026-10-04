@@ -66,6 +66,20 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
         let map_pointer = pair.map.get(&1).unwrap().as_ptr();
         let cell_before = pair.cell.get_before_block().as_ptr();
         let map_before = pair.map.get_before_block(&1).unwrap().as_ptr();
+        let cell_undo = pair.cell.original_undo().as_ref().unwrap().as_ptr();
+        let map_undo = pair
+            .map
+            .original_undo_entries()
+            .map(|(key, value)| (*key, value.as_ref().map(|text| text.as_ptr())))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            map_undo.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert!(
+            map_undo[2].1.is_none(),
+            "original insertion has an absent preimage"
+        );
         let cell_identity = pair.cell.publication_identity();
         let map_identity = pair.map.publication_identity();
         let expected_cell = json::to_json(&pair.cell).unwrap();
@@ -93,6 +107,17 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
         assert_eq!(pair.map.get(&1).unwrap().as_ptr(), map_pointer);
         assert_eq!(pair.cell.get_before_block().as_ptr(), cell_before);
         assert_eq!(pair.map.get_before_block(&1).unwrap().as_ptr(), map_before);
+        assert_eq!(
+            pair.cell.original_undo().as_ref().unwrap().as_ptr(),
+            cell_undo
+        );
+        assert_eq!(
+            pair.map
+                .original_undo_entries()
+                .map(|(key, value)| (*key, value.as_ref().map(|text| text.as_ptr())))
+                .collect::<Vec<_>>(),
+            map_undo
+        );
         assert_eq!(pair.cell.publication_identity(), cell_identity);
         assert_eq!(pair.map.publication_identity(), map_identity);
         assert_eq!(pair.cell.mode(), mode);
@@ -146,6 +171,10 @@ fn frozen_typed_inventory_keeps_exact_reads_and_snapshot_with_all_writers_free()
 
 #[test]
 fn frozen_field_delays_actual_capture_notice_until_original_cleanup_is_retired() {
+    let observer_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&observer_budget);
     let cell = Cell::new(7_u64);
     let probe = cell.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
     let mut field = BlockField::new(cell.block());
@@ -158,7 +187,7 @@ fn frozen_field_delays_actual_capture_notice_until_original_cleanup_is_retired()
     };
     let noticed = Arc::new(Notice(AtomicUsize::new(0)));
     let waker = Waker::from(Arc::clone(&noticed));
-    let mut future = wait.wait_for_release();
+    let mut future = wait.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut future)
             .poll(&mut Context::from_waker(&waker))
@@ -372,6 +401,10 @@ fn world_read_trait_borrows_frozen_original_cell_fields_without_execution_deref(
 #[test]
 fn inline_frozen_pair_recovers_actual_busy_without_replacing_originals() {
     for replacement in [false, true] {
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&observer_budget);
         let cell = Cell::new(String::from("old"));
         let map = Storage::<u64, String>::from_iter([(1, "old".into())]);
         let mut pair = Pair {
@@ -425,7 +458,7 @@ fn inline_frozen_pair_recovers_actual_busy_without_replacing_originals() {
         };
         let noticed = Arc::new(Notice(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&noticed));
-        let mut future = wait.wait_for_release();
+        let mut future = wait.wait_for_release(&mut registration);
         assert!(
             Pin::new(&mut future)
                 .poll(&mut Context::from_waker(&waker))

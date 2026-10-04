@@ -26,7 +26,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) state_relation: KagemushaStateRelationWitnessV1,
     pub(super) generated: KagemushaGeneratedRecursiveStateProofV1,
     // Retain the complete original through the Send fixture lifetime.
-    pub(super) _public_original: Vec<u8>,
+    pub(super) public_original: Vec<u8>,
     pub(super) preparation_relation: KagemushaGuardBundleRelationWitnessV1,
     pub(super) guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
     pub(super) approval: KagemushaAppOperationApprovalV1,
@@ -38,7 +38,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) receiver_credential: KagemushaOrdinaryAppCredentialV1,
     pub(super) previous_receiver_counter: Option<u32>,
     // Retain the complete original through the Send fixture lifetime.
-    pub(super) _reservation: KagemushaOutboxReservationV1,
+    pub(super) reservation: KagemushaOutboxReservationV1,
     pub(super) preparation_clock: KagemushaOrdinaryCashClockContextV1,
     pub(super) candidate_digest: DigestV1,
 }
@@ -52,6 +52,11 @@ pub(super) fn prove_ordinary_send_state_for_testing_v1(
     wrapper_ep: &PlonkProtocol<EpAffine>,
     apple: bool,
 ) -> OrdinarySendStateForTestingV1 {
+    assert_eq!(
+        funded.consumed_credits.root(),
+        funded.state.consumed_credit_root,
+        "the funded predecessor must retain the actual Mint replay tree"
+    );
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
     let seed = KagemushaRecoverySeedV1::from_unsealed([44; 32]).unwrap();
@@ -705,7 +710,7 @@ pub(super) fn prove_ordinary_send_state_for_testing_v1(
         state: preview.successor.clone(),
         state_relation,
         generated,
-        _public_original: public_original,
+        public_original,
         preparation_relation: guard_relation,
         guard,
         approval,
@@ -716,7 +721,7 @@ pub(super) fn prove_ordinary_send_state_for_testing_v1(
         request,
         receiver_credential,
         previous_receiver_counter,
-        _reservation: reservation,
+        reservation,
         preparation_clock,
         candidate_digest,
         funded,

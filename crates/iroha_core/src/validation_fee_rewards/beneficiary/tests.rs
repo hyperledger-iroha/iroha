@@ -1,9 +1,10 @@
+//! Funded reward custody and claim ownership across repeated beneficiary rekeys.
 use super::*;
 use iroha_data_model::{IntoKeyValue, fee_evidence::FeeEvidencePayloadV1};
 #[test]
 fn recovery_preserves_reserved_and_delayed_rewards_through_repeated_rekeys() {
-    crate::retail_fee_tests::fixture(1_793_451_600_000, |stx, _| {
-        let binding = active_bindings(stx).unwrap().remove(0);
+    crate::retail_fee_tests::fixture(1_793_451_600_000, |stx, policy| {
+        let (_, binding) = super::super::tests::network_xor_claim_fixture(stx, policy);
         let old = super::super::tests::account(2);
         let middle = super::super::tests::account(3);
         let latest = super::super::tests::account(4);
@@ -44,7 +45,7 @@ fn recovery_preserves_reserved_and_delayed_rewards_through_repeated_rekeys() {
             binding.xor_asset_id.clone(),
             binding.reward_pool_account_id.clone(),
         );
-        let (_, value) = Asset::new(pool.clone(), quantity(200, 2).unwrap()).into_key_value();
+        let (_, value) = Asset::new(pool.clone(), quantity(200, 9).unwrap()).into_key_value();
         stx.world.assets.insert(pool.clone(), value);
         let allocated_key = state_key(&binding, "Allocation/0").unwrap();
         let original_allocation = stx
@@ -59,14 +60,18 @@ fn recovery_preserves_reserved_and_delayed_rewards_through_repeated_rekeys() {
             read::<u128>(stx, &claimable_key(&binding, &old).unwrap()).unwrap(),
             Some(100)
         );
-        assert!(claim_fee_rewards(stx, &old, binding.validator_lane_id).is_err());
+        assert!(
+            super::super::tests::claim_current_fee_credit(stx, &old, binding.validator_lane_id)
+                .is_err()
+        );
         assert!(rekey_beneficiary(stx, &old, &stranger).is_err());
         assert!(rekey_beneficiary(stx, &stranger, &middle).is_err());
         assert_eq!(
             owner(stx, &binding, &old).unwrap().unwrap().account_id,
             middle
         );
-        claim_fee_rewards(stx, &middle, binding.validator_lane_id).unwrap();
+        super::super::tests::claim_current_fee_credit(stx, &middle, binding.validator_lane_id)
+            .unwrap();
         assert_eq!(read_state(stx, &binding).unwrap().reserved_xor, 0);
         // A later conversion still uses the unchanged pre-recovery earning account.
         reserve_conversion(
@@ -84,9 +89,14 @@ fn recovery_preserves_reserved_and_delayed_rewards_through_repeated_rekeys() {
         rekey_beneficiary(stx, &middle, &latest).unwrap();
         assert_eq!(root(stx, &binding, &latest).unwrap(), old);
         assert_eq!(owner(stx, &binding, &old).unwrap().unwrap().revision, 2);
-        assert!(claim_fee_rewards(stx, &middle, binding.validator_lane_id).is_err());
-        claim_fee_rewards(stx, &latest, binding.validator_lane_id).unwrap();
-        claim_fee_rewards(stx, &latest, binding.validator_lane_id).unwrap();
+        assert!(
+            super::super::tests::claim_current_fee_credit(stx, &middle, binding.validator_lane_id)
+                .is_err()
+        );
+        super::super::tests::claim_current_fee_credit(stx, &latest, binding.validator_lane_id)
+            .unwrap();
+        super::super::tests::claim_current_fee_credit(stx, &latest, binding.validator_lane_id)
+            .unwrap();
         let state = read_state(stx, &binding).unwrap();
         assert_eq!(
             (
@@ -105,7 +115,7 @@ fn recovery_preserves_reserved_and_delayed_rewards_through_repeated_rekeys() {
         for account in [&middle, &latest] {
             let paid = AssetId::new(binding.xor_asset_id.clone(), account.clone());
             assert_eq!(
-                minor_units(stx.world.assets.get(&paid).unwrap().as_ref(), 2).unwrap(),
+                minor_units(stx.world.assets.get(&paid).unwrap().as_ref(), 9).unwrap(),
                 100
             );
         }

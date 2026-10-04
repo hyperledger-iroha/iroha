@@ -1,13 +1,12 @@
 //! Physical allocator refusal, rollback and final-release controls for resident maps.
 
+use iroha_allocation::release::ReleaseRegistration;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, PrepaidSharedError};
 use iroha_crypto::{Hash, MerkleMap, MerkleMapError};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},
-    future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
-    pin::pin,
     sync::{
         Arc, Barrier, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
@@ -146,6 +145,7 @@ fn each_physical_path_failure_preserves_old_root_count_and_original_node_owners(
 
 struct AfterFree {
     budget: AllocationBudget,
+    observer_bytes: usize,
     bytes: usize,
     wakes: AtomicUsize,
 }
@@ -158,7 +158,7 @@ impl Wake for AfterFree {
             FREED[0].load(SeqCst),
             "refund preceded the final System deallocation"
         );
-        assert_eq!(self.budget.reserved_bytes(), 0);
+        assert_eq!(self.budget.reserved_bytes(), self.observer_bytes);
         drop(self.budget.try_reserve_bytes(self.bytes).unwrap());
         self.wakes.fetch_add(1, SeqCst);
     }
@@ -168,29 +168,37 @@ impl Wake for AfterFree {
 fn concurrent_last_snapshot_refunds_only_after_the_actual_node_is_gone() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(1024 * 1024);
+    let observer_bytes = ReleaseRegistration::allocation_layout().size();
+    let mut registration = ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(registration.belongs_to(&budget));
     let mut map = MerkleMap::new(&budget);
     let value = Hash::new(b"warm hash");
     arm(&budget, usize::MAX);
     map.replace(key(0), None, Some(value)).unwrap();
     disarm();
-    let bytes = budget.reserved_bytes();
+    let bytes = budget.reserved_bytes() - observer_bytes;
     assert_eq!(COUNT.load(SeqCst), 1);
     assert_eq!(SIZES[0].load(SeqCst), bytes);
-    assert_eq!(RESERVED[0].load(SeqCst), bytes);
-    budget.set_limit_bytes(bytes);
+    assert_eq!(RESERVED[0].load(SeqCst), bytes + observer_bytes);
+    budget.set_limit_bytes(bytes + observer_bytes);
     let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
         panic!("node retains original credit");
     };
     let observer = Arc::new(AfterFree {
         budget: budget.clone(),
+        observer_bytes,
         bytes,
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&observer));
-    let mut wait = pin!(release.wait_for_release());
     assert!(
-        wait.as_mut()
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&release, &mut Context::from_waker(&waker))
             .is_pending()
     );
     let barrier = Barrier::new(4);
@@ -207,10 +215,13 @@ fn concurrent_last_snapshot_refunds_only_after_the_actual_node_is_gone() {
     });
     assert_eq!(observer.wakes.load(SeqCst), 1);
     assert!(
-        wait.as_mut()
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&release, &mut Context::from_waker(&waker))
             .is_ready()
     );
+    assert_eq!(budget.reserved_bytes(), observer_bytes);
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]

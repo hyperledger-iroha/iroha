@@ -55,18 +55,23 @@ final class ToriiElectionTallyV1Tests: XCTestCase {
         return ToriiClient(
             baseURL: URL(string: "https://example.test")!,
             session: URLSession(configuration: configuration),
-            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { Self.freshnessTimestampMs },
+                nonce: { Self.freshnessNonce }
+            )
         )
     }
+
+    private static let freshnessTimestampMs: UInt64 = 4_102_444_801_000
+    private static let freshnessNonce = "election-tally-test"
 
     private func auth() throws -> ToriiCanonicalRequestAuth {
         let account = try Keypair(privateKeyBytes: signingSeed)
             .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
         return ToriiCanonicalRequestAuth(
             accountId: account,
-            privateKey: signingSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "election-tally-test"
+            privateKey: signingSeed
         )
     }
 
@@ -137,8 +142,8 @@ final class ToriiElectionTallyV1Tests: XCTestCase {
                 accountId: authorization.accountId,
                 privateKey: authorization.privateKey,
                 networkId: TestNetworkIds.canonical,
-                timestampMs: authorization.timestampMs!,
-                nonce: authorization.nonce!
+                timestampMs: Self.freshnessTimestampMs,
+                nonce: Self.freshnessNonce
             )
             for (key, value) in expectedHeaders where key != ToriiCanonicalRequest.headerSignature {
                 XCTAssertEqual(request.value(forHTTPHeaderField: key), value)
@@ -151,13 +156,13 @@ final class ToriiElectionTallyV1Tests: XCTestCase {
             let message = try ToriiCanonicalRequest.signatureMessage(
                 networkId: TestNetworkIds.canonical,
                 method: "POST", url: request.url!, body: expectedBody,
-                timestampMs: authorization.timestampMs!, nonce: authorization.nonce!
+                timestampMs: Self.freshnessTimestampMs, nonce: Self.freshnessNonce
             )
             XCTAssertTrue(signer.publicKey.isValidSignature(signature, for: message))
             let changedBodyMessage = try ToriiCanonicalRequest.signatureMessage(
                 networkId: TestNetworkIds.canonical,
                 method: "POST", url: request.url!, body: Data(#"{"election_id":"election-2"}"#.utf8),
-                timestampMs: authorization.timestampMs!, nonce: authorization.nonce!
+                timestampMs: Self.freshnessTimestampMs, nonce: Self.freshnessNonce
             )
             XCTAssertFalse(signer.publicKey.isValidSignature(signature, for: changedBodyMessage))
             return (

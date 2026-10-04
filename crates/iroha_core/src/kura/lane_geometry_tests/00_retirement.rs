@@ -823,7 +823,7 @@ fn store_structural_geometry_chain(kura: &Kura, height: u64) -> (HashOf<BlockHea
         );
     }
     for next in current + 1..=height {
-        kura.store_block(Arc::clone(chain.committed(next).block()))
+        kura.store_block(chain.committed(next).block().clone())
             .expect("store original executed native carrier");
     }
     let height_usize = NonZeroUsize::new(usize::try_from(height).expect("height fits usize"))

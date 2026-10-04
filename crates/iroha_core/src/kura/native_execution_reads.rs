@@ -42,19 +42,28 @@ impl NativeFrameRead<'_> {
         if slot.length != wire_len {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
+        let length = usize::try_from(wire_len)?;
         let bytes = if slot.is_evicted() {
+            // The bounded sidecar owner charges its one raw buffer before allocation.
             let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
                 &store.path_to_blockchain,
                 &store.da_block_path(height),
                 &store.da_blocks_dir,
-                usize::try_from(wire_len)?,
+                length,
             )?
             else {
                 return Ok(None);
             };
             bytes
         } else {
-            let mut bytes = vec![0; usize::try_from(wire_len)?];
+            // Inline storage owns its buffer here; subsequent native decoding retains
+            // this inherited cumulative scope and accounts for its separate graph.
+            norito::core::reserve_decode_allocation(length).map_err(Error::NoritoFrame)?;
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(length).map_err(|_| {
+                Error::NoritoFrame(norito::Error::AllocationFailed { bytes: wire_len })
+            })?;
+            bytes.resize(length, 0);
             store.read_block_data(slot.start, &mut bytes)?;
             bytes
         };
@@ -113,7 +122,7 @@ impl Kura {
         &self,
         authority: &crate::sumeragi::certified_chain::AuthenticatedExecutionBlock,
         admitted_wire_len: u64,
-    ) -> Result<Option<(Arc<SignedBlock>, Vec<u8>)>> {
+    ) -> Result<Option<(iroha_data_model::block::SharedSignedBlock, Vec<u8>)>> {
         let expected = authority.block();
         let height = expected.header().height().get();
         let (wire_len, wire_hash) = expected.canonical_wire_identity()?;
@@ -130,7 +139,7 @@ impl Kura {
         if Hash::new(&bytes) != wire_hash {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
-        Ok(Some((Arc::clone(expected), bytes)))
+        Ok(Some((expected.clone(), bytes)))
     }
 }
 
@@ -146,6 +155,84 @@ mod native_execution_read_tests {
     };
 
     #[test]
+    fn native_original_frame_admission_preserves_cumulative_allocation_on_both_stores() {
+        for evicted in [false, true] {
+            let mut chain =
+                CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+            chain.commit(Vec::new());
+            let original = chain.committed(2);
+            let wire = original.block().encode_wire().unwrap();
+            let length = wire.len();
+            if evicted {
+                let mut store = chain.kura().block_store.lock();
+                store.write_da_block_bytes(2, &wire).unwrap();
+                store
+                    .write_block_index(1, EVICTED_BLOCK_START, length as u64)
+                    .unwrap();
+                store.publish_commit_marker(2).unwrap();
+            }
+            let read = |admitted| -> Result<Option<Vec<u8>>> {
+                chain
+                    .kura()
+                    .native_frame_read(2, original.block_hash())?
+                    .ok_or(Error::CanonicalBlockWireMismatch { height: 2 })?
+                    .read(admitted)
+            };
+            let unspent = chain
+                .kura()
+                .native_frame_read(2, original.block_hash())
+                .unwrap()
+                .unwrap();
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert!(matches!(
+                    unspent.read(length as u64 - 1),
+                    Err(Error::CanonicalBlockWireMismatch { height: 2 })
+                ));
+                norito::core::reserve_decode_allocation(1).unwrap();
+            });
+            // Include the real repeated durable-marker decodes; source metadata is not free.
+            // Probe cumulative consumption without guessing those current codec allocations.
+            const PROBE_LIMIT: usize = 16 * 1024 * 1024;
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE_LIMIT, 64);
+            let exact = norito::with_decode_limits_scope(limits, || {
+                assert_eq!(read(length as u64).unwrap().unwrap(), wire);
+                let error = norito::core::reserve_decode_allocation(PROBE_LIMIT).unwrap_err();
+                let norito::Error::TotalAllocationExceeded { attempted, limit } = error else {
+                    panic!("original quota refusal")
+                };
+                usize::try_from(attempted - limit).unwrap()
+            });
+            assert!(
+                exact >= length,
+                "the original frame buffer must be charged before reading"
+            );
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert_eq!(read(length as u64).unwrap().unwrap(), wire);
+                assert!(matches!(
+                    read(length as u64),
+                    Err(Error::NoritoFrame(
+                        norito::Error::TotalAllocationExceeded { .. }
+                    ))
+                ));
+            });
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact - 1, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert!(matches!(
+                    read(length as u64),
+                    Err(Error::NoritoFrame(
+                        norito::Error::TotalAllocationExceeded { .. }
+                    ))
+                ));
+            });
+            assert_eq!(read(length as u64).unwrap().unwrap(), wire);
+        }
+    }
+
+    #[test]
     fn native_read_requires_exact_prepaid_length_and_retains_original_graph() {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
@@ -155,7 +242,7 @@ mod native_execution_read_tests {
         for height in 1..=2 {
             let receipt = source.authenticated_execution(height).unwrap();
             let (length, _) = receipt.block().canonical_wire_identity().unwrap();
-            let pointer = Arc::as_ptr(receipt.block());
+            let pointer = receipt.block().clone();
             for wrong in [0, length - 1, length + 1] {
                 assert!(
                     chain
@@ -169,7 +256,9 @@ mod native_execution_read_tests {
                 .read_authenticated_execution_wire(&receipt, length)
                 .unwrap()
                 .unwrap();
-            assert_eq!(Arc::as_ptr(&original), pointer);
+            assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                &original, &pointer
+            ));
             assert_eq!(bytes, original.encode_wire().unwrap());
             assert!(!chain.kura().store_root().join("v2_finality").exists());
         }
@@ -216,7 +305,10 @@ mod native_execution_read_tests {
             .read_authenticated_execution_wire(&receipt, length)
             .unwrap()
             .unwrap();
-        assert!(Arc::ptr_eq(&original, receipt.block()));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &original,
+            receipt.block()
+        ));
     }
     #[test]
     fn native_metadata_is_untrusted_and_cannot_expand_an_admitted_read() {

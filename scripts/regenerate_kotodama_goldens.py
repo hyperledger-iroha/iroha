@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """Build, validate, and publish the canonical Kotodama V1 goldens.
 
-Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
+Prerequisites are freshly built ``koto`` and ``ivm_artifact_admit`` binaries. The script
 never invokes Cargo or accepts signing material. Tool children create private files;
 compiler staging stays mode 0600 and reviewed public outputs publish as 0644.
 Scratch files are confined to
 the selected staging root. ``--write`` requires an absent absolute output root
-outside the source workspace and can only create one sealed publication there.
+below the checkout's ignored ``target`` directory or outside the workspace.
+Both locations use the same create-only sealed publication implementation.
 The checked-in ``ivm_artifacts.tsv`` file is the authoritative ownership and
 source-to-artifact map for every IVM program in the repository. Compiler staging
 outputs retain the native writer's mode 0600; reviewed public renderings use
-mode 0644. Independent runtime manifests may use 0600 or 0644 and must match
-compiler bytes exactly. This does not change checked-tree or publication modes.
+mode 0644. Independent admission manifests use 0600 and must match compiler
+bytes exactly. This does not change checked-tree or publication modes.
 
 ``--check`` is the safe default: compile everything in two independent
 temporary staging trees and fail unless their canonical path sets, bytes, and
 modes are identical to each other and to the selected checked tree. ``--write``
-uses the same two-pass proof before publishing the absent external
+uses the same two-pass proof before publishing the absent
 ``--output-root``. Its exact directory/file inventory is descriptor-bound and
 the owner manifest is written last as the mandatory completion seal. Failed
-external runs leave unsealed, create-only residue. Checked-in outputs are
+publication runs leave unsealed, create-only residue. Checked-in outputs are
 refreshed only by a reviewed identity-relative patch from a sealed tree and are
 then verified with ``--check``. The signed prediction-market deployment
 manifest is intentionally untracked and outside this workflow because private
@@ -420,7 +421,9 @@ def unique_builds(rows: Sequence[Golden]) -> list[Golden]:
     return sorted(by_source.values(), key=lambda row: row.source.as_posix())
 
 
-def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
+def run(
+    command: Sequence[os.PathLike[str] | str], root: Path, *, input: str | None = None
+) -> str:
     """Run a tool with private child outputs without changing the parent umask."""
 
     rendered = [os.fspath(part) for part in command]
@@ -432,6 +435,7 @@ def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
         stderr=subprocess.PIPE,
         text=True,
         umask=0o077,
+        input=input,
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip()
@@ -439,16 +443,20 @@ def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
     return result.stdout
 
 
-def _read_sealed_regular(path: Path, context: str) -> tuple[bytes, os.stat_result]:
+def _read_sealed_regular(
+    path: Path, context: str, *, maximum: int | None = None
+) -> tuple[bytes, os.stat_result]:
     """Read one single-link regular file without following a symbolic link."""
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if no_follow is None:
         raise GoldenError("sealed generation requires O_NOFOLLOW support")
     flags |= no_follow
     try:
         named_before = path.lstat()
+        if not stat.S_ISREG(named_before.st_mode):
+            raise GoldenError(f"{context} must be a regular non-symlink file: {path}")
         descriptor = os.open(path, flags)
     except OSError as error:
         raise GoldenError(f"failed to open {context} {path}: {error}") from error
@@ -465,6 +473,8 @@ def _read_sealed_regular(path: Path, context: str) -> tuple[bytes, os.stat_resul
             raise GoldenError(
                 f"{context} must be one regular non-symlink file with one hard link: {path}"
             )
+        if maximum is not None and opened_before.st_size > maximum:
+            raise GoldenError(f"{context} exceeds its expected size: {path}")
         chunks: list[bytes] = []
         remaining = opened_before.st_size
         while remaining:
@@ -509,7 +519,7 @@ def generation_input_seals(
     root: Path,
     sources: Sequence[Path],
     koto: Path,
-    iroha: Path,
+    admission_tool: Path,
 ) -> tuple[FileSeal, ...]:
     """Seal the exact source, map, owner, and executable inputs to generation."""
 
@@ -519,7 +529,7 @@ def generation_input_seals(
         Path(__file__).resolve(strict=True),
         *(root / source for source in sources),
         koto,
-        iroha,
+        admission_tool,
     ]
     if len(inputs) != len(set(inputs)):
         raise GoldenError("generation input inventory contains duplicate paths")
@@ -725,14 +735,14 @@ def read_compiler_output(source: Path) -> bytes:
 
 
 def compare_runtime_manifest(source: Path, destination: Path) -> None:
-    """Compare private compiler bytes with an independently produced CLI manifest."""
+    """Compare private compiler bytes with an independently produced admission manifest."""
 
     expected = read_compiler_output(source)
-    actual, metadata = _read_sealed_regular(destination, "runtime manifest")
-    # The CLI's regular-file writer honors the caller's private or public umask.
-    # Neither accepted staging mode allows execution or group/other mutation.
-    if stat.S_IMODE(metadata.st_mode) not in {0o600, 0o644}:
-        raise GoldenError(f"runtime manifest must use mode 0600 or 0644: {destination}")
+    actual, metadata = _read_sealed_regular(
+        destination, "runtime manifest", maximum=len(expected)
+    )
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise GoldenError(f"runtime manifest must use mode 0600: {destination}")
     if actual != expected:
         raise GoldenError(f"runtime manifest differs from compiler output: {destination}")
 
@@ -1097,9 +1107,9 @@ def validate_contract_test_reports(json_output: str, junit_path: Path) -> None:
 
 
 def verify_runtime_manifests(
-    iroha: Path, root: Path, stage: Path, builds: Sequence[Golden]
+    admission_tool: Path, root: Path, stage: Path, builds: Sequence[Golden]
 ) -> None:
-    """Cross-check compiler manifests with the independent runtime CLI parser."""
+    """Cross-check compiler manifests through the canonical native admission owner."""
 
     verified = stage / "verified"
     verified.mkdir()
@@ -1110,11 +1120,7 @@ def verify_runtime_manifests(
         runtime_manifest = verified / f"{stem}.manifest.json"
         run(
             [
-                iroha,
-                "--machine",
-                "contract",
-                "manifest",
-                "build",
+                admission_tool,
                 "--code-file",
                 artifact,
                 "--out",
@@ -1127,7 +1133,7 @@ def verify_runtime_manifests(
 
 def build_and_validate(
     koto: Path,
-    iroha: Path | None,
+    admission_tool: Path,
     root: Path,
     stage: Path,
     rows: Sequence[Golden],
@@ -1149,8 +1155,7 @@ def build_and_validate(
         manifest = stage / "release" / f"{row.source.stem}.manifest.json"
         validate_artifact(artifact, row.mode, manifest_abi_hash(manifest))
     validate_performance(stage, builds)
-    if iroha is not None:
-        verify_runtime_manifests(iroha, root, stage, builds)
+    verify_runtime_manifests(admission_tool, root, stage, builds)
     if run_tests:
         run_contract_tests(koto, root, stage)
 
@@ -1422,10 +1427,10 @@ def _snapshot_bound_tree(
     return snapshot
 
 
-def _expected_external_snapshot(
+def _expected_publication_snapshot(
     rendered: Sequence[RenderedFile], *, complete: bool
 ) -> dict[Path, tuple[str, int, bytes | None]]:
-    """Return the exact accepted external publication inventory."""
+    """Return the exact accepted publication inventory."""
 
     expected: dict[Path, tuple[str, int, bytes | None]] = {
         directory.relative_path: ("directory", directory.mode, None)
@@ -1448,7 +1453,7 @@ def _expected_external_snapshot(
     return expected
 
 
-def _compare_external_snapshot(
+def _compare_publication_snapshot(
     actual: dict[Path, tuple[str, int, bytes | None]],
     expected: dict[Path, tuple[str, int, bytes | None]],
 ) -> None:
@@ -1472,10 +1477,10 @@ def _compare_external_snapshot(
             )
 
 
-def _validate_external_publication(
+def _validate_publication(
     path: Path, rendered: Sequence[RenderedFile]
 ) -> None:
-    """Verify one completed external tree through an inode-bound boundary."""
+    """Verify one completed publication tree through an inode-bound boundary."""
 
     parent = _open_canonical_publication_parent(path)
     root = -1
@@ -1497,9 +1502,9 @@ def _validate_external_publication(
             raise GoldenError("Kotodama publication root must be a mode-0700 directory")
         _revalidate_publication_boundary(path, parent, root)
         actual = _snapshot_bound_tree(root)
-        _compare_external_snapshot(
+        _compare_publication_snapshot(
             actual,
-            _expected_external_snapshot(rendered, complete=True),
+            _expected_publication_snapshot(rendered, complete=True),
         )
         _revalidate_publication_boundary(path, parent, root)
     finally:
@@ -1508,13 +1513,13 @@ def _validate_external_publication(
         os.close(parent)
 
 
-def publish_external_create_only(
+def publish_create_only(
     path: Path,
     rendered: Sequence[RenderedFile],
     *,
     preseal: Callable[[], None] | None = None,
 ) -> int:
-    """Create an immutable external tree and write its completion seal last.
+    """Create an immutable publication tree and write its completion seal last.
 
     The destination directory becomes visible when it is atomically reserved,
     but it is not a publication until the owner manifest exists. Every checker
@@ -1522,7 +1527,7 @@ def publish_external_create_only(
     never removes or overwrites a caller-selected path.
     """
 
-    expected_incomplete = _expected_external_snapshot(rendered, complete=False)
+    expected_incomplete = _expected_publication_snapshot(rendered, complete=False)
     parent = _open_canonical_publication_parent(path)
     root = -1
     try:
@@ -1568,7 +1573,7 @@ def publish_external_create_only(
                 output.mode,
             )
 
-        _compare_external_snapshot(
+        _compare_publication_snapshot(
             _snapshot_bound_tree(root),
             expected_incomplete,
         )
@@ -1588,7 +1593,7 @@ def publish_external_create_only(
             os.close(root)
         os.close(parent)
 
-    _validate_external_publication(path, rendered)
+    _validate_publication(path, rendered)
     return len(rendered)
 
 
@@ -1596,16 +1601,16 @@ def verify_rendered_tree(
     output_root: Path,
     rendered: Sequence[RenderedFile],
 ) -> int:
-    """Check the repository or one completed sealed external tree."""
+    """Check the repository or one completed sealed publication tree."""
 
     output_root = _prepare_real_directory(
         output_root,
         context="Kotodama golden output root",
         create=False,
     )
-    strict_external_root = output_root != repository_root().resolve(strict=True)
-    if strict_external_root:
-        _validate_external_publication(output_root, rendered)
+    strict_publication_root = output_root != repository_root().resolve(strict=True)
+    if strict_publication_root:
+        _validate_publication(output_root, rendered)
         return 0
 
     expected_paths = {output.relative_path for output in rendered}
@@ -1696,7 +1701,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode.add_argument(
         "--write",
         action="store_true",
-        help="create one prevalidated publication at an absent external output root",
+        help="create one prevalidated publication at an absent output root",
     )
     parser.add_argument(
         "--koto",
@@ -1705,29 +1710,30 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=Path("target/debug/koto"),
     )
     parser.add_argument(
-        "--iroha",
+        "--admission-tool",
         type=_non_empty_path,
         action=_UniquePathAction,
-        default=Path("target/debug/iroha"),
+        default=Path("target/debug/ivm_artifact_admit"),
+        help="canonical ivm_artifact_admit executable (default: target/debug/ivm_artifact_admit)",
     )
     parser.add_argument(
         "--output-root",
         type=_absolute_output_root_path,
         action=_UniquePathAction,
-        help="publish or compare below this absolute root outside the workspace",
+        help="publish or compare below this absent absolute root (ignored target directory or outside workspace)",
     )
     parser.add_argument(
         "--staging-root",
         type=_explicit_root_path,
         action=_UniquePathAction,
-        help="create the temporary compiler tree below this root",
+        help="temporary compiler root (ignored target descendant or outside workspace)",
     )
     arguments = list(argv)
     if sum(argument in {"--check", "--write"} for argument in arguments) > 1:
         parser.error("select --check or --write at most once")
     parsed = parser.parse_args(arguments)
     if parsed.write and parsed.output_root is None:
-        parser.error("--write requires --output-root <absent-absolute-external-root>")
+        parser.error("--write requires --output-root <absent-absolute-root>")
     return parsed
 
 
@@ -1782,19 +1788,57 @@ def _preflight_create_only_output_path(path: Path) -> Path:
         os.close(parent)
 
 
-def _require_external_output_path(root: Path, path: Path) -> Path:
-    """Require an absolute canonical-parent path outside the source workspace."""
+def _require_scratch_path(root: Path, path: Path) -> Path:
+    """Allow canonical external scratch or untracked, ignored checkout target scratch.
+
+    Recheck Git's actual ignore/index decision before the completion seal. Source
+    directories and tracked files never become writable generation destinations.
+    """
 
     if not path.is_absolute():
-        raise GoldenError(f"Kotodama output root must be absolute: {path}")
+        raise GoldenError(f"Kotodama scratch root must be absolute: {path}")
     workspace = root.resolve(strict=True)
+    if ".." in path.parts or path.resolve(strict=False) != path:
+        raise GoldenError(f"Kotodama scratch root must have a canonical non-symlink path: {path}")
+    if path == workspace or workspace in path.parents:
+        if workspace / "target" not in path.parents:
+            raise GoldenError(
+                f"Kotodama scratch inside the workspace must be below ignored target: {path}"
+            )
+        relative = path.relative_to(workspace).as_posix()
+        if run(["git", "ls-files", "--cached", "-z", "--", relative], workspace):
+            raise GoldenError(f"Kotodama scratch contains tracked paths: {path}")
+        # -z avoids Git's pathname quoting and makes the exact decision unambiguous.
+        ignored = run(
+            ["git", "check-ignore", "--no-index", "-z", "--stdin"],
+            workspace,
+            input=relative + "\0",
+        )
+        if ignored != relative + "\0":
+            raise GoldenError(f"Kotodama scratch must be Git-ignored: {path}")
+    return path
+
+
+def _require_output_path(root: Path, path: Path) -> Path:
+    """Require an allowed output path whose existing parent retains canonical custody."""
+
+    _require_scratch_path(root, path)
     parent = _open_canonical_publication_parent(path)
     os.close(parent)
-    if path == workspace or workspace in path.parents:
-        raise GoldenError(
-            f"Kotodama output root must be outside the source workspace: {path}"
-        )
     return path
+
+
+def _prepare_staging_directory(root: Path, requested: Path) -> Path:
+    """Prepare scratch without granting authority to a substituted canonical path."""
+
+    _require_scratch_path(root, requested)
+    prepared = _prepare_real_directory(
+        requested, context="Kotodama golden staging root", create=True
+    )
+    if prepared != requested:
+        raise GoldenError("Kotodama staging path changed during preparation")
+    _require_scratch_path(root, requested)
+    return requested
 
 
 def _confined_destination(
@@ -1834,7 +1878,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.output_root is None:
             output_root = root
         else:
-            output_root = _require_external_output_path(root, args.output_root)
+            output_root = _require_output_path(root, args.output_root)
         staging_root = _rooted_path(
             root,
             args.staging_root,
@@ -1848,23 +1892,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 context="Kotodama golden output root",
                 create=False,
             )
-        staging_root = _prepare_real_directory(
-            staging_root,
-            context="Kotodama golden staging root",
-            create=True,
-        )
+        staging_root = _prepare_staging_directory(root, staging_root)
         rows = read_map(root / MAP_PATH)
         sources = tracked_sources(root)
         validate_output_inventory(rows, sources, tracked_outputs(root))
         koto = _resolve_tool(root, args.koto, "koto")
-        iroha = _resolve_tool(root, args.iroha, "iroha")
-        sealed_inputs = generation_input_seals(root, sources, koto, iroha)
+        admission_tool = _resolve_tool(root, args.admission_tool, "ivm_artifact_admit")
+        sealed_inputs = generation_input_seals(root, sources, koto, admission_tool)
         checked_sources, byte_exact_sources = partition_source_policy(root, sources)
         if not checked_sources or not byte_exact_sources:
             raise GoldenError(
                 "Kotodama source policy must contain checked and byte-exact sources"
             )
-        if generation_input_seals(root, sources, koto, iroha) != sealed_inputs:
+        if generation_input_seals(root, sources, koto, admission_tool) != sealed_inputs:
             raise GoldenError(
                 "Kotodama generation inputs drifted during source classification"
             )
@@ -1882,7 +1922,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise GoldenError("independent Kotodama staging roots alias each other")
             build_and_validate(
                 koto,
-                iroha,
+                admission_tool,
                 root,
                 first_stage,
                 rows,
@@ -1890,7 +1930,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             build_and_validate(
                 koto,
-                iroha,
+                admission_tool,
                 root,
                 second_stage,
                 rows,
@@ -1899,13 +1939,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             first_render = rendered_files(first_stage, rows)
             second_render = rendered_files(second_stage, rows)
             compare_renderings(first_render, second_render)
+
             def require_stable_inputs() -> None:
-                if generation_input_seals(root, sources, koto, iroha) != sealed_inputs:
+                _require_scratch_path(root, staging_root)
+                if args.output_root is not None:
+                    _require_output_path(root, output_root)
+                if generation_input_seals(root, sources, koto, admission_tool) != sealed_inputs:
                     raise GoldenError("Kotodama generation inputs drifted during rendering")
 
             require_stable_inputs()
             if args.write:
-                changed = publish_external_create_only(
+                changed = publish_create_only(
                     output_root,
                     first_render,
                     preseal=require_stable_inputs,

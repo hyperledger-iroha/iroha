@@ -8,6 +8,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from .errors import error_for_status
+
 
 def decode_exact_json_bytes(
     body: Any,
@@ -129,7 +131,4 @@ def expect_status_without_body(
     if response.status_code in expected_set:
         return
     response.close()
-    raise RuntimeError(
-        f"{context} returned unexpected status {response.status_code}; "
-        f"expected {sorted(expected_set)}"
-    )
+    raise error_for_status(response.status_code, expected=expected_set, context=context)

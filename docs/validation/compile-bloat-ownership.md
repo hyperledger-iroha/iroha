@@ -23,17 +23,19 @@ The committee-test owner migrated its protected import directly to
 development-only fee-evidence test imports `kotodama_lang::compiler::Compiler`
 directly.
 The signed-clock type path, Core ZK URL dependency and shared request-codec
-derive are corrected. The current normal Core ZK library frontend passes with
-its four default features and an unchanged source/Git interval. The `dev-tools`
-fee target compiles and its two ordinary tests pass, with captured sources and
-managed inputs unchanged through build and runtime. Wallet custody now declares
-its three canonical Norito identities and
-has its missing test module. Additional identity, root-frame roundtrip and
-wrong-schema controls preserve every original custody-test byte. The default
-Wallet library's 78 ordinary tests pass, including all eight custody controls,
-with captured source and managed inputs unchanged. The last metadata sequence stopped at its first build
-before the wallet correction; the second build and strict freshness comparison
-have not run.
+derive are corrected. The recorded normal Core ZK library check passes with its
+four default features, no diagnostics and unchanged captured source, Git,
+invocation and selected managed inputs. Subsequent dependency edits require fresh
+validation. The `dev-tools` fee target has a recorded build and two passing
+ordinary tests. Canonical Wallet custody schemas and frame controls preserve
+the original assertions; the Selection schema expectation now names its actual
+owner. The expanded prospective registry contains 107 ordinary tests, including
+15 direct custody controls, with no ignores. Its latest build passes, but
+concurrent SDK source and generated-input changes refused registry and runtime
+admission. The earlier 78-test pass qualifies only its original source cut.
+The authenticated two-build executable metadata check passes on its recorded
+source cut, with the four library owners fresh and all five executable targets
+rebuilt; it does not qualify later source changes.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
 moved compiler/model and all six Norito grouped harnesses. Twelve
@@ -43,8 +45,11 @@ source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. Current target-inventory validation admits 106 declared binaries and 23
-defaults, including the installed-context developer tool. Certificate, attestation,
+graphs. Current target-inventory validation admits 107 declared binaries and 24
+defaults. The canonical `ivm_artifact_admit` executable independently verifies
+contracts and creates their manifests without the node CLI; its exact shipping
+owner uses the existing final slot under the unchanged 24-default ceiling. The
+installed-context developer tool remains non-default. Certificate, attestation,
 preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
 IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
@@ -55,11 +60,16 @@ Halo2-only Native graph observation fell from 418 to 403 packages; it does not
 establish a current frontend result or build speedup. Current owner-boundary checks
 admit the exact CoreZK/Halo2 profiles and SDK paths for default/TLS selections and
 the fixed Musubi, SCCP wallet and storage-client consumers, retaining their runtime,
-P2P, compiler and test-feature denials. Feature hygiene, the ownership-guard suite
-and all 21 configured dependency boundaries have recorded passes. Source budgets
-include the exact filesystem-lock, Petal, URL, wallet-manifest and IVM test-owner
-costs. The reviewed graph reproduces the previous baseline and accounts for each
-new package and edge, preserving ownership denials without growth headroom.
+P2P, compiler and test-feature denials. Feature hygiene passes all 65 controls
+and its guard command. All 21 configured dependency boundaries pass locked
+offline Cargo resolution with all 120 manifest inputs and the lock unchanged.
+The current source budget passes with exact reviewed normal, optional and
+test-owner declaration costs, preserving ownership denials without growth
+headroom. All 230 pure dependency-guard tests and both actual Cargo boundary
+regressions pass. The compiler source guard seals 305 fixture includes and
+605 test names; all 43 Python source-reader controls pass, including the
+ordinary duplicate-fixture regression. Surface/toolchain workspace lint
+inheritance and Surface public Rustdoc still require correction.
 The normal production-feature
 Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
@@ -97,22 +107,23 @@ the three additional ignores are reviewed cost diagnostics. Renamed scalar
 tests retain ordinary coverage without retired aliases. All five corrected
 GETGAS/scalar-history regressions pass, with captured source, Git, toolchain,
 managed inputs and artifacts unchanged through their build and runtime intervals.
-The earlier retained ordinary suite continues in its original source epoch and
-records the five original failures. Full current ordinary and final merged-source
-qualification remain open, including changes applied after the focused run.
+The earlier ordinary suite closed naturally with 2,424 passes, 52 failures and
+65 ignores; its source changed during execution. All 52 failed cases remain
+ordinary tests and require current-source regression validation. The current
+source inventory additionally contains one reviewed shared-public-FFT cost
+diagnostic, bringing prospective ignores to 69. Neither a source inventory nor
+a focused subset qualifies the full current ordinary suite or final candidate.
 The derive library, strict JSON and UI regressions pass, preserving diagnostics.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
-Concurrent policy edits limit current-source qualification. Both executable
-metadata builds compile with matching package/features, but the freshness check
-fails with concurrent source changes and library rebuilds. The last recorded workspace
-check reaches Core test compile errors; the separate repair chat owns those fixes.
-Both merges are complete.
-The separate repair chat retains the remaining protocol integration repairs. Broader Core/SDK
-and Privacy sources continue to change, so final
-validation requires a stable current source interval. Workspace validation,
-metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
-and panic-inventory closure remain separate.
+Concurrent policy edits limit current-source qualification. A later workspace
+check passes on its recorded source cut. The last strict workspace result
+identified 135 Core ZK diagnostics and two sample-owner diagnostics; the reviewed
+repairs require fresh strict validation. The current merge has no unmerged
+entries and remains uncommitted; its separate owner handles the merge. Current
+workspace checks, applicable strict lint, Privacy regressions and observational
+warm timings remain open. Each earlier component pass retains its own source
+and feature scope; ongoing SDK and proof changes require fresh input guards.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.
 
 Two additional numeric controls reconstruct canonical frame, CRC and SHA inputs

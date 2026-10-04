@@ -13,7 +13,7 @@ final class AccountIdTests: XCTestCase {
 
     func testMakeProducesI105Format() throws {
         let publicKey = try validEd25519PublicKey(seed: 0xAB)
-        let accountId = AccountId.make(publicKey: publicKey)
+        let accountId = try AccountId.make(publicKey: publicKey)
 
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
@@ -76,7 +76,7 @@ final class AccountIdTests: XCTestCase {
     func testMakeAndMakeI105ProduceSameFormat() throws {
         let publicKey = try validEd25519PublicKey(seed: 0xEF)
 
-        let accountId = AccountId.make(publicKey: publicKey)
+        let accountId = try AccountId.make(publicKey: publicKey)
         let i105AccountId = try AccountId.makeI105(publicKey: publicKey)
 
         XCTAssertEqual(accountId, i105AccountId)

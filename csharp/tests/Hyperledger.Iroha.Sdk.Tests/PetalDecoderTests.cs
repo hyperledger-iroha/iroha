@@ -281,7 +281,7 @@ public sealed class PetalDecoderTests
 
     private static PetalDecoder.Reference LevelsOf(PetalLuma luma, PetalHomography pose)
     {
-        var reference = PetalDecoder.ReferenceLevels(luma, pose);
+        var reference = PetalDecoder.ReferenceLevels(luma, pose, null);
         Assert.NotNull(reference);
         return reference.Value;
     }
@@ -717,18 +717,240 @@ public sealed class PetalDecoderTests
     }
 
     [Fact]
-    public void AValidCodeWithAMissingFinderIsNotMisread()
+    public void AHiddenBlossomIsInferredAndEveryLaneStillReads()
     {
+        var render = PetalTestSupport.RenderLuma(SetupEncoder, 2, 768, 2);
+        var (p, k, d) = SetupEncoder.LaneData(2);
+        for (var corner = 0; corner < 4; corner++)
+        {
+            var decoded = PetalDecoder.Decode(PetalTestSupport.HideBlossom(render, corner));
+            Assert.True(decoded.Success, $"corner {corner}: {decoded.Error}");
+            Assert.True(corner == decoded.Frame.InferredCorner, $"corner {corner}: inferred {decoded.Frame.InferredCorner}");
+            Assert.Equal((0, false), (decoded.Frame.Rotation, decoded.Frame.Mirrored));
+            Assert.Equal(p, decoded.Frame.P?.Data);
+            Assert.Equal(k, decoded.Frame.K?.Data);
+            Assert.Equal(d, decoded.Frame.D?.Data);
+        }
+    }
+
+    [Fact]
+    public void TheInferredCornerIsReportedInCodeCoordinatesWhenMirrored()
+    {
+        // hide the top-right blossom of the code, then mirror the picture: the hidden
+        // blossom appears top-left in the image but is still corner 1 of the code
+        var hidden = PetalTestSupport.HideBlossom(PetalTestSupport.RenderLuma(SetupEncoder, 3, 768, 2), 1);
+        var decoded = PetalDecoder.Decode(PetalTestSupport.Mirror(hidden));
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        Assert.True(decoded.Frame.Mirrored);
+        Assert.Equal(1, decoded.Frame.InferredCorner);
+        Assert.Equal(SetupEncoder.LaneData(3).D, decoded.Frame.D?.Data);
+    }
+
+    [Fact]
+    public void ALargeHiddenRegionNeverReadsWrongData()
+    {
+        // the whole bottom-right quarter is gone: rings and tiles with it
         var luma = PetalTestSupport.RenderLuma(SetupEncoder, 2, 768, 2);
         var n = luma.Width;
-        // erase the bottom-right blossom
         for (var y = n * 3 / 4; y < n; y++)
         {
             for (var x = n * 3 / 4; x < n; x++)
                 luma.Data[y * n + x] = 0;
         }
 
-        Assert.False(PetalDecoder.Decode(luma).Success);
+        var (p, k, d) = SetupEncoder.LaneData(2);
+        var result = PetalDecoder.Decode(luma);
+        if (!result.Success)
+            return;
+        foreach (var (lane, truth) in new[] { (result.Frame.P, p), (result.Frame.K, k), (result.Frame.D, d) })
+        {
+            if (lane is not null)
+                Assert.Equal(truth, lane.Data);
+        }
+    }
+
+    [Fact]
+    public void TrackingFollowsASmallMovementAndGivesUpOnAJump()
+    {
+        var luma = PetalTestSupport.Padded(PetalTestSupport.RenderLuma(SetupEncoder, 6, 768, 2), 100);
+        var first = PetalDecoder.Decode(luma);
+        Assert.True(first.Success, first.Error.ToString());
+        var (p, k, d) = SetupEncoder.LaneData(6);
+        var followed = PetalDecoder.Track(PetalTestSupport.Shifted(luma, 9, -6), first.Frame);
+        Assert.NotNull(followed);
+        Assert.Equal(p, followed.P?.Data);
+        Assert.Equal(k, followed.K?.Data);
+        Assert.Equal(d, followed.D?.Data);
+        Assert.Null(followed.InferredCorner);
+        // more than a finder diameter: tracking refuses, a full decode is needed
+        var jumped = PetalTestSupport.Shifted(luma, 95, 0);
+        Assert.Null(PetalDecoder.Track(jumped, first.Frame));
+        Assert.True(PetalDecoder.Decode(jumped).Success);
+        // an unusable image is refused like by the full decoder
+        Assert.Null(PetalDecoder.Track(new PetalLuma(47, 47), first.Frame));
+    }
+
+    [Fact]
+    public void BrokenPosesAreRefusedWithoutThrowing()
+    {
+        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
+        var decoded = PetalDecoder.Decode(luma);
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        var previous = decoded.Frame;
+        // a good pose that names a corner that does not exist
+        Assert.NotNull(PetalDecoder.Track(luma, previous));
+        foreach (var corner in new[] { 4, 255, -1 })
+        {
+            var named = new PetalDecodedFrame(previous.Homography, previous.Rotation, previous.Mirrored, previous.P, previous.K, previous.D, corner);
+            Assert.Null(PetalDecoder.Track(luma, named));
+        }
+
+        var nonFinite = new[]
+        {
+            new PetalHomography(Enumerable.Repeat(double.NaN, 9).ToArray()),
+            new PetalHomography(double.PositiveInfinity, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        };
+        foreach (var broken in nonFinite)
+            Assert.Null(PetalDecoder.DecodeAt(luma, broken));
+        // the last one makes every finder far larger than the image
+        var huge = new PetalHomography(50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0);
+        foreach (var broken in nonFinite.Append(huge))
+        {
+            foreach (var inferred in new int?[] { null, 2 })
+            {
+                var frame = new PetalDecodedFrame(broken, previous.Rotation, previous.Mirrored, previous.P, previous.K, previous.D, inferred);
+                Assert.Null(PetalDecoder.Track(luma, frame));
+            }
+        }
+    }
+
+    [Fact]
+    public void TrackingSurvivesABlossomThatDisappears()
+    {
+        var render = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
+        var first = PetalDecoder.Decode(render);
+        Assert.True(first.Success, first.Error.ToString());
+        // the same code, slightly moved, now with the bottom-left blossom covered
+        var moved = PetalTestSupport.Shifted(PetalTestSupport.HideBlossom(render, 3), -5, 4);
+        var followed = PetalDecoder.Track(moved, first.Frame);
+        Assert.NotNull(followed);
+        Assert.Equal(3, followed.InferredCorner);
+        Assert.Equal(SetupEncoder.LaneData(4).D, followed.D?.Data);
+    }
+
+    [Fact]
+    public void ABlossomThatReappearsIsSeenAgain()
+    {
+        var render = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
+        var covered = PetalTestSupport.HideBlossom(render, 3);
+        var first = PetalDecoder.Decode(covered);
+        Assert.True(first.Success, first.Error.ToString());
+        Assert.Equal(3, first.Frame.InferredCorner);
+        // the thumb moves away and the hand moves a little
+        var followed = PetalDecoder.Track(PetalTestSupport.Shifted(render, 4, -3), first.Frame);
+        Assert.NotNull(followed);
+        Assert.Null(followed.InferredCorner);
+        Assert.Equal(SetupEncoder.LaneData(4).D, followed.D?.Data);
+        // still covered: still inferred
+        followed = PetalDecoder.Track(PetalTestSupport.Shifted(covered, 4, -3), first.Frame);
+        Assert.NotNull(followed);
+        Assert.Equal(3, followed.InferredCorner);
+    }
+
+    [Fact]
+    public void TheTianMaskTellsTheQuarterTurnsApart()
+    {
+        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 5, 768, 2);
+        var quad = PetalLocator.Locate(luma);
+        Assert.NotNull(quad);
+        var byRotation = new[] { double.MinValue, double.MinValue, double.MinValue, double.MinValue };
+        foreach (var (rotation, mirrored, h) in PetalDecoder.HypothesesFor(quad, true))
+        {
+            var reference = PetalDecoder.ReferenceLevels(luma, h, null);
+            Assert.NotNull(reference);
+            if (!mirrored)
+                byRotation[rotation] = PetalDecoder.MaskScore(luma, h, reference.Value);
+        }
+
+        // upright wins clearly over the three other quarter turns
+        for (var rotation = 1; rotation < 4; rotation++)
+            Assert.True(byRotation[0] > byRotation[rotation] + 0.1, string.Join(", ", byRotation));
+    }
+
+    [Fact]
+    public void CanonicalCornersFollowTheHypothesisPermutation()
+    {
+        // the hypothesis (rotation, mirrored) maps canonical corner i to quad corner
+        // (i + rotation) % 4, or (rotation + 4 - i) % 4 when mirrored; CanonicalCorner inverts it
+        for (var rotation = 0; rotation < 4; rotation++)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                Assert.Equal(i, PetalDecoder.CanonicalCorner((i + rotation) % 4, rotation, false));
+                Assert.Equal(i, PetalDecoder.CanonicalCorner((rotation + 4 - i) % 4, rotation, true));
+            }
+        }
+    }
+
+    /// <summary>A canvas-sized image with finder (lit) and reference-canvas (dark) levels painted where they are sampled.</summary>
+    private static PetalLuma LevelCard((byte Lit, byte Dark)[] levels)
+    {
+        var pixels = new byte[1024 * 1024];
+        void Paint(int cx, int cy, int radius, byte value)
+        {
+            for (var y = cy - radius; y <= cy + radius; y++)
+                for (var x = cx - radius; x <= cx + radius; x++)
+                    pixels[y * 1024 + x] = value;
+        }
+
+        (int X, int Y)[] centers = [(72, 72), (952, 72), (952, 952), (72, 952)];
+        for (var corner = 0; corner < 4; corner++)
+        {
+            var (cx, cy) = centers[corner];
+            var (sx, sy) = (cx < 512 ? 1 : -1, cy < 512 ? 1 : -1);
+            Paint(cx, cy, 30, levels[corner].Lit);
+            Paint(cx + sx * 100, cy, 12, levels[corner].Dark);
+            Paint(cx, cy + sy * 100, 12, levels[corner].Dark);
+        }
+
+        return new PetalLuma(1024, 1024, pixels);
+    }
+
+    [Fact]
+    public void AnInferredCornerNeedsContrastToo()
+    {
+        var h = PetalHomography.Identity;
+        // even light: the hidden corner (3) gets levels between the others'
+        var even = PetalDecoder.ReferenceLevels(LevelCard([(230, 30), (220, 25), (210, 20), (0, 0)]), h, 3);
+        Assert.NotNull(even);
+        Assert.True(even.Value.Lit(3) - even.Value.Dark(3) >= 12.0);
+        // the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
+        Assert.Null(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (0, 0)]), h, 3));
+        // with every corner seen, the same light is fine
+        Assert.NotNull(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (240, 20)]), h, null));
+    }
+
+    [Fact]
+    public void AnInferredCornerTakesItsLevelsFromTheOtherThree()
+    {
+        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 5, 768, 2);
+        var pose = RenderHomography();
+        var seen = LevelsOf(luma, pose);
+        for (var corner = 0; corner < 4; corner++)
+        {
+            var hidden = PetalTestSupport.HideBlossom(luma, corner);
+            // the covered blossom has no contrast of its own: refused unless it is inferred
+            Assert.Null(PetalDecoder.ReferenceLevels(hidden, pose, null));
+            var inferred = PetalDecoder.ReferenceLevels(hidden, pose, corner);
+            Assert.NotNull(inferred);
+            var (n1, opposite, n2) = ((corner + 1) % 4, (corner + 2) % 4, (corner + 3) % 4);
+            var expected = Math.Clamp(
+                seen.Lit(n1) + seen.Lit(n2) - seen.Lit(opposite),
+                Math.Min(Math.Min(seen.Lit(n1), seen.Lit(opposite)), seen.Lit(n2)),
+                Math.Max(Math.Max(seen.Lit(n1), seen.Lit(opposite)), seen.Lit(n2)));
+            Assert.Equal(expected, inferred.Value.Lit(corner));
+            Assert.Equal(seen.Dark(opposite), inferred.Value.Dark(opposite));
+        }
     }
 
     [Fact]
@@ -793,6 +1015,59 @@ public sealed class PetalDecoderTests
         Assert.Equal(2, done.Meta.Kind);
         Assert.True(session.Stats.Readable > 0 && session.Stats.LaneD > 0);
         Assert.True(session.Progress.Complete);
+    }
+
+    [Fact]
+    public void ASteadyCameraIsTrackedAfterTheFirstFrame()
+    {
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(300, 3), 2);
+        var config = PetalCaptureSimulator.FitToFrame(
+            PetalCaptureConfig.Modern() with { Width = 640, Height = 480, RotationDeg = 8.0 },
+            4.0);
+        PetalLuma Shot(int frame) => PetalCaptureSimulator.Capture(
+            PetalRenderer.Render(encoder.Cells((ushort)frame), new PetalRenderOptions { Size = 512, Supersample = 2 }),
+            config);
+        var session = new PetalScanSession();
+        for (var frame = 0; frame < 6; frame++)
+        {
+            var outcome = session.Push(Shot(frame), frame * 125L);
+            Assert.True(outcome.Error is null, $"frame {frame}: {outcome.Error}");
+        }
+
+        Assert.Equal(6u, session.Stats.Readable);
+        // every frame after the first follows the pose
+        Assert.Equal(5u, session.Stats.Tracked);
+        // a pause longer than the tracking window forces a full search again
+        session.Push(Shot(6), 5 * 125L + PetalScanSession.TrackWindowMilliseconds + 1);
+        Assert.Equal(5u, session.Stats.Tracked);
+        Assert.Equal(7u, session.Stats.Readable);
+        // so does a reset, which forgets the pose
+        session.Reset();
+        session.Push(Shot(7), 5 * 125L + PetalScanSession.TrackWindowMilliseconds + 100);
+        Assert.Equal(5u, session.Stats.Tracked);
+        Assert.Equal(8u, session.Stats.Readable);
+    }
+
+    [Fact]
+    public void ASessionCountsAThumbThatArrivesAndLeaves()
+    {
+        var session = new PetalScanSession();
+        PetalLuma Frame(int frame, bool covered)
+        {
+            var render = PetalTestSupport.RenderLuma(SetupEncoder, (ushort)frame, 600, 2);
+            return covered ? PetalTestSupport.HideBlossom(render, 1) : render;
+        }
+
+        session.Push(Frame(0, false), 0);
+        // the thumb arrives: tracked, with the top-right corner inferred
+        Assert.Equal("PKD", session.Push(Frame(1, true), 125).Lanes);
+        Assert.Equal((1u, 1u), (session.Stats.Tracked, session.Stats.Inferred));
+        Assert.Equal("PKD", session.Push(Frame(2, true), 250).Lanes);
+        Assert.Equal((2u, 2u), (session.Stats.Tracked, session.Stats.Inferred));
+        // the thumb leaves: the blossom is seen again
+        Assert.Equal("PKD", session.Push(Frame(3, false), 375).Lanes);
+        Assert.Equal((3u, 2u), (session.Stats.Tracked, session.Stats.Inferred));
+        Assert.Equal(4u, session.Stats.Readable);
     }
 
     [Fact]

@@ -42,13 +42,15 @@ fn replacement_rewind_retains_notifications_through_acquisition_execution_and_re
     {
         let (state, proposal) = fixture();
         let state: Arc<State> = Arc::from(state);
+        let mut registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         seed_committed_prefix(&state, proposal.header());
         let journal = membership_probe_before_stage(&state);
         let callback = membership_probe_callback(&state, journal);
         let (wait, original_release) = observe_rewind_source(&state, state_write);
         let waker = Waker::from(Arc::clone(&callback));
         let mut context = Context::from_waker(&waker);
-        let mut future = wait.clone().wait_for_release();
+        let mut future = wait.clone().wait_for_release(&mut registration);
         assert!(Pin::new(&mut future).poll(&mut context).is_pending());
         if exit >= 4 {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -121,6 +123,8 @@ fn replacement_rewind_retains_notifications_through_original_capture_refusal_and
     {
         let (state, proposal, topology) = super::super::fixture_with_topology();
         let state: Arc<State> = Arc::from(state);
+        let mut registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let journal = membership_probe_before_stage(&state);
         let callback = membership_probe_callback(&state, journal);
         let (valid, mut carrier) =
@@ -128,18 +132,18 @@ fn replacement_rewind_retains_notifications_through_original_capture_refusal_and
         let (wait, original_release) = observe_rewind_source(&state, state_write);
         let waker = Waker::from(Arc::clone(&callback));
         let mut task = Context::from_waker(&waker);
-        let mut future = wait.clone().wait_for_release();
+        let mut future = wait.clone().wait_for_release(&mut registration);
         assert!(Pin::new(&mut future).poll(&mut task).is_pending());
         // Install the exact owner before the same borrowed rewind kernel. This
         // isolates capture custody on a genuine authenticated ordinary carrier;
         // it does not manufacture replacement or membership authority.
         {
             let fields = carrier.fields.as_mut().unwrap();
-            fields.da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
+            fields._da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
             state
                 .rewind_da_indexes_to_height_with_releases(
                     0,
-                    fields.da_rewind_releases.as_mut().unwrap(),
+                    fields._da_rewind_releases.as_mut().unwrap(),
                 )
                 .unwrap();
         }

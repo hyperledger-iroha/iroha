@@ -327,7 +327,7 @@ pub(super) fn bank_residues(
 /// Append the same exact comparisons to the caller's original residual owner.
 /// The caller retains canonical source limbs/signs and private fetch selectors.
 pub(super) fn append_bank_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     limbs: [[F; 4]; 2],
     signs: [F; 2],
